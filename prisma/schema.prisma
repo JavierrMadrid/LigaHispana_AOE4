@@ -1,0 +1,70 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PlayerStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum MatchResult {
+  WIN
+  LOSS
+}
+
+model Player {
+  id            String       @id @default(cuid())
+  profileId     Int          @unique
+  name          String
+  twitchChannel String?
+  status        PlayerStatus @default(PENDING)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  matches       Match[]
+}
+
+model Match {
+  id                String      @id @default(cuid())
+  gameId            String
+  playerId          String
+  player            Player      @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  opponentProfileId Int?
+  opponentName      String?
+  civ               String?
+  opponentCiv       String?
+  map               String?
+  leaderboard       String      @default("rm_solo")
+  // Null mientras la partida sigue en curso: el resultado todavía no existe.
+  // El motor de F3 solo debe puntuar partidas con `result` y `finishedAt`.
+  result            MatchResult?
+  startedAt         DateTime
+  finishedAt        DateTime?
+  durationSeconds   Int?
+  points            Int         @default(0)
+  rawJson           Json
+  createdAt         DateTime    @default(now())
+
+  // La unicidad es por jugador, no global: en un torneo individual dos
+  // participantes pueden jugar la misma partida y cada uno necesita su fila
+  // (resultado, civ y puntos propios). Un único `gameId` global descartaría la
+  // mitad de los datos de esos cruces.
+  @@unique([playerId, gameId])
+  @@index([playerId, startedAt])
+  // Sostiene la consulta de "partidas en directo" de F4 (`finishedAt IS NULL`).
+  @@index([playerId, finishedAt])
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
