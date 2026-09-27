@@ -123,7 +123,7 @@ Notas:
 - Se guardan **todas** las partidas del jugador, no solo las clasificatorias: el filtro por `leaderboard` y por fecha lo hace el motor de F3. Así también salen las "partidas en directo" (F4) del mismo histórico.
 - `leaderboard` es una `String` (no enum) precisamente para no tener que migrar cada vez que aparece un modo de juego nuevo en la API.
 - `result` admite `null`: significa que la partida aún no está resuelta por la API. F3 no debe puntuar esas filas.
-- El motor de puntuación (F3) ampliará este modelo (objetivos, snapshot de clasificación).
+- El motor de puntuación (F3) amplía este modelo con el agregado versionado (`PlayerScore`) y los snapshots (`ScoreSnapshot`). El diseño completo está en [`docs/MODELO-DATOS.md`](MODELO-DATOS.md); aún no está aplicado al schema.
 
 ## Integración con AoE4World
 
@@ -149,10 +149,17 @@ Consideraciones:
 
 ### F2 — Integración AoE4World + worker de polling ✅ (ver "Estado actual")
 
-### F3 — Motor de puntuación — **bloqueado: faltan las reglas**
-- Definir qué cuenta como **partida clasificatoria** (no solo ranked 1v1) y con qué reglas.
-- Reglas declarativas (victoria + objetivos). Recálculo incremental por partida.
-- Generación y persistencia de la clasificación.
+### F3 — Motor de puntuación — **diseño hecho, pendiente de que el cliente lo valide**
+
+- [x] Reglas de puntuación v1 adaptadas a individual: [`docs/PUNTUACION.md`](PUNTUACION.md)
+- [x] Modelo de datos completo derivado de esas reglas: [`docs/MODELO-DATOS.md`](MODELO-DATOS.md)
+- [ ] Cliente valida y cierra las 16 decisiones abiertas de `PUNTUACION.md` §10 (y las P-01 a P-06 de `MODELO-DATOS.md` §9.1)
+- [ ] Confirmar contra la API los nombres exactos de los modos de juego (D-01)
+- [ ] Publicar el ruleset v1 y arrancar el motor
+- [ ] Motor: agregados incrementales, reparto de premios por puesto, recálculo completo al cambiar de versión
+- [ ] Persistencia de la clasificación y de los snapshots
+
+Ver `docs/MODELO-DATOS.md` §9.3 para qué bloquea y qué no.
 
 ### F4 — Frontend público
 - Clasificación en vivo.
@@ -181,8 +188,8 @@ Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes d
 
 ## Decisiones pendientes
 
-- [ ] **Qué cuenta como partida clasificatoria** y cómo se punctúa (punto base, bonificaciones, penalizaciones). Es la decisión que bloquea F3 y es del cliente, no técnica. **Decidido el 26/09/2026: se aplaza**; F3 no arranca hasta que haya reglas. Mientras tanto F2 guarda todo y `points` está a 0 en todas las filas, así que las reglas se pueden cambiar sin volver a pedir nada a la API.
-- [ ] Fecha/ventana de clasificatorias (campo `Setting`).
+- [ ] **Qué cuenta como partida clasificatoria** y cómo se punctúa. Es una decisión del cliente, no técnica. **Resuelto el 27/09/2026 como diseño**: `docs/PUNTUACION.md` define la v1 (base Wololo adaptada a individual, 5 categorías, techo 109) y deja 16 decisiones abiertas con su recomendación por defecto. Pendiente de que el cliente lo valide. Mientras tanto F2 guarda todo y `points` está a 0 en todas las filas, así que las reglas se pueden cambiar sin volver a pedir nada a la API.
+- [ ] Fecha/ventana de clasificatorias. Resuelto en diseño: vive en la versión de las reglas (`Setting`) y se ancla en `startedAt`. Falta que el cliente ponga las fechas (D-02 de `PUNTUACION.md`).
 - [ ] Cómo se cumple el requisito 2 ("en todo momento"): el worker de F2 corre cada 5 minutos; queda decidir si F4 revalida el server con esa cadencia o hace polling en cliente.
 - [ ] Rival en partidos por equipos: el schema tiene un único par de campos, así que en `rm_2v2` y superiores se guarda solo el primer jugador del equipo contrario (el equipo completo está en `rawJson`). Si las reglas necesitaran "partida contra dos rivales", habría que añadir columnas.
 

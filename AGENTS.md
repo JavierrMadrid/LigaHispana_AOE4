@@ -30,6 +30,8 @@ Torneo individual de Age of Empires IV. La clasificación se calcula a partir de
 
 ## Cómo trabajo: delego, no escribo el código
 
+Esta guía es la del agente `orchestrator` (`.opencode/agent/orchestrator.md`), que es el agente por defecto del repo (`default_agent` en `opencode.json`). Planifica, reparte y verifica; sus permisos le impiden escribir código fuera de la documentación y de los ficheros de agente.
+
 Cada subagente tiene cargadas sus skills **obligatoriamente** en el paso 0 y su md con la información específica de su ámbito.
 
 | Si el cambio toca… | Delega a | Archivo | Skills que carga |
