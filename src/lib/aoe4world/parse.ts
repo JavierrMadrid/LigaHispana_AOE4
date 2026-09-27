@@ -268,11 +268,15 @@ function parseLeaderboardEntry(value: unknown): Aoe4WorldLeaderboardEntry | null
     rating: readNumber(value.rating),
     rank: readInteger(value.rank),
     rankLevel: readString(value.rank_level),
+    // Firmado: `readInteger` no descarta negativos, que es justo lo que hay que
+    // conservar de una racha de derrotas.
+    streak: readInteger(value.streak),
     gamesCount: readInteger(value.games_count),
     winsCount: readInteger(value.wins_count),
     lossesCount: readInteger(value.losses_count),
     twitchUrl: readString(value.twitch_url),
     twitchIsLive: readBoolean(value.twitch_is_live),
+    avatars: readAvatars(value.avatars),
     lastGameAt: readDate(value.last_game_at),
   };
 }

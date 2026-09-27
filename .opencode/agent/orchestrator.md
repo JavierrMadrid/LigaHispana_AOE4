@@ -1,7 +1,7 @@
 ---
 description: Orquestador por defecto. Encuadra, planifica, reparte el trabajo entre los subagentes y verifica el resultado. Úsalo como punto de entrada para cualquier tarea del proyecto.
 mode: primary
-model: opencode/space-bunny-free
+model: opencode/mimo-v2.6-flash-free
 temperature: 0.2
 color: primary
 permission:

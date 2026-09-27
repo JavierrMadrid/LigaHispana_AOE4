@@ -62,6 +62,28 @@ Decisión: todo usuario autenticado es admin → **registros públicos de Supaba
 - [x] Punto de entrada único `POST|GET /api/cron/sync`, con sesión de admin **o** `Authorization: Bearer $CRON_SECRET`.
 - [x] `npm run sync` (CLI) y `npm run verify:sync` (comprobaciones con datos de ejemplo, con `--db` para el guardado).
 - [x] Cero de la API, tabla de rate limit y `Setting` por jugador (`aoe4world.sync.player.<profileId>`).
+- [x] `mode` y `civRandomized` se rellenan al guardar cada partida, y los *backfills* de las
+  filas anteriores están en `npm run backfill:model`.
+- [x] **Modo mock** (`AOE4WORLD_MOCK=1`): `performRequest()` resuelve con las fixtures locales de
+  `src/lib/aoe4world/mock/` en lugar de salir a la red, sin tocar parsers, worker ni motor. Solo
+  fuera de producción: si el flag está activo con `NODE_ENV=production`, la configuración falla
+  al arrancar. Por defecto no cambia nada.
+- [x] **Simulación del torneo**: `npm run mock:tournament` crea/actualiza 10 participantes
+  `APPROVED` (profileId `90000001`–`90000010`, rango reservado que no choca con los de
+  `verify:sync`), sincroniza **solo** esos perfiles contra el mock y recalcula la clasificación.
+  Sale: 127 filas de partida (71 partidas distintas: 68 terminadas + **3 en directo**, estas
+  últimas 5 filas por la unicidad `(playerId, gameId)`), 10 puntuaciones distintas y 5 canales de
+  Twitch. Idempotente; `npm run mock:clean` retira exactamente esos 10 jugadores y sus cursores.
+  - **Rivales externos**: el torneo es individual, así que no todos los rivales son de la liga.
+    Las fixtures incluyen 10 rivales de ladder (`profileId` `92000001`–`92000010`) que **nunca**
+    se convierten en `Player`: 20 partidas terminadas (2 por participante, una ganada y una
+    perdida) y **1 de los 3 directos** es participante vs externo, que es el caso que deja la
+    tarjeta de `/partidas` con una sola fila y sin el distintivo "jugadores de la liga". En la BD
+    quedan 21 filas con `opponentProfileId` ajeno a la liga.
+  - Tiempos: el histórico está **anclado a una epoch fija** (determinista) y las 3 partidas en
+    vivo calculan su `started_at` como "hace 10–20 min" **en cada petición**, con lo que nunca
+    salen de la ventana de 60 min y el cursor `since` no dispara el borrado por abandonada: la
+    simulación no se pudre con el paso de las horas.
 
 Decisiones de F2 que condicionan F3/F4:
 
@@ -112,18 +134,20 @@ AoE4World API ──poll──► Worker/Cron ──► PostgreSQL (Supabase)
 ```
 Player     (id, profileId unico, name, twitchChannel?, status: PENDING|APPROVED|REJECTED, timestamps)
 Match      (id, [playerId, gameId] unico, playerId FK, opponentProfileId?, opponentName?,
-            civ?, opponentCiv?, map?, leaderboard="rm_solo", result?: WIN|LOSS (null = sin resolver),
+            civ?, opponentCiv?, civRandomized, map?, leaderboard="rm_solo", mode?,
+            result?: WIN|LOSS (null = sin resolver),
             startedAt, finishedAt?, durationSeconds?, points, rawJson, createdAt)
+PlayerScore(playerId, ruleSetVersion) pk, rank, total, wins, matches, breakdown JSON, computedAt
 Setting    (key PK, value JSON, updatedAt)
 ```
 
 Notas:
 - `gameId` se guarda como `String` y la unicidad es **por jugador** (`@@unique([playerId, gameId])`): el torneo es individual y dos participantes pueden jugar la misma partida, cada uno con su propio resultado y sus puntos.
 - `rawJson` conserva la partida completa de la API para poder recalcular puntos si cambian las reglas.
-- Se guardan **todas** las partidas del jugador, no solo las clasificatorias: el filtro por `leaderboard` y por fecha lo hace el motor de F3. Así también salen las "partidas en directo" (F4) del mismo histórico.
-- `leaderboard` es una `String` (no enum) precisamente para no tener que migrar cada vez que aparece un modo de juego nuevo en la API.
-- `result` admite `null`: significa que la partida aún no está resuelta por la API. F3 no debe puntuar esas filas.
-- El motor de puntuación (F3) amplía este modelo con el agregado versionado (`PlayerScore`) y los snapshots (`ScoreSnapshot`). El diseño completo está en la rama `docs/f3-puntuacion`; aún no está aplicado al schema.
+- Se guardan **todas** las partidas del jugador, no solo las clasificatorias: el filtro por `mode` y por fecha lo hace el motor. Así también salen las "partidas en directo" (F4) del mismo histórico.
+- `leaderboard` es una `String` (no enum) precisamente para no tener que migrar cada vez que aparece un modo de juego nuevo en la API. `mode` es la **familia de ladder resuelta** (`rm_1v1` -> `rm_solo`, `rm_2v2`/`rm_3v3`/`rm_4v4` -> `rm_team`) y es por la que filtra el motor; `leaderboard` no se toca, porque es el registro literal de lo que dijo la API.
+- `result` admite `null`: significa que la partida aún no está resuelta por la API. El motor no puntúa esas filas.
+- `PlayerScore` es el agregado **versionado** que lee la web. El modelo completo está en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md): la parte que no depende de las reglas ya está aplicada y la que depende (ruleset Wololo, snapshots, categorías) está diferida.
 
 ## Integración con AoE4World
 
@@ -149,26 +173,68 @@ Consideraciones:
 
 ### F2 — Integración AoE4World + worker de polling ✅ (ver "Estado actual")
 
-### F3 — Motor de puntuación — **diseño hecho, pendiente de que el cliente lo valide**
+### F3 — Motor de puntuación (MVP provisional) ✅ / reglas reales pendientes
 
-El diseño vive en la rama `docs/f3-puntuacion` (`docs/PUNTUACION.md` y `docs/MODELO-DATOS.md`). No está en `main` hasta que se valide.
+Lo que hay en `feat/mvp-web` es un **MVP funcional**, no el motor de las reglas Wololo: la
+comunidad decide esas en días o semanas y hasta entonces se aplica una regla provisional
+completa y simple.
 
-- [x] Reglas de puntuación v1 adaptadas a individual
-- [x] Modelo de datos completo derivado de esas reglas
-- [ ] Cliente valida y cierra las 16 decisiones abiertas de las reglas y las 6 de producto del modelo de datos
-- [ ] Confirmar contra la API los nombres exactos de los modos de juego (D-01)
-- [ ] Publicar el ruleset v1 y arrancar el motor
-- [ ] Motor: agregados incrementales, reparto de premios por puesto, recálculo completo al cambiar de versión
-- [ ] Persistencia de la clasificación y de los snapshots
+- [x] **Regla del MVP**: 1 punto por victoria en partida clasificatoria (`mode` en `rm_solo` o
+  `rm_team`) y partida resuelta. Derrota = 0. Sin ventana de fechas ni duración mínima.
+- [x] `Match.mode` (familia de ladder resuelta) y `Match.civRandomized`, con la correspondencia
+  mecánica en `normalize.ts` y los *backfills* (`npm run backfill:model`).
+- [x] Índice `(mode, startedAt)` y tabla `PlayerScore` (agregado versionado, versión de reglas 1).
+- [x] Motor en `src/lib/scoring.ts` (`recomputeScores()`), idempotente y conectado al final de
+  cada pasada del worker. `npm run score` para recalcular a mano.
+- [x] Lecturas públicas en `src/lib/public.ts` (`getStandings`, `getLiveMatches`, `getTwitchChannels`).
+- [x] Desglose por modo guardado en `PlayerScore.breakdown`.
 
-### F4 — Frontend público
-- Clasificación en vivo.
-- Partidas en directo.
-- Página por jugador.
+Pendiente, y deliberadamente diferido hasta que la comunidad cierre las reglas
+(detalle en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md) §0 bis):
+
+- [ ] Validar el ruleset de `docs/PUNTUACION.md` (rama `docs/f3-puntuacion`) y publicar la
+  versión 2 del ruleset en `Setting`, conviviendo con la clasificación provisional.
+- [ ] `ScoreSnapshot` (rastro de cada cálculo), columnas de categoría en `PlayerScore`,
+  `Match.pointsRuleSetVersion`, ventana de fechas, duración mínima y desempate por rating.
+- [ ] RLS sin políticas e índice parcial de partidas en directo.
+- [ ] Motor: agregados incrementales en vez de recálculo completo por pasada.
+
+### F4 — Frontend público (MVP) ✅ / crecimiento pendiente
+
+Cuatro páginas públicas en español, con navegación compartida y **tema propio de torneo
+medieval (pizarra + oro antiguo + marfil, titulares en Cinzel)**, aplicando las skills de
+diseño del repo; la referencia ordreduwololo.fr y soloqchallenge.gg solo mandan en
+comportamiento, no en estética:
+
+- [x] `/` — Clasificación general: `getStandings()`. **Rediseño de cara completa**: tabla con
+  columnas Puesto | Jugador | Puntos | Elo | V - D | Racha | Stats (enlace a AoE4World), con
+  indicador "en partida" y icono de Twitch (en directo o apagado) junto al nombre.
+- [x] **Filtros en cliente** sobre la tabla: búsqueda por nombre/canal (insensible a acentos),
+  pills "En partida" y "En directo", y selección única de división con el emblema de cada una
+  (los 6 SVG son originales, en `src/components/division-icon.tsx`). Estados vacíos de filtro
+  con "Quitar filtros".
+- [x] `/partidas` — Partidas en directo de participantes (1vs1 y por equipos):
+  `getLiveMatches()`, con auto-refresco opcional por `router.refresh()`.
+- [x] `/reglas` — Reglas del MVP (1 punto por victoria clasificatoria) y aviso de que el
+  reglamento definitivo se define con la comunidad.
+- [x] **`/streams` eliminada** (el requisito de streams se resuelve con el icono de Twitch en
+  la clasificación); `getTwitchChannels()` se conserva como base de F5 y de `verify:sync`.
+- [x] Estados vacíos como primera clase, responsive (scroll horizontal en la tabla) y
+  `dynamic = "force-dynamic"` en las páginas con datos.
+- [x] `StandingRow.matches` retirado del contrato público (la UI calcula `wins + losses`);
+  `joinNames()` retirado de `format.ts`.
+
+Pendiente de F4:
+
+- [ ] Página por jugador (ficha con historial de partidas).
+- [ ] Crecer `/` con las secciones previstas (últimas partidas, hitos, etc.).
+- [ ] Opcional: `next/image` para avatares (exige `remotePatterns` en `next.config.ts`).
 
 ### F5 — Twitch
 - Registro de app en Twitch (Client ID/Secret).
-- Helix API para detectar streamers en directo + embeds.
+- Helix API para detectar streamers en directo + embeds. Hoy el indicador "En directo" de la
+  clasificación lee `twitchIsLive`, que rellena el worker desde `twitch_is_live` de la ladder
+  de AoE4World: sirve para el icono, pero sin Helix no hay embed ni garantía de frescura.
 
 ### F6 — Registro público
 - Formulario de inscripción (perfil AoE4World + Twitch opcional) → estado `PENDING` → aprobación admin.
@@ -188,10 +254,25 @@ Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes d
 
 ## Decisiones pendientes
 
-- [ ] **Qué cuenta como partida clasificatoria** y cómo se punctúa. Es una decisión del cliente, no técnica. **Resuelto el 27/09/2026 como diseño**: la v1 (base Wololo adaptada a individual, 5 categorías, techo 109) deja 16 decisiones abiertas con su recomendación por defecto, en la rama `docs/f3-puntuacion`. Pendiente de que el cliente lo valide. Mientras tanto F2 guarda todo y `points` está a 0 en todas las filas, así que las reglas se pueden cambiar sin volver a pedir nada a la API.
-- [ ] Fecha/ventana de clasificatorias. Resuelto en diseño: vive en la versión de las reglas (`Setting`) y se ancla en `startedAt`. Falta que el cliente ponga las fechas (D-02).
-- [ ] Cómo se cumple el requisito 2 ("en todo momento"): el worker de F2 corre cada 5 minutos; queda decidir si F4 revalida el server con esa cadencia o hace polling en cliente.
-- [ ] Rival en partidos por equipos: el schema tiene un único par de campos, así que en `rm_2v2` y superiores se guarda solo el primer jugador del equipo contrario (el equipo completo está en `rawJson`). Si las reglas necesitaran "partida contra dos rivales", habría que añadir columnas.
+- [ ] **Qué cuenta como partida clasificatoria y cómo se puntúa.** Para el MVP está resuelto de
+  forma provisional: 1 punto por victoria en `rm_solo` o `rm_team` con la partida resuelta, sin
+  ventana de fechas ni duración mínima. El diseño de las reglas definitivas (Wololo adaptado a
+  individual, 5 categorías, techo 109) está en la rama `docs/f3-puntuacion`
+  (`docs/PUNTUACION.md`), pendiente de que el cliente lo valide. Publicar esas reglas es
+  publicar la versión 2 del ruleset y recalcular **al lado** de la provisional, sin perderla:
+  por eso el agregado está versionado.
+- [x] **Ventana de clasificatorias y duración mínima.** No aplican en el MVP. Cuando entren,
+  viven en la versión de las reglas (`Setting`) y se anclan en `startedAt` (D-02, D-03).
+- [ ] **Cómo se cumple el requisito 2 ("en todo momento")**: el worker corre cada 5 minutos y
+  ya recalcula la clasificación al final de cada pasada. Falta decidir si F4 relee el servidor
+  en cada visita (que es lo que hace el DAL actual) o si añade revalidación por etiqueta.
+- [ ] Rival en partidas por equipos: el schema tiene un único par de campos, así que en
+  `rm_2v2` y superiores se guarda solo el primer jugador del equipo contrario (el equipo
+  completo está en `rawJson`). Si las reglas necesitaran "partida contra dos rivales", habría
+  que añadir columnas.
+- [ ] **Detectar si un canal de Twitch está en directo**: la clasificación ya muestra el icono
+  con `twitchIsLive` (lo rellena el worker desde el campo `twitch_is_live` de la ladder de
+  AoE4World), pero sin la app de Twitch y Helix (F5) no hay embed ni frescura garantizada.
 
 ## Consideraciones técnicas / riesgos
 

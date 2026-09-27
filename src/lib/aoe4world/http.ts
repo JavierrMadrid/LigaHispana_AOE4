@@ -6,6 +6,13 @@
  * rate limit que mande la API. Los endpoints de `client.ts` no llaman a `fetch`
  * directamente, así que no hay forma de saltarse estas reglas por accidente.
  *
+ * Es también el único punto en el que se puede salir a la red, así que es
+ * también el interruptor del mock: con `AOE4WORLD_MOCK` activo (solo posible
+ * fuera de producción, lo garantiza `env.ts`) las peticiones se resuelven con
+ * las fixtures locales de `mock/` sin tocar `fetch`. Los contadores de `stats`
+ * se siguen incrementando, para que el resumen del worker refleje el mismo
+ * volumen de trabajo que reflejaría contra la API real.
+ *
  * Las respuestas de AoE4World (Cloudflare por delante) no siempre traen
  * `X-RateLimit-*`, así que la política es *best effort*: espaciamos por
  * defecto y reaccionamos a lo que llegue.
@@ -13,6 +20,7 @@
 
 import { isRecord } from "@/lib/json";
 import { getAoe4WorldConfig, type Aoe4WorldConfig } from "./env";
+import { resolveMockAoe4WorldRequest } from "./mock";
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -265,6 +273,22 @@ export function createAoe4WorldHttpClient(
     searchParams: URLSearchParams | undefined,
     options: Aoe4WorldRequestOptions | undefined,
   ): Promise<unknown> {
+    // Interruptor del mock: se resuelve todo aquí, antes de montar la URL y el
+    // timeout, pero contando la petición como cualquier otra para que el
+    // resumen del worker siga siendo verosímil. `options` no se usa: sin red
+    // no hay qué cancelar (la señal ya se ha comprobado en `fetchJson`).
+    if (config.mock) {
+      stats.requests += 1;
+
+      const mocked = resolveMockAoe4WorldRequest(path, searchParams);
+
+      if (mocked.kind === "not-found") {
+        throw new Aoe4WorldNotFoundError(path);
+      }
+
+      return mocked.payload;
+    }
+
     const url = new URL(`${config.apiBase}/api/v0${path}`);
 
     if (searchParams) {

@@ -1,26 +1,78 @@
 @import "tailwindcss";
 
+/*
+ * Tema único de la aplicación: oscuro, fijado a propósito.
+ *
+ * La cara pública viste la paleta de Age of Empires IV: pizarra y carbón de
+ * fondo, oro antiguo como único acento y marfil para el texto. El panel de
+ * administración y el login no usan estos tokens (van con la rampa `neutral` y
+ * el acento `amber` de Tailwind), así que solo comparten el fondo del `body` y
+ * el anillo de foco: siguen legibles sin tocar nada.
+ *
+ * Antes había un `prefers-color-scheme: light` que pintaba el `body` de blanco
+ * mientras las pantallas de login y admin se pintaban de `neutral-950` a mano:
+ * en modo claro salían bordes blancos alrededor de paneles oscuros. El sitio
+ * tiene identidad de sala de control, así que se fija oscuro.
+ *
+ * Formas: contenedores y bloques a 8px (`rounded-lg`), controles a 6px
+ * (`rounded-md`) y píldoras/etiquetas a radio completo (`rounded-full`).
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+
+  /* Base: pizarra y marfil. */
+  --background: #0b0d10;
+  --foreground: #e9e3d5;
+
+  /* Superficies y filetes. */
+  --surface: #12151a;
+  --surface-raised: #191d24;
+  --line: #262b33;
+
+  /* Acento único: oro antiguo. */
+  --accent: #c9a45c;
+  --accent-strong: #e0c07a;
+  --accent-ink: #1a1408;
+
+  /* Texto secundario. */
+  --muted: #98a0aa;
+
+  /* Twitch: color de marca para el icono y el estado en directo. */
+  --twitch: #a970ff;
+  --twitch-soft: #c9a6ff;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-ink: var(--accent-ink);
+  --color-muted: var(--muted);
+  --color-twitch: var(--twitch);
+  --color-twitch-soft: var(--twitch-soft);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* Roles de tipografía: Cinzel (capital romana inscripcional) para titulares
+     y wordmark; Geist para lectura y cifras tabulares. */
+  --font-display: var(--font-cinzel);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  ::selection {
+    @apply bg-accent text-accent-ink;
+  }
 }

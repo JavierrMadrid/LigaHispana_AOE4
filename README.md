@@ -34,6 +34,8 @@ npm run lint       # eslint
 npm run build      # build de producción
 npm run sync       # sincroniza las partidas de AoE4World (ver "Sincronización")
 npm run verify:sync  # comprobaciones de normalización y guardado (ver más abajo)
+npm run mock:tournament  # simula el torneo completo contra la API falsa (ver "Simulación local")
+npm run mock:clean       # retira exactamente lo que crea la simulación
 ```
 
 ## Base de datos
@@ -63,6 +65,7 @@ Se usa **Supabase** (Postgres cloud). La conexión se define en `.env` (`DATABAS
 | `AOE4WORLD_SYNC_MAX_PAGES` | Páginas máximas por pasada y jugador (10 → 500 partidas) |
 | `AOE4WORLD_SYNC_CONCURRENCY` | Jugadores a la vez (3) |
 | `AOE4WORLD_SYNC_DEADLINE_MS` | Plazo global de una pasada (240000) |
+| `AOE4WORLD_MOCK` | `1` para responder con las fixtures locales de `src/lib/aoe4world/mock/` en vez de salir a la red (`0` por defecto; imposible con `NODE_ENV=production`) |
 | `CRON_SECRET` | Secreto para llamar a `POST /api/cron/sync` sin sesión |
 
 ## Sincronización con AoE4World
@@ -108,6 +111,32 @@ npm run verify:sync -- --db  # además comprueba el guardado y borra lo que crea
 ```
 
 `--db` necesita `DATABASE_URL` y crea un jugador de prueba con `profileId` 9000001; si ya existe, la comprobación avisa y para. La limpieza se hace siempre, incluso si algo falla.
+
+## Simulación local (mock de AoE4World)
+
+Para ver `/` y `/partidas` poblados sin depender de la API real y sin gastar cuota de *rate limit* existe un modo mock, **opt-in** y solo para desarrollo:
+
+- `AOE4WORLD_MOCK=1` intercepta el único punto de salida HTTP, `performRequest()` en `src/lib/aoe4world/http.ts`, y responde con las fixtures locales de `src/lib/aoe4world/mock/` en lugar de salir a la red. Los parsers, el worker y el motor de puntuación son exactamente los mismos, así que la simulación ejercita el código real: cualquier cambio futuro del worker se sigue probando contra el mismo flujo.
+- Con el flag activo y `NODE_ENV=production`, la configuración falla al arrancar: el mock no puede estar activo en producción. Por defecto (`0`) no hay ningún cambio de comportamiento.
+
+```bash
+npm run mock:tournament  # crea o actualiza el torneo simulado y sincroniza
+npm run mock:clean       # retira exactamente lo que crea la simulación
+```
+
+`npm run mock:tournament`:
+
+- Crea o actualiza los **10 participantes** del torneo simulado como `APPROVED`, con `profileId` en el rango reservado `90000001`–`90000010` (no se solapa con perfiles reales ni con el jugador de prueba de `verify:sync --db`).
+- Sincroniza **solo esos perfiles**: no toca ni le pide nada a ningún otro jugador aprobado que haya en la base, y al final recalcula la clasificación.
+- Resultado: **127 filas de partida** (71 partidas distintas: 68 terminadas y 3 en directo), de las que **122 están resueltas** con resultado informado. Los 3 directos dejan **5 filas** con `finishedAt` a `null`: una sola en el cruce contra un rival externo y dos por cada cruce entre participantes. Además, **10 puntuaciones distintas** entre sí y **5 canales de Twitch** entre los participantes.
+- **Rivales externos**: el calendario incluye partidas contra gente de la ladder que no juega la liga, con `profileId` en el rango reservado `92000001`–`92000010`: **20 terminadas** (dos por participante, una ganada y una perdida, que dejan los totales separados entre sí) y **1 de los 3 directos** (Serrano Hernández contra Brazo de Plata). Esos rivales **no** se convierten en filas `Player`: solo aparecen como `opponentProfileId` / `opponentName`, igual que en la base real.
+- Es **idempotente**: se puede lanzar N veces seguidas sin duplicar partidas ni acumular basura.
+
+`npm run mock:clean` borra exactamente esos 10 jugadores (la cascada del schema borra sus `Match` y `PlayerScore`) y sus cursores `Setting` (`aoe4world.sync.player.<profileId>`), sin tocar nada ni nadie más de la base de datos.
+
+> **Aviso**: el cron `POST /api/cron/sync` también respeta el flag. Si activas el mock en local con jugadores reales aprobados, esos perfiles recibirán 404 del mock (no existen en las fixtures); por eso el script acota la pasada a los perfiles del torneo simulado.
+
+Cómo se sostiene en el tiempo: el histórico de partidas terminadas está anclado a una **epoch fija**, así que no se mueve entre ejecuciones, y las **3 partidas en vivo** recalculan su `started_at` como "hace 10–20 minutos" en cada petición. De ese modo nunca salen de la ventana de 60 minutos que define "en directo" ni se borran por abandonadas, aunque la simulación repose días.
 
 ## Panel de administración
 

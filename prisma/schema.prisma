@@ -25,11 +25,41 @@ model Player {
   id            String       @id @default(cuid())
   profileId     Int          @unique
   name          String
+  // Canal registrado en el panel (lo escribe el admin). No es lo mismo que
+  // `twitchUrl`, que es lo que AoE4World publica en el perfil del jugador.
   twitchChannel String?
   status        PlayerStatus @default(PENDING)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-  matches       Match[]
+
+  // Lo siguiente se rellena con `GET /leaderboards/rm_solo`, una sola vez por
+  // pasada del worker (no una por jugador). Ver `src/lib/aoe4world/ladder.ts`.
+
+  // `rating` de la ladder. Null = el jugador no tiene partidas clasificatorias
+  // en la ladder (o todavía no se ha sincronizado): sigue siendo una fila
+  // válida del torneo, solo que sin elo ni división.
+  elo              Int?
+  // `rank_level` literal de AoE4World ("gold_2"), no la división resuelta: la
+  // tabla puede querer pintar el tier y la división se deriva en el DAL.
+  rankLevel        String?
+  // Racha **firmada**: positiva = victorias seguidas, negativa = derrotas
+  // seguidas, null = sin ladder. No guardarla en valor absoluto: el signo es
+  // la información.
+  streak           Int?
+  // "En directo en Twitch" leído de `twitch_is_live` del mismo endpoint que el
+  // elo, así F5 no necesita la API de Helix para el indicador de la clasificación.
+  twitchIsLive     Boolean     @default(false)
+  // Respaldo del canal: si el jugador no tiene `twitchChannel` registrado, la
+  // tabla enlaza el que declara en AoE4World.
+  twitchUrl        String?
+  // `avatars.full`; si es null la interfaz dibuja un monograma.
+  avatarUrl        String?
+  // Cuándo se miró la ladder por última vez. No se toca si el jugador no
+  // aparece en la respuesta, para poder distinguir "sin ladder" de "sin sync".
+  ladderUpdatedAt  DateTime?
+
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  matches          Match[]
+  scores           PlayerScore[]
 }
 
 model Match {
@@ -42,13 +72,25 @@ model Match {
   civ               String?
   opponentCiv       String?
   map               String?
+  // Lo que dice la API (o el `kind` si la API no manda `leaderboard`). No se
+  // toca: es el registro literal de lo que publicó AoE4World.
   leaderboard       String      @default("rm_solo")
+  // Familia de ladder resuelta (`rm_2v2` -> `rm_team`). Es una columna aparte y
+  // no un enum porque la lista de qué familias puntúan la da el ruleset, no el
+  // esquema: así, añadir un modo a las reglas no obliga a reescribir datos.
+  mode              String?
+  // La API marca si la civilización de este jugador fue aleatoria. Sin columna
+  // el motor tendría que parsear `rawJson` en cada recálculo para poder filtrar.
+  civRandomized     Boolean     @default(false)
   // Null mientras la partida sigue en curso: el resultado todavía no existe.
-  // El motor de F3 solo debe puntuar partidas con `result` y `finishedAt`.
+  // El motor solo debe puntuar partidas con `result` y `finishedAt`.
   result            MatchResult?
   startedAt         DateTime
   finishedAt        DateTime?
   durationSeconds   Int?
+  // Puntos que esta partida aporta según el ruleset activo. Con las reglas
+  // provisionales del MVP vale 1 en cada victoria clasificatoria; el motor es el
+  // único que lo escribe (ver `src/lib/scoring.ts`).
   points            Int         @default(0)
   rawJson           Json
   createdAt         DateTime    @default(now())
@@ -61,6 +103,40 @@ model Match {
   @@index([playerId, startedAt])
   // Sostiene la consulta de "partidas en directo" de F4 (`finishedAt IS NULL`).
   @@index([playerId, finishedAt])
+  // Sostiene el filtro de partidas clasificatorias: `mode` es igualdad y
+  // `startedAt` es rango, que es el orden que aprovecha un índice en Postgres.
+  @@index([mode, startedAt])
+}
+
+/// Puntuación de un jugador con una versión concreta de las reglas.
+///
+/// Agregado y no derivado en la consulta: la web lee esta tabla, no `Match`. El
+/// `ruleSetVersion` permite publicar reglas nuevas y recalcular al lado de la
+/// anterior sin pisarla.
+model PlayerScore {
+  playerId       String
+  ruleSetVersion Int
+  player         Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  // Puesto con el desempate ya aplicado. Se guarda porque el desempate acaba en
+  // datos que no están en la base de datos (el rating viene de la API), así que
+  // el orden final no se puede resolver en SQL.
+  rank           Int
+  total          Int      @default(0)
+  wins           Int      @default(0)
+  matches        Int      @default(0)
+
+  // Desglose por modo de la regla que produjo esta fila. Es JSON y no columnas
+  // porque el número de categorías cambia con cada versión de las reglas.
+  breakdown      Json
+  computedAt     DateTime @default(now())
+
+  // Clave compuesta: una fila por jugador y versión. Indexa también la FK a
+  // Player (columna más a la izquierda), que es lo que hace barato el borrado en
+  // cascada al eliminar un jugador.
+  @@id([playerId, ruleSetVersion])
+  // La consulta más caliente del sitio: la clasificación, sin `sort`.
+  @@index([ruleSetVersion, rank])
 }
 
 model Setting {

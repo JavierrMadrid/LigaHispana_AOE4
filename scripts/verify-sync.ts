@@ -2,9 +2,10 @@ import "dotenv/config";
 
 import assert from "node:assert/strict";
 
-import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame } from "@/lib/aoe4world/normalize";
+import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame, readOwnCivRandomized, resolveGameMode } from "@/lib/aoe4world/normalize";
 import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/parse";
 import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
+import { countsAsRanked, MVP_RULESET_VERSION } from "@/lib/scoring";
 import type { Aoe4WorldClient } from "@/lib/aoe4world/client";
 import type { Aoe4WorldGame, Aoe4WorldGamesPage } from "@/lib/aoe4world/types";
 
@@ -23,6 +24,8 @@ const SAMPLE_PROFILE_ID = 9_000_001;
 const SAMPLE_OPPONENT_ID = 9_000_002;
 const SAMPLE_ALLY_ID = 9_000_003;
 const SAMPLE_RIVAL_ID = 9_000_004;
+/** Segundo jugador, para comprobar que las lecturas públicas filtran por estado. */
+const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
 
 /**
  * Reloj congelado para las comprobaciones de normalización: al pasarle `NOW` a
@@ -205,6 +208,74 @@ async function checkNormalization(): Promise<void> {
     assert.equal(match.durationSeconds, 1800);
     assert.equal(match.startedAt.toISOString(), "2026-09-26T18:00:00.000Z");
     assert.equal(match.finishedAt?.toISOString(), "2026-09-26T18:30:00.000Z");
+  });
+
+  await check("mode resuelve la familia de ladder a partir de lo que dice la API", () => {
+    assert.equal(resolveGameMode("rm_1v1"), "rm_solo");
+    assert.equal(resolveGameMode("rm_2v2"), "rm_team");
+    assert.equal(resolveGameMode("rm_3v3"), "rm_team");
+    assert.equal(resolveGameMode("rm_4v4"), "rm_team");
+    assert.equal(resolveGameMode("rm_solo"), "rm_solo", "lo que ya viene canónico pasa tal cual");
+    assert.equal(resolveGameMode("qm_1v1"), "qm_1v1", "un modo desconocido pasa tal cual");
+    assert.equal(resolveGameMode(null), null);
+    assert.equal(resolveGameMode("  "), null);
+
+    assert.equal(normalized(SOLO_WIN).mode, "rm_solo");
+    assert.equal(normalized(TEAM_LOSS).mode, "rm_team", "el 2v2 cuenta como ranked de equipos");
+  });
+
+  await check("civRandomized se lee del jugador de esta fila, no del compañero", () => {
+    assert.equal(readOwnCivRandomized(parsedGame(SOLO_WIN), SAMPLE_PROFILE_ID), false);
+    assert.equal(normalized(SOLO_WIN).civRandomized, false);
+
+    // El compañero juega con civ aleatoria; el jugador de la fila no.
+    const conCompaneroAleatorio = {
+      ...TEAM_LOSS,
+      teams: TEAM_LOSS.teams.map((team) =>
+        team.map((entry) => {
+          const player = entry.player;
+          const profileId = player.profile_id;
+          return { player: { ...player, civilization_randomized: profileId === SAMPLE_ALLY_ID } };
+        }),
+      ),
+    };
+    assert.equal(
+      readOwnCivRandomized(parsedGame(conCompaneroAleatorio), SAMPLE_PROFILE_ID),
+      false,
+      "que el compañero lleve civ aleatoria no dice nada de esta fila",
+    );
+
+    const propia = {
+      ...TEAM_LOSS,
+      teams: TEAM_LOSS.teams.map((team) =>
+        team.map((entry) => {
+          const player = entry.player;
+          return { player: { ...player, civilization_randomized: player.profile_id === SAMPLE_PROFILE_ID } };
+        }),
+      ),
+    };
+    assert.equal(readOwnCivRandomized(parsedGame(propia), SAMPLE_PROFILE_ID), true);
+    assert.equal(normalized(propia).civRandomized, true);
+
+    // Un payload sin el campo se interpreta como "no aleatoria", que es lo mismo
+    // que el valor por defecto de la columna.
+    assert.equal(readOwnCivRandomized(parsedGame(SOLO_WIN), SAMPLE_RIVAL_ID), false);
+  });
+
+  await check("solo cuentan las partidas clasificatorias resueltas", () => {
+    const base = { mode: "rm_solo", result: "WIN" as const, finishedAt: NOW };
+
+    assert.equal(countsAsRanked(base), true);
+    assert.equal(countsAsRanked({ ...base, mode: "rm_team" }), true, "los equipos también son ranked");
+    assert.equal(countsAsRanked({ ...base, finishedAt: null }), false, "en curso no puntúa");
+    assert.equal(countsAsRanked({ ...base, result: null }), false, "sin resultado no puntúa");
+    assert.equal(countsAsRanked({ ...base, mode: "qm_1v1" }), false, "una custom no es clasificatoria");
+    assert.equal(countsAsRanked({ ...base, mode: null }), false, "sin ladder resuelta no puntúa");
+    assert.equal(
+      countsAsRanked({ ...base, mode: "rm_solo", result: "LOSS", finishedAt: NOW }),
+      true,
+      "una derrota cuenta como partida, aunque no dé puntos",
+    );
   });
 
   await check("rawJson guarda la partida tal cual la devolvió la API", () => {
@@ -439,16 +510,23 @@ async function runDatabaseChecks(): Promise<void> {
       const solo = rows.find((row) => row.gameId === "9000001");
       assert.equal(solo?.result, "WIN");
       assert.equal(solo?.leaderboard, "rm_solo");
-      assert.equal(solo?.points, 0, "los puntos los pone F3");
+      assert.equal(solo?.mode, "rm_solo", "la familia de ladder se resuelve al guardar");
+      assert.equal(solo?.civRandomized, false);
+      assert.equal(solo?.points, 1, "el motor da 1 punto a la victoria clasificatoria");
       assert.equal(
         solo?.finishedAt?.toISOString(),
         new Date(soloStartedAt.getTime() + 1_800_000).toISOString(),
         "finishedAt = started_at + duración",
       );
 
+      const porEquipos = rows.find((row) => row.gameId === "9000002");
+      assert.equal(porEquipos?.mode, "rm_team");
+      assert.equal(porEquipos?.points, 0, "una derrota clasificatoria no da puntos, pero sí cuenta");
+
       const enCurso = rows.find((row) => row.gameId === "9000003");
       assert.equal(enCurso?.finishedAt, null);
       assert.equal(enCurso?.result, null);
+      assert.equal(enCurso?.points, 0, "una partida en curso nunca puntúa");
 
       const state = await readPlayerSyncState(SAMPLE_PROFILE_ID);
       assert.ok(state !== null);
@@ -639,6 +717,160 @@ async function runDatabaseChecks(): Promise<void> {
 
       assert.ok(setting !== null);
       assert.equal(setting.key, "aoe4world.sync.player.9000001");
+    });
+
+    await check("el motor deja la clasificación al día y es idempotente", async () => {
+      const { recomputeScores } = await import("@/lib/scoring");
+
+      const primera = await recomputeScores();
+      assert.equal(primera.ruleSetVersion, MVP_RULESET_VERSION);
+      assert.equal(primera.playersRanked >= 1, true);
+
+      const segunda = await recomputeScores();
+      assert.equal(
+        segunda.playersRanked,
+        primera.playersRanked,
+        "repetir el recálculo no crea filas nuevas",
+      );
+      assert.equal(segunda.playersUnranked, 0);
+
+      const score = await db.playerScore.findUnique({
+        where: { playerId_ruleSetVersion: { playerId: player.id, ruleSetVersion: MVP_RULESET_VERSION } },
+      });
+
+      assert.ok(score !== null, "el jugador de muestra tiene que estar en la clasificación");
+      assert.ok(score.rank >= 1, "el puesto es un entero positivo");
+      assert.equal(score.total, 3, "tres victorias clasificatorias (1v1, 2v2 y la del refetch)");
+      assert.equal(score.wins, 3);
+      assert.equal(score.matches, 4, "cuatro partidas clasificatorias resueltas: 3 ganadas y la perdida");
+
+      // Los puntos de la tabla y los de la clasificación tienen que cuadrar.
+      const puntosEnPartidas = await db.match.aggregate({
+        where: { playerId: player.id },
+        _sum: { points: true },
+      });
+      assert.equal(puntosEnPartidas._sum.points, score.total, "PlayerScore.total = suma de Match.points");
+
+      // Ninguna partida en vivo ni abandonada puede haber colado puntos.
+      const puntosInesperados = await db.match.aggregate({
+        where: { playerId: player.id, points: { gt: 0 }, OR: [{ finishedAt: null }, { result: null }] },
+        _sum: { points: true },
+      });
+      assert.equal(puntosInesperados._sum.points, null, "una partida sin resolver nunca puntúa");
+
+      const breakdown = score.breakdown as {
+        ruleSetVersion: number;
+        rule: string;
+        byMode: Record<string, { wins: number; points: number; matches: number }>;
+      };
+      assert.equal(breakdown.ruleSetVersion, MVP_RULESET_VERSION);
+      assert.equal(typeof breakdown.rule, "string");
+      assert.deepEqual(breakdown.byMode.rm_solo, { wins: 3, points: 3, matches: 3 });
+      assert.deepEqual(breakdown.byMode.rm_team, { wins: 0, points: 0, matches: 1 });
+
+      // Los puestos de toda la tabla tienen que ser coherentes con el orden.
+      const todas = await db.playerScore.findMany({
+        where: { ruleSetVersion: MVP_RULESET_VERSION },
+        orderBy: { rank: "asc" },
+        select: { rank: true, total: true, wins: true },
+      });
+
+      assert.deepEqual(
+        todas.map((row) => row.rank),
+        todas.map((_, index) => index + 1),
+        "los puestos son un entero denso y sin huecos",
+      );
+      assert.equal(
+        todas.every((row, index) => {
+          const anterior = todas[index - 1];
+          return anterior === undefined || anterior.total >= row.total;
+        }),
+        true,
+        "el orden por rank coincide con el orden por puntos",
+      );
+    });
+
+    await check("la clasificación pública solo muestra a los aprobados", async () => {
+      const { getStandings, getLiveMatches, getTwitchChannels } = await import("@/lib/public");
+
+      // Un segundo jugador, aprobado, sin partidas: no debe tener fila.
+      const vacio = await db.player.create({
+        data: { profileId: SAMPLE_PENDING_PROFILE_ID + 1, name: "Sin Partidas", status: "APPROVED" },
+      });
+      // Y uno pendiente, con partidas y canal: tampoco debe aparecer en nada.
+      const pendiente = await db.player.create({
+        data: {
+          profileId: SAMPLE_PENDING_PROFILE_ID,
+          name: "Jugador Pendiente",
+          status: "PENDING",
+          twitchChannel: "canal_pendiente",
+        },
+      });
+
+      try {
+        await db.match.create({
+          data: {
+            gameId: "9000099",
+            playerId: pendiente.id,
+            leaderboard: "rm_solo",
+            mode: "rm_solo",
+            result: null,
+            startedAt: new Date(now.getTime() - 10 * 60_000),
+            finishedAt: null,
+            rawJson: fixture.live,
+          },
+        });
+
+        const standings = await getStandings();
+        const fila = standings.find((row) => row.profileId === SAMPLE_PROFILE_ID);
+
+        assert.ok(fila !== undefined, "el jugador de muestra sale en la clasificación");
+        assert.equal(fila.points, 3);
+        assert.equal(fila.wins, 3);
+        assert.equal(fila.wins + fila.losses, 4);
+        assert.equal(
+          standings.some((row) => row.profileId === vacio.profileId),
+          false,
+          "un aprobado sin partidas clasificatorias no tiene fila (P-02)",
+        );
+        assert.deepEqual(
+          standings.map((row) => row.rank),
+          standings.map((_, index) => index + 1),
+          "los puestos son un entero denso y en orden",
+        );
+
+        const vivos = await getLiveMatches();
+        assert.equal(
+          vivos.some((row) => row.playerProfileId === SAMPLE_PENDING_PROFILE_ID),
+          false,
+          "una partida en curso de un jugador pendiente no se publica",
+        );
+        assert.equal(
+          vivos.every((row) => row.startedAt instanceof Date),
+          true,
+          "startedAt llega como Date, no como texto",
+        );
+
+        await db.player.update({
+          where: { id: player.id },
+          data: { twitchChannel: "https://twitch.tv/Canal_De_Prueba" },
+        });
+
+        const canales = await getTwitchChannels();
+        const mio = canales.find((row) => row.profileId === SAMPLE_PROFILE_ID);
+
+        assert.ok(mio !== undefined, "el canal del jugador aprobado sale en la lista");
+        assert.equal(mio.twitchChannel, "canal_de_prueba", "una URL se recorta a nombre de canal");
+        assert.equal(
+          canales.some((row) => row.profileId === SAMPLE_PENDING_PROFILE_ID),
+          false,
+          "los jugadores pendientes no publican canal",
+        );
+      } finally {
+        await db.player.deleteMany({
+          where: { profileId: { in: [SAMPLE_PENDING_PROFILE_ID, SAMPLE_PENDING_PROFILE_ID + 1] } },
+        });
+      }
     });
   } finally {
     await db.player.deleteMany({ where: { profileId: SAMPLE_PROFILE_ID } });

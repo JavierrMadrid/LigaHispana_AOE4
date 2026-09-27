@@ -2,9 +2,11 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { mergeAbandonedAudit, readPlayerSyncState, writePlayerSyncState } from "@/lib/settings";
+import { recomputeScores, type RecomputeScoresResult } from "@/lib/scoring";
 import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
 import { Aoe4WorldError, Aoe4WorldNotFoundError } from "./http";
+import { syncLadderSnapshot, type LadderSyncResult } from "./ladder";
 import { normalizeGame, type NormalizedMatch } from "./normalize";
 import type { Aoe4WorldGame } from "./types";
 
@@ -15,6 +17,14 @@ import type { Aoe4WorldGame } from "./types";
  * partidas de **todas** las ladders, se normalizan y se guardan las nuevas con
  * deduplicación por `(playerId, gameId)`. Un jugador que falle no tumba el
  * lote: su error queda registrado y el resto sigue.
+ *
+ * Además, una vez por pasada y antes del bucle, se toma una instantánea de la
+ * ladder (`ladder.ts`): elo, división, racha y directo de Twitch de todos los
+ * aprobados en una sola llamada.
+ *
+ * Al final se recalcula la clasificación. Es lo que cumple el requisito de
+ * "siempre actualizada" sin que nadie tenga que recargar: cada pasada del worker
+ * deja la tabla de puntos al día.
  */
 
 /**
@@ -78,6 +88,18 @@ export type SyncSummary = {
   apiRetries: number;
   rateLimitResponses: number;
   rateLimitPausesMs: number;
+  /**
+   * Instantánea de la ladder (elo, división, racha, directo de Twitch) tomada
+   * al principio de la pasada. Su fallo no afecta al resto del resumen.
+   */
+  ladder: LadderSyncResult;
+  /**
+   * Recálculo de la clasificación al final de la pasada. `null` solo si la
+   * versión de reglas leída no existe, lo que no debería ocurrir.
+   */
+  scoring: RecomputeScoresResult | null;
+  /** Por qué no se pudo recalcular la clasificación, si no se pudo. */
+  scoringError: string | null;
   players: SyncPlayerResult[];
 };
 
@@ -158,8 +180,10 @@ async function applyMatchUpdate(playerId: string, match: NormalizedMatch): Promi
       opponentName: match.opponentName,
       civ: match.civ,
       opponentCiv: match.opponentCiv,
+      civRandomized: match.civRandomized,
       map: match.map,
       leaderboard: match.leaderboard,
+      mode: match.mode,
       result: match.result,
       startedAt: match.startedAt,
       finishedAt: match.finishedAt,
@@ -199,8 +223,9 @@ async function persistMatches(
   let inserted = 0;
 
   if (toCreate.length > 0) {
-    // `points` se escribe solo en el alta y a 0: el motor de F3 todavía no
-    // existe. En la actualización no se toca para no pisar lo que calcule F3.
+    // `points` se escribe solo en el alta y a 0: aquí no hay nada que decidir,
+    // los puntos los calcula el motor de scoring al final de la pasada. En la
+    // actualización no se toca, para no pisar lo que ese motor haya escrito.
     const created = await db.match.createMany({
       data: toCreate.map((match) => ({
         gameId: match.gameId,
@@ -209,8 +234,10 @@ async function persistMatches(
         opponentName: match.opponentName,
         civ: match.civ,
         opponentCiv: match.opponentCiv,
+        civRandomized: match.civRandomized,
         map: match.map,
         leaderboard: match.leaderboard,
+        mode: match.mode,
         result: match.result,
         startedAt: match.startedAt,
         finishedAt: match.finishedAt,
@@ -522,6 +549,15 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
 
   const players = await readApprovedPlayers(options.profileIds);
 
+  // Una sola llamada a la ladder para todos los aprobados, y antes del bucle:
+  // así se ejecuta siempre, aunque el bucle se pase del plazo o algún jugador
+  // falle. Si falla, se registra y la pasada continúa con lo que ya había.
+  const ladder = await syncLadderSnapshot(players, client, signal);
+
+  if (ladder.error !== null) {
+    console.error(`[sync] No se ha podido refrescar la ladder: ${ladder.error}`);
+  }
+
   const settled = await runPool(players, config.concurrency, async (player) => {
     if (signal.aborted) {
       return emptyPlayerResult(player, { status: "cancelled", error: "Plazo agotado." });
@@ -540,6 +576,20 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     } else if (result.status === "cancelled") {
       console.warn(`[sync] Jugador ${result.profileId} (${result.name}): sincronización cancelada.`);
     }
+  }
+
+  // La clasificación se recalcula al final y en su propia transacción. Si falla,
+  // las partidas ya están guardadas: la web serviría la clasificación anterior
+  // hasta la próxima pasada, que es preferible a tumbar la sincronización entera.
+
+  let scoring: RecomputeScoresResult | null = null;
+  let scoringError: string | null = null;
+
+  try {
+    scoring = await recomputeScores();
+  } catch (error) {
+    scoringError = toErrorMessage(error);
+    console.error(`[sync] No se ha podido recalcular la clasificación: ${scoringError}`);
   }
 
   const finishedAtMs = Date.now();
@@ -562,6 +612,9 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     apiRetries: client.stats.retries,
     rateLimitResponses: client.stats.rateLimitResponses,
     rateLimitPausesMs: client.stats.rateLimitPausesMs,
+    ladder,
+    scoring,
+    scoringError,
     players: settled,
   };
 }

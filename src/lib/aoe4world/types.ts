@@ -82,11 +82,18 @@ export type Aoe4WorldLeaderboardEntry = {
   rating: number | null;
   rank: number | null;
   rankLevel: string | null;
+  /**
+   * Racha **firmada** (comprobado contra la API: conviven `-1` y `20`):
+   * positiva = victorias seguidas, negativa = derrotas. `null` cuando el
+   * jugador no tiene partidas en la ladder.
+   */
+  streak: number | null;
   gamesCount: number | null;
   winsCount: number | null;
   lossesCount: number | null;
   twitchUrl: string | null;
   twitchIsLive: boolean;
+  avatars: Aoe4WorldPlayer["avatars"];
   lastGameAt: Date | null;
 };
 

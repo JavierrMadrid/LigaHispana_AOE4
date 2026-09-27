@@ -24,10 +24,13 @@ export const LIVE_GAME_WINDOW_MS = LIVE_GAME_WINDOW_MINUTES * 60_000;
 export type NormalizedMatch = {
   gameId: string;
   leaderboard: string;
+  /** Familia de ladder resuelta; `null` solo si la API no dio ninguna referencia. */
+  mode: string | null;
   opponentProfileId: number | null;
   opponentName: string | null;
   civ: string | null;
   opponentCiv: string | null;
+  civRandomized: boolean;
   map: string | null;
   /** `null` mientras la partida sigue en curso. */
   result: MatchResult | null;
@@ -51,6 +54,41 @@ export function isLiveGame(game: Aoe4WorldGame, now: Date = new Date()): boolean
   const elapsedMs = now.getTime() - game.startedAt.getTime();
 
   return notFinishedYet && elapsedMs <= LIVE_GAME_WINDOW_MS;
+}
+
+/**
+ * Correspondencia mecánica entre el `kind` de la API y la familia de ladder.
+ *
+ * La API usa el mismo nombre para cosas distintas según el endpoint: un ranked
+ * 2v2 puede venir como `leaderboard: "rm_team"` o como `kind: "rm_2v2"`. Como
+ * `leaderboard` es el registro literal de lo que publicó la API, no se reescribe;
+ * esta función produce la familia canónica en `Match.mode`, que es la columna por
+ * la que el motor filtra.
+ *
+ * La lista de qué familias **puntúan** no va aquí: eso es dato de las reglas, y
+ * por eso el mapeo es "cómo se llaman las cosas en la API" y no "qué cuenta en
+ * este torneo". Así, añadir un modo al ruleset no obliga a reescribir datos.
+ */
+const LADDER_FAMILY: Readonly<Record<string, string>> = {
+  rm_1v1: "rm_solo",
+  rm_2v2: "rm_team",
+  rm_3v3: "rm_team",
+  rm_4v4: "rm_team",
+};
+
+/** `rm_1v1` -> `rm_solo`, `rm_2v2` -> `rm_team`, cualquier otro valor pasa tal cual. */
+export function resolveGameMode(leaderboard: string | null): string | null {
+  if (leaderboard === null) {
+    return null;
+  }
+
+  const trimmed = leaderboard.trim();
+
+  if (trimmed === "") {
+    return null;
+  }
+
+  return LADDER_FAMILY[trimmed] ?? trimmed;
 }
 
 function toMatchResult(result: "win" | "loss" | null): MatchResult | null {
@@ -80,6 +118,24 @@ function findSides(game: Aoe4WorldGame, profileId: number) {
   const opponent = opponentTeam?.[0] ?? null;
 
   return { own, opponent };
+}
+
+/**
+ * Si la civilización de **este** jugador fue aleatoria.
+ *
+ * La API marca la civilización de cada jugador dentro de su equipo, así que hay
+ * que buscar a nuestro `profileId` y no leer el primer `true` que aparezca: en un
+ * 2v2 puede ser el compañero el que jugó con civ aleatoria. `teams` ya viene
+ * normalizado desde `parse.ts`, que acepta las dos formas en que la API envía la
+ * entrada (`{ player: {...} }` en el listado y plana en el detalle), así que aquí
+ * no hay que volver a parsear `rawJson`.
+ *
+ * `false` cuando no aparece: la API no siempre manda el campo, y quedarse sin
+ * dato se interpreta como "no aleatoria", que es el mismo valor por defecto de la
+ * columna.
+ */
+export function readOwnCivRandomized(game: Aoe4WorldGame, profileId: number): boolean {
+  return findSides(game, profileId).own?.civilizationRandomized ?? false;
 }
 
 export function normalizeGame(
@@ -121,10 +177,12 @@ export function normalizeGame(
     match: {
       gameId: String(game.gameId),
       leaderboard,
+      mode: resolveGameMode(leaderboard),
       opponentProfileId: opponent?.profileId ?? null,
       opponentName: opponent?.name ?? null,
       civ: own?.civilization ?? null,
       opponentCiv: opponent?.civilization ?? null,
+      civRandomized: readOwnCivRandomized(game, profileId),
       map: game.map,
       result,
       startedAt: game.startedAt,

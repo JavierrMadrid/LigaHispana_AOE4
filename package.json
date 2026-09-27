@@ -12,7 +12,11 @@
     "db:push": "prisma db push",
     "studio": "prisma studio",
     "sync": "tsx --conditions=react-server scripts/sync.ts",
+    "score": "tsx --conditions=react-server scripts/score.ts",
+    "backfill:model": "tsx --conditions=react-server scripts/backfill-model.ts",
     "verify:sync": "tsx --conditions=react-server scripts/verify-sync.ts",
+    "mock:tournament": "tsx --conditions=react-server scripts/mock-tournament.ts",
+    "mock:clean": "tsx --conditions=react-server scripts/mock-tournament.ts --clean",
     "postinstall": "prisma generate"
   },
   "dependencies": {

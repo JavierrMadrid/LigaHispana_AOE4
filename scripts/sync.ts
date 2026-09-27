@@ -38,6 +38,19 @@ async function main(): Promise<void> {
   console.log(`Partidas en directo detectadas: ${summary.liveMatches}`);
   console.log(`Partidas descartadas: ${summary.skippedGames}`);
   console.log(
+    summary.scoring === null
+      ? "Clasificación: no recalculada"
+      : `Clasificación: ${summary.scoring.playersRanked} jugadores, ${summary.scoring.matchesScored} partidas con punto (${summary.scoring.durationMs} ms)`,
+  );
+  if (summary.scoringError !== null) {
+    console.log(`Clasificación: ERROR — ${summary.scoringError}`);
+  }
+  console.log(
+    `Ladder: ${summary.ladder.batches} llamada(s), ${summary.ladder.playersUpdated} jugador(es) actualizados, ` +
+      `${summary.ladder.playersMissing} ausentes de la respuesta` +
+      (summary.ladder.error === null ? "" : ` — ERROR: ${summary.ladder.error}`),
+  );
+  console.log(
     `Llamadas a la API: ${summary.apiRequests} (reintentos: ${summary.apiRetries}, pausas por rate limit: ${summary.rateLimitPausesMs} ms)`,
   );
   console.log(`Duración: ${summary.durationMs} ms`);

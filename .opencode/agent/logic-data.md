@@ -1,7 +1,7 @@
 ---
 description: Lógica, datos e integraciones (Prisma, Supabase Auth/Postgres, API de AoE4World, Server Actions, workers). Úsalo para cualquier cambio de lógica, base de datos, API o infraestructura.
 mode: subagent
-model: opencode/space-bunny-free
+model: opencode/mimo-v2.6-flash-free
 temperature: 0.2
 permission:
   edit: allow

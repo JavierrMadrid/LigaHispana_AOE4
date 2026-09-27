@@ -1,0 +1,925 @@
+# Modelo de datos — Liga Hispana AoE4
+
+Traducción a tablas de las reglas de puntuación. Es la especificación de
+`docs/PUNTUACION.md` (que define **qué** puntúa y **cuánto**) al esquema de
+la base de datos (que define **dónde vive cada dato**).
+
+> **Estado en esta rama: aplicado a medias.** La parte del modelo que no depende
+> de las reglas ya está en `prisma/schema.prisma` y en la base de datos. La parte
+> que sí depende (el *ruleset* Wololo completo, los snapshots y las categorías)
+> sigue sin aplicarse, a la espera de que la comunidad cierre las reglas.
+> **El capítulo "Adaptación al MVP" es el mapa de qué es cuál**, y lo primero que
+> hay que leer para no confundirse con el diseño completo.
+
+| | |
+|---|---|
+| Estado | **Parcialmente aplicado.** Ver "Adaptación al MVP" (§0 bis) para el desglose exacto de qué sí y qué no. |
+| Depende de | `docs/PUNTUACION.md` (§9 lista los once requisitos que este documento tiene que cubrir) y `docs/PLAN.md` (reglas heredadas de F2). |
+| Punto de partida | `prisma/schema.prisma` a fecha de hoy: `Player`, `Match`, `Setting`, más `PlayerScore`. |
+| Cubre | Los once requisitos de `PUNTUACION.md` §9. El cruce está en §3 y en §5. |
+| No cubre | El motor de cálculo (F3, código), la interfaz (F4) ni el panel de admin. |
+
+> **Dónde está `PUNTUACION.md`.** Este documento lo referencia unas veinte veces
+> como si estuviera al lado, y **no lo está**: las reglas de puntuación completas
+> viven en la rama `docs/f3-puntuacion` (`git show docs/f3-puntuacion:docs/PUNTUACION.md`).
+> Tampoco se han copiado aquí, porque sus reglas no son las que se aplican hoy.
+> Mientras la comunidad no las valide, este documento se lee como **diseño de
+> referencia**: explica a dónde va cada cosa, no qué está funcionando.
+
+## 0. Cómo se lee y cómo se edita
+
+- **§1 es intocable.** Es el modelo que ya está en producción con datos. Si algo de ahí parece
+  mejor de otra forma, está justificado en `PLAN.md` y el coste de cambiarlo está en §1.3.
+- **§3 y §4 son la propuesta.** Campos, tipos, índices y el SQL que Prisma no sabe expresar.
+- **§5 es el mapa que delata los huecos**: qué tabla alimenta cada regla. Si una casilla está
+  vacía o dice "de momento en `rawJson`", ahí hay una decisión pendiente.
+- **§9 separa las dos clases de decisión**, y no se mezclan:
+  - **Decisiones de producto (P-nn)**: son del cliente. Cambiarlas no cuesta código, cuesta lo
+    que el cliente quiera que signifique.
+  - **Decisiones técnicas (M-nn)**: son mías, con motivo. El cliente puede revertirlas, pero
+    conviene que sepa qué se rompe al hacerlo.
+- Las decisiones de producto **que ya están abiertas en `PUNTUACION.md` §10 (D-01 a D-16) no se
+  repiten aquí**: se enlazan. Este documento solo añade las que son específicamente de datos.
+
+## 0 bis. Adaptación al MVP (lo que hay de este diseño en el código hoy)
+
+Este documento describe un modelo completo, pensado para unas reglas de cinco categorías
+todavía por decidir. Lo que se ha implementado **ya** es el MVP: un torneo en marcha con una
+regla provisional de un punto por victoria en partida clasificatoria. Este capítulo es el
+mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` existe.
+
+### 0 bis.1 La regla que se aplica ahora
+
+> **Cada victoria en partida clasificatoria (ranked 1v1 o por equipos) da 1 punto.**
+
+- **Clasificatoria** = `Match.mode ∈ ('rm_solo', 'rm_team')`. Las dos ladders *ranked* del modo
+  competitivo. Nada más cuenta: ni customs (`qm_*`), ni `ew_*`, ni `ffa_*`.
+- Solo puntúan partidas **resueltas** (`result` y `finishedAt` no nulos). Una partida en curso
+  nunca puntúa, ni a favor ni en contra.
+- Derrota = 0 puntos (pero cuenta como partida jugada).
+- **Sin ventana de fechas, sin duración mínima, sin categorías y sin desempate por rating.**
+  El desempate provisional es `total desc, wins desc, profileId asc`, que termina en un valor
+  único, así que el puesto es un entero denso sin empates que repartir.
+- La versión de reglas es la `1` (`MVP_RULESET_VERSION` en `src/lib/scoring.ts`) y es
+  **provisional**: representa esta regla, no el ruleset Wololo del diseño.
+
+### 0 bis.2 Aplicado
+
+| Pieza | Dónde | Nota |
+|---|---|---|
+| `Match.mode` + correspondencia mecánica | `resolveGameMode()` en `src/lib/aoe4world/normalize.ts` | `rm_1v1` → `rm_solo`; `rm_2v2`/`rm_3v3`/`rm_4v4` → `rm_team`; el resto tal cual (§3.1.1). `leaderboard` **no** se toca. |
+| `Match.civRandomized` | `readOwnCivRandomized()` en el mismo archivo | Se lee de la entrada del jugador con nuestro `profileId` dentro de `rawJson.teams[]`, en las dos formas en que la API la manda (anidada y plana), porque `parse.ts` ya la normaliza (§3.1.2). |
+| `Match`: índice `(mode, startedAt)` | `prisma/schema.prisma` | Como en §3.1.3. |
+| `PlayerScore` (tabla nueva) | `prisma/schema.prisma` | Agregado versionado, con la pk compuesta y el índice `(ruleSetVersion, rank)` de §3.2. **Sin las columnas de categorías Wololo**; el `breakdown` JSON las absorbe. |
+| `Player.scores` | `prisma/schema.prisma` | Relación inversa, como en el borrador de §4. |
+| `Match.points` con valor real | `src/lib/scoring.ts` | **Cambio de fondo respecto a §3.1.4**: allí la columna se quedaba a 0 porque ninguna regla repartía puntos por partida. Aquí sí: vale 1 en cada victoria clasificatoria resuelta y 0 en el resto. Es justamente la "regla de puntos por partida" que §3.1.4 anticipaba, y por eso la columna ya existía y no hubo que crearla. |
+| *Backfill* de `mode` y `civRandomized` | `npm run backfill:model` (`scripts/backfill-model.ts`) | Los SQL 3a y 3b de §8.1, idempotentes, más sus comprobaciones. |
+
+**Formato exacto de `PlayerScore.breakdown` en el MVP.** Es un objeto con tres campos, y las
+dos familias clasificatorias están **siempre presentes** (con ceros si no aplican), para que
+quien lo lea no tenga que defenderse de una clave que puede no existir:
+
+```json
+{
+  "ruleSetVersion": 1,
+  "rule": "un punto por victoria en partida clasificatoria (ranked)",
+  "byMode": {
+    "rm_solo": { "wins": 3, "points": 3, "matches": 5 },
+    "rm_team": { "wins": 1, "points": 1, "matches": 2 }
+  }
+}
+```
+
+El tipo exportado es `ScoreBreakdown` en `src/lib/scoring.ts`. Cuando entren las categorías
+Wololo, este JSON **crece** (claves `civs`, `maps`, `crowns`, `milestones`...) sin tocar el
+schema: para eso es JSON y no columnas.
+
+### 0 bis.3 Diferido hasta que la comunidad cierre las reglas
+
+Nada de esto está en el código, y no es un olvido: son piezas que no tienen sentido sin las
+reglas que las define.
+
+| Pieza diferida | Por qué espera |
+|---|---|
+| `ScoreSnapshot` (tabla) | El rastro de cada cálculo completo y su delta es útil cuando hay varias versiones conviviendo. Con una sola versión provisional, la tabla `PlayerScore` ya dice todo. Es el paso 7 de §8.1. |
+| Columnas de categoría de `PlayerScore`: `civsWonCount`, `mapsWonCount`, `crownsCount`, `milestonesReached`, `ratingUsed` | Son una columna por categoría del ruleset Wololo. Con el MVP, `wins`/`matches` cubren la clasificación y `breakdown` recoge lo que la interfaz necesite. |
+| Ruleset completo en `Setting` (`scoring.ruleset.active`, `scoring.ruleset.v{N}`, `scoring.lastRun` de §3.4) | El documento de reglas es lo que hay que versionar, y no hay documento que versionar todavía: la regla del MVP cabe en una constante de código. |
+| Filtros de ventana de fechas y duración mínima | Dependen de las fechas que pone la comunidad (D-02, D-03). |
+| Desempate por ratio y por rating de `rm_solo` | El rating viene de la API y cambia solo; la cadena de desempates provisional acaba en `profileId`, que es único. |
+| RLS sin políticas (§7) | **Diferido por prudencia, no por dificultad.** La comprobación previa (0.1) sí se ha hecho en esta base de datos: el rol de `DATABASE_URL` es `postgres` con `rolbypassrls = true`, así que activarlo **no** dejaría la web sin datos. Aun así, las tablas existentes llevan tiempo funcionando sin RLS y conviene hacerlo con el worker parado y en la misma revisión de permisos. |
+| Índice parcial de partidas en directo (§3.6) | No aplicado: la consulta de F4 (`finishedAt IS NULL` sobre unos pocos miles de filas de las decenas de miles) no lo necesita todavía, y un índice que no está en el schema es una complicación en cada `db push`. |
+| *Backfills* de §8.1 que solo aplican a las reglas | Los pasos 3c, 3d y 3e que hypotheticalmente existieran para categorías que hoy no hay. Los que sí aplican (3a y 3b) están hechos. |
+
+### 0 bis.4 Lo que esto no cambia del diseño
+
+- El aggregate versionado sigue siendo la tabla de lectura de la web, no `Match` (§3.2).
+- El puesto se sigue **guardando** en `rank` y no resolviéndose en la consulta (§3.2, punto 1).
+- El mapeo de `kind` a ladder sigue estando **en código**, no en el ruleset (§3.1.1, M-02).
+- `rawJson` no se toca y las partidas no se borran (P-04).
+- `Player.status` sigue siendo el filtro de quién rankea (requisito 11).
+- P-02 se respeta: un jugador aprobado **sin ninguna partida clasificatoria resuelta no tiene
+  fila** en `PlayerScore` y por tanto no aparece en la clasificación.
+
+### 0 bis.5 Comandos
+
+| Comando | Qué hace |
+|---|---|
+| `npm run score` | Recalcula la clasificación y la imprime. Es lo que hace el worker al final de cada pasada, pero a mano. |
+| `npm run backfill:model` | Rellena `mode` y `civRandomized` de las partidas que ya había en la base de datos. Idempotente. |
+| `npm run verify:sync -- --db` | Comprueba normalización, guardado, motor de puntuación y lecturas públicas contra la base de datos de verdad, con datos de ejemplo que limpia al terminar. |
+
+## 1. El modelo actual
+
+### 1.1 `Player`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | `String` (cuid) | Clave primaria interna. Nunca se expone. |
+| `profileId` | `Int` | Identificador de AoE4World. **Único**: un jugador es una persona en AoE4World. |
+| `name` | `String` | Lo refresca el worker con el nombre de la API. |
+| `twitchChannel` | `String?` | Lo rellena el admin. Lo usa F5, no el motor de puntos. |
+| `status` | `PlayerStatus` (`PENDING`/`APPROVED`/`REJECTED`) | Filtro de la clasificación: solo `APPROVED` puntúa (requisito 11). |
+| `createdAt`, `updatedAt` | `DateTime` | |
+
+Índices: `id` (pk) y `profileId` (único). **Ninguno más**, y está justificado en §6.
+
+### 1.2 `Match`
+
+Una fila por **jugador y partida**. Dos participantes que se enfrentan generan dos filas con
+resultados, civilizaciones y puntos propios.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `gameId` | `String` | Id de la partida en AoE4World. `String` y no `Int` porque la API lo manda como número pero no garantiza el rango, y no queremos un `Int4` que reviente. |
+| `playerId` | `String` | FK a `Player.id`, `onDelete: Cascade`. |
+| `opponentProfileId` | `Int?` | Solo el **primer** rival del equipo contrario. Limitación conocida y anotada en `PLAN.md`. |
+| `opponentName` | `String?` | |
+| `civ`, `opponentCiv` | `String?` | Alimentan las categorías 2 y 4. |
+| `map` | `String?` | Alimenta la categoría 3. |
+| `leaderboard` | `String` (por defecto `rm_solo`) | Lo que dice la API, o el `kind` si la API no manda `leaderboard`. |
+| `result` | `MatchResult?` (`WIN`/`LOSS`) | **`null` = la partida sigue en curso.** El resultado todavía no existe. |
+| `startedAt` | `DateTime` | Ancla de la ventana de clasificatorias. |
+| `finishedAt` | `DateTime?` | Derivado (`started_at + duration`). **`null` = en curso**, que es lo que F4 lista como partida en directo. |
+| `durationSeconds` | `Int?` | Alimenta el filtro de duración mínima. |
+| `points` | `Int` (por defecto 0) | **En el diseño completo siempre vale 0.** Ver §3.1.4. En el MVP **sí** vale 1 por victoria clasificatoria: §0 bis.2. |
+| `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** |
+| `createdAt` | `DateTime` | |
+
+| Índice | Tipo | Consulta que sostiene |
+|---|---|---|
+| `(playerId, gameId)` | único | Deduplicación del worker. |
+| `(playerId, startedAt)` | compuesto | Partidas de un jugador ordenadas por fecha: ficha de jugador, rango de hitos, agregados. |
+| `(playerId, finishedAt)` | compuesto | Partidas en directo de un jugador, y orden por `finishedAt` para los hitos. |
+
+### 1.3 Decisiones heredadas que no se tocan
+
+| Decisión | Por qué | Coste de revertirla |
+|---|---|---|
+| `leaderboard` es `String`, no enum | La API publica modos nuevos y no queremos una migración por cada uno. | Alto y recurrente: obliga a migrar cada vez que aparece un modo. |
+| `rawJson` se guarda entero | Es lo que permite recalcular puntos sin volver a pedir nada a la API (`PUNTUACION` §5.1). | **Irreversible en la práctica**: una partida que la API ya no devuelve no se puede recuperar. |
+| `result` y `finishedAt` admiten `null` | `null` significa "en curso" y F4 lo lista como partida en directo. F2 borra la fila cuando la partida se abandona. | Alto: `finishedAt = null` es la señal de "vivo"; si se llena con un centinela, F4 deja de poder filtrar. |
+| Unicidad `(playerId, gameId)`, no `gameId` | Dos participantes pueden jugar la misma partida y cada uno necesita su fila. | **Pérdida silenciosa de datos**: con unicidad global, la fila del segundo jugador no se guarda y su resultado desaparece. |
+| El worker guarda **todas** las partidas, no solo las clasificatorias | El filtro por modo y por fecha lo hace el motor, y así las partidas en directo salen del mismo histórico. | Medio: obligaría al worker a saber las reglas, y a reescribir el histórico cada vez que cambian. |
+| `Setting` como memoria del worker | Ya existe y ya guarda el cursor de sincronización por jugador. Reutilizarlo evita una segunda configuración clave-valor. | Bajo, pero duplicaría la misma idea en dos sitios. |
+
+### 1.4 `Setting`
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `key` | `String` | Clave primaria. |
+| `value` | `Json` | |
+| `updatedAt` | `DateTime` | |
+
+Sin índices adicionales: se lee siempre por clave, que es la primaria.
+
+## 2. Resumen de lo que hay que añadir
+
+| # | Pieza | Tipo de cambio | Requisito de `PUNTUACION.md` §9 |
+|---|---|---|---|
+| 1 | `Match.mode` | Columna nueva | 1 (modo canónico consultable) |
+| 2 | `Match.civRandomized` | Columna nueva | 1 (y D-04) |
+| 3 | `Match`: índice `(mode, startedAt)` | Índice nuevo | 7 |
+| 4 | `PlayerScore` | **Tabla nueva** | 2 y 3 (agregado versionado y desglose) |
+| 5 | `ScoreSnapshot` | **Tabla nueva** | 5 y 6 (auditoría de cada cálculo) |
+| 6 | Reglas y memoria del motor en `Setting` | Filas nuevas | 4 |
+| 7 | Índice parcial de partidas en directo | **SQL a mano** | 7 (corrigido, ver §3.6) |
+| 8 | RLS sin políticas | **SQL a mano** | 10 |
+| — | `Player` | Sin cambios | 11 (ya resuelto con `status`) |
+| — | `Match.points` | Sin cambios, se queda a 0 | 8 |
+
+Dos tablas y dos columnas. Nada se borra ni se renombra.
+
+## 3. El modelo completo, pieza a pieza
+
+### 3.1 `Match`: dos columnas nuevas
+
+#### 3.1.1 `mode` (requisito 1)
+
+| | |
+|---|---|
+| Qué es | La **familia de ladder** de la partida: `rm_solo`, `rm_team`, `qm_1v1`… |
+| Para qué | El filtro de modos es la condición más frecuente del motor, y hoy no se puede filtrar en SQL. |
+| Tipo | `String?` |
+| Por qué `String` y no enum | Misma razón que `leaderboard`: la API publica familias nuevas y no queremos migrar por cada una. Además, la lista de qué familias cuentan es **dato del ruleset**, no del esquema. |
+| Por qué nullable | Las filas que ya existen no lo tienen. Se rellena con un *backfill* (§8) y, si algún día se quiere, se pasa a `NOT NULL`. |
+
+El problema que resuelve, con precisión: hoy la columna `leaderboard` guarda
+`game.leaderboard ?? game.kind` (ver `normalize.ts`). Para un ranked 2v2 eso significa que puede
+guardar `rm_team` **o** `rm_2v2`, según lo que mande la API. Un ruleset que liste `rm_team` no
+encontraría las filas guardadas como `rm_2v2`, y el filtro de la clasificación se quedaría corto
+sin avisar.
+
+La solución es una correspondencia mecánica, **fija y en código**, no una lista de modos del torneo:
+
+| Valor guardado | `mode` resuelto | Comentario |
+|---|---|---|
+| `rm_1v1` | `rm_solo` | |
+| `rm_2v2`, `rm_3v3`, `rm_4v4` | `rm_team` | La ladder de equipos cubre los tres tamaños. |
+| Cualquier otro valor | Él mismo | `qm_1v1`, `ew_*`, `ffa_*`… pasan tal cual. |
+| Sin valor reconocible | `null` | No cuenta, y el ruleset lo descarta igualmente. |
+
+La frontera queda así, y es importante que quede clara:
+
+- **El código sabe cómo llama la API a las cosas** (que `rm_2v2` cuelga de `rm_team`).
+- **El ruleset decide qué cuenta** (que en este torneo puntúa `rm_solo`, `rm_team` y `qm_*`).
+
+Con esa separación, si el cliente mañana añade `ew_1v1` a la lista del ruleset, **las filas ya
+guardadas empiezan a contar sin volver a escribir nada**. Ese es el motivo de que la
+correspondencia sea mecánica y no "si el valor está en la lista del ruleset".
+
+#### 3.1.2 `civRandomized` (requisito 1, y D-04)
+
+| | |
+|---|---|
+| Qué es | `true` si la API marcó que la civilización de **este** jugador fue aleatoria. |
+| Para qué | Que una victoria con civ aleatoria no cuente para la categoría 2 ni para la 4 (D-04). |
+| Tipo | `Boolean`, por defecto `false`. |
+| De dónde sale | `rawJson.teams[].civilization_randomized` del jugador con nuestro `profileId`. |
+
+Por qué una columna si el dato ya está en `rawJson`: porque el motor tiene que contar
+civilizaciones distintas **en SQL** (`count(distinct civ)`), y filtrar por un campo de `jsonb`
+dentro de un array de arrays de objetos no es indexable. Con la columna, el backfill y los
+agregados son un `group by` normal. El coste es una columna booleana (1 byte por fila) y un
+backfill que hay que hacer bien (§8).
+
+Riesgo conocido y por eso lo digo: el valor por defecto es `false`, así que **una fila antigua
+sin backfill cuenta como "no aleatoria"**, y si el backfill se hace mal, las categorías 2 y 4
+salen mal. No es un riesgo teórico, es el motivo de que el paso 3b de §8 sea una comprobación
+explícita y no un detalle.
+
+#### 3.1.3 Índice `(mode, startedAt)`
+
+| | |
+|---|---|
+| Consulta que lo sostiene | "Todas las partidas clasificatorias de todos los jugadores aprobados dentro de la ventana": `where mode = any(...) and startedAt >= from and startedAt < to and result is not null and finishedAt is not null and durationSeconds >= min`. |
+| Por qué en ese orden | `mode` es igualdad, `startedAt` es rango. El índice compuesto pone la igualdad primero y el rango último, que es el orden que aprovecha un índice en Postgres. |
+| Por qué en Prisma y no a mano | Prisma sí sabe expresar este. Ver §3.6 para el índice que sí necesita SQL. |
+
+#### 3.1.4 `points` se queda (requisito 8)
+
+> **Lo que sigue describe el diseño completo.** En el MVP esta columna **sí** se usa: vale 1 en
+> cada victoria clasificatoria resuelta. Ver §0 bis.2. El resto del razonamiento de aquí sigue
+> en pie, y es justamente por eso por lo que la columna existía.
+
+`Match.points` **no se borra y no se usa**. En la v1 las cinco categorías son agregadas o por
+puesto: ninguna reparte puntos sobre una partida concreta, así que la columna vale 0 en todas
+las filas y se queda así.
+
+Razones para no borrarla: el worker de F2 la escribe en el alta y la respeta en la actualización
+(`sync.ts`), así que borrarla obliga a tocar código de F2 para ganar una columna vacía. Y el día
+que entre la regla "puntos por partida" de `PUNTUACION` §8, la columna es justo donde tienen que
+caer esos puntos. Lo que esa regla necesitará entonces, y que hoy no existe, es una columna
+`pointsRuleSetVersion` para poder recalcular: **no se añade ahora** (sería una columna muerta)
+y queda anotado en §5 para cuando haga falta.
+
+### 3.2 `PlayerScore`: el agregado versionado (requisitos 2 y 3)
+
+Una fila por **jugador y versión de reglas**. Es la tabla de la que lee la web, y la única que
+contiene puntos.
+
+| Campo | Tipo | Qué guarda | De dónde sale |
+|---|---|---|---|
+| `playerId` | `String` | FK a `Player.id`, cascada | |
+| `ruleSetVersion` | `Int` | Con qué versión de las reglas se calculó esta fila | `Setting` (ruleset activo) |
+| `rank` | `Int` | Puesto en la clasificación final, **ya con la cadena de desempates aplicada** | El motor |
+| `total` | `Int` | Puntos de las cinco categorías | El motor |
+| `wins` | `Int` | Victorias clasificatorias | `Match` |
+| `matches` | `Int` | Partidas clasificatorias resueltas (victorias y derrotas) | `Match` |
+| `civsWonCount` | `Int` | Civilizaciones distintas ganadas | `Match.civ` |
+| `mapsWonCount` | `Int` | Mapas distintos ganados | `Match.map` |
+| `crownsCount` | `Int` | Civilizaciones de las que es rey | derivado |
+| `milestonesReached` | `Int` | Cuántos escalones de victorias ha alcanzado | derivado |
+| `ratingUsed` | `Int?` | El rating de `rm_solo` que se usó en el desempate de esta fila | `GET /leaderboards/rm_solo` |
+| `breakdown` | `Json` | El desglose por categoría, con la lista de civs, mapas, coronas e hitos | El motor |
+| `computedAt` | `DateTime` | Cuándo se calculó esta fila | El motor |
+
+| Índice | Tipo | Consulta que sostiene |
+|---|---|---|
+| `(playerId, ruleSetVersion)` | **pk compuesta** | Lectura de la ficha de un jugador. De paso indexa la FK a `Player` (columna más a la izquierda), que es lo que evita un escaneo en el `Cascade` al borrar un jugador. |
+| `(ruleSetVersion, rank)` | compuesto | **La consulta más caliente del sitio**: la clasificación, `where ruleSetVersion = V order by rank asc`. Igualdad y rango ordenados, sin `sort`. |
+
+Tres decisiones de diseño detrás de esta tabla, que son las que conviene que el cliente
+entienda porque son las que hacen el resto del modelo necesario:
+
+**1. El puesto se guarda, no se calcula en la consulta.** La cadena de desempates de
+`PUNTUACION` §4.1 acaba en el rating, que no está en la base de datos (viene de la API y cambia
+solo). Por lo tanto **el orden no se puede resolver en SQL**: hay que calcularlo en el motor y
+guardarlo. Por eso existe `rank` y por eso el índice de la clasificación es por `rank` y no por
+`total` (esto corrige lo que decía `PUNTUACION` §9.2, que proponía `(ruleSetVersion, total desc)`:
+con `total` solo, dos jugadores empatados quedarían en orden arbitrario y habría que resolverlo
+en la capa de aplicación).
+
+**2. El desglose es JSON, no columnas.** Las categorías cambian con cada versión de las reglas
+(un ruleset con seis categorías no cabe en columnas sin migrar). El desglose vive **dentro de la
+fila versionada**, así que conviven dos versiones sin molestar. A cambio se pierde la
+posibilidad de consultar en SQL "quién ha ganado con los French"; queda anotado en §5.
+
+**3. El recuento y la lista van los dos.** `civsWonCount` es la cifra que se muestra y se
+ordena; `breakdown.civs` es la evidencia de qué civilizaciones son. Es duplicación, pero la
+escribe siempre el mismo motor en la misma operación, así que no puede desincronizarse, y evita
+parsear JSON para pintar un "3 coronas".
+
+### 3.3 `ScoreSnapshot`: el rastro (requisitos 5 y 6)
+
+Una fila por **cálculo completo**, con su resultado y su delta. No es una tabla de lectura
+caliente: la web nunca la lee.
+
+| Campo | Tipo | Qué guarda |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `ruleSetVersion` | `Int` | Con qué versión se calculó |
+| `asOf` | `DateTime` | Momento del corte |
+| `watermark` | `DateTime?` | `max(finishedAt)` de las partidas incluidas. Dice hasta dónde llegan los datos. |
+| `reason` | `SnapshotReason` | Por qué se calculó: ver abajo |
+| `rows` | `Json` | La clasificación de esa versión, con nombre, puesto, total y desglose |
+| `delta` | `Json?` | Qué cambió respecto al cálculo anterior, por jugador y por regla |
+
+`reason` (enum):
+
+| Valor | Cuándo |
+|---|---|
+| `RULESET_PUBLISH` | Se ha publicado una versión nueva de las reglas y se ha recalculado. |
+| `MANUAL_RECALC` | Un admin ha pedido un recálculo. |
+| `WINDOW_CHANGE` | Se ha cambiado la ventana de fechas o la lista de modos. |
+| `SEASON_CLOSE` | Cierre de la temporada. |
+
+Índices: único `(ruleSetVersion, asOf)` (evita dos snapshots del mismo corte) y
+`(asOf desc)` para el historial del panel.
+
+**Aviso importante sobre la frecuencia.** `PUNTUACION` §6 sugiere hacer un snapshot al final de
+cada pasada del worker. Eso está mal y hay que corregirlo aquí: el worker corre cada 5 minutos,
+son 288 pasadas al día, y con ~60 jugadores el `rows` de cada una ronda los 50 KB. Son **10 MB al
+día**, casi 4 GB al año, para guardar 287 veces lo mismo. La regla correcta es:
+
+> **El snapshot se escribe por evento, no por pasada.** Cada publicación de versión, cada
+> recálculo manual y cada cierre de temporada. El estado de la última pasada se guarda
+> **sobrescribiendo una fila de `Setting`** (`scoring.lastRun`), que es una sola fila y no crece.
+
+Los datos de la tabla se conservan todos. Con unos cuantos snapshots por temporada, la tabla
+pesa menos de 1 MB.
+
+**Por qué tabla y no filas de `Setting`.** `PUNTUACION` §9.5 decía "un JSON por snapshot", y
+la forma es correcta; lo que cambia es dónde vive. En `Setting` habría que inventar una clave
+por snapshot (`scoring.snapshot.v3.2026-10-14T1830Z`), y para listar el historial habría que
+hacer `LIKE 'scoring.snapshot%'` y ordenar el texto de la clave. Una tabla con dos columnas
+resuelve eso con un índice y sin formato de clave que mantener. El rastro de las pasadas del
+worker (requisito 6) **sí** se queda en `Setting`, porque es memoria de trabajo que se
+sobrescribe, no un histórico.
+
+### 3.4 `Setting`: las claves nuevas
+
+Sin tabla nueva. Se reutiliza la que F2 ya usa.
+
+| Clave | Contenido | Quién la escribe | Quién la lee |
+|---|---|---|---|
+| `scoring.ruleset.active` | `{ version, publishedAt, publishedBy, versions: [1, 2, 3] }` | Publicación de versión | El motor, en cada pasada |
+| `scoring.ruleset.v{N}` | El documento completo de las reglas (el YAML de `PUNTUACION` §5.4, en JSON) | Publicación de versión | El motor |
+| `scoring.lastRun` | Resumen de la última pasada: versión, duración, jugadores, contadores, `snapshotId` | Worker | Panel de admin |
+| `scoring.sync.player.{profileId}` | Ya existe desde F2 (cursor) | Worker | Worker |
+
+Decisiones detrás de este reparto:
+
+- **El ruleset son filas de `Setting`, no una tabla** (`PUNTUACION` §9.4). Una tabla por regla
+  invitaría a editar media regla y necesitaría su propio versionado. Un documento se edita entero
+  o no se edita.
+- **La versión activa es un puntero, no una copia.** `scoring.ruleset.active` guarda el número de
+  versión y la lista de versiones publicadas, y el documento se lee de `scoring.ruleset.v{N}`.
+  Así el puntero no puede desincronizarse del documento: hay una sola copia de cada versión.
+- **La lista de versiones viaja en el puntero** para que el panel no tenga que hacer `LIKE` sobre
+  las claves. Es el único punto donde hay dos fuentes de verdad (el puntero y las claves), y
+  ambos los escribe la misma acción de admin, en la misma transacción.
+- **`publishedBy` no necesita columna**: cabe dentro del documento JSON de la versión, así que
+  el schema no tiene que registrar quién publicó cada versión.
+
+Coste conocido de no tener tabla de rulesets: **`ruleSetVersion` no tiene integridad referencial**.
+Nada impide escribir una fila de `PlayerScore` con una versión que no existe en `Setting`. Se
+cubre validando en la escritura (el motor no publica una versión sin guardar antes su documento,
+y no calcula contra una versión que no esté en el puntero), y es un riesgo que solo puede cometer
+el propio código, no un usuario.
+
+### 3.5 `Player`: sin cambios
+
+Requisito 11 cubierto por `status`. Los jugadores `PENDING` y `REJECTED` no entran ni en la
+clasificación ni en el reparto de premios.
+
+Lo que se ha considerado y **no** se añade:
+
+| Candidato | Por qué no |
+|---|---|
+| `country` (la API lo devuelve) | Ninguna regla de la v1 lo usa. Es un dato de presentación, y se puede pedir cuando F4 lo necesite. |
+| `seasonId` o `tournamentId` | La ventana de fechas del ruleset ya separa temporadas. Una columna más que mantener y que rellenar sería redundante. Ver P-01. |
+| Índice en `status` | La consulta es "jugadores aprobados" sobre una tabla de decenas o pocos cientos de filas, y se ordena por `profileId` (que sí está indexado por ser único). Un índice aquí no se va a usar. |
+
+### 3.6 Índices que Prisma no sabe expresar
+
+**Corrección de `PUNTUACION` §9.7.** Allí se propuso un índice parcial sobre las partidas
+**resueltas** (`where result is not null and finishedAt is not null`). Es un error: ese predicado
+excluye un puñado de filas (las que están en curso) de un total de decenas de miles, así que el
+índice parcial sería casi tan grande como uno completo, y a cambio obligaría a mantenerlo con SQL
+a mano. No compensa.
+
+Donde un índice parcial **sí** compensa es en la consulta de partidas en directo: ahí el predicato
+`finishedAt is null` es selectivo de verdad, porque en cualquier momento hay unas pocas partidas vivas
+entre decenas de miles de terminadas).
+
+```sql
+-- ÍNDICE PARCIAL: Prisma no lo expresa. Crear DESPUÉS del `db push`, nunca antes.
+-- Envoltido en un bloque DO para que se pueda reponer a mano.
+do $$
+begin
+  if not exists (
+    select 1 from pg_class where relname = 'match_live_idx'
+  ) then
+    create index match_live_idx on "Match" ("startedAt")
+    where "finishedAt" is null;
+  end if;
+end $$;
+```
+
+Soporta la consulta de F4: `where finishedAt is null and Player.status = 'APPROVED' order by
+startedAt desc`. Con el predicado en el índice, `finishedAt` no necesita estar en la clave.
+
+**El aviso importante:** `prisma db push` calcula la diferencia entre el schema y la base de
+datos. Un índice que no está en el schema no le es familiar: puede avisar y pedir confirmación, o
+proponerlo como pérdida de datos. Por eso el bloque va con `DO` (se puede reponer) y hay que
+**comprobarlo después de cada `db push`**. La comprobación:
+
+```sql
+select indexname from pg_indexes where tablename = 'Match' order by indexname;
+```
+
+Alternativa si se quiere evitar SQL a mano: declarar en Prisma `@@index([finishedAt, startedAt])`.
+Funciona (el `finishedAt` delante permite filtrar por `IS NULL`) pero indexa las 30.000 filas en
+vez de unas pocas. Es la opción M-04 de §9.
+
+## 4. Borrador de `prisma/schema.prisma`
+
+> **Este bloque ya no es la referencia del schema: lo es `prisma/schema.prisma`.** Se conserva
+> intacto como **registro histórico del diseño completo**, y para ver los comentarios del
+> porqué que Prisma no admite. Difiere del schema real en los puntos que enumera
+> "Adaptación al MVP" (§0 bis): sin `SnapshotReason`, sin `ScoreSnapshot`, sin las columnas de
+> categoría en `PlayerScore` (`civsWonCount`, `mapsWonCount`, `crownsCount`,
+> `milestonesReached`, `ratingUsed`), y con `Match.points` tomando valor real en vez de
+> quedarse a 0. Cuando se aplique el resto, el bloque y el schema convergerán.
+
+Propuesta completa, tal como estaba el día que se escribió. Los comentarios explican el porqué
+de lo que no es obvio, que es la regla del repositorio.
+
+```prisma
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PlayerStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum MatchResult {
+  WIN
+  LOSS
+}
+
+/// Por qué se calcula: se escribe al publicar una versión de las reglas o al
+/// recalcular, nunca en cada pasada del worker (que correría 288 veces al día).
+enum SnapshotReason {
+  RULESET_PUBLISH
+  MANUAL_RECALC
+  WINDOW_CHANGE
+  SEASON_CLOSE
+}
+
+model Player {
+  id            String        @id @default(cuid())
+  profileId     Int           @unique
+  name          String
+  twitchChannel String?
+  status        PlayerStatus  @default(PENDING)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  matches       Match[]
+  scores        PlayerScore[]
+}
+
+model Match {
+  id                String      @id @default(cuid())
+  gameId            String
+  playerId          String
+  player            Player      @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  opponentProfileId Int?
+  opponentName      String?
+  civ               String?
+  opponentCiv       String?
+  map               String?
+  // Lo que dice la API, o el `kind` si la API no manda `leaderboard`. No se toca:
+  // es el registro de lo que la API publicó.
+  leaderboard       String      @default("rm_solo")
+  // Familia de ladder resuelta (`rm_2v2` -> `rm_team`). Es lo que permite filtrar
+  // por modo en SQL; la lista de qué familias puntúan la da el ruleset, no el código.
+  mode              String?
+  // La API marca si la civilización de este jugador fue aleatoria. Sin esto, la
+  // categoría 2 premiaría jugar civilizaciones que no se dominan.
+  civRandomized     Boolean     @default(false)
+  // Null mientras la partida sigue en curso: el resultado todavía no existe.
+  // El motor de F3 solo debe puntuar partidas con `result` y `finishedAt`.
+  result            MatchResult?
+  startedAt         DateTime
+  finishedAt        DateTime?
+  durationSeconds   Int?
+  // Siempre 0 en la v1: ninguna regla reparte puntos por partida. No se borra
+  // porque el worker de F2 la escribe y la futura regla por partida la necesita.
+  points            Int         @default(0)
+  rawJson           Json
+  createdAt         DateTime    @default(now())
+
+  // La unicidad es por jugador, no global: en un torneo individual dos
+  // participantes pueden jugar la misma partida y cada uno necesita su fila
+  // (resultado, civ y puntos propios). Un único `gameId` global descartaría la
+  // mitad de los datos de esos cruces.
+  @@unique([playerId, gameId])
+  @@index([playerId, startedAt])
+  // Sostiene la consulta de "partidas en directo" de F4 (`finishedAt IS NULL`).
+  @@index([playerId, finishedAt])
+  // Sostiene el filtro de partidas clasificatorias por ventana: `mode` es
+  // igualdad y `startedAt` es rango, y ese es el orden que aprovecha el índice.
+  @@index([mode, startedAt])
+}
+
+/// Puntuación de un jugador con una versión concreta de las reglas.
+///
+/// Las dos versiones de una regla conviven aquí sin molestar: es lo que permite
+/// publicar una versión nueva y recalcular al lado de la anterior, y comparar.
+model PlayerScore {
+  playerId       String
+  ruleSetVersion Int
+  player         Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  /// Puesto final con la cadena de desempates ya aplicada. Se guarda porque el
+  /// desempate acaba en el rating, que no está en la base de datos: el orden
+  /// final no se puede resolver en SQL.
+  rank           Int
+  total          Int      @default(0)
+  wins           Int      @default(0)
+  matches        Int      @default(0)
+  civsWonCount   Int      @default(0)
+  mapsWonCount   Int      @default(0)
+  crownsCount    Int      @default(0)
+  milestonesReached Int   @default(0)
+
+  /// Rating de `rm_solo` usado en esta fila. Se guarda para que el recálculo sea
+  /// reproducible: si el rating de la API cambia, el snapshot sigue siendo fiel.
+  ratingUsed     Int?
+
+  /// Desglose por categoría, con la lista de civilizaciones, mapas, coronas e
+  /// hitos. Es JSON y no columnas porque el número de categorías cambia con cada
+  /// versión de las reglas, y migrar columnas en cada versión no es una opción.
+  breakdown      Json
+  computedAt     DateTime @default(now())
+
+  // Clave compuesta: una fila por jugador y versión. Indexa también la FK a
+  // Player (columna más a la izquierda), que es lo que hace barato el borrado
+  // en cascada cuando se elimina un jugador.
+  @@id([playerId, ruleSetVersion])
+  // La consulta más caliente del sitio: clasificación por puesto, sin `sort`.
+  @@index([ruleSetVersion, rank])
+}
+
+/// Resultado de un cálculo completo, con su delta respecto al anterior.
+///
+/// No es una tabla de lectura caliente: la web lee `PlayerScore`. Esto es el
+/// rastro que responde a "por qué el martes esto tenía 87 puntos".
+model ScoreSnapshot {
+  id             String         @id @default(cuid())
+  ruleSetVersion Int
+  asOf           DateTime
+  /// `max(finishedAt)` de las partidas incluidas: dice hasta dónde llegan los datos.
+  watermark      DateTime?
+  reason         SnapshotReason
+  /// La clasificación tal como quedó, con nombre, puesto, total y desglose.
+  rows           Json
+  /// Qué cambió respecto al cálculo anterior, por jugador y por regla.
+  delta          Json?
+
+  @@unique([ruleSetVersion, asOf])
+  @@index([asOf(sort: Desc)])
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+```
+
+Lo que **no** aparece en ese bloque y hay que hacer aparte: el índice parcial de §3.6, los
+`alter table ... enable row level security` de §7 y los *backfills* de §8.
+
+## 5. Mapa regla → dato
+
+Una fila por pieza de `PUNTUACION.md`. La columna "dato" es la que hay que mirar para saber si
+el modelo aguanta.
+
+| Pieza de las reglas | Dato que la alimenta | Dónde vive | ¿Falta algo? |
+|---|---|---|---|
+| **Categoría 1** (victorias) | `Match.result = WIN` con los filtros de clasificatoria | `Match` → `PlayerScore.wins` | — |
+| **Categoría 2** (civilizaciones) | `count(distinct Match.civ)` de las ganadas, excluyendo aleatorias | `Match.civ`, `Match.civRandomized` → `PlayerScore.civsWonCount` y `breakdown.civs` | — |
+| **Categoría 3** (mapas) | `count(distinct Match.map)` de las ganadas, excluyendo nulo y `Unknown Map` | `Match.map` → `mapsWonCount` y `breakdown.maps` | Confirmar el literal exacto del mapa desconocido (comprobación 0.4 de §8.0) |
+| **Categoría 4** (coronas) | Agrupar victorias por civ, quedarse con el máximo de cada civ, con el mínimo de 10 | Derivado de `Match.civ` → `crownsCount` y `breakdown.crowns` | — |
+| **Categoría 5** (hitos) | `PlayerScore.wins` contra los escalones, y la fecha de la `n`-ésima victoria | `Match.finishedAt` + `PlayerScore.milestonesReached` | — |
+| **Ventana de fechas** | Ruleset `window.from` / `window.to` contra `Match.startedAt` | `Setting` + `Match.startedAt` | — |
+| **Filtro de modo** | Ruleset `modes.include` / `modes.exclude` contra `Match.mode` | `Setting` + `Match.mode` | — |
+| **Filtro de resultado resuelto** | `Match.result is not null and finishedAt is not null` | `Match` | — |
+| **Filtro de duración** | Ruleset `minDurationSeconds` contra `Match.durationSeconds` | `Setting` + `Match.durationSeconds` | — |
+| **Filtro de civ aleatoria** | Ruleset `countRandomizedCivs` contra `Match.civRandomized` | `Setting` + `Match.civRandomized` | — |
+| **Desempate 1** (métrica de la categoría) | `PlayerScore` según la categoría | `PlayerScore` | — |
+| **Desempate 2** (victorias) | `PlayerScore.wins` | `PlayerScore` | — |
+| **Desempate 3** (ratio) | `wins / matches` | `PlayerScore.wins`, `PlayerScore.matches` | — |
+| **Desempate 4** (rating `rm_solo`) | `GET /leaderboards/rm_solo?profile_id=...` | `PlayerScore.ratingUsed` | — |
+| **Desempate 5** (`profileId`) | `Player.profileId` | `Player` | — |
+| **Reparto por puesto (mecanismo N..1)** | `rank` dentro de cada categoría | Solo en el motor; sale en `breakdown` | — |
+| **Puesto final** | Cadena de desempates aplicada | `PlayerScore.rank` | — |
+| **Total** | Suma de las cinco categorías | `PlayerScore.total` | — |
+| **Desglose para la interfaz** | Por categoría, con la lista de civs, mapas, coronas e hitos | `PlayerScore.breakdown` | — |
+| **Versionado** | Ruleset con número de versión, archivado | `Setting` + `ruleSetVersion` en `PlayerScore` y `ScoreSnapshot` | — |
+| **Rastro de un recálculo** | Resultado y delta | `ScoreSnapshot` (+ `Setting` `scoring.lastRun`) | — |
+| **Jugadores rankeables (N)** | `status = APPROVED` **y** al menos una partida clasificatoria | `Player.status` + `PlayerScore.matches > 0` | — |
+| **Partidas en directo** | `finishedAt is null` en jugadores aprobados | `Match` | Índice parcial (§3.6) |
+| **Regla `bonus` (reservada, `PUNTUACION` §5.3)** | Puntos a mano por jugador, con motivo | **No hay dónde guardarlos** | **Hueco real: M-05** |
+| **Regla "puntos por partida" (futura)** | Puntos por partida con versión de reglas | `Match.points` (sin versión) | Hueco menor: M-06 |
+| **Racha de victorias (futura)** | Racha actual y mejor racha | Solo derivable de `Match` | Hueco menor: hace falta un `metric` nuevo |
+| **Bonificación por upset (futura)** | Victoria contra rival de rating superior | Solo en `rawJson` | Hueco menor |
+
+Los tres huecos de abajo del todo **no bloquean la v1**: las tres reglas están marcadas como
+reservadas o futuras en `PUNTUACION` §5.3 y §8. El de `bonus` sí merece una tabla el día que se
+active, y por eso está en §9.
+
+## 6. Consultas calientes
+
+Cada consulta con el índice que la sostiene. Un índice que no aparece aquí, no se crea.
+
+| # | Dónde | Forma de la consulta | Índice que la sostiene | Comentario |
+|---|---|---|---|---|
+| 1 | `/` clasificación | `PlayerScore where ruleSetVersion = V order by rank asc take 50 skip N` | `@@index([ruleSetVersion, rank])` | Igualdad + orden. Sin `sort`. Con 60 filas, `skip` no duele; si algún día son miles, paginación por cursor sobre `rank` (M-07). |
+| 2 | `/` clasificación | Lo anterior + `Player` para nombre y canal de Twitch | El anterior + `Player.id` (pk) | 60 filas, un `in` de ids. Sin joins duplicados. |
+| 3 | `/jugador/[id]` | `Player where profileId = X` | `Player.profileId` (único) | |
+| 4 | `/jugador/[id]` | `PlayerScore where playerId = X and ruleSetVersion = V` | pk compuesta | Una fila, leída por clave primaria. |
+| 5 | `/jugador/[id]` | `Match where playerId = X order by startedAt desc take 20` | `@@index([playerId, startedAt])` | Postgres recorre el índice al revés: **no hace falta un índice `desc` aparte**. |
+| 6 | `/partidas` en directo | `Match where finishedAt is null order by startedAt desc take 50`, con `Player.status = APPROVED` | Índice parcial de §3.6 | El único índice parcial que se justifica: el predicado es selectivo. |
+| 7 | Worker (sync) | `Match where playerId = X and gameId in (...)` | pk única `(playerId, gameId)` | Sin cambios respecto a F2. |
+| 8 | Worker (sync) | `Match where playerId = X and finishedAt is null and startedAt < cursor` | `@@index([playerId, finishedAt])` | El refetch de partidas en curso. Sin cambios. |
+| 9 | Motor, recálculo completo | `Match where mode = any(...) and startedAt >= from and startedAt < to and result is not null and finishedAt is not null and durationSeconds >= min` | `@@index([mode, startedAt])` | Lee todas las partidas clasificatorias de la temporada. Con 30.000 filas es un escaneo de unos milisegundos; el índice lo hace mejor y evita que crezca mal. |
+| 10 | Motor, agregado de un jugador | Ídem 9 con `playerId = X` | `@@index([playerId, startedAt])` | La columna que más filas trae va en la fecha. |
+| 11 | Motor, orden de los hitos | `Match where playerId = X and result = WIN and finishedAt is not null order by finishedAt, startedAt, gameId` | `@@index([playerId, finishedAt])` | El desempate por fecha de la `n`-ésima victoria. `startedAt` y `gameId` no están en el índice: se resuelve ordenando en memoria, que son ≤ 8 consultas por jugador. |
+| 12 | Motor, reyes por civ | `Match where result = WIN and mode = any(...) group by civ` | Ídem 9 | Se apoya en el mismo índice del recálculo. |
+| 13 | `/admin` jugadores | `Player order by profileId` | `Player.profileId` (único) | Decenas de filas. **Sin índice en `status`** (M-09). |
+| 14 | Motor, ruleset | `Setting where key in ('scoring.ruleset.active', 'scoring.ruleset.v3')` | pk | Dos filas por pasada. |
+| 15 | `/admin` historial | `ScoreSnapshot order by asOf desc` | `@@index([asOf(sort: Desc)])` | Pocas filas. |
+
+Las consultas 9 a 12 son las que corren en cada pasada del worker. Con el volumen de un torneo
+(30 jugadores, 30.000 a 50.000 partidas) son milisegundos: no es un problema de rendimiento, es un
+problema de **correctitud** (que el filtro se aplique en SQL y no se pierda nada por un `join`
+mal hecho).
+
+## 7. RLS y privilegios
+
+Postura recomendada, y el motivo de que sea esta: **la web no se conecta nunca a la base de
+datos con una clave de cliente.** Todo el acceso pasa por el DAL del servidor con `DATABASE_URL`.
+Así que las tablas no tienen por qué ser legibles para nadie más.
+
+| Paso | Qué | Por qué |
+|---|---|---|
+| 1 | `alter table ... enable row level security` en **todas** las tablas de `public` | Es la capa que no se puede olvidar: aunque alguien conceda permisos por error, sin políticas las filas siguen sin salir. |
+| 2 | **Ninguna política.** Cero `create policy` | Una tabla con RLS y sin políticas devuelve **cero filas** a cualquier rol que no tenga `BYPASSRLS`. Eso es exactamente lo que queremos para `anon` y `authenticated`. |
+| 3 | **Ningún `grant`** a `anon` ni a `authenticated` | Refuerzo. Opcional si el paso 1 está bien, pero gratis. |
+| 4 | Comprobar con el asesor | `supabase db advisors` (CLI 2.81.3+) o el equivalente por MCP. Avisa de tablas sin RLS y de permisos demasiado abiertos. |
+
+```sql
+-- Sin políticas. Esto es todo lo que hace falta.
+alter table public."Player"       enable row level security;
+alter table public."Match"        enable row level security;
+alter table public."Setting"      enable row level security;
+alter table public."PlayerScore"  enable row level security;
+alter table public."ScoreSnapshot" enable row level security;
+
+-- Refuerzo opcional: que los roles de cliente no puedan ni intentar leer.
+revoke all on table public."PlayerScore"  from anon, authenticated;
+revoke all on table public."ScoreSnapshot" from anon, authenticated;
+```
+
+**Comprobación obligatoria antes de habilitar RLS.** Si el rol de `DATABASE_URL` no tiene
+`BYPASSRLS`, activar RLS sin políticas hará que la web deje de ver datos **en silencio**, sin
+error. Por eso esto va primero:
+
+```sql
+-- Debe devolver rolbypassrls = true (o rolsuper = true) para el rol de la app.
+select current_user, rolbypassrls, rolsuper from pg_roles where rolname = current_user;
+```
+
+**Comprobación de que la postura funciona** (después de aplicar):
+
+```sql
+-- Debe salir vacía.
+select relname, relrowsecurity from pg_class
+where relnamespace = 'public'::regnamespace and relkind = 'r'
+  and (not relrowsecurity);
+```
+
+Y, desde el proyecto, una lectura real con la clave publicable de Supabase debe devolver cero
+filas, no un error.
+
+Nota sobre vistas: si algún día se crea una vista paraSimplificar la clasificación, **una vista
+se salta RLS por defecto**. Hay que crearla con `security_invoker = true` (Postgres 15+) o
+revocar los permisos de `anon` y `authenticated` sobre ella. Ninguna tabla de este modelo necesita
+vistas hoy.
+
+## 8. Orden de aplicación y riesgos
+
+### 8.0 Antes de tocar nada (solo lectura, reversible, sin riesgo)
+
+Siete consultas que hay que hacer en Supabase antes de aplicar nada. Las tres primeras pueden
+cambiar el plan.
+
+| # | Comprobación | Por qué | Si el resultado sorprende |
+|---|---|---|---|
+| 0.1 | Rol de `DATABASE_URL`: `select current_user, rolbypassrls, rolsuper from pg_roles where rolname = current_user` | Si no tiene `BYPASSRLS`, RLS rompe la web en silencio (§7) | Parar. Resolver antes de aplicar nada |
+| 0.2 | Estado de RLS actual: la consulta de `pg_class` de §7 | No sabemos si las tres tablas existentes ya lo tienen | Si ya lo tienen, el paso 5 se reduce a las dos nuevas |
+| 0.3 | Volumen: `select count(*) from "Match"` | Decide si el *backfill* se hace de una vez o en lotes | Con más de 500.000 filas, lotes y `vacuum` |
+| 0.4 | **Modos reales**: `select "leaderboard", count(*) from "Match" group by 1 order by 2 desc`, y mapas raros: `select "map", count(*) from "Match" where "map" ilike '%unknown%' group by 1` | Confirma de una vez los nombres de la API (D-01), el mapa `kind` → ladder del §3.1.1 y el literal con el que la API marca el mapa desconocido | Si aparece un modo que no esperábamos, la lista de D-01 cambia; si el mapa desconocido no se llama `Unknown Map`, el filtro de la categoría 3 hay que cambiarlo |
+| 0.5 | **Claves de `rawJson`**: `select jsonb_pretty("rawJson"->'teams') from "Match" where "rawJson"->'teams' is not null limit 1` | Confirma `civilization_randomized` y que vienen las dos formas (anidada y plana) | Si la clave no es esa, el *backfill* 3b cambia |
+| 0.6 | FKs sin índice (consulta de la guía de Postgres, abajo) | Un índice que falta en una FK ralentiza los `join` y los `Cascade` | Añadir el índice que falte |
+| 0.7 | Duplicados: `select "playerId", "gameId", count(*) from "Match" group by 1,2 having count(*) > 1 limit 5` | Si hubiera duplicados, algún índice nuevo fallaría al crearse | Limpiar antes de aplicar |
+
+```sql
+-- 0.6: foreign keys sin ningún índice que las cubra.
+select conrelid::regclass as tabla, a.attname as columna
+from pg_constraint c
+join pg_attribute a on a.attrelid = c.conrelid and a.attnum = any(c.conkey)
+where c.contype = 'f'
+  and not exists (
+    select 1 from pg_index i
+    where i.indrelid = c.conrelid and a.attnum = any(i.indkey)
+  );
+```
+
+### 8.1 Orden
+
+> **Estado real de esta tabla.** Los pasos **1, 2, 3a y 3b están hechos** (rama `feat/mvp-web`):
+> el schema aplicado es el de `prisma/schema.prisma`, el `db push` fue aditivo y sin pérdidas, y
+> los dos *backfills* se ejecutan con `npm run backfill:model`, que es este mismo SQL más sus
+> comprobaciones. Los pasos **4, 5 y 6 están diferidos** (ver §0 bis.3). El paso **7 está hecho a
+> medias**: el motor calcula y publica la clasificación (`npm run score`), pero **no** hay
+> `ScoreSnapshot` porque esa tabla no existe. El paso 8 se cubre en parte con
+> `npm run verify:sync -- --db`.
+
+| Paso | Qué | Riesgo | Reversible |
+|---|---|---|---|
+| 1 | Copiar el borrador a `prisma/schema.prisma` y `npm run generate` | Ninguno (no toca la base de datos) | Sí |
+| 2 | `npm run db push` | **Ninguno**: 2 columnas aditivas, 2 tablas nuevas, 1 índice. Ni una operación destructiva | Sí, borrando tablas y columnas |
+| 3a | *Backfill* de `mode` (§ SQL abajo) | Bajo. Un `UPDATE` de una columna | Sí: `set "mode" = null` y repetir |
+| 3b | *Backfill* de `civRandomized` | Medio: si las claves son incorrectas, las categorías 2 y 4 salen mal | Sí: `set "civRandomized" = false` y repetir |
+| 4 | Índice parcial de partidas en directo | Ninguno | Sí, `drop index` |
+| 5 | RLS en las tablas que falten | **Alto si se hace sin la comprobación 0.1**: la web deja de ver datos sin error | Sí, `disable row level security` |
+| 6 | Publicar el ruleset v1 en `Setting` | Ninguno | Sí |
+| 7 | Primera pasada de puntuación + primer `ScoreSnapshot` con `reason = RULESET_PUBLISH` | Ninguno (solo escribe en las tablas nuevas) | Sí, `truncate` de las dos tablas |
+| 8 | Verificación funcional (§6, consultas 1, 4, 6 y 9 a mano, con `EXPLAIN ANALYZE`) | Ninguno | — |
+
+**El paso 3 se hace con el worker parado.** Los dos *backfills* escriben masivamente y pueden
+bloquear las escrituras del worker durante unos segundos. Con este volumen no es un problema, pero
+no hay razón para hacerlo en producción a la vez que entra una pasada.
+
+```sql
+-- 3a: familia de ladder. Idempotente (solo toca filas a null).
+update "Match"
+set "mode" = case
+  when "leaderboard" = 'rm_1v1' then 'rm_solo'
+  when "leaderboard" in ('rm_2v2', 'rm_3v3', 'rm_4v4') then 'rm_team'
+  else "leaderboard"
+end
+where "mode" is null;
+
+-- 3b: civilización aleatoria del jugador de esta fila. Idempotente: el valor se
+-- recalcula siempre desde rawJson, así que se puede repetir sin miedo.
+update "Match" m
+set "civRandomized" = coalesce((
+  select coalesce(
+           p.ent -> 'player' ->> 'civilization_randomized',
+           p.ent ->> 'civilization_randomized'
+         ) = 'true'
+  from jsonb_array_elements(m."rawJson" -> 'teams') as equipo,
+       lateral jsonb_array_elements(equipo) as p(ent)
+  where coalesce(
+          p.ent -> 'player' ->> 'profile_id',
+          p.ent ->> 'profile_id'
+        ) = pl."profileId"::text
+  limit 1
+), false)
+from "Player" pl
+where pl."id" = m."playerId";
+
+-- Verificación de 3a y 3b. La primera debe devolver 0.
+select count(*) from "Match" where "mode" is null;
+select count(*) from "Match" where "rawJson" -> 'teams' is not null and "civRandomized" = false;
+```
+
+La segunda verificación da un número **que no tiene que ser 0**: sirve para comparar con el
+resultado del mismo `count` si se ejecuta antes del *backfill*, y confirmar que el `UPDATE` ha
+tocado lo que tocaba. Si el *backfill* 3b falla en silencio (por ejemplo, si `rawJson->'teams'`
+viene como un array plano y no anidado en algunas filas), esa cuenta no se moverá.
+
+> Estos dos `UPDATE` son los que ejecuta `scripts/backfill-model.ts` (`npm run backfill:model`).
+> El 3b **no** necesita el `coalesce` de las dos formas porque en el worker la lectura se hace
+> sobre `teams` ya normalizado en `parse.ts`, que acepta la anidada y la plana; el SQL sí tiene
+> que leer el `rawJson` crudo, y por eso ahí sí hace falta.
+
+### 8.2 Supabase: lo que hay que tener en cuenta
+
+| Aviso | Detalle |
+|---|---|
+| **No hay *shadow database*** | Nada de `prisma migrate dev` en desarrollo: no puede crear una base de sombra para calcular la diferencia. El camino válido es `db push` contra la base real. |
+| **El script `migrate` del `package.json` es un pie** | `npm run migrate` ejecuta `prisma migrate dev`, que en Supabase fallará. No está en ningún flujo, pero ahí está. Decisión M-10: documentarlo como no válido en desarrollo, o quitarlo. |
+| **DDL a través del *pooler*** | `prisma7.config.ts` solo tiene `url`, y `DATABASE_URL` apunta al *session pooler* de Supabase. DDL por el *pooler* funciona, pero lo propio es hacerlo contra la conexión directa. Decisión M-11: añadir `directUrl` a la config y una segunda variable de entorno. |
+| **`db push` contra un *pooler* con un solo cliente** | Si `db push` se queda colgado, casi siempre es esto. Con `directUrl` desaparece. |
+| **El estado de la base de datos es la fuente** | Sin migraciones, el schema es la verdad. Si alguien cambia algo a mano en el panel de Supabase, `db push` no lo sabe hasta que lo encuentra. |
+| **`db push` pide confirmación si detecta pérdida** | Con el índice parcial de §3.6 puede avisar. **Nunca** usar `--accept-data-loss`: significaría que ha decidido que algo se borra. |
+| **Asesor de la base de datos** | `supabase db advisors` (CLI 2.81.3+) o el equivalente por MCP, después de aplicar. Avisa de RLS, de permisos y de índices que faltan. |
+
+## 9. Decisiones pendientes
+
+Dos clases, y no se mezclan.
+
+### 9.1 Decisiones de producto (son del cliente)
+
+Las que ya están abiertas en `PUNTUACION.md` §10 **no se repiten**: son D-01 a D-16 y se resuelven
+allá. Estas son solo las que son de datos y no estaban allí.
+
+| # | Pregunta | Recomendación | Coste de cambiarla |
+|---|---|---|---|
+| **P-01** | **¿Cuántas temporadas conviven en la misma base de datos?** | **Todas, sin columna de temporada.** La ventana de fechas del ruleset ya las separa: los datos de la temporada 1 no cuentan en la temporada 2 porque su ventana es otra. | Añadir `seasonId` después: una columna, un índice y un filtro más en cada consulta. Feo pero no difícil. La razón de no hacerlo ahora es que la ventana ya resuelve el problema. |
+| **P-02** | **¿Los jugadores aprobados que no han jugado aparecen en la web?** | **No en la clasificación.** Con la decisión D-09 (`rankableIfHasMatches: true`) no tienen fila en `PlayerScore`, así que no aparecen. **Sí en el panel de admin**, que los lista desde `Player`. | Si tienen que aparecer, el motor crea filas a 0 para ellos y hay que decidir si cuentan para `N` al repartir premios (que es justo lo que D-09 evita) o no. |
+| **P-03** | **¿El desglose por categoría se publica en la web o se queda en el panel?** | **En la web.** Es lo que hace que la clasificación se entienda y lo que hace visible el versionado ("tus puntos son de la v2"). | El desglose está en `PlayerScore.breakdown` en los dos casos; no cambia el modelo, cambia el DAL. Publicarlo antes de que haya una versión 2 sería enseñar una estructura que va a cambiar. |
+| **P-04** | **¿Se puede borrar el histórico de partidas al acabar la temporada?** | **No.** Es lo único que hace posible recalcular (`PUNTUACION` §5.1), y con unos cientos de KB por temporada no hay presión de espacio. | Irreversible. Si se perdieran las partidas de la temporada 1, esa temporada no se podría volver a calcular nunca. |
+| **P-05** | **¿Cuánto tiempo se conservan los snapshots y las versiones de reglas?** | **Todos.** Un snapshot ocupa ~50 KB y una versión de reglas unos pocos KB. Con unas decenas de filas por temporada, la tabla entera pesa menos de 1 MB. Conservarlos es lo que permite responder "por qué cambió la clasificación". | Ninguno, y la alternativa (borrar los antiguos) pierde justamente la evidencia que justifica este modelo. |
+| **P-06** | **¿Quién puede publicar una versión de las reglas?** | **Solo un admin** (Supabase Auth), desde el panel, y la acción queda anotada con `publishedBy` y la nota de cambios dentro del propio documento de la versión. | Permitir que cualquiera publique convierte el torneo en algo editable por cualquiera, y el recálculo es una operación cara. |
+
+### 9.2 Decisiones técnicas (son mías, con motivo)
+
+Estas se pueden revertir, pero hay que saber qué se rompe.
+
+| # | Decisión | Mi valor | Por qué | Qué pasa si se revierte |
+|---|---|---|---|---|
+| **M-01** | `mode` es una columna aparte, y `leaderboard` no se toca | Sí, columnas separadas | `leaderboard` es el registro de lo que dijo la API y no se puede sobrescribir sin perder información. Además, la nueva columna es *nullable* y el *backfill* es una Sentencia | Si se sobrescribiera `leaderboard`, se pierde el dato original y la resolución quedaría ligada a la versión de la API del momento |
+| **M-02** | La correspondencia `kind` → ladder va en **código**, no en el ruleset | Código | Es cómo llama la API a las cosas, no qué cuenta en este torneo. Con ella en código, cambiar la lista de modos del ruleset no obliga a reescribir datos | Si la lista de nombres se pusiera en el ruleset, cada versión nueva que añadiera un modo obligaría a volver a escribir `mode` en todas las filas |
+| **M-03** | `civRandomized` como columna, con *backfill* | Sí | El conteo de civilizaciones distintas tiene que ser un `group by` en SQL | Sin la columna, el motor tendría que parsear 30.000 documentos JSON en cada recálculo para filtrar, y el filtro quedaría en memoria |
+| **M-04** | Índice de partidas en directo: **parcial a mano** | Parcial | El predicado `finishedAt is null` es selectivo de verdad: unas pocas filas entre decenas de miles | Con `@@index([finishedAt, startedAt])` en Prisma funciona igual de bien y no hay que mantener nada a mano, pero el índice tiene 30.000 entradas en vez de unas pocas |
+| **M-05** | Los puntos a mano (regla `bonus`) **no tienen tabla** | Sin tabla | La regla 7 del Wololo está descartada y `bonus` es un evaluador reservado. Añadir una tabla que no se usa es deuda | Cuando se active, hará falta una tabla `ScoreBonus` (jugador, versión, categoría, cantidad, motivo, quién lo concedió) para que el bonus entre en el recálculo y en la auditoría. **No bloquea la v1.** |
+| **M-06** | `Match.points` se queda sin columna de versión | Se queda | En la v1 vale 0 en todas las filas. Añadir `pointsRuleSetVersion` ahora es una columna muerta | Cuando entre la regla por partida, esa columna se añade con el *backfill* a 0, y las reglas por partida se recalculan desde cero |
+| **M-07** | Paginación de la clasificación por `skip`/`take` | `skip`/`take` sobre `rank` | Con decenas o pocos cientos de jugadores no hay problema, y `rank` es un entero denso: no hay filas que se muevan | Con miles de jugadores, `skip` empieza a escanear filas de más. El salto a paginación por cursor sobre `rank` es local a la consulta del DAL |
+| **M-08** | `PlayerScore` sin `seasonId` ni `RuleSet` relacionada | Sin referencias | Una tabla de rulesets daría integridad referencial a `ruleSetVersion`, pero el documento completo pesa poco y `Setting` ya es la memoria del worker. El coste es que nada impide una fila con una versión inexistente, y se cubre validando en la escritura | Si aparece un problema real de integridad, la migración es una tabla `RuleSet(id, version, publishedAt)` y una FK. Nada del resto cambia |
+| **M-09** | Sin índice en `Player.status` | Sin índice | La consulta "jugadores aprobados" es sobre una tabla diminuta y se ordena por `profileId`, que ya está indexado por ser único | Si algún día hubiera 100.000 jugadores, el índice empezaría a merecer. No antes |
+| **M-10** | Qué hacer con el script `migrate` de `package.json` | Documentarlo como no válido en desarrollo | Ejecuta `prisma migrate dev`, que no funciona sin *shadow database*. Es un pie esperando a que alguien lo pruebe | (Borrarlo o renombrarlo es un cambio de una línea, pero no lo he hecho porque este encargo es solo documentación) |
+| **M-11** | `directUrl` para el DDL | Añadirlo | `prisma7.config.ts` solo tiene `url`, y apunta al *pooler*. El DDL no necesita *pooler* y a veces se queda colgado | Si no se añade, `db push` sigue funcionando, pero con menos margen |
+
+### 9.3 Qué bloquea la implementación de F3
+
+| Bloqueo | De quién es | Por qué bloquea |
+|---|---|---|
+| **Los nombres exactos de los modos** (D-01) | Producto, con un dato de la API | El filtro de partidas clasificatorias depende de la lista. Se resuelve con la consulta 0.4 y una decisión del cliente |
+| **Las fechas de la ventana** (D-02) | Producto | Sin ventana no hay recálculo posible ni fin de torneo |
+| **La duración mínima** (D-03) | Producto, con un dato de las partidas ya guardadas | Es un parámetro, no un bloqueo técnico: se puede arrancar con 600 s y recalcular cuando el cliente lo cambie |
+| **La calibración de las categorías 4 y 5** (D-06, D-07) | Producto | El motor las implementa con los valores que le den. Se puede arrancar con 5 y 3 y recalcular |
+| **Publicar el ruleset v1** | Admin, con el cliente | Sin documento en `Setting` no hay nada que calcular. Es un paso de §8.1, no una decisión de diseño |
+| **La comprobación 0.1 del rol** | Técnica, y es la más urgente | Si el rol de `DATABASE_URL` no tiene `BYPASSRLS` y se activa RLS, la web se queda sin datos sin ningún error. Es el único punto donde un error mío no se vería en el desarrollo |
+
+Ninguno de ellos impide **empezar** F3: el motor se puede escribir con el ruleset v1 de
+`PUNTUACION` §5.4, que ya tiene valores. Los bloquean para **publicar una clasificación que no
+vaya a cambiar** la semana siguiente.

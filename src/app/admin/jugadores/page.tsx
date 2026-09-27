@@ -5,7 +5,7 @@ import { PlayerForm } from "./player-form";
 import { approvePlayer, deletePlayer, rejectPlayer } from "./actions";
 
 export const metadata: Metadata = {
-  title: "Jugadores — Admin",
+  title: { absolute: "Jugadores · Admin" },
 };
 
 const statusStyles: Record<string, string> = {
