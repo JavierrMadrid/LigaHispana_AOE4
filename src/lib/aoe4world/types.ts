@@ -105,6 +105,33 @@ export type Aoe4WorldLeaderboard = {
   totalCount: number;
 };
 
+/**
+ * Una página de la ladder **completa**, sin filtrar por `profile_id`.
+ *
+ * Es un caso distinto del que cubre `Aoe4WorldLeaderboard`: ahí se consulta a
+ * jugadores concretos (una llamada por cada 50 ids) y no hace falta saber dónde
+ * está nadie. Recorrer la clasificación entera para localizar un tramo de
+ * divisiones sí lo necesita, así que la respuesta trae además `page` y
+ * `next_page` (comprobado contra la API real), que aquí ya están tipados.
+ *
+ * `perPage` es el tamaño **efectivo** que dice la respuesta, no el pedido: la API
+ * devuelve como mucho 50 por página y se calla si le piden más, así que quien
+ * recorra la ladder tiene que avanzar con este número y no con el que ha enviado.
+ */
+export type Aoe4WorldLadderPage = {
+  key: string;
+  name: string;
+  season: number | null;
+  page: number;
+  perPage: number;
+  totalCount: number;
+  /** Filas de esta página. */
+  count: number;
+  /** Página siguiente, o `null` si esta es la última. */
+  nextPage: number | null;
+  players: Aoe4WorldLeaderboardEntry[];
+};
+
 export type Aoe4WorldAutocompleteResult = {
   query: string;
   leaderboard: string;

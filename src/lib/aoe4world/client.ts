@@ -17,6 +17,7 @@ import {
   parseAutocomplete,
   parseGame,
   parseGamesPage,
+  parseLadderPage,
   parseLeaderboard,
   parsePlayer,
 } from "./parse";
@@ -25,12 +26,21 @@ import {
   type Aoe4WorldAutocompleteResult,
   type Aoe4WorldGame,
   type Aoe4WorldGamesPage,
+  type Aoe4WorldLadderPage,
   type Aoe4WorldLeaderboard,
   type Aoe4WorldPlayer,
 } from "./types";
 
 /** La API acepta un máximo de 50 ids por llamada a `leaderboards`. */
 export const LEADERBOARD_MAX_PROFILE_IDS = 50;
+
+/**
+ * Jugadores por página en la ladder completa. La API publica `per_page: 50` y
+ * devuelve páginas más cortas si se le pide más, igual que con las partidas: se
+ * acota la petición y, sobre todo, se avanza con el `perPage` que llega en la
+ * respuesta.
+ */
+export const LADDER_MAX_PAGE_SIZE = 50;
 
 /**
  * Máximo real de partidas por página. Pedir más no da error: la API devuelve
@@ -47,6 +57,12 @@ export type Aoe4WorldGamesQuery = {
   leaderboard?: string;
   opponentProfileId?: number;
   includeAlts?: boolean;
+};
+
+export type Aoe4WorldLadderQuery = {
+  /** Página a leer, empezando por 1. */
+  page?: number;
+  perPage?: number;
 };
 
 export type Aoe4WorldClient = {
@@ -70,6 +86,23 @@ export type Aoe4WorldClient = {
     profileIds: number[],
     options?: Aoe4WorldRequestOptions,
   ): Promise<Aoe4WorldLeaderboard>;
+  /**
+   * `GET /api/v0/leaderboards/:leaderboard` **sin** `profile_id`: una página de la
+   * clasificación completa.
+   *
+   * Es lo que permite recorrer la ladder (23 000 y pico jugadores) por páginas en
+   * lugar de pedir 461 llamadas a mano, y es la única forma de localizar un tramo
+   * de divisiones: la API ignora en silencio `rating_min`/`rating_max` y
+   * `rank_level`, así que los tres devuelven siempre la página 1.
+   *
+   * El worker no la usa: solo la necesita quien busca por divisiones
+   * (`src/lib/simulation/select.ts`).
+   */
+  getLadderPage(
+    leaderboard: string,
+    query?: Aoe4WorldLadderQuery,
+    options?: Aoe4WorldRequestOptions,
+  ): Promise<Aoe4WorldLadderPage>;
   /** `GET /api/v0/players/autocomplete` */
   autocompletePlayers(
     leaderboard: string,
@@ -217,6 +250,40 @@ export function createAoe4WorldClient(
       }
 
       return result;
+    },
+
+    async getLadderPage(leaderboard, query, options) {
+      if (leaderboard.trim() === "") {
+        throw new Aoe4WorldError("La ladder necesita un nombre.");
+      }
+
+      const params = new URLSearchParams();
+
+      if (query?.page !== undefined) {
+        params.set("page", String(Math.max(1, Math.trunc(query.page))));
+      }
+
+      // Se manda `per_page` aunque la API pueda ignorarlo: lo que decide el
+      // recorrido es el `perPage` de la respuesta, que es el único dato que
+      // refleja el tamaño de página que la API ha aplicado de verdad.
+      if (query?.perPage !== undefined) {
+        params.set("per_page", String(Math.min(query.perPage, LADDER_MAX_PAGE_SIZE)));
+      }
+
+      const payload = await http.fetchJson(
+        `/leaderboards/${encodeURIComponent(leaderboard)}`,
+        params,
+        options,
+      );
+      const page = parseLadderPage(payload);
+
+      if (page === null) {
+        throw new Aoe4WorldError(
+          `La página ${query?.page ?? 1} de /leaderboards/${leaderboard} no tiene la forma esperada.`,
+        );
+      }
+
+      return page;
     },
 
     async autocompletePlayers(leaderboard, query, limit, options) {

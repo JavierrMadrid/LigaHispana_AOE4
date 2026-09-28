@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Bundles de skills de agentes: markdown y binarios de terceros, no código del proyecto.
+    ".agents/**",
+    ".opencode/**",
+    // Ficheros `.cjs` sueltos en `scripts/`: helpers de ejecución (`--require`),
+    // no código del proyecto; no pasan por el linter de TypeScript.
+    "scripts/**/*.cjs",
   ]),
 ]);
 

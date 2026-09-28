@@ -10,6 +10,7 @@
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "db:push": "prisma db push",
+    "db:security": "tsx --conditions=react-server scripts/db-security.ts",
     "studio": "prisma studio",
     "sync": "tsx --conditions=react-server scripts/sync.ts",
     "score": "tsx --conditions=react-server scripts/score.ts",
@@ -17,6 +18,9 @@
     "verify:sync": "tsx --conditions=react-server scripts/verify-sync.ts",
     "mock:tournament": "tsx --conditions=react-server scripts/mock-tournament.ts",
     "mock:clean": "tsx --conditions=react-server scripts/mock-tournament.ts --clean",
+    "simulate:tournament": "tsx --conditions=react-server scripts/simulate-tournament.ts",
+    "simulate:clean": "tsx --conditions=react-server scripts/simulate-tournament.ts --clean",
+    "brand:assets": "tsx scripts/build-brand-assets.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -40,6 +44,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
     "prisma": "^7.10.0",
+    "sharp": "^0.35.5",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5"

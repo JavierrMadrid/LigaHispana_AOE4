@@ -1,30 +1,32 @@
 import type { ReactNode } from "react";
 
 type PageHeadProps = {
+  /**
+   * Título de la página. No se pinta: es el `h1` semántico que necesitan los
+   * lectores de pantalla y los buscadores. La navegación ya dice al visitante
+   * en qué página está, así que el título visible sobraba.
+   */
   title: string;
-  lead?: ReactNode;
-  /** Contenido a la derecha del título: contador en directo, botón de refresco. */
+  /** Controles de la página: contador en juego, refresco, chips de estado. */
   aside?: ReactNode;
 };
 
 /**
- * Cabecera de una página pública: filete de oro, titular en capital
- * inscripcional y entradilla. El filete es la firma de la casa y se repite en
- * todas las páginas para que la cara pública se lea como una sola web.
+ * Cabecera semántica de una página pública.
+ *
+ * Tras la limpieza visual las páginas no llevan titular a la vista y empiezan
+ * directamente por su contenido. Aquí solo queda el `h1` oculto y, si la página
+ * tiene controles propios, una fila para colocarlos encima de ese contenido.
  */
-export function PageHead({ title, lead, aside }: PageHeadProps) {
+export function PageHead({ title, aside }: PageHeadProps) {
   return (
-    <div className="flex flex-col gap-6 border-b border-line pb-8 sm:flex-row sm:items-end sm:justify-between">
-      <div>
-        <span aria-hidden="true" className="block h-px w-10 bg-accent/70" />
-        <h1 className="mt-4 font-display text-3xl font-semibold text-foreground sm:text-4xl">
-          {title}
-        </h1>
-        {lead ? (
-          <p className="mt-3 max-w-[62ch] leading-relaxed text-muted">{lead}</p>
-        ) : null}
-      </div>
-      {aside ? <div className="flex shrink-0 items-center gap-4">{aside}</div> : null}
-    </div>
+    <>
+      <h1 className="sr-only">{title}</h1>
+      {aside ? (
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+          {aside}
+        </div>
+      ) : null}
+    </>
   );
 }

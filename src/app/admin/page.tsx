@@ -24,7 +24,7 @@ export default async function AdminPage() {
     <div className="flex flex-col gap-8">
       <section>
         <h1 className="text-2xl font-semibold">Resumen</h1>
-        <p className="mt-1 text-sm text-neutral-400">
+        <p className="mt-1 text-sm text-muted">
           Estado de la Liga Hispana de Age of Empires IV.
         </p>
       </section>
@@ -33,9 +33,9 @@ export default async function AdminPage() {
         {stats.map((stat) => (
           <div
             key={stat.label}
-            className="rounded-lg border border-neutral-800 bg-neutral-950 p-4"
+            className="rounded-lg border border-line bg-surface p-4"
           >
-            <p className="text-sm text-neutral-400">{stat.label}</p>
+            <p className="text-sm text-muted">{stat.label}</p>
             <p className="mt-1 text-3xl font-semibold tabular-nums">
               {stat.value}
             </p>
@@ -44,7 +44,7 @@ export default async function AdminPage() {
       </section>
 
       {pendingPlayers > 0 ? (
-        <section className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+        <section className="rounded-lg border border-accent/40 bg-accent/5 p-4">
           <p className="text-sm">
             Hay <strong>{pendingPlayers}</strong>{" "}
             {pendingPlayers === 1 ? "registro pendiente" : "registros pendientes"}{" "}
@@ -52,7 +52,7 @@ export default async function AdminPage() {
           </p>
           <Link
             href="/admin/jugadores"
-            className="mt-3 inline-block rounded-md bg-amber-500 px-3 py-2 text-sm font-medium text-neutral-950 hover:bg-amber-400"
+            className="mt-3 inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-medium text-accent-ink transition-colors hover:bg-accent-strong"
           >
             Revisar registros
           </Link>

@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { PageHead } from "@/components/page-head";
 
 export const metadata: Metadata = {
   title: "Reglas",
   description:
-    "Formato, sistema de puntuación provisional y qué cuenta como partida clasificatoria en la Liga Hispana de Age of Empires IV.",
+    "Formato, sistema de puntuación con objetivos especiales y qué cuenta como partida clasificatoria en la Liga Hispana de Age of Empires IV.",
 };
 
 const SECTIONS = [
   { id: "formato", label: "Formato" },
   { id: "puntuacion", label: "Puntuación" },
+  { id: "objetivos", label: "Objetivos especiales" },
   { id: "clasificatorias", label: "Partidas clasificatorias" },
   { id: "estado", label: "Estado del reglamento" },
 ] as const;
@@ -23,21 +25,29 @@ const MODES = [
   { mode: "Partidas personalizadas", ladder: "", counts: false },
 ] as const;
 
+/**
+ * Cabecera de una sección normativa: el titular en Cinzel sobre el filete que
+ * abre el bloque. Repite el ritmo de cabecera de los grupos de `/objetivos`
+ * para que las dos páginas se lean como la misma crónica.
+ */
+function SectionHeading({ title }: { title: string }) {
+  return (
+    <h2 className="border-b border-line pb-3 font-display text-xl font-semibold text-foreground">
+      {title}
+    </h2>
+  );
+}
+
 export default function RulesPage() {
   return (
     <div className="flex flex-col gap-10">
-      <PageHead
-        title="Reglas"
-        lead="El torneo es individual. Cada jugador entra con su cuenta de AoE4World, juega en la ladder ranked y acumula puntos. Quien termine con más puntos, gana."
-      />
+      <PageHead title="Reglas" />
 
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_13rem] lg:gap-14">
-        <div className="flex min-w-0 flex-col gap-12">
+        <div className="flex min-w-0 flex-col gap-16">
           <section id="formato" className="scroll-mt-24">
-            <h2 className="font-display text-xl font-semibold text-foreground">
-              Formato
-            </h2>
-            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 leading-relaxed text-foreground/85">
+            <SectionHeading title="Formato" />
+            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
                 No hay equipos. Cada persona compite por su cuenta y su cuenta es la
                 que se registra en la liga, junto con un identificador de perfil de
@@ -46,7 +56,7 @@ export default function RulesPage() {
               <p>
                 Se juega en la misma ladder ranked que usan las cuentas públicas del
                 juego. No hace falta tirar partidas amistosas ni apuntarse a ningún
-                evento: basta con jugar al ranked con la cuenta dada de alta.
+                evento: basta con jugar rankeds con la cuenta dada de alta.
               </p>
               <p>
                 La clasificación se recalcula sola cada pocos minutos con los
@@ -57,55 +67,91 @@ export default function RulesPage() {
           </section>
 
           <section id="puntuacion" className="scroll-mt-24">
-            <h2 className="font-display text-xl font-semibold text-foreground">
-              Puntuación
-            </h2>
-            <ul className="mt-4 flex max-w-[68ch] flex-col gap-3">
-              <li className="flex gap-3 leading-relaxed text-foreground/85">
+            <SectionHeading title="Puntuación" />
+            <ul className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
+              <li className="flex gap-3">
                 <span
                   aria-hidden="true"
                   className="font-display font-semibold tabular-nums text-accent"
                 >
-                  1
+                  10
                 </span>
                 <span>
                   Cada victoria en partida clasificatoria vale{" "}
-                  <strong className="font-semibold text-foreground">1 punto</strong>.
+                  <strong className="font-semibold text-foreground">10 puntos</strong>.
                 </span>
               </li>
-              <li className="flex gap-3 leading-relaxed text-foreground/85">
+              <li className="flex gap-3">
                 <span
                   aria-hidden="true"
-                  className="font-display font-semibold tabular-nums text-muted"
+                  className="font-display font-semibold tabular-nums text-muted/70"
                 >
                   0
                 </span>
                 <span>Las derrotas no suman ni restan nada.</span>
               </li>
-              <li className="flex gap-3 leading-relaxed text-foreground/85">
+              <li className="flex gap-3">
                 <span
                   aria-hidden="true"
-                  className="font-display font-semibold tabular-nums text-muted"
+                  className="font-display font-semibold tabular-nums text-muted/70"
                 >
                   0
                 </span>
                 <span>
                   Una partida abandonada, caída o sin resolver no cuenta: ni suma ni
-                  resta, y desaparece de la lista de partidas en directo.
+                  resta, y desaparece de la lista de partidas en juego.
                 </span>
               </li>
             </ul>
-            <p className="mt-5 max-w-[68ch] leading-relaxed text-muted">
+            <p className="mt-5 max-w-[68ch] text-[15px] leading-relaxed text-muted">
+              A esa suma se añaden los{" "}
+              <strong className="font-semibold text-foreground">
+                objetivos especiales
+              </strong>
+              , que reparten puntos extra a quien va primero. Están detallados en la
+              sección siguiente.
+            </p>
+            <p className="mt-3 max-w-[68ch] text-sm leading-relaxed text-muted/85">
               Las cifras de la clasificación salen de las partidas que AoE4World ya ha
               resuelto. Una partida que todavía no tiene resultado no puntúa nunca.
             </p>
           </section>
 
+          <section id="objetivos" className="scroll-mt-24">
+            <SectionHeading title="Objetivos especiales" />
+            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
+              <p>
+                El torneo reparte 2320 puntos extra entre 37 objetivos. Cada objetivo
+                lo cobra una sola persona, la que va primera en su clasificación: no
+                hay puestos parciales ni puntos repartidos.
+              </p>
+              <p>
+                Quién posee cada objetivo se resuelve en caliente, en cada recálculo
+                de la clasificación, así que el poseedor puede cambiar de una jornada
+                a otra. La excepción son las carreras de civilización: cada una se
+                cierra en cuanto alguien llega a 10 victorias con esa civilización y
+                ya no se reabre.
+              </p>
+              <p>
+                Tres familias exigen un mínimo. El mejor ratio (<em>Prohibido perder</em>)
+                y la mejor racha (<em>¿Golpe de suerte?</em>) piden 10 partidas
+                clasificatorias, y cada civilización se cierra al llegar a 10
+                victorias. Los demás objetivos no tienen umbral.
+              </p>
+              <p>
+                <Link
+                  href="/objetivos"
+                  className="text-accent underline underline-offset-4 hover:text-accent-strong"
+                >
+                  Ver los objetivos, sus puntos y quién los posee
+                </Link>
+              </p>
+            </div>
+          </section>
+
           <section id="clasificatorias" className="scroll-mt-24">
-            <h2 className="font-display text-xl font-semibold text-foreground">
-              Qué cuenta como partida clasificatoria
-            </h2>
-            <p className="mt-4 max-w-[68ch] leading-relaxed text-foreground/85">
+            <SectionHeading title="Qué cuenta como partida clasificatoria" />
+            <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
               Solo cuentan las partidas de la ladder <em>ranked</em>: el 1vs1 y el
               ranked por equipos. Cualquier otro modo, incluidas las partidas
               personalizadas y el quick match, sirve para practicar pero no suma
@@ -113,7 +159,7 @@ export default function RulesPage() {
             </p>
 
             <div className="mt-6 overflow-x-auto rounded-lg border border-line">
-              <table className="w-full border-collapse text-sm">
+              <table className="w-full min-w-[32rem] border-collapse text-sm">
                 <caption className="sr-only">
                   Modos de juego de Age of Empires IV y si puntúan en la liga.
                 </caption>
@@ -154,24 +200,24 @@ export default function RulesPage() {
               </table>
             </div>
 
-            <p className="mt-5 max-w-[68ch] leading-relaxed text-muted">
-              En una partida por equipos solo se registra la victoria de cada jugador
-              de la liga. Sus compañeros de equipo no suman puntos, y el rival que
-              aparece en la lista de partidas en directo es solo el primer jugador
-              del equipo contrario.
+            <p className="mt-5 max-w-[68ch] text-sm leading-relaxed text-muted/85">
+              En una partida por equipos solo puntúa la victoria de cada jugador de
+              la liga: sus compañeros de equipo no suman puntos. La lista de
+              partidas en juego sí muestra la alineación completa, con todos los
+              jugadores de cada equipo y su civilización.
             </p>
           </section>
 
           <section id="estado" className="scroll-mt-24">
-            <h2 className="font-display text-xl font-semibold text-foreground">
-              Estado del reglamento
-            </h2>
-            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 leading-relaxed text-foreground/85">
+            <SectionHeading title="Estado del reglamento" />
+            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
-                El sistema de puntuación que se aplica hoy es provisional. La
-                comunidad está definiéndolo ahora mismo; hasta que se cierre, se
-                aplica la regla más simple que cumple el formato del torneo, que es un
-                punto plano por victoria.
+                El sistema de puntuación que se aplica hoy es la versión 2 del
+                reglamento: 10 puntos por victoria clasificatoria más los 37
+                objetivos especiales. Sigue abierto mientras la organización cierra
+                los últimos detalles, como los puntos exactos de cada objetivo;
+                cualquier cambio de estructura sube la versión y se recalcula la
+                clasificación entera.
               </p>
               <p>
                 Cuando se publiquen las reglas definitivas se anunciarán en esta

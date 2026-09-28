@@ -24,10 +24,24 @@ enum MatchResult {
 model Player {
   id            String       @id @default(cuid())
   profileId     Int          @unique
+  // Nombre de **display**: lo escribe quien participa (formulario de
+  // inscripción) o el admin. No lo toca el worker nunca, para que el nombre que
+  // alguien eligió no dependa de que AoE4World lo cambie por su cuenta.
   name          String
+  // Nombre **oficial de AoE4World**, separado del de display para poder publicar
+  // los dos. Lo refresca el worker con `GET /players/:profile_id`; null = aún no
+  // se ha sincronizado, que es lo que hay en toda fila creada hoy.
+  aoe4WorldName String?
   // Canal registrado en el panel (lo escribe el admin). No es lo mismo que
   // `twitchUrl`, que es lo que AoE4World publica en el perfil del jugador.
   twitchChannel String?
+  // Correo de contacto: lo **exige** el formulario público de `/participar` para
+  // que la organización pueda responder dudas. Es nullable a propósito, y no por
+  // descuido: el alta manual de admin no tiene por qué traerlo (se puede dar de
+  // alta a un jugador sin pedirle que deje un correo) y las filas que ya existían
+  // no lo tienen. El motor de puntos no lo lee nunca: es un dato de contacto, no
+  // de juego, así que no entra en la clasificación ni en ningún desglose.
+  contactEmail  String?
   status        PlayerStatus @default(PENDING)
 
   // Lo siguiente se rellena con `GET /leaderboards/rm_solo`, una sola vez por
@@ -76,7 +90,7 @@ model Match {
   // toca: es el registro literal de lo que publicó AoE4World.
   leaderboard       String      @default("rm_solo")
   // Familia de ladder resuelta (`rm_2v2` -> `rm_team`). Es una columna aparte y
-  // no un enum porque la lista de qué familias puntúan la da el ruleset, no el
+  // no un enum porque la lista de qué familias puntúa la da el ruleset, no el
   // esquema: así, añadir un modo a las reglas no obliga a reescribir datos.
   mode              String?
   // La API marca si la civilización de este jugador fue aleatoria. Sin columna
@@ -88,9 +102,10 @@ model Match {
   startedAt         DateTime
   finishedAt        DateTime?
   durationSeconds   Int?
-  // Puntos que esta partida aporta según el ruleset activo. Con las reglas
-  // provisionales del MVP vale 1 en cada victoria clasificatoria; el motor es el
-  // único que lo escribe (ver `src/lib/scoring.ts`).
+  // Puntos que esta partida aporta según el ruleset activo: hoy
+  // `DEFAULT_RULESET.pointsPerWin` en cada victoria clasificatoria resuelta y 0 en
+  // el resto. El motor es el único que lo escribe, y solo en las filas cuyo valor
+  // cambia (ver `recomputeScores` en `src/lib/scoring.ts`).
   points            Int         @default(0)
   rawJson           Json
   createdAt         DateTime    @default(now())
@@ -143,4 +158,29 @@ model Setting {
   key       String   @id
   value     Json
   updatedAt DateTime @updatedAt
+}
+
+/// Contador de frecuencia de los endpoints públicos sin sesión.
+///
+/// Una fila por clave, y la clave **nunca** es una IP: es su HMAC-SHA-256
+/// (`ip:<hex>`) o el cubo compartido `global` cuando la petición no trae una IP
+/// identificable. Solo se guarda el hash, y el hash es lo que se cuenta, así que
+/// la tabla no contiene datos personales y ni un log puede reconstruirlos.
+///
+/// La ventana es fija, no deslizante: `windowStart` es el inicio de la ventana en
+/// curso y el contador vuelve a 1 cuando esa ventana caduca. El incremento
+/// happens en **una sola sentencia** (`INSERT ... ON CONFLICT DO UPDATE` en
+/// `src/lib/rate-limit.ts`) porque el despliegue es serverless: la memoria de
+/// proceso no valdría, y dos envíos simultáneos tienen que serializarse en la
+/// base de datos en vez de colarse cada uno por su lado.
+///
+/// No lleva índice en `windowStart` a propósito: la limpieza de filas caducadas
+/// (`deleteMany`) es periódica y el contenido es una fila por clave vista, así
+/// que un recorrido secuencial de una tabla tan pequeña sale más barato que
+/// mantener un índice que solo se usaría en ese borrado.
+model RateLimitCounter {
+  key         String   @id
+  count       Int      @default(0)
+  windowStart DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

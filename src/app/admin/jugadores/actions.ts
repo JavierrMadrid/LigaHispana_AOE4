@@ -4,38 +4,15 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { PlayerStatus } from "@/generated/prisma/enums";
+import {
+  parseName,
+  parseProfileId,
+  parseTwitchChannel,
+} from "@/lib/player-input";
 
 export type PlayerFormState = {
   error: string | null;
 };
-
-function parseProfileId(value: FormDataEntryValue | null) {
-  const raw = String(value ?? "").trim();
-
-  if (!/^\d+$/.test(raw)) {
-    return null;
-  }
-
-  const profileId = Number(raw);
-
-  return profileId > 0 ? profileId : null;
-}
-
-function parseName(value: FormDataEntryValue | null) {
-  const name = String(value ?? "").trim();
-
-  return name.length > 0 && name.length <= 64 ? name : null;
-}
-
-function parseTwitchChannel(value: FormDataEntryValue | null) {
-  const channel = String(value ?? "").trim().replace(/^@/, "");
-
-  if (!channel) {
-    return null;
-  }
-
-  return /^[a-zA-Z0-9_]{3,25}$/.test(channel) ? channel.toLowerCase() : null;
-}
 
 export async function createPlayer(
   _prevState: PlayerFormState,

@@ -36,6 +36,8 @@ npm run sync       # sincroniza las partidas de AoE4World (ver "Sincronización"
 npm run verify:sync  # comprobaciones de normalización y guardado (ver más abajo)
 npm run mock:tournament  # simula el torneo completo contra la API falsa (ver "Simulación local")
 npm run mock:clean       # retira exactamente lo que crea la simulación
+npm run simulate:tournament  # torneo simulado con jugadores REALES de AoE4World (ver "Torneo simulado con jugadores reales")
+npm run simulate:clean        # deshace esa simulación, comprobando antes cada fila
 ```
 
 ## Base de datos
@@ -67,6 +69,26 @@ Se usa **Supabase** (Postgres cloud). La conexión se define en `.env` (`DATABAS
 | `AOE4WORLD_SYNC_DEADLINE_MS` | Plazo global de una pasada (240000) |
 | `AOE4WORLD_MOCK` | `1` para responder con las fixtures locales de `src/lib/aoe4world/mock/` en vez de salir a la red (`0` por defecto; imposible con `NODE_ENV=production`) |
 | `CRON_SECRET` | Secreto para llamar a `POST /api/cron/sync` sin sesión |
+| `RATE_LIMIT_MAX_ATTEMPTS` | Envíos de inscripción permitidos por IP y ventana (5) |
+| `RATE_LIMIT_WINDOW_SECONDS` | Longitud de la ventana del límite, en segundos (3600) |
+| `RATE_LIMIT_STALE_SECONDS` | Antigüedad a partir de la cual se purga una fila de contador, en segundos (86400) |
+| `RATE_LIMIT_SALT` | Secreto del HMAC-SHA-256 con el que se hashea la IP. Sin él se usa `CRON_SECRET`, y si tampoco hay, una sal fija en el código |
+| `REGISTRATION_PROFILE_TIMEOUT_MS` | Presupuesto de la comprobación del perfil al inscribirse, en ms (8000) |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Site key pública de Cloudflare Turnstile, la que monta el widget de `/participar`. Sin ella no se pinta el captcha |
+| `TURNSTILE_SECRET_KEY` | Secret key de Cloudflare Turnstile (solo servidor). **Si no está definida el captcha queda desactivado**: el formulario sigue funcionando sin comprobación. En producción hay que definirla |
+| `TURNSTILE_TIMEOUT_MS` | Presupuesto de la llamada a `siteverify`, en ms (5000) |
+
+## Inscripción pública
+
+`/participar` es un endpoint público y sin autenticación, así que la Server Action `registerPlayer` (`src/app/(public)/participar/actions.ts`) tiene cinco capas, en este orden:
+
+1. **Campo trampa** (`website`): no escribe nada y devuelve la misma confirmación que un alta bueno, para que un bot no pueda aprender a esquivarla.
+2. **Límite de frecuencia por IP** (`src/lib/rate-limit.ts`): cuenta en Postgres, con la IP **hasheada** (HMAC-SHA-256 con `RATE_LIMIT_SALT`, nunca en claro), en una ventana fija. El incremento es un `INSERT ... ON CONFLICT DO UPDATE` de una sola sentencia, así que el despliegue serverless no lo evita y dos envíos simultáneos se serializan. Sin IP identificable (`x-forwarded-for` / `x-real-ip`) cae a un cubo compartido `global`. Por defecto, 5 envíos por hora y IP.
+3. **Captcha** (Cloudflare Turnstile, `src/lib/turnstile.ts`): cierra el hueco que el límite no puede, que es rotar `x-forwarded-for` detrás de un proxy que la reenvía sin reescribir. Verifica el token del campo `cf-turnstile-response` contra `siteverify`, **falla cerrado** (si no se puede comprobar, el envío no pasa) y **se desactiva solo si no hay `TURNSTILE_SECRET_KEY`**, para que el proyecto funcione sin configurar nada. La site key (`NEXT_PUBLIC_TURNSTILE_SITE_KEY`) la usa el componente cliente; los dos nombres del contrato están en `src/lib/turnstile-contract.ts`.
+4. **Validadores de los campos** compartidos con el alta de admin (`src/lib/player-input.ts`) y comprobación de la fila existente: lo sale gratis y no gasta API. El **correo es obligatorio** y se guarda en `Player.contactEmail`, para que la organización pueda responder dudas.
+5. **Comprobación del perfil** (`src/lib/registration.ts`): `GET /players/:id` con un presupuesto de 8 s. Un 404 es un error de campo en `profileId`; cualquier otro fallo (red, 429, timeout) **no** crea nada y devuelve un mensaje reintentable. Si el perfil existe, se guarda el nombre oficial en `Player.aoe4WorldName` y `Player.name` conserva el de display que escribió la persona.
+
+El resultado siempre se deja en `PENDING`: aprobar o rechazar es decisión de la organización. Lo único que se **reescribe** es un envío de un perfil que estaba `REJECTED`: actualiza esa misma fila (nombre, canal, correo, nombre oficial y retrato) y la devuelve a `PENDING`, en vez de crear una segunda solicitud. Un perfil `APPROVED` o `PENDING` sigue bloqueando el envío.
 
 ## Sincronización con AoE4World
 
@@ -92,6 +114,12 @@ Devuelve un resumen en JSON con el detalle por jugador (partidas vistas, nuevas,
 
 **Cada 5 minutos**. La API pide uso responsable y ya ha devuelto 429; por debajo de 3 minutos el worker dispara demasiadas peticiones por minuto solo con un puñado de jugadores. Con más jugadores, sube `AOE4WORLD_MIN_REQUEST_INTERVAL_MS` antes que la frecuencia. Para F4 ("en directo") 5 minutos es suficiente: una partida en directo se detecta en la siguiente pasada y se marca con `finishedAt = null`.
 
+El disparo lo hace un **cron externo** (cron-job.org, EasyCron, o un workflow programado de GitHub Actions): una petición a `https://<dominio>/api/cron/sync` con `Authorization: Bearer $CRON_SECRET`, cada 5 minutos. El endpoint acepta `GET` y `POST`, así que vale cualquier servicio que sepa mandar una cabecera. El proyecto solo necesita `CRON_SECRET` definido en las variables de entorno del hosting.
+
+El repo trae un workflow listo en [`.github/workflows/cron-sync.yml`](.github/workflows/cron-sync.yml). Para usarlo, define en el repositorio la variable `SITE_URL` y el secreto `CRON_SECRET` (Settings > Secrets and variables > Actions). Aviso: los workflows programados de GitHub pueden retrasarse unos minutos y se desactivan tras 60 días sin actividad del repositorio.
+
+Se evita el cron nativo del hosting a propósito: en Vercel el plan Hobby lo limita a **una vez al día**, y en Cloudflare el plan Free da **10 ms de CPU por disparo**, que no llegan para una pasada del worker. Un cron externo no depende de ninguna de las dos cosas.
+
 ### Decisiones de la fase F2
 
 - **"Partida en directo"**: la API solo publica partidas terminadas. Una partida se considera en directo si (`ongoing === true` o `state !== "processed"`) **y** empezó hace menos de `LIVE_GAME_WINDOW_MINUTES = 60`. Se persiste con `finishedAt` y `result` a `null`; en la pasada siguiente la API ya la devuelve procesada y se actualiza.
@@ -110,7 +138,7 @@ npm run verify:sync          # normalización con datos de ejemplo (no necesita 
 npm run verify:sync -- --db  # además comprueba el guardado y borra lo que crea
 ```
 
-`--db` necesita `DATABASE_URL` y crea un jugador de prueba con `profileId` 9000001; si ya existe, la comprobación avisa y para. La limpieza se hace siempre, incluso si algo falla.
+`--db` necesita `DATABASE_URL` y trabaja con un jugador de prueba (`profileId` 9000001) que **borra al terminar siempre, incluso si una comprobación falla**, así que se puede repetir tantas veces como haga falta. Solo hay un caso en el que se niega a arrancar: que ese jugador ya exista porque una ejecución anterior murió antes de poder limpiarlo; entonces avisa y para para no pisar datos ajenos. Borrarlo con `npm run simulate:clean` no sirve (es de otra simulación), así que se borra desde `/admin/jugadores` o a mano por su `profileId`.
 
 ## Simulación local (mock de AoE4World)
 
@@ -138,6 +166,38 @@ npm run mock:clean       # retira exactamente lo que crea la simulación
 
 Cómo se sostiene en el tiempo: el histórico de partidas terminadas está anclado a una **epoch fija**, así que no se mueve entre ejecuciones, y las **3 partidas en vivo** recalculan su `started_at` como "hace 10–20 minutos" en cada petición. De ese modo nunca salen de la ventana de 60 minutos que define "en directo" ni se borran por abandonadas, aunque la simulación repose días.
 
+## Torneo simulado con jugadores reales (API de verdad)
+
+`mock:tournament` usa fixtures. Esta otra simulación mete en la base de datos **gente real de la ladder de AoE4World**, con sus partidas reales, para probar la web con datos de verdad sin esperar al torneo real.
+
+```bash
+npm run simulate:tournament                    # elige, da de alta, importa la ventana y recalcula
+npm run simulate:tournament -- --select-only   # solo elige y lo informa (no toca la base de datos)
+npm run simulate:tournament -- --max-candidates=30 --max-pages=6   # más margen para divisiones difíciles
+npm run simulate:clean                         # deshace lo que creó
+npm run simulate:clean -- --dry-run            # comprueba qué borraría, sin borrar nada
+```
+
+- **Quién entra**: un jugador por división (`src/lib/divisions.ts`) con **más de 20 partidas de ladder (`rm_solo`) en los últimos 14 días**, contadas con el mismo criterio con el que se importan (`normalizeGame`), así que el número del informe es el número de filas que acaban en la tabla.
+- **Cómo se los busca**: la API **ignora** `rating_min`/`rating_max` y `rank_level` (devuelven siempre la página 1), así que no hay forma de pedir "los bronces". El script recorre la ladder por páginas con **búsqueda binaria** sobre la monotonía de las divisiones (~49 llamadas en vez de las 461 que tiene `rm_solo`), lee las primeras páginas de cada bloque y valida candidatos de uno en uno. Se eligen por orden de ladder dentro de la división, así que el reparto es siempre el mismo mientras la ladder no se mueva.
+- **Ventana**: el torneo simulado son 4 semanas de las que ya han pasado 3. El script **siembra el cursor de sincronización** de cada jugador en el arranque del torneo en vez de dejar que el worker recorra el histórico entero (miles de partidas que no cuentan), y a partir de ahí el cursor avanza con normalidad: la simulación **sigue creciendo** con cada pasada real del cron.
+- **Elo, división, racha y avatar** no se rellenan en el alta: los deja `syncLadderSnapshot`, el mismo paso que usa el worker con todos los jugadores aprobados.
+- **Coste**: ~90 llamadas a la API y unos 40 s (49 de búsqueda binaria + 18 de páginas + ~24 de conteo de partidas), más ~17 llamadas y ~6 s para importar la ventana.
+- **Idempotente**: repetirlo no duplica jugadores ni partidas, no resetea el cursor hacia atrás y vuelve a imprimir la misma clasificación.
+
+### Cómo se deshace (importante)
+
+La base de datos es la de producción y dentro de un mes contendrá los participantes de verdad, así que **no hay ningún rango de `profileId` reservado** que marque las filas de esta simulación. Lo que la marca es el **manifiesto** que el script escribe en `Setting["simulation.roster"]`: la lista de jugadores que dio de alta, con la identidad usada en el momento (`profileId`, nombre, división, fecha de la ventana).
+
+`npm run simulate:clean`:
+
+1. Lee el manifiesto. Si no hay manifiesto, no borra nada y lo dice (no adivina).
+2. **Comprueba la identidad de cada fila** contra el manifiesto antes de tocar nada: si el número de filas no cuadra, si algún `profileId` no está en el manifiesto o si **el nombre de la fila no es el que escribió la simulación** (por ejemplo, porque alguien lo editó en `/admin`), **aborta y no borra**.
+3. Avisa (sin abortar) de los jugadores que quedaron de una ejecución anterior y de las partidas que caen fuera de la ventana del torneo, porque el borrado en cascada se las llevaría por delante.
+4. Solo entonces borra: los 6 jugadores (y en cascada sus `Match` y `PlayerScore`), sus cursores `aoe4world.sync.player.<profileId>` y el propio manifiesto. Las partidas en las que esos jugadores eran **rivales** de otros no se tocan: son de otros.
+
+Use `--dry-run` antes si quiere ver el plan sin ejecutar nada. Y si el manifiesto llegara a perderse, el borrado hay que hacerlo **a mano**: es preferible a borrar filas de participantes reales.
+
 ## Panel de administración
 
 Acceso en `/admin`, protegido con **Supabase Auth** (cookies SSR vía `@supabase/ssr` + `src/proxy.ts`). Cualquier usuario autenticado es admin, así que **desactiva los registros públicos** en Supabase (Authentication → Sign In / Providers) y crea las cuentas a mano.
@@ -151,6 +211,7 @@ Acceso en `/admin`, protegido con **Supabase Auth** (cookies SSR vía `@supabase
 - `Player`: participante (`profileId` de AoE4World, nombre, canal de Twitch opcional, estado PENDING/APPROVED/REJECTED).
 - `Match`: partida de un jugador (`gameId`, `leaderboard`, resultado, civs, mapa, fechas, puntos y JSON crudo de la API). Se guardan **todas** las partidas, no solo las clasificatorias: el filtro es del motor de puntuación. La unicidad es por `(playerId, gameId)`: en un torneo individual dos participantes pueden jugar la misma partida y cada uno necesita su fila.
 - `Setting`: configuración del torneo (fechas, reglas, etc.) y memoria del worker (`aoe4world.sync.player.<profileId>`).
+- `RateLimitCounter`: contador de frecuencia de los endpoints públicos sin sesión, una fila por clave (`ip:<hmac>` o `global`). Nunca contiene una IP: solo su hash. La gestiona `src/lib/rate-limit.ts`.
 
 ## Estado y plan
 

@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   console.log(
     summary.scoring === null
       ? "Clasificación: no recalculada"
-      : `Clasificación: ${summary.scoring.playersRanked} jugadores, ${summary.scoring.matchesScored} partidas con punto (${summary.scoring.durationMs} ms)`,
+      : `Clasificación: ${summary.scoring.playersRanked} jugadores, ${summary.scoring.matchesUpdated} partidas con puntos actualizados (${summary.scoring.durationMs} ms)`,
   );
   if (summary.scoringError !== null) {
     console.log(`Clasificación: ERROR — ${summary.scoringError}`);

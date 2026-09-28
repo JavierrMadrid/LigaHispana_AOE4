@@ -8,7 +8,7 @@ import { getLiveMatches, getStandings } from "@/lib/public";
 export const metadata: Metadata = {
   title: "Clasificación general",
   description:
-    "Posiciones de la Liga Hispana de Age of Empires IV ordenadas por puntos. Un punto por cada victoria en partida clasificatoria.",
+    "Posiciones de la Liga Hispana de Age of Empires IV ordenadas por puntos: 10 por cada victoria clasificatoria más los puntos de los objetivos especiales.",
 };
 
 // La clasificación se lee de la base de datos en cada petición. Sin esto la
@@ -19,72 +19,60 @@ export const dynamic = "force-dynamic";
 export default async function StandingsPage() {
   const [rows, liveMatches] = await Promise.all([getStandings(), getLiveMatches()]);
 
-  // En un 2v2 entran dos filas con el mismo `gameId`: para contar partidas, no
-  // filas, hay que quedarse con los identificadores distintos.
-  const liveGames = new Set(liveMatches.map((match) => match.gameId)).size;
-
-  const counters = [
-    { label: "Jugadores", value: rows.length },
-    {
-      label: "Partidas clasificatorias",
-      value: rows.reduce((total, row) => total + row.wins + row.losses, 0),
-    },
-    { label: "Puntos repartidos", value: rows.reduce((total, row) => total + row.points, 0) },
-  ];
+  // `getLiveMatches()` ya agrupa por partida: cuenta partidas, no filas, así que
+  // el tamaño de la lista es directamente el número de partidas en juego.
+  const liveGames = liveMatches.length;
 
   return (
-    <div className="flex flex-col gap-10">
-      <PageHead
-        title="Clasificación general"
-        lead="Torneo individual: cada jugador compite por su cuenta en la ladder ranked y suma un punto por cada victoria clasificatoria. Gana quien termine con más puntos."
-        aside={
-          liveGames > 0 ? (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Clasificación general" />
+
+      {/* Cabecera del torneo: estado de emisión y tamaño de la tabla en una
+          sola banda. No es un titular (el `h1` sigue oculto por convención):
+          es el marcador de la sala, y por eso el número del recuento va en la
+          tipografía de display mientras el resto se queda en texto corrido. */}
+      <div className="thread-top relative overflow-hidden rounded-lg border border-line bg-surface px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+          {liveGames > 0 ? (
             <Link
               href="/partidas"
-              className="inline-flex items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm text-accent transition-colors hover:bg-accent/15"
+              className="group inline-flex items-center gap-2 text-sm font-medium text-live-soft transition-colors hover:text-live"
             >
               <LiveDot />
-              {liveGames === 1 ? "1 partida en directo" : `${liveGames} partidas en directo`}
+              {liveGames === 1 ? "1 partida en juego" : `${liveGames} partidas en juego`}
+              <span className="text-muted transition-colors group-hover:text-live-soft">
+                Ver partidas
+              </span>
             </Link>
-          ) : null
-        }
-      />
+          ) : (
+            <span className="inline-flex items-center gap-2 text-sm text-muted">
+              <span
+                aria-hidden="true"
+                className="size-2 shrink-0 rounded-full border border-line-strong"
+              />
+              Sin partidas en juego ahora mismo
+            </span>
+          )}
 
-      <dl className="grid gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-3">
-        {counters.map((counter) => (
-          <div key={counter.label} className="bg-surface px-5 py-4">
-            <dt className="text-xs text-muted">{counter.label}</dt>
-            <dd className="mt-1 text-2xl font-semibold tabular-nums text-foreground">
-              {counter.value}
-            </dd>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted">
+            <p>
+              <span className="font-display text-base tabular-nums text-foreground">
+                {rows.length}
+              </span>{" "}
+              {rows.length === 1 ? "participante" : "participantes"}
+            </p>
+            <Link
+              href="/reglas"
+              className="text-accent underline-offset-4 transition-colors hover:text-accent-strong hover:underline"
+            >
+              Cómo se puntúa
+            </Link>
           </div>
-        ))}
-      </dl>
+        </div>
+      </div>
 
       <section aria-label="Clasificación">
         <StandingsTable rows={rows} />
-      </section>
-
-      <section aria-labelledby="puntuacion" className="border-t border-line pt-6">
-        <h2
-          id="puntuacion"
-          className="font-display text-lg font-semibold text-foreground"
-        >
-          Cómo se puntúa ahora mismo
-        </h2>
-        <p className="mt-2 max-w-[62ch] text-sm leading-relaxed text-muted">
-          Una victoria en partida clasificatoria vale 1 punto. Las derrotas no suman
-          ni restan, y las partidas abandonadas o sin resolver no cuentan. El
-          reglamento definitivo se está definiendo con la comunidad, así que esta
-          regla es provisional: cuando se cierre, la clasificación se recalcula
-          entera sin perder los resultados ya obtenidos.
-        </p>
-        <Link
-          href="/reglas"
-          className="mt-4 inline-block text-sm text-accent underline underline-offset-4 hover:text-accent-strong"
-        >
-          Leer las reglas completas
-        </Link>
       </section>
     </div>
   );

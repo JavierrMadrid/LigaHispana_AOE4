@@ -28,24 +28,30 @@ Torneo individual de Age of Empires IV. La clasificación se calcula a partir de
 | Auth | Supabase Auth solo para admins (`src/lib/supabase/`, `src/lib/auth.ts`, `src/proxy.ts`) |
 | Datos externos | API de AoE4World (rate limits: polling conservador con *backoff*) |
 
-## Cómo trabajo: delego, no escribo el código
+## Cómo trabajo: delego, con vía rápida para lo pequeño
 
-Esta guía es la del agente `orchestrator` (`.opencode/agent/orchestrator.md`), que es el agente por defecto del repo (`default_agent` en `opencode.json`). Planifica, reparte y verifica; sus permisos le impiden escribir código fuera de la documentación y de los ficheros de agente.
-
-Cada subagente tiene cargadas sus skills **obligatoriamente** en el paso 0 y su md con la información específica de su ámbito.
+Esta guía es la del agente `orchestrator` (`.opencode/agent/orchestrator.md`), que es el agente por defecto del repo (`default_agent` en `opencode.json`). Planifica, reparte y verifica. Puede editar código, pero solo para la **vía rápida** (abajo); el trabajo de verdad lo hacen los subagentes.
 
 | Si el cambio toca… | Delega a | Archivo | Skills que carga |
 |---|---|---|---|
 | UI, páginas, componentes, Tailwind, estilos, copy | `@design-ux` | `.opencode/agent/design-ux.md` | `design-taste-frontend`, `frontend-design` |
 | Lógica, Prisma, Supabase Auth, API de AoE4World, Server Actions, workers | `@logic-data` | `.opencode/agent/logic-data.md` | `vercel-react-best-practices`, `supabase`, `supabase-postgres-best-practices` |
 
-Reglas de enrutado:
+### Vía rápida (sin ceremonia)
+
+Un cambio es **pequeño** si no toca el modelo (`prisma/`), el plan, el stack/arquitectura, las dependencias, la seguridad, la API externa, los workers ni ninguna lógica de negocio o puntuación, y además es de superficie y acotado: copy/typo, alineación o espaciado, un color de un token existente, un atributo accesible, renombrar una variable local, un comentario, un pequeño fix o responder una duda.
+
+Esos cambios se hacen **directamente** (el orquestador, o el subagente de turno si se delega), y **sin**: cargar skills, `todowrite`, tocar `docs/PLAN.md` ni `npm run build` (`lint` solo si el cambio puede romper tipos o sintaxis). Se cierra con una línea.
+
+Todo lo demás es **vía completa**: skills obligatorias en el paso 0, ciclo de trabajo entero y `lint` + `build`.
+
+Reglas de enrutado (vía completa):
 
 - Ante la duda, delega: es más barato que rehacer la interfaz después.
 - Un cambio que atraviesa ambas capas se parte: primero la lógica (`@logic-data`), después la UI (`@design-ux`).
-- No escribas JSX ni CSS tú mismo, y no escribas schema ni queries tú mismo.
+- Fuera de la vía rápida, no escribas JSX ni CSS tú mismo, y no escribas schema ni queries tú mismo.
 - Cada subagente se mantiene en su ámbito; si necesita algo del otro, lo pide en su informe y tú lo reencargas.
-- Al cerrar, revisa el diff completo contra las skills de diseño: si tocaste UI sin pasar por `@design-ux`, corrígelo.
+- Al cerrar la vía completa, revisa el diff completo contra las skills de diseño: si tocaste UI sin pasar por `@design-ux`, corrígelo.
 
 ## Reglas del repositorio
 

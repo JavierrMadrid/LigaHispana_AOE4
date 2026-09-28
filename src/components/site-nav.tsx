@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 
 const items = [
   { href: "/", label: "Clasificación" },
-  { href: "/partidas", label: "En directo" },
+  { href: "/partidas", label: "Partidas en juego" },
+  { href: "/objetivos", label: "Objetivos" },
   { href: "/reglas", label: "Reglas" },
 ] as const;
 
@@ -21,8 +22,8 @@ export function SiteNav() {
   const pathname = usePathname();
 
   return (
-    <nav aria-label="Principal" className="-mx-1 overflow-x-auto py-1">
-      <ul className="flex items-center gap-1 px-1">
+    <nav aria-label="Principal" className="-mx-1.5 overflow-x-auto py-1">
+      <ul className="flex items-center gap-1.5 px-1.5">
         {items.map((item) => {
           const active =
             item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
@@ -32,7 +33,7 @@ export function SiteNav() {
               <Link
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`relative block rounded-md px-2.5 py-1.5 text-sm transition-colors ${
+                className={`relative block whitespace-nowrap rounded-md px-3.5 py-2 text-[15px] transition-colors ${
                   active
                     ? "font-semibold text-accent"
                     : "text-muted hover:bg-surface hover:text-foreground"
@@ -42,7 +43,7 @@ export function SiteNav() {
                 {active ? (
                   <span
                     aria-hidden="true"
-                    className="absolute inset-x-2.5 -bottom-px h-px bg-accent"
+                    className="absolute inset-x-3.5 -bottom-px h-px bg-accent"
                   />
                 ) : null}
               </Link>

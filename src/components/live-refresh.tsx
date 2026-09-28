@@ -7,7 +7,7 @@ import { useTransition } from "react";
 const REFRESH_MS = 75_000;
 
 /**
- * Refresco de la lista de partidas en directo.
+ * Refresco de la lista de partidas en juego.
  *
  * `router.refresh()` vuelve a pedir la ruta al servidor y vuelve a renderizar sus
  * Server Components, que es justo lo que hace falta porque la lista sale de la

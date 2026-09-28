@@ -13,10 +13,11 @@ import type { Aoe4WorldGame } from "./types";
 /**
  * Sincronización de partidas de los participantes aprobados.
  *
- * Por jugador: se pide el perfil (para refrescar el nombre), se paginan las
- * partidas de **todas** las ladders, se normalizan y se guardan las nuevas con
- * deduplicación por `(playerId, gameId)`. Un jugador que falle no tumba el
- * lote: su error queda registrado y el resto sigue.
+ * Por jugador: se pide el perfil (para guardar el nombre oficial de AoE4World y
+ * refrescar el avatar), se paginan las partidas de **todas** las ladders, se
+ * normalizan y se guardan las nuevas con deduplicación por
+ * `(playerId, gameId)`. Un jugador que falle no tumba el lote: su error queda
+ * registrado y el resto sigue.
  *
  * Además, una vez por pasada y antes del bucle, se toma una instantánea de la
  * ladder (`ladder.ts`): elo, división, racha y directo de Twitch de todos los
@@ -52,6 +53,13 @@ export type SyncPlayerStatus = "ok" | "failed" | "cancelled";
 
 export type SyncPlayerResult = {
   profileId: number;
+  /**
+   * Nombre de display del jugador (`Player.name`), el que escribió en la
+   * inscripción. Es lo que identifica al jugador en los logs y en la salida de
+   * los scripts, así que **no** se sustituye por el oficial de AoE4World: si la
+   * API no llegara a devolver el perfil, el nombre de referencia sigue siendo el
+   * que la web muestra.
+   */
   name: string;
   status: SyncPlayerStatus;
   error: string | null;
@@ -119,7 +127,13 @@ type SyncConfig = {
   deadlineMs: number;
 };
 
-type SyncPlayerRow = { id: string; profileId: number; name: string };
+type SyncPlayerRow = {
+  id: string;
+  profileId: number;
+  name: string;
+  aoe4WorldName: string | null;
+  avatarUrl: string | null;
+};
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -139,7 +153,7 @@ function readApprovedPlayers(profileIds: number[] | undefined): Promise<SyncPlay
       status: "APPROVED",
       ...(profileIds === undefined ? {} : { profileId: { in: profileIds } }),
     },
-    select: { id: true, profileId: true, name: true },
+    select: { id: true, profileId: true, name: true, aoe4WorldName: true, avatarUrl: true },
     orderBy: { profileId: "asc" },
   });
 }
@@ -413,23 +427,35 @@ async function syncPlayer(
     storedSince !== null && !Number.isNaN(storedSince.getTime()) ? storedSince : null;
   const sinceUsed = since === null ? null : since.toISOString();
 
-  // El nombre de AoE4World es la fuente de verdad; el que puso el admin se
-  // conserva si la API no devuelve otro.
-  let name = player.name;
-
+  // `Player.name` es el nombre de display y no se toca aquí: lo escribió quien
+  // se inscribió y no depende de que AoE4World renombre el perfil. Del perfil
+  // solo se toma lo que es de AoE4World y va en su propia columna.
   try {
     const profile = await client.getPlayer(player.profileId, { signal });
-    name = profile.name;
 
-    if (profile.name !== player.name) {
-      await db.player.update({ where: { id: player.id }, data: { name: profile.name } });
+    // El perfil se pide en cada pasada, así que aprovecha para refrescar también
+    // el retrato: es la única vía para los jugadores que la ladder de `rm_solo`
+    // no devuelve (sin partidas en la temporada), que no llegarían a tener
+    // avatar nunca. Un `avatars.full` vacío no pisa el que ya había, igual que
+    // en `ladder.ts`.
+    const officialNameChanged = profile.name !== player.aoe4WorldName;
+    const avatarUrl = profile.avatars.full;
+    const avatarChanged = avatarUrl !== null && avatarUrl !== player.avatarUrl;
+
+    if (officialNameChanged || avatarChanged) {
+      await db.player.update({
+        where: { id: player.id },
+        data: {
+          ...(officialNameChanged ? { aoe4WorldName: profile.name } : {}),
+          ...(avatarChanged ? { avatarUrl } : {}),
+        },
+      });
     }
   } catch (error) {
     if (error instanceof Aoe4WorldError && error.status === 404) {
       // Perfil borrado o inexistente en AoE4World: es un fallo de este jugador,
       // no del lote, pero no se sigue gastando API en intentarlo cada pasada.
       return emptyPlayerResult(player, {
-        name,
         status: "failed",
         error: `AoE4World no conoce el perfil ${player.profileId}.`,
         sinceUsed,
@@ -494,7 +520,6 @@ async function syncPlayer(
   }
 
   return emptyPlayerResult(player, {
-    name,
     pages: fetched.pages,
     gamesSeen: fetched.games.length,
     matchesInserted: inserted,

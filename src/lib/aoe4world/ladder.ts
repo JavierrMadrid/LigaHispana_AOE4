@@ -21,6 +21,10 @@ import { DEFAULT_LEADERBOARD } from "./types";
  * - Un jugador que aparece **con los campos vacíos** sí se guarda así (`null`
  *   en `elo`/`rankLevel`/`streak`, `twitchIsLive = false`): eso significa "no
  *   está clasificado ahora mismo", que es información y no un hueco.
+ * - **Excepción `avatarUrl`**: un `avatars.full` vacío no dice nada (el retrato
+ *   sigue existiendo en AoE4World), así que no pisa el último guardado; solo se
+ *   actualiza cuando llega URL nueva. Borrar un avatar bueno degradaría la
+ *   tabla a un monograma sin ganar información.
  * - Un fallo de este paso **no tumba la pasada**: se devuelve en `error`, quien
  *   llama lo registra y la sincronización de partidas sigue igual. La web
  *   serviría el último snapshot guardado hasta la próxima pasada.
@@ -110,7 +114,9 @@ export async function syncLadderSnapshot(
             streak: entry.streak,
             twitchIsLive: entry.twitchIsLive,
             twitchUrl: entry.twitchUrl,
-            avatarUrl: entry.avatars.full,
+            // Sin la clave en el `update`, Prisma no toca el campo: un avatar
+            // nulo de la respuesta no borra el que ya había (ver cabecera).
+            ...(entry.avatars.full === null ? {} : { avatarUrl: entry.avatars.full }),
             ladderUpdatedAt: fetchedAt,
           },
         });

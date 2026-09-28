@@ -4,15 +4,33 @@
  * Tema único de la aplicación: oscuro, fijado a propósito.
  *
  * La cara pública viste la paleta de Age of Empires IV: pizarra y carbón de
- * fondo, oro antiguo como único acento y marfil para el texto. El panel de
- * administración y el login no usan estos tokens (van con la rampa `neutral` y
- * el acento `amber` de Tailwind), así que solo comparten el fondo del `body` y
- * el anillo de foco: siguen legibles sin tocar nada.
+ * fondo, oro antiguo como único acento y marfil para el texto. El login y el
+ * panel de administración comparten estos mismos tokens; el admin es "Operate"
+ * puro, así que allí la tipografía de display se reserva a la marca (el nombre
+ * de la liga) y los titulares y las cifras van en Geist.
  *
  * Antes había un `prefers-color-scheme: light` que pintaba el `body` de blanco
- * mientras las pantallas de login y admin se pintaban de `neutral-950` a mano:
- * en modo claro salían bordes blancos alrededor de paneles oscuros. El sitio
- * tiene identidad de sala de control, así que se fija oscuro.
+ * mientras las pantallas de login y admin se pintaban oscuras a mano: en modo
+ * claro salían bordes blancos alrededor de paneles oscuros. El sitio tiene
+ * identidad de sala de control, así que se fija oscuro.
+ *
+ * Capas de color, de fuera hacia dentro:
+ *  - Estructura: `--accent` es el ÚNICO acento de marca (oro antiguo) y se
+ *    reserva a identidad y control (navegación activa, foco, enlaces, medalla
+ *    de la primera plaza).
+ *  - Estado: `--live` es una señal semántica de emisión (brasa), no un segundo
+ *    acento de marca; solo marca "en partida ahora mismo". `--twitch` es color
+ *    de marca de terceros y solo viste lo que es de Twitch.
+ *  - Resultado y racha: `--win`/`--loss` y la rampa `--streak-*` son estado
+ *    deportivo (verde gana, rojo pierde); refuerzan una cifra que ya se lee,
+ *    nunca son la única señal. No son marca ni emisión.
+ *  - Podio: `--podium-silver` y `--podium-bronze` para el 2.º y 3.º puesto; el
+ *    1.º usa el oro de la casa.
+ *
+ * El hilo dorado (`--thread`) es la única textura del proyecto: un filete de
+ * 1px que enmarca la cabecera, el pie y la cabecera del torneo. No hay sombras
+ * en la cara pública: la elevación se declara con filete o con relleno, nunca
+ * con las dos cosas.
  *
  * Formas: contenedores y bloques a 8px (`rounded-lg`), controles a 6px
  * (`rounded-md`) y píldoras/etiquetas a radio completo (`rounded-full`).
@@ -28,6 +46,7 @@
   --surface: #12151a;
   --surface-raised: #191d24;
   --line: #262b33;
+  --line-strong: #3a424e;
 
   /* Acento único: oro antiguo. */
   --accent: #c9a45c;
@@ -37,9 +56,35 @@
   /* Texto secundario. */
   --muted: #98a0aa;
 
+  /* Podio: plata y bronce; el oro es el acento de la casa. */
+  --podium-silver: #b9c2cc;
+  --podium-bronze: #c08a55;
+
+  /* Resultado de partidas: verde gana, rojo pierde. Es estado deportivo, no
+     marca: por eso no toca el oro del acento ni la brasa de `--live`. */
+  --win: #7ec78d;
+  --loss: #e07070;
+
+  /* Rampa de la racha, del rojo al verde. Tonos propios en vez de reutilizar
+     `--live` (emisión) o `--podium-bronze` (podio) para no mezclar semánticas:
+     aquí el naranja significa racha negativa, no "en partida" ni un puesto.
+     El signo y la cifra ya comunican el dato; el color solo lo refuerza. */
+  --streak-slump: #dd6363;
+  --streak-dip: #e08a4c;
+  --streak-rise: #c3d47a;
+  --streak-surge: #5cae74;
+
+  /* Señal de emisión (partida en juego o jugador en partida): brasa, distinta
+     del oro de marca y del rojo de la división Conquistador. */
+  --live: #e2603c;
+  --live-soft: #f2a288;
+
   /* Twitch: color de marca para el icono y el estado en directo. */
   --twitch: #a970ff;
   --twitch-soft: #c9a6ff;
+
+  /* Hilo dorado del chrome. */
+  --thread: color-mix(in oklab, var(--accent) 30%, transparent);
 }
 
 @theme inline {
@@ -48,10 +93,21 @@
   --color-surface: var(--surface);
   --color-surface-raised: var(--surface-raised);
   --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
   --color-accent: var(--accent);
   --color-accent-strong: var(--accent-strong);
   --color-accent-ink: var(--accent-ink);
   --color-muted: var(--muted);
+  --color-podium-silver: var(--podium-silver);
+  --color-podium-bronze: var(--podium-bronze);
+  --color-win: var(--win);
+  --color-loss: var(--loss);
+  --color-streak-slump: var(--streak-slump);
+  --color-streak-dip: var(--streak-dip);
+  --color-streak-rise: var(--streak-rise);
+  --color-streak-surge: var(--streak-surge);
+  --color-live: var(--live);
+  --color-live-soft: var(--live-soft);
   --color-twitch: var(--twitch);
   --color-twitch-soft: var(--twitch-soft);
   --font-sans: var(--font-geist-sans);
@@ -72,7 +128,78 @@ body {
     @apply outline-2 outline-offset-2 outline-accent;
   }
 
+  /* Tailwind v4 devuelve a los botones el cursor nativo (`default`) en lugar de
+     la mano, así que un control pulsable y un texto inerte se ven igual. Se
+     recupera aquí, en una sola regla, para que no vuelva a colarse: los
+     deshabilitados (`:disabled` o `aria-disabled`) conservan el cursor por
+     defecto, y las utilidades `cursor-*` de un componente siguen ganando. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
   ::selection {
     @apply bg-accent text-accent-ink;
+  }
+
+  /* Superficies del navegador (barra de desplazamiento, cursor de texto y
+     controles nativos) pintadas desde la paleta: es la señal más barata de que
+     la página está construida y no ensamblada. */
+  html {
+    scroll-padding-top: 5.5rem;
+    accent-color: var(--accent);
+    caret-color: var(--accent-strong);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--line-strong);
+    border: 2px solid var(--background);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted);
+  }
+}
+
+@layer components {
+  /* Hilo dorado de 1px. El anfitrión debe ser `relative`. */
+  .thread-top::before,
+  .thread-bottom::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    height: 1px;
+    background: var(--thread);
+    pointer-events: none;
+  }
+
+  .thread-top::before {
+    top: 0;
+  }
+
+  .thread-bottom::after {
+    bottom: 0;
   }
 }

@@ -33,7 +33,7 @@ export default function NotFound() {
           Ir a la clasificación
         </Link>
         <Link href="/partidas" className="text-muted transition-colors hover:text-accent">
-          Partidas en directo
+          Partidas en juego
         </Link>
         <Link href="/reglas" className="text-muted transition-colors hover:text-accent">
           Reglas

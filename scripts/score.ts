@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { getStandings } from "@/lib/public";
-import { MVP_RULE_LABEL, recomputeScores } from "@/lib/scoring";
+import { RULE_LABEL, recomputeScores } from "@/lib/scoring";
 
 /**
  * Recalcular la clasificación a mano, sin levantar el servidor.
@@ -21,10 +21,14 @@ async function main(): Promise<void> {
 
   console.log("");
   console.log("--- Clasificación ---");
-  console.log(`Versión de reglas: ${result.ruleSetVersion} (${MVP_RULE_LABEL})`);
-  console.log(`Partidas con punto: ${result.matchesScored} (filas reiniciadas: ${result.matchesReset})`);
+  console.log(`Versión de reglas: ${result.ruleSetVersion} (${RULE_LABEL})`);
+  console.log(`Partidas con puntos actualizados: ${result.matchesUpdated}`);
   console.log(`Jugadores en la clasificación: ${result.playersRanked}`);
   console.log(`Filas retiradas: ${result.playersUnranked}`);
+  console.log(`Puntos de partidas: ${result.totalPoints - result.objectivesPoints}`);
+  console.log(
+    `Puntos de objetivos: ${result.objectivesPoints} (${result.objectivesAwarded} con poseedor)`,
+  );
   console.log(`Suma de puntos: ${result.totalPoints}`);
   console.log(`Duración: ${result.durationMs} ms`);
   console.log("");

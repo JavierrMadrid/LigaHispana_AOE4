@@ -6,6 +6,7 @@ import {
   type Aoe4WorldGamePlayer,
   type Aoe4WorldGamesPage,
   type Aoe4WorldGameResult,
+  type Aoe4WorldLadderPage,
   type Aoe4WorldLeaderboard,
   type Aoe4WorldLeaderboardEntry,
   type Aoe4WorldPlayer,
@@ -305,6 +306,37 @@ export function parseLeaderboard(value: unknown): Aoe4WorldLeaderboard | null {
     season: readInteger(value.season),
     players,
     totalCount: readInteger(value.total_count) ?? players.length,
+  };
+}
+
+/**
+ * Una página de la ladder completa (`GET /leaderboards/:ladder` sin `profile_id`).
+ *
+ * Delega en `parseLeaderboard` para no duplicar la lectura de cada jugador y solo
+ * añade lo que ese tipo no necesita: la paginación. Los campos salen de la misma
+ * respuesta, así que una entrada se interpreta exactamente igual en los dos
+ * endpoints.
+ */
+export function parseLadderPage(value: unknown): Aoe4WorldLadderPage | null {
+  const board = parseLeaderboard(value);
+
+  if (board === null || !isRecord(value)) {
+    return null;
+  }
+
+  const perPage = readInteger(value.per_page) ?? board.players.length;
+  const nextPage = readInteger(value.next_page);
+
+  return {
+    key: board.key,
+    name: board.name,
+    season: board.season,
+    page: readInteger(value.page) ?? 1,
+    perPage,
+    totalCount: board.totalCount,
+    count: readInteger(value.count) ?? board.players.length,
+    nextPage: nextPage !== null && nextPage > 0 ? nextPage : null,
+    players: board.players,
   };
 }
 

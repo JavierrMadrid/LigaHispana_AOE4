@@ -11,24 +11,24 @@ export function LoginForm() {
   return (
     <form action={formAction} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-neutral-400">Email</span>
+        <span className="text-muted">Email</span>
         <input
           name="email"
           type="email"
           autoComplete="email"
           required
-          className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-neutral-100 outline-none focus:border-amber-500"
+          className="h-10 rounded-md border border-line bg-background px-3 text-foreground"
         />
       </label>
 
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-neutral-400">Contraseña</span>
+        <span className="text-muted">Contraseña</span>
         <input
           name="password"
           type="password"
           autoComplete="current-password"
           required
-          className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-neutral-100 outline-none focus:border-amber-500"
+          className="h-10 rounded-md border border-line bg-background px-3 text-foreground"
         />
       </label>
 
@@ -39,7 +39,7 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-amber-500 px-3 py-2 font-medium text-neutral-950 transition hover:bg-amber-400 disabled:opacity-60"
+        className="h-10 rounded-md bg-accent px-4 font-medium text-accent-ink transition-colors hover:bg-accent-strong disabled:opacity-60"
       >
         {pending ? "Entrando…" : "Entrar"}
       </button>

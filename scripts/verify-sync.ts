@@ -5,9 +5,20 @@ import assert from "node:assert/strict";
 import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame, readOwnCivRandomized, resolveGameMode } from "@/lib/aoe4world/normalize";
 import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/parse";
 import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
-import { countsAsRanked, MVP_RULESET_VERSION } from "@/lib/scoring";
+
+import { isKnownCivilization } from "@/lib/civs";
+import { Prisma, type PrismaClient } from "@/generated/prisma/client";
+import {
+  countsAsRanked,
+  DEFAULT_RULESET,
+  mergeRuleset,
+  RANKED_MODES,
+  RULE_LABEL,
+  RULESET_VERSION,
+  SCORING_RULESET_KEY,
+} from "@/lib/scoring";
 import type { Aoe4WorldClient } from "@/lib/aoe4world/client";
-import type { Aoe4WorldGame, Aoe4WorldGamesPage } from "@/lib/aoe4world/types";
+import type { Aoe4WorldGame, Aoe4WorldGamesPage, Aoe4WorldLadderPage } from "@/lib/aoe4world/types";
 
 /**
  * Verificación de la normalización y del guardado, sin llamar a la API real.
@@ -26,6 +37,11 @@ const SAMPLE_ALLY_ID = 9_000_003;
 const SAMPLE_RIVAL_ID = 9_000_004;
 /** Segundo jugador, para comprobar que las lecturas públicas filtran por estado. */
 const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
+/**
+ * Tercer jugador, solo para la ventana: sus partidas se colocan justo en los bordes
+ * de `[from, to)` y son las que deciden qué cuenta.
+ */
+const WINDOW_PROFILE_ID = 9_000_006;
 
 /**
  * Reloj congelado para las comprobaciones de normalización: al pasarle `NOW` a
@@ -42,7 +58,7 @@ function samplePlayer(overrides: Record<string, unknown> = {}) {
     name: "Jugador Muestra",
     country: "es",
     result: "win",
-    civilization: "britons",
+    civilization: "english",
     civilization_randomized: false,
     rating: 1510,
     rating_diff: 7,
@@ -104,7 +120,7 @@ const TEAM_LOSS = {
       { player: samplePlayer({ profile_id: SAMPLE_RIVAL_ID, name: "Rival A", result: "win" }) },
       { player: samplePlayer({ profile_id: SAMPLE_ALLY_ID, name: "Compañero", result: "loss" }) },
     ],
-    [{ player: samplePlayer({ result: "loss", civilization: "delhi" }) }],
+    [{ player: samplePlayer({ result: "loss", civilization: "delhi_sultanate" }) }],
   ],
 };
 
@@ -202,7 +218,7 @@ async function checkNormalization(): Promise<void> {
     assert.equal(match.result, "WIN");
     assert.equal(match.opponentProfileId, SAMPLE_OPPONENT_ID);
     assert.equal(match.opponentName, "Rival Muestra");
-    assert.equal(match.civ, "britons");
+    assert.equal(match.civ, "english");
     assert.equal(match.opponentCiv, "malians");
     assert.equal(match.map, "High View");
     assert.equal(match.durationSeconds, 1800);
@@ -263,18 +279,168 @@ async function checkNormalization(): Promise<void> {
   });
 
   await check("solo cuentan las partidas clasificatorias resueltas", () => {
-    const base = { mode: "rm_solo", result: "WIN" as const, finishedAt: NOW };
+    const base = {
+      mode: "rm_solo",
+      result: "WIN" as const,
+      startedAt: new Date("2026-09-20T18:00:00.000Z"),
+      finishedAt: NOW,
+    };
+    const ventana = DEFAULT_RULESET.window;
 
-    assert.equal(countsAsRanked(base), true);
-    assert.equal(countsAsRanked({ ...base, mode: "rm_team" }), true, "los equipos también son ranked");
-    assert.equal(countsAsRanked({ ...base, finishedAt: null }), false, "en curso no puntúa");
-    assert.equal(countsAsRanked({ ...base, result: null }), false, "sin resultado no puntúa");
-    assert.equal(countsAsRanked({ ...base, mode: "qm_1v1" }), false, "una custom no es clasificatoria");
-    assert.equal(countsAsRanked({ ...base, mode: null }), false, "sin ladder resuelta no puntúa");
+    assert.equal(countsAsRanked(base, ventana), true);
     assert.equal(
-      countsAsRanked({ ...base, mode: "rm_solo", result: "LOSS", finishedAt: NOW }),
+      countsAsRanked({ ...base, mode: "rm_team" }, ventana),
+      true,
+      "los equipos también son ranked",
+    );
+    assert.equal(countsAsRanked({ ...base, finishedAt: null }, ventana), false, "en curso no puntúa");
+    assert.equal(countsAsRanked({ ...base, result: null }, ventana), false, "sin resultado no puntúa");
+    assert.equal(
+      countsAsRanked({ ...base, mode: "qm_1v1" }, ventana),
+      false,
+      "una custom no es clasificatoria",
+    );
+    assert.equal(countsAsRanked({ ...base, mode: null }, ventana), false, "sin ladder resuelta no puntúa");
+    assert.equal(
+      countsAsRanked({ ...base, mode: "rm_solo", result: "LOSS", finishedAt: NOW }, ventana),
       true,
       "una derrota cuenta como partida, aunque no dé puntos",
+    );
+  });
+
+  await check("la ventana de fechas se aplica por la fecha de inicio de la partida", () => {
+    const { from, to } = DEFAULT_RULESET.window;
+    const ventana = DEFAULT_RULESET.window;
+    const resuelta = (startedAt: string) => ({
+      mode: "rm_solo",
+      result: "WIN" as const,
+      startedAt: new Date(startedAt),
+      finishedAt: NOW,
+    });
+    const milisegundoAntes = (instante: string) =>
+      new Date(Date.parse(instante) - 1).toISOString();
+
+    assert.ok(to !== null, "la ventana de pruebas tiene fin, para poder cortar los dos bordes");
+    assert.equal(
+      countsAsRanked(resuelta(milisegundoAntes(from)), ventana),
+      false,
+      "un milisegundo antes de `from` no cuenta",
+    );
+    assert.equal(countsAsRanked(resuelta(from), ventana), true, "`from` es inclusivo");
+    assert.equal(
+      countsAsRanked(resuelta(milisegundoAntes(to)), ventana),
+      true,
+      "un milisegundo antes de `to` todavía cuenta",
+    );
+    assert.equal(
+      countsAsRanked(resuelta(to), ventana),
+      false,
+      "`to` es exclusivo: una partida empezada exactamente ahí ya es de la siguiente",
+    );
+    assert.equal(
+      countsAsRanked(resuelta(new Date(Date.parse(to) + 1).toISOString()), ventana),
+      false,
+      "después de `to` no cuenta",
+    );
+
+    // La ventana se ancla en `startedAt`, no en `finishedAt`: lo que decide es
+    // cuándo se jugó, no cuándo se publicó el desenlace.
+    const empezadaDentroTerminadaDespues = {
+      ...resuelta(from),
+      finishedAt: new Date(Date.parse("2030-01-01T00:00:00.000Z")),
+    };
+    assert.equal(
+      countsAsRanked(empezadaDentroTerminadaDespues, ventana),
+      true,
+      "empezada dentro de la ventana cuenta aunque termine fuera",
+    );
+
+    // `to: null` deja la ventana abierta por la derecha: es lo que permite fijar
+    // el fin del torneo más tarde sin tocar código.
+    const abierta = { from, to: null };
+    assert.equal(
+      countsAsRanked(resuelta("2031-06-01T12:00:00.000Z"), abierta),
+      true,
+      "con `to: null` no hay corte por la derecha",
+    );
+    assert.equal(
+      countsAsRanked(resuelta(milisegundoAntes(from)), abierta),
+      false,
+      "`from` sigue cortando por la izquierda con la ventana abierta",
+    );
+  });
+
+  await check("el `window` guardado se valida y lo raro cae al valor por defecto", () => {
+    const porDefecto = DEFAULT_RULESET.window;
+
+    // Sin `window` en `Setting`: el documento por defecto, sin avisos.
+    const ausente = mergeRuleset({ version: RULESET_VERSION, pointsPerWin: 10 });
+    assert.deepEqual(ausente.ruleset.window, porDefecto);
+    assert.deepEqual(
+      ausente.warnings.filter((warning) => warning.includes("window")),
+      [],
+      "una ventana ausente no es un error: es la de por defecto",
+    );
+
+    // Una ventana bien escrita se aplica tal cual, con las horas normalizadas.
+    const buena = mergeRuleset({
+      version: RULESET_VERSION,
+      window: { from: "2026-09-15T02:00:00+02:00", to: "2026-10-15T00:00:00Z" },
+    });
+    assert.deepEqual(buena.ruleset.window, { from: "2026-09-15T00:00:00.000Z", to: "2026-10-15T00:00:00.000Z" });
+    assert.deepEqual(buena.warnings, []);
+
+    // `to: null` es legítimo: ventana abierta.
+    const abierta = mergeRuleset({
+      version: RULESET_VERSION,
+      window: { from: "2026-09-15T00:00:00Z", to: null },
+    });
+    assert.equal(abierta.ruleset.window.to, null);
+    assert.deepEqual(abierta.warnings, []);
+
+    // Todo lo demás cae al valor por defecto, avisando, y sin romperse.
+    const invalidos: unknown[] = [
+      "no-es-un-objeto",
+      {},
+      { from: "ayer" },
+      { from: "2026-09-15" },
+      { from: "2026-09-15T00:00:00" },
+      { from: 20261 },
+      { from: "2026-09-15T00:00:00Z", to: "mañana" },
+      { from: "2026-10-15T00:00:00Z", to: "2026-09-15T00:00:00Z" },
+      { from: "2026-09-15T00:00:00Z", to: "2026-09-15T00:00:00Z" },
+    ];
+
+    for (const window of invalidos) {
+      const resultado = mergeRuleset({ version: RULESET_VERSION, window });
+
+      assert.deepEqual(
+        resultado.ruleset.window,
+        porDefecto,
+        `window ${JSON.stringify(window)} debería caer al valor por defecto`,
+      );
+      assert.equal(
+        resultado.warnings.some((warning) => warning.includes("window")),
+        true,
+        `window ${JSON.stringify(window)} debería avisar`,
+      );
+    }
+
+    // Un `to` ausente hereda el del documento por defecto y lo dice: abrir la
+    // ventana hay que pedirlo escribiendo `null`, no por olvidarse.
+    const sinFin = mergeRuleset({
+      version: RULESET_VERSION,
+      window: { from: "2026-09-15T00:00:00Z" },
+    });
+    assert.equal(sinFin.ruleset.window.to, porDefecto.to);
+    assert.equal(sinFin.warnings.some((warning) => warning.includes("window.to")), true);
+  });
+
+  await check("el ruleset por defecto no se contradice con las familias rankeadas", () => {
+    assert.deepEqual(
+      DEFAULT_RULESET.modes,
+      [...RANKED_MODES],
+      "las familias del ruleset por defecto son las rankeadas: si divergen, `countsAsRanked()` y el SQL filtrarían distinto",
     );
   });
 
@@ -344,7 +510,7 @@ async function checkNormalization(): Promise<void> {
     assert.equal(deLaLista?.profileId, SAMPLE_PROFILE_ID);
     assert.equal(delDetalle?.profileId, SAMPLE_PROFILE_ID);
     assert.equal(delDetalle?.result, "win");
-    assert.equal(delDetalle?.civilization, "britons");
+    assert.equal(delDetalle?.civilization, "english");
   });
 
   await check("un payload roto no revienta: se descarta", () => {
@@ -401,6 +567,9 @@ function createFakeClient(
     async getLeaderboard() {
       throw new Error("no se usa en esta verificación");
     },
+    async getLadderPage(): Promise<Aoe4WorldLadderPage> {
+      throw new Error("no se usa en esta verificación");
+    },
     async autocompletePlayers() {
       throw new Error("no se usa en esta verificación");
     },
@@ -415,14 +584,26 @@ function createFakeClient(
  * de verdad: si no, la partida en curso acaba ageing por fuera de la ventana de
  * 60 minutos y el worker la descarta (que es lo correcto, pero no lo que
  * queremos comprobar aquí).
+ *
+ * Las dos partidas **terminadas** sí se anclan a la ventana activa, con
+ * `withinWindow()`, y no al reloj: no hay nada de "en directo" que juzgar, y así
+ * las comprobaciones del motor no dependen del día en que se ejecuten ni se rompen
+ * cuando la ventana de pruebas se mueva. La partida en directo no puede anclarse
+ * (su prueba *es* la ventana de 60 minutos), así que sí depende de que la ventana
+ * del torneo siga cubriendo el presente: lo comprueba la primera comprobación de
+ * la sección de base de datos.
  */
+function withinWindow(days: number): string {
+  return new Date(Date.parse(DEFAULT_RULESET.window.from) + days * 86_400_000).toISOString();
+}
+
 function buildFixtureAt(now: Date) {
   const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
   const liveStartedAt = ago(10).toISOString();
 
   return {
-    solo: { ...SOLO_WIN, started_at: ago(180).toISOString() },
-    team: { ...TEAM_LOSS, started_at: ago(300).toISOString() },
+    solo: { ...SOLO_WIN, started_at: withinWindow(2) },
+    team: { ...TEAM_LOSS, started_at: withinWindow(3) },
     // 10 minutos dentro de la ventana de 60, con 50 de margen: aunque la
     // comprobación tardara media hora, la partida seguiría "en curso".
     live: { ...ONGOING_SOLO, started_at: liveStartedAt },
@@ -453,6 +634,231 @@ function buildFixtureAt(now: Date) {
   };
 }
 
+/**
+ * Comprobaciones de la ventana de fechas contra la base de datos de verdad.
+ *
+ * Usa un jugador aparte cuyas partidas están **justo en los bordes** de
+ * `[from, to)`, y para el `to = null` sustituye temporalmente el ruleset guardado
+ * y lo deja como estaba (con un `finally`, y recalculando al final para que la
+ * clasificación real no se quede calculada con la ventana de prueba).
+ */
+async function runWindowChecks(
+  db: PrismaClient,
+  jugadorMuestra: { id: string },
+): Promise<void> {
+  const { getObjectives, readRuleset, recomputeScores } = await import("@/lib/scoring");
+  const { countsAsRanked } = await import("@/lib/ranked-match");
+
+  const ventana = (await readRuleset()).window;
+
+  assert.ok(ventana.to !== null, "estas comprobaciones necesitan una ventana con los dos bordes");
+
+  const from = Date.parse(ventana.from);
+  const to = Date.parse(ventana.to);
+
+  /** Las cinco partidas, todas ganadas y resueltas: solo decide la fecha de inicio. */
+  const casos = [
+    { gameId: "9000101", etiqueta: "justo antes de from", at: from - 1, dentro: false },
+    { gameId: "9000102", etiqueta: "justo en from", at: from, dentro: true },
+    { gameId: "9000103", etiqueta: "justo antes de to", at: to - 1, dentro: true },
+    { gameId: "9000104", etiqueta: "justo en to", at: to, dentro: false },
+    { gameId: "9000105", etiqueta: "después de to", at: to + 1, dentro: false },
+  ];
+
+  const existente = await db.player.findUnique({ where: { profileId: WINDOW_PROFILE_ID } });
+  assert.equal(
+    existente,
+    null,
+    `ya existe un jugador con profileId ${WINDOW_PROFILE_ID}; bórralo antes de repetir la verificación`,
+  );
+
+  // El ruleset guardado, para poder devolverlo tal cual estaba.
+  const rulesetGuardado = await db.setting.findUnique({ where: { key: SCORING_RULESET_KEY } });
+
+  const jugador = await db.player.create({
+    data: { profileId: WINDOW_PROFILE_ID, name: "Jugador Ventana", status: "APPROVED" },
+  });
+
+  console.log("Ventana de fechas");
+
+  try {
+    await db.match.createMany({
+      data: casos.map((caso) => ({
+        gameId: caso.gameId,
+        playerId: jugador.id,
+        leaderboard: "rm_solo",
+        mode: "rm_solo",
+        civ: "english",
+        result: "WIN" as const,
+        startedAt: new Date(caso.at),
+        finishedAt: new Date(caso.at + 1_800_000),
+        rawJson: { game_id: Number(caso.gameId), kind: "rm_1v1", leaderboard: "rm_solo" },
+      })),
+    });
+
+    await check("los dos bordes de la ventana se cortan como dice la regla", async () => {
+      for (const caso of casos) {
+        assert.equal(
+          countsAsRanked(
+            { mode: "rm_solo", result: "WIN", startedAt: new Date(caso.at), finishedAt: new Date() },
+            ventana,
+          ),
+          caso.dentro,
+          `${caso.etiqueta} (${new Date(caso.at).toISOString()})`,
+        );
+      }
+    });
+
+    await check("una partida fuera de la ventana no puntúa, y el agregado la ignora", async () => {
+      await recomputeScores();
+
+      const puntos = await db.match.findMany({
+        where: { playerId: jugador.id },
+        orderBy: { startedAt: "asc" },
+        select: { gameId: true, startedAt: true, points: true },
+      });
+
+      for (const caso of casos) {
+        const fila = puntos.find((fila) => fila.gameId === caso.gameId);
+
+        assert.ok(fila !== undefined, `falta la partida ${caso.gameId}`);
+
+        if (caso.dentro) {
+          assert.equal(
+            fila.points,
+            DEFAULT_RULESET.pointsPerWin,
+            `${caso.etiqueta}: cuenta y puntúa`,
+          );
+        } else {
+          assert.equal(fila.points, 0, `${caso.etiqueta}: no cuenta y no puntúa`);
+        }
+      }
+
+      const score = await db.playerScore.findUnique({
+        where: {
+          playerId_ruleSetVersion: { playerId: jugador.id, ruleSetVersion: RULESET_VERSION },
+        },
+      });
+
+      assert.ok(score !== null, "el jugador de la ventana está en la clasificación");
+      assert.equal(
+        score.matches,
+        casos.filter((caso) => caso.dentro).length,
+        "solo cuentan las partidas de dentro de la ventana",
+      );
+      assert.equal(score.wins, score.matches, "todas están ganadas");
+      assert.equal(
+        score.total - (score.breakdown as { objectives: { points: number } }).objectives.points,
+        score.wins * DEFAULT_RULESET.pointsPerWin,
+        "los puntos de partidas cuadran con las victorias de la ventana",
+      );
+    });
+
+    await check("los objetivos cuentan las mismas partidas de la ventana", async () => {
+      const { loadObjectivePlayers } = await import("@/lib/objectives");
+      const dentro = casos.filter((caso) => caso.dentro).length;
+      const agregados = await loadObjectivePlayers(db, (await readRuleset()));
+      const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
+
+      // Es el mismo filtro que el del `UPDATE` de `Match.points` y que el del
+      // agregado de la clasificación, así que su recuento de partidas tiene que
+      // coincidir con el de `PlayerScore.matches`.
+      assert.equal(suyo?.matches, dentro, "el jugador de la ventana solo suma sus partidas de dentro");
+      assert.equal(suyo?.wins, dentro, "y solo las ganadas, que aquí son todas");
+
+      // Y tiene que ser el mismo número que el agregado de la clasificación.
+      const score = await db.playerScore.findUnique({
+        where: {
+          playerId_ruleSetVersion: { playerId: jugador.id, ruleSetVersion: RULESET_VERSION },
+        },
+      });
+      assert.equal(suyo?.matches, score?.matches, "objetivos y clasificación cuentan lo mismo");
+
+      // La vista pública solo enseña los tres primeros, así que este jugador
+      // puede no salir: si sale, sus números tienen que ser los de la ventana.
+      const vista = await getObjectives();
+
+      for (const option of vista.options) {
+        const contendiente = option.ranking.find(
+          (contendiente) => contendiente.profileId === WINDOW_PROFILE_ID,
+        );
+
+        if (contendiente !== undefined) {
+          assert.ok(
+            contendiente.matches <= dentro && contendiente.value <= dentro,
+            `${option.id}: no puede competir con más de ${dentro} partidas de la ventana`,
+          );
+        }
+      }
+    });
+
+    await check("con `to: null` la ventana se abre por la derecha", async () => {
+      const { loadObjectivePlayers } = await import("@/lib/objectives");
+
+      await db.setting.update({
+        where: { key: SCORING_RULESET_KEY },
+        data: {
+          value: { ...(rulesetGuardado?.value as object), window: { from: ventana.from, to: null } },
+        },
+      });
+
+      const abierta = (await readRuleset()).window;
+      assert.equal(abierta.to, null, "el ruleset abierto se lee tal cual");
+
+      await recomputeScores();
+
+      const score = await db.playerScore.findUnique({
+        where: {
+          playerId_ruleSetVersion: { playerId: jugador.id, ruleSetVersion: RULESET_VERSION },
+        },
+      });
+
+      // `from` sigue cortando por la izquierda: solo la partida de antes se queda
+      // fuera. Las tres que estaban en o después de `to` vuelven a contar.
+      const dentro = casos.filter((caso) => caso.dentro).length;
+      const fueraPorLaIzquierda = casos.filter((caso) => !caso.dentro && caso.at < from).length;
+      const esperada = casos.length - fueraPorLaIzquierda;
+
+      assert.ok(esperada > dentro, "el cambio tiene que verse: con `to: null` cuenta más");
+      assert.equal(
+        score?.matches,
+        esperada,
+        "con la ventana abierta cuentan también las partidas de después de `to`",
+      );
+
+      const puntos = await db.match.aggregate({
+        where: { playerId: jugador.id, points: { gt: 0 } },
+        _count: { _all: true },
+      });
+      assert.equal(puntos._count._all, esperada, "y todas ellas puntúan");
+
+      const agregados = await loadObjectivePlayers(db, (await readRuleset()));
+      const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
+      assert.equal(suyo?.matches, esperada, "los objetivos también las cuentan");
+    });
+  } finally {
+    // Se devuelve el ruleset como estaba y se recalcula, para que la
+    // clasificación real no se quede con la ventana abierta de la prueba.
+    if (rulesetGuardado === null) {
+      await db.setting.deleteMany({ where: { key: SCORING_RULESET_KEY } });
+    } else {
+      await db.setting.update({
+        where: { key: SCORING_RULESET_KEY },
+        data: { value: rulesetGuardado.value as Prisma.InputJsonValue },
+      });
+    }
+
+    await db.player.deleteMany({ where: { profileId: WINDOW_PROFILE_ID } });
+    await recomputeScores();
+    assert.equal(
+      (await db.playerScore.count({ where: { playerId: jugadorMuestra.id } })),
+      1,
+      "tras devolver la ventana, el jugador de muestra vuelve a estar en la clasificación",
+    );
+    console.log("  --    ventana de prueba restaurada");
+  }
+}
+
 async function runDatabaseChecks(): Promise<void> {
   // Importación diferida: las comprobaciones de normalización no tocan la base
   // de datos y así funcionan aunque `DATABASE_URL` no esté definida.
@@ -461,11 +867,33 @@ async function runDatabaseChecks(): Promise<void> {
     "@/lib/settings"
   );
   const { db } = await import("@/lib/db");
+  const { getObjectives, readRuleset, recomputeScores } = await import("@/lib/scoring");
 
   const now = new Date();
   const fixture = buildFixtureAt(now);
   const soloStartedAt = new Date(fixture.solo.started_at);
   const liveStartedAt = new Date(fixture.live.started_at);
+
+  console.log("Guardado en base de datos");
+
+  await check("la ventana activa cubre la fixture de esta verificación", async () => {
+    const ventana = (await readRuleset()).window;
+    const fin = ventana.to === null ? Number.POSITIVE_INFINITY : Date.parse(ventana.to);
+
+    assert.ok(
+      ventana.to !== null,
+      `la ventana de ${SCORING_RULESET_KEY} está abierta (to = null) y las cuentas de esta verificación asumen un fin`,
+    );
+    assert.ok(
+      soloStartedAt.getTime() < now.getTime() && new Date(fixture.team.started_at) < now,
+      "la ventana activa tiene que empezar en el pasado, o las partidas de muestra serían futuras",
+    );
+    assert.ok(
+      liveStartedAt.getTime() < fin,
+      `la ventana activa (${ventana.from} — ${String(ventana.to)}) ya no cubre el presente y la partida en ` +
+        "directo de la fixture caería fuera: hay que mover la ventana de DEFAULT_RULESET o esperar a la siguiente",
+    );
+  });
 
   const games: Aoe4WorldGame[] = [
     parsedGame(fixture.solo),
@@ -484,8 +912,6 @@ async function runDatabaseChecks(): Promise<void> {
     data: { profileId: SAMPLE_PROFILE_ID, name: "Jugador Muestra", status: "APPROVED" },
   });
 
-  console.log("Guardado en base de datos");
-
   try {
     await check("la primera pasada inserta las partidas y guarda el cursor", async () => {
       const summary = await syncApprovedPlayers({
@@ -499,7 +925,11 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(player.matchesUpdated, 0);
       assert.equal(player.matchesSkipped, 0, "no debería descartarse ninguna partida");
       assert.equal(player.liveMatches, 1);
-      assert.equal(player.name, "Jugador Muestra Actualizado");
+      assert.equal(
+        player.name,
+        "Jugador Muestra",
+        "el resultado identifica al jugador por su nombre de display, no por el oficial",
+      );
 
       const rows = await db.match.findMany({
         where: { player: { profileId: SAMPLE_PROFILE_ID } },
@@ -512,7 +942,11 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(solo?.leaderboard, "rm_solo");
       assert.equal(solo?.mode, "rm_solo", "la familia de ladder se resuelve al guardar");
       assert.equal(solo?.civRandomized, false);
-      assert.equal(solo?.points, 1, "el motor da 1 punto a la victoria clasificatoria");
+      assert.equal(
+        solo?.points,
+        DEFAULT_RULESET.pointsPerWin,
+        "el motor da pointsPerWin puntos a la victoria clasificatoria",
+      );
       assert.equal(
         solo?.finishedAt?.toISOString(),
         new Date(soloStartedAt.getTime() + 1_800_000).toISOString(),
@@ -572,10 +1006,22 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(total, 3, "sigue habiendo tres filas, no se duplica nada");
     });
 
-    await check("el nombre del jugador se refresca con el de AoE4World", async () => {
-      const player = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
-      assert.equal(player?.name, "Jugador Muestra Actualizado");
-    });
+    await check(
+      "el nombre de display no se pisa y el oficial va a su propia columna",
+      async () => {
+        const player = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
+        assert.equal(
+          player?.name,
+          "Jugador Muestra",
+          "el worker no toca `Player.name`: es lo que escribió quien se inscribió",
+        );
+        assert.equal(
+          player?.aoe4WorldName,
+          "Jugador Muestra Actualizado",
+          "el nombre de AoE4World se guarda aparte, para poder publicar los dos",
+        );
+      },
+    );
 
     await check(
       "el refetch resuelve una partida en vivo que el listado ya no devuelve",
@@ -720,10 +1166,8 @@ async function runDatabaseChecks(): Promise<void> {
     });
 
     await check("el motor deja la clasificación al día y es idempotente", async () => {
-      const { recomputeScores } = await import("@/lib/scoring");
-
       const primera = await recomputeScores();
-      assert.equal(primera.ruleSetVersion, MVP_RULESET_VERSION);
+      assert.equal(primera.ruleSetVersion, RULESET_VERSION);
       assert.equal(primera.playersRanked >= 1, true);
 
       const segunda = await recomputeScores();
@@ -733,23 +1177,45 @@ async function runDatabaseChecks(): Promise<void> {
         "repetir el recálculo no crea filas nuevas",
       );
       assert.equal(segunda.playersUnranked, 0);
+      assert.equal(
+        segunda.objectivesPoints,
+        primera.objectivesPoints,
+        "repetir el recálculo reparte los mismos objetivos",
+      );
 
       const score = await db.playerScore.findUnique({
-        where: { playerId_ruleSetVersion: { playerId: player.id, ruleSetVersion: MVP_RULESET_VERSION } },
+        where: { playerId_ruleSetVersion: { playerId: player.id, ruleSetVersion: RULESET_VERSION } },
       });
 
       assert.ok(score !== null, "el jugador de muestra tiene que estar en la clasificación");
       assert.ok(score.rank >= 1, "el puesto es un entero positivo");
-      assert.equal(score.total, 3, "tres victorias clasificatorias (1v1, 2v2 y la del refetch)");
       assert.equal(score.wins, 3);
       assert.equal(score.matches, 4, "cuatro partidas clasificatorias resueltas: 3 ganadas y la perdida");
 
-      // Los puntos de la tabla y los de la clasificación tienen que cuadrar.
+      const breakdown = score.breakdown as {
+        ruleSetVersion: number;
+        rule: string;
+        byMode: Record<string, { wins: number; points: number; matches: number }>;
+        objectives: { points: number; earned: string[] };
+      };
+
+      const puntosDePartidas = DEFAULT_RULESET.pointsPerWin * score.wins;
+      assert.equal(
+        score.total,
+        puntosDePartidas + breakdown.objectives.points,
+        "total = victorias × pointsPerWin + puntos de objetivos",
+      );
+
+      // Los puntos de la tabla y los de las partidas tienen que cuadrar.
       const puntosEnPartidas = await db.match.aggregate({
         where: { playerId: player.id },
         _sum: { points: true },
       });
-      assert.equal(puntosEnPartidas._sum.points, score.total, "PlayerScore.total = suma de Match.points");
+      assert.equal(
+        puntosEnPartidas._sum.points,
+        puntosDePartidas,
+        "Match.points suma lo mismo que los puntos de partidas del desglose",
+      );
 
       // Ninguna partida en vivo ni abandonada puede haber colado puntos.
       const puntosInesperados = await db.match.aggregate({
@@ -758,19 +1224,44 @@ async function runDatabaseChecks(): Promise<void> {
       });
       assert.equal(puntosInesperados._sum.points, null, "una partida sin resolver nunca puntúa");
 
-      const breakdown = score.breakdown as {
-        ruleSetVersion: number;
-        rule: string;
-        byMode: Record<string, { wins: number; points: number; matches: number }>;
-      };
-      assert.equal(breakdown.ruleSetVersion, MVP_RULESET_VERSION);
+      assert.equal(breakdown.ruleSetVersion, RULESET_VERSION);
       assert.equal(typeof breakdown.rule, "string");
-      assert.deepEqual(breakdown.byMode.rm_solo, { wins: 3, points: 3, matches: 3 });
+      assert.deepEqual(breakdown.byMode.rm_solo, {
+        wins: 3,
+        points: 3 * DEFAULT_RULESET.pointsPerWin,
+        matches: 3,
+      });
       assert.deepEqual(breakdown.byMode.rm_team, { wins: 0, points: 0, matches: 1 });
+
+      // Los objetivos del desglose tienen que existir y sumar lo que dice el ruleset.
+      assert.equal(
+        breakdown.objectives.earned.every((id) => id in DEFAULT_RULESET.objectives),
+        true,
+        `objetivos desconocidos en el desglose: ${breakdown.objectives.earned.join(", ")}`,
+      );
+      assert.equal(
+        breakdown.objectives.points,
+        breakdown.objectives.earned.reduce(
+          (sum, id) => sum + (DEFAULT_RULESET.objectives[id] ?? 0),
+          0,
+        ),
+        "los puntos de objetivos cuadran con los ids ganados",
+      );
+
+      // Los puntos de partidas de toda la tabla suman lo que dice `Match.points`.
+      const partidasAprobados = await db.match.aggregate({
+        where: { player: { status: "APPROVED" }, mode: { in: DEFAULT_RULESET.modes } },
+        _sum: { points: true },
+      });
+      assert.equal(
+        primera.totalPoints - primera.objectivesPoints,
+        partidasAprobados._sum.points ?? 0,
+        "los puntos de partidas del recálculo cuadran con la suma de Match.points",
+      );
 
       // Los puestos de toda la tabla tienen que ser coherentes con el orden.
       const todas = await db.playerScore.findMany({
-        where: { ruleSetVersion: MVP_RULESET_VERSION },
+        where: { ruleSetVersion: RULESET_VERSION },
         orderBy: { rank: "asc" },
         select: { rank: true, total: true, wins: true },
       });
@@ -787,6 +1278,201 @@ async function runDatabaseChecks(): Promise<void> {
         }),
         true,
         "el orden por rank coincide con el orden por puntos",
+      );
+
+      // `countsAsRanked()` (que decide fila a fila, en memoria) tiene que contar
+      // lo mismo que el `groupBy` y que el `UPDATE` de `Match.points`, que son sus
+      // dos traducciones a SQL. Es la comprobación que avisa si las tres se
+      // desincronizan: se recorren todas las partidas del jugador de muestra y se
+      // comparan las dos cuentas.
+      const ventana = (await readRuleset()).window;
+      const filas = await db.match.findMany({
+        where: { playerId: player.id },
+        select: { mode: true, result: true, startedAt: true, finishedAt: true, points: true },
+      });
+      const enJs = filas.filter((fila) => countsAsRanked(fila, ventana));
+
+      assert.equal(
+        enJs.length,
+        score.matches,
+        "las partidas que cuentan en memoria son las que cuenta el agregado",
+      );
+      assert.equal(
+        enJs.filter((fila) => fila.result === "WIN").length,
+        score.wins,
+        "y las victorias también",
+      );
+      assert.equal(
+        enJs.reduce((sum, fila) => sum + fila.points, 0),
+        score.total - breakdown.objectives.points,
+        "los puntos de `Match.points` son los que suman en la clasificación",
+      );
+      assert.equal(
+        filas.filter((fila) => !countsAsRanked(fila, ventana)).every((fila) => fila.points === 0),
+        true,
+        "ninguna partida que no cuenta puede tener puntos",
+      );
+    });
+
+    await check("los objetivos se publican con el contrato previsto", async () => {
+      const { OBJECTIVE_COUNT, OBJECTIVE_GROUP_LABELS } = await import("@/lib/objectives");
+
+      const view = await getObjectives();
+
+      assert.equal(view.ruleSetVersion, RULESET_VERSION);
+      assert.equal(view.rule, RULE_LABEL, "la etiqueta pública es la del código");
+      assert.deepEqual(
+        view.window,
+        (await readRuleset()).window,
+        "la vista publica la ventana activa, para que el copy no lleve fechas escritas a mano",
+      );
+      assert.equal(
+        view.pointsPerWin,
+        DEFAULT_RULESET.pointsPerWin,
+        "los puntos por victoria salen del ruleset activo",
+      );
+      assert.deepEqual(
+        view.minimums,
+        DEFAULT_RULESET.minimums,
+        "los mínimos salen del ruleset activo",
+      );
+      assert.equal(view.options.length, OBJECTIVE_COUNT, "hay los 37 objetivos de docs/PUNTUACION.md");
+
+      const groups = view.options.map((option) => option.group);
+      assert.deepEqual(
+        [...new Set(groups)],
+        ["actividad", "racha", "division", "formato", "civilizacion"],
+        "los grupos salen en el orden documentado, sin intercalarse",
+      );
+      assert.deepEqual(
+        view.options.slice(0, 4).map((option) => option.id),
+        ["loco-por-ganar", "otp", "golpe-de-suerte", "prohibido-perder"],
+        "otp va con Actividad y prohibido-perder con Racha, en ese orden",
+      );
+      assert.equal(
+        groups.every((group) => group in OBJECTIVE_GROUP_LABELS),
+        true,
+        "todo grupo tiene rótulo",
+      );
+
+      // Copy exacto del cliente y métricas de Actividad y Racha (§3.2-§3.3).
+      const porId = new Map(view.options.map((option) => [option.id, option]));
+
+      assert.equal(
+        porId.get("golpe-de-suerte")?.label,
+        "¿Golpe de suerte?",
+        "el rótulo de `golpe-de-suerte` es copy del cliente",
+      );
+      assert.equal(
+        porId.get("sensei-oro")?.label,
+        "El Sensei de Oro",
+        "los rótulos de `sensei-*` son copy del cliente",
+      );
+      assert.equal(
+        porId.get("otp")?.group,
+        "actividad",
+        "otp se agrupa en Actividad (sin grupo Dominio)",
+      );
+      assert.equal(
+        porId.get("prohibido-perder")?.group,
+        "racha",
+        "prohibido-perder se agrupa en Racha (sin grupo Dominio)",
+      );
+      assert.equal(
+        porId.get("otp")?.metric,
+        "victorias",
+        "otp lo decide el máximo de victorias con una misma civ, sin umbral",
+      );
+      assert.equal(
+        porId.get("prohibido-perder")?.metric,
+        "winrate",
+        "prohibido-perder sigue decidiéndose por ratio",
+      );
+
+      // El detalle de `otp`: la civilización del jugador, en el catálogo.
+      const otp = porId.get("otp");
+
+      assert.ok(otp !== undefined, "otp existe");
+
+      for (const contender of otp.ranking) {
+        assert.ok(contender.detail, `otp: ${contender.name} lleva su civ en detail`);
+        assert.equal(
+          isKnownCivilization(contender.detail.id),
+          true,
+          `otp: ${contender.detail.id} es una civ del catálogo`,
+        );
+        assert.ok(
+          contender.detail.label.length > 0,
+          `otp: la civ ${contender.detail.id} tiene nombre en español`,
+        );
+      }
+
+      assert.equal(
+        view.options
+          .filter((option) => option.id !== "otp")
+          .every((option) => option.ranking.every((contender) => contender.detail == null)),
+        true,
+        "solo otp rellena detail",
+      );
+
+      const holders = new Set<string>();
+
+      for (const option of view.options) {
+        assert.equal(
+          option.points,
+          DEFAULT_RULESET.objectives[option.id],
+          `${option.id}: los puntos salen del ruleset`,
+        );
+        assert.ok(option.ranking.length <= 3, `${option.id}: el ranking va acotado a 3`);
+
+        for (const contender of option.ranking) {
+          assert.equal(typeof contender.value, "number", `${option.id}: value es numérico`);
+          assert.equal(
+            typeof contender.eligible,
+            "boolean",
+            `${option.id}: eligible marca si cumple el mínimo`,
+          );
+          assert.equal(
+            contender.profileUrl,
+            `https://aoe4world.com/players/${contender.profileId}`,
+            `${option.id}: profileUrl con el mismo criterio que la clasificación`,
+          );
+        }
+
+        if (option.holder !== null) {
+          holders.add(option.id);
+          assert.equal(option.holder.eligible, true, `${option.id}: el poseedor cumple el mínimo`);
+        }
+      }
+
+      // Lo que el motor anotó en el desglose tiene que coincidir con lo que
+      // publica la vista: mismos objetivos, mismos poseedores.
+      const score = await db.playerScore.findUnique({
+        where: { playerId_ruleSetVersion: { playerId: player.id, ruleSetVersion: RULESET_VERSION } },
+      });
+
+      assert.ok(score !== null);
+      const breakdown = score.breakdown as { rule: string; objectives: { earned: string[] } };
+      assert.equal(breakdown.rule, RULE_LABEL, "el desglose guarda la etiqueta del código");
+      assert.equal(
+        breakdown.objectives.earned.every((id) => holders.has(id)),
+        true,
+        `el desglose anota objetivos que no tienen poseedor: ${breakdown.objectives.earned.join(", ")}`,
+      );
+
+      // `ensureRuleset` corrige la copia guardada: en `Setting` no puede quedar
+      // el texto de una versión anterior de las reglas.
+      const stored = await db.setting.findUnique({ where: { key: SCORING_RULESET_KEY } });
+
+      assert.ok(stored !== null, "el ruleset está publicado en Setting");
+      assert.equal(
+        typeof stored.value === "object" &&
+          stored.value !== null &&
+          !Array.isArray(stored.value)
+          ? (stored.value as { label?: unknown }).label
+          : undefined,
+        RULE_LABEL,
+        "el label guardado en scoring.ruleset es el del código",
       );
     });
 
@@ -825,9 +1511,32 @@ async function runDatabaseChecks(): Promise<void> {
         const fila = standings.find((row) => row.profileId === SAMPLE_PROFILE_ID);
 
         assert.ok(fila !== undefined, "el jugador de muestra sale en la clasificación");
-        assert.equal(fila.points, 3);
-        assert.equal(fila.wins, 3);
+        assert.equal(
+          fila.name,
+          "Jugador Muestra",
+          "la clasificación publica el nombre de display",
+        );
+        assert.equal(
+          fila.aoe4WorldName,
+          "Jugador Muestra Actualizado",
+          "y también el oficial, para poder pintar los dos",
+        );
+
+        const esperado = await db.playerScore.findUnique({
+          where: {
+            playerId_ruleSetVersion: { playerId: player.id, ruleSetVersion: RULESET_VERSION },
+          },
+        });
+
+        assert.ok(esperado !== null);
+        assert.equal(fila.points, esperado.total, "la tabla pública lee el total del agregado");
+        assert.equal(fila.wins, esperado.wins);
         assert.equal(fila.wins + fila.losses, 4);
+        assert.equal(
+          fila.points >= 3 * DEFAULT_RULESET.pointsPerWin,
+          true,
+          "con los objetivos no se puede sumar menos que con las partidas solas",
+        );
         assert.equal(
           standings.some((row) => row.profileId === vacio.profileId),
           false,
@@ -841,15 +1550,112 @@ async function runDatabaseChecks(): Promise<void> {
 
         const vivos = await getLiveMatches();
         assert.equal(
-          vivos.some((row) => row.playerProfileId === SAMPLE_PENDING_PROFILE_ID),
+          vivos.some((match) =>
+            match.participants.some(
+              (participant) =>
+                participant.profileId === SAMPLE_PENDING_PROFILE_ID && participant.isLeaguePlayer,
+            ),
+          ),
           false,
           "una partida en curso de un jugador pendiente no se publica",
         );
         assert.equal(
-          vivos.every((row) => row.startedAt instanceof Date),
+          vivos.every((match) => match.startedAt instanceof Date),
           true,
           "startedAt llega como Date, no como texto",
         );
+
+        // Una partida con **dos** participantes del torneo tiene dos filas
+        // `Match` (unicidad `(playerId, gameId)`), pero es una sola partida y
+        // cada jugador aparece una sola vez dentro de ella.
+        const gameIdCruce = "9000098";
+        const teamsCruce = [
+          [{ player: samplePlayer({ result: null, civilization: "mongols" }) }],
+          [
+            {
+              player: samplePlayer({
+                profile_id: vacio.profileId,
+                name: vacio.name,
+                result: null,
+                civilization: "japanese",
+              }),
+            },
+          ],
+        ];
+
+        await db.match.createMany({
+          data: [
+            {
+              gameId: gameIdCruce,
+              playerId: player.id,
+              leaderboard: "rm_solo",
+              mode: "rm_solo",
+              civ: "mongols",
+              opponentProfileId: vacio.profileId,
+              opponentName: vacio.name,
+              opponentCiv: "japanese",
+              result: null,
+              startedAt: new Date(now.getTime() - 5 * 60_000),
+              finishedAt: null,
+              rawJson: { ...fixture.live, game_id: 9_000_098, teams: teamsCruce },
+            },
+            {
+              gameId: gameIdCruce,
+              playerId: vacio.id,
+              leaderboard: "rm_solo",
+              mode: "rm_solo",
+              civ: "japanese",
+              opponentProfileId: player.profileId,
+              opponentName: player.name,
+              opponentCiv: "mongols",
+              result: null,
+              startedAt: new Date(now.getTime() - 5 * 60_000),
+              finishedAt: null,
+              rawJson: { ...fixture.live, game_id: 9_000_098, teams: teamsCruce },
+            },
+          ],
+        });
+
+        const conCruce = await getLiveMatches();
+
+        assert.equal(
+          conCruce.filter((match) => match.gameId === gameIdCruce).length,
+          1,
+          "una partida con dos participantes de la liga se publica una sola vez",
+        );
+        assert.equal(
+          new Set(conCruce.map((match) => match.gameId)).size,
+          conCruce.length,
+          "no hay dos entradas con el mismo gameId",
+        );
+
+        const cruce = conCruce.find((match) => match.gameId === gameIdCruce);
+
+        assert.ok(cruce !== undefined, "el cruce sale en la lista");
+        assert.deepEqual(
+          cruce.participants.map((participant) => participant.profileId).sort(),
+          [player.profileId, vacio.profileId].sort(),
+          "cada participante aparece una sola vez y son los dos",
+        );
+        assert.equal(cruce.leaguePlayerCount, 2, "los dos se marcan como de la liga");
+        assert.equal(
+          cruce.participants.every((participant) => participant.isLeaguePlayer),
+          true,
+          "los dos participantes están aprobados",
+        );
+        assert.deepEqual(
+          cruce.participants.map((participant) => participant.team),
+          [1, 2],
+          "la alineación sale en orden de equipos",
+        );
+        assert.equal(cruce.format, "1vs1", "el formato sale resuelto y legible");
+        assert.deepEqual(
+          cruce.participants.map((participant) => participant.civ),
+          ["mongols", "japanese"],
+          "cada jugador conserva su civilización",
+        );
+
+        await db.match.deleteMany({ where: { gameId: gameIdCruce } });
 
         await db.player.update({
           where: { id: player.id },
@@ -872,6 +1678,8 @@ async function runDatabaseChecks(): Promise<void> {
         });
       }
     });
+
+    await runWindowChecks(db, player);
   } finally {
     await db.player.deleteMany({ where: { profileId: SAMPLE_PROFILE_ID } });
     await db.setting.deleteMany({ where: { key: playerSyncKey(SAMPLE_PROFILE_ID) } });

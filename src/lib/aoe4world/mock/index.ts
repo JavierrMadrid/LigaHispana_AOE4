@@ -94,16 +94,22 @@ type DirectoryPlayer = {
   profileId: number;
   name: string;
   country: string;
+  /** `avatars.full`; los rivales externos no lo traen y se responde `null`. */
+  avatarUrl?: string | null;
 };
 
 function playerPayload(player: DirectoryPlayer): unknown {
+  const avatar = player.avatarUrl ?? null;
+
   return {
     profile_id: player.profileId,
     name: player.name,
     steam_id: null,
     site_url: `https://aoe4world.com/players/${player.profileId}`,
     country: player.country,
-    avatars: { small: null, medium: null, full: null },
+    // La API real devuelve aquí el retrato (contrastado en septiembre de 2026):
+    // el worker lo guarda, así que el mock tiene que servirlo también.
+    avatars: { small: avatar, medium: avatar, full: avatar },
   };
 }
 

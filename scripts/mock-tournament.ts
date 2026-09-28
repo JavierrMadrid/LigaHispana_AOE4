@@ -9,7 +9,9 @@ import {
 } from "@/lib/aoe4world/mock/players";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { db } from "@/lib/db";
+import { OBJECTIVE_POINTS } from "@/lib/objectives";
 import { DIVISIONS, getStandings } from "@/lib/public";
+import { DEFAULT_RULESET, RULESET_VERSION } from "@/lib/scoring";
 import { playerSyncKey } from "@/lib/settings";
 
 /**
@@ -52,8 +54,76 @@ async function ensureMockPlayers(): Promise<void> {
   }
 }
 
+/**
+ * Comprueba que las filas que se van a borrar son exactamente las del mock.
+ *
+ * El borrado va por `profileId`, que es un rango reservado, pero un rango por sí
+ * solo no es una prueba: si algún día se colara un jugador real con uno de esos
+ * ids, `mock:clean` se lo llevaría por delante sin decirlo. Por eso se compara
+ * también el nombre (y el canal) con la lista del mock, que es su única fuente de
+ * verdad. Si algo no cuadra, no se borra nada.
+ */
+async function assertRowsAreMock(): Promise<void> {
+  const rows = await db.player.findMany({
+    where: { profileId: { in: MOCK_PROFILE_IDS } },
+    select: { profileId: true, name: true, twitchChannel: true },
+    orderBy: { profileId: "asc" },
+  });
+
+  if (rows.length === 0) {
+    console.log("No hay jugadores del mock en la base de datos: no hay nada que limpiar.");
+    return;
+  }
+
+  const esperadoPorId = new Map(
+    MOCK_TOURNAMENT_PLAYERS.map((player) => [player.profileId, player]),
+  );
+  const problemas: string[] = [];
+
+  if (rows.length !== MOCK_PROFILE_IDS.length) {
+    problemas.push(
+      `se esperaban ${MOCK_PROFILE_IDS.length} jugadores del mock y hay ${rows.length}`,
+    );
+  }
+
+  for (const row of rows) {
+    const esperado = esperadoPorId.get(row.profileId);
+
+    if (esperado === undefined) {
+      problemas.push(`${row.profileId} (${row.name}) no está en la lista del mock`);
+      continue;
+    }
+
+    if (esperado.name !== row.name) {
+      problemas.push(
+        `${row.profileId}: el nombre "${row.name}" no es el del mock ("${esperado.name}")`,
+      );
+    }
+
+    if ((esperado.twitchChannel ?? null) !== (row.twitchChannel ?? null)) {
+      problemas.push(
+        `${row.profileId} (${esperado.name}): el canal "${row.twitchChannel ?? "null"}" no es el del mock ("${esperado.twitchChannel ?? "null"}")`,
+      );
+    }
+  }
+
+  if (problemas.length > 0) {
+    console.error("");
+    for (const problema of problemas) {
+      console.error(`ERROR: ${problema}`);
+    }
+    console.error("No se borra nada: las filas no son las del mock.");
+    throw new Error("La limpieza del torneo simulado se ha abortado.");
+  }
+
+  console.log(`Verificado: las ${rows.length} filas a borrar son los jugadores del mock.`);
+  console.log(`  ${rows.map((row) => `${row.profileId} ${row.name}`).join(", ")}`);
+}
+
 async function cleanMockTournament(): Promise<void> {
-  // El borrado es en cascada (Match y PlayerScore cuelcan de Player en el
+  await assertRowsAreMock();
+
+  // El borrado es en cascada (Match y PlayerScore cuelgan de Player en el
   // schema); los cursores `Setting` no, así que se borran a mano.
   const players = await db.player.deleteMany({
     where: { profileId: { in: MOCK_PROFILE_IDS } },
@@ -203,7 +273,6 @@ async function runMockTournament(): Promise<void> {
     );
   }
 
-  const distinctTotals = new Set(standings.map((row) => row.points)).size;
   const problems: string[] = [];
 
   if (summary.playersFailed > 0) {
@@ -242,10 +311,72 @@ async function runMockTournament(): Promise<void> {
     );
   }
 
-  if (standings.length > 0 && distinctTotals !== standings.length) {
-    problems.push(
-      `los totales no son distintos entre sí (${distinctTotals} valores para ${standings.length} jugadores)`,
+  // La clasificación de la v2 se compone de dos sumas que tienen que cuadrar:
+  // las victorias por `pointsPerWin` y los puntos de los objetivos ganados.
+  const scores = await db.playerScore.findMany({
+    where: { ruleSetVersion: RULESET_VERSION, player: { profileId: { in: MOCK_PROFILE_IDS } } },
+    select: {
+      total: true,
+      wins: true,
+      breakdown: true,
+      player: { select: { profileId: true } },
+    },
+  });
+
+  const conObjetivos = scores.filter((score) => {
+    const breakdown = score.breakdown as { objectives?: { points?: number } } | null;
+    return (breakdown?.objectives?.points ?? 0) > 0;
+  });
+
+  const desglosesIncoherentes = scores.filter((score) => {
+    const breakdown = score.breakdown as {
+      byMode?: Record<string, { points?: number }>;
+      objectives?: { points?: number; earned?: string[] };
+    } | null;
+
+    const objectives = breakdown?.objectives ?? { points: 0, earned: [] };
+    const objectivesPoints = objectives.points ?? 0;
+    const earned = objectives.earned ?? [];
+    const sumados = earned.reduce(
+      (sum, id) => sum + (OBJECTIVE_POINTS[id] ?? -1),
+      0,
     );
+    const porModos = Object.values(breakdown?.byMode ?? {}).reduce(
+      (sum, mode) => sum + (mode.points ?? 0),
+      0,
+    );
+
+    return (
+      sumados !== objectivesPoints ||
+      porModos !== score.total - objectivesPoints ||
+      score.total !== score.wins * DEFAULT_RULESET.pointsPerWin + objectivesPoints
+    );
+  });
+
+  if (desglosesIncoherentes.length > 0) {
+    problems.push(
+      `desgloses de puntuación que no cuadran: ${desglosesIncoherentes
+        .map((score) => score.player.profileId)
+        .join(", ")}`,
+    );
+  }
+
+  if (scores.length === MOCK_PROFILE_IDS.length && conObjetivos.length === 0) {
+    problems.push("ningún participante suma puntos de objetivos en la v2");
+  }
+
+  if (standings.length > 0) {
+    const totales = standings.map((row) => row.points);
+
+    if (totales.some((total, index) => index > 0 && total > totales[index - 1])) {
+      problems.push("los totales de la clasificación no salen en orden descendente");
+    }
+
+    const distintos = new Set(totales).size;
+
+    if (distintos < 3) {
+      problems.push(`se esperaban al menos 3 totales distintos y hay ${distintos}`);
+    }
   }
 
   // Comprobaciones de la ladder (elo, división, racha, Twitch y partido en curso).

@@ -5,8 +5,11 @@ import type { DivisionId } from "@/lib/public";
  * Divisiones de la ladder para la interfaz pública.
  *
  * `public.ts` es `server-only`, así que la lista que necesitan los filtros
- * (componente cliente) vive aquí, con sus etiquetas y colores. Los emblemas son
- * SVG propios, dibujados para este proyecto: no se usa ningún asset del juego.
+ * (componente cliente) vive aquí, con sus etiquetas y colores.
+ *
+ * Estos escudos son SVG propios del proyecto y hoy son el reemplazo de los
+ * iconos oficiales de liga: `league-icon.tsx` pinta el asset del juego cuando
+ * existe y cae a `DivisionIcon` cuando falta.
  */
 export type DivisionUi = {
   id: DivisionId;

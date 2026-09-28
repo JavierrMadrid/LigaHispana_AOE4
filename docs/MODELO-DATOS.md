@@ -15,9 +15,9 @@ la base de datos (que define **dónde vive cada dato**).
 |---|---|
 | Estado | **Parcialmente aplicado.** Ver "Adaptación al MVP" (§0 bis) para el desglose exacto de qué sí y qué no. |
 | Depende de | `docs/PUNTUACION.md` (§9 lista los once requisitos que este documento tiene que cubrir) y `docs/PLAN.md` (reglas heredadas de F2). |
-| Punto de partida | `prisma/schema.prisma` a fecha de hoy: `Player`, `Match`, `Setting`, más `PlayerScore`. |
+| Punto de partida | `prisma/schema.prisma` a fecha de hoy: `Player`, `Match`, `Setting`, más `PlayerScore` y `RateLimitCounter`. |
 | Cubre | Los once requisitos de `PUNTUACION.md` §9. El cruce está en §3 y en §5. |
-| No cubre | El motor de cálculo (F3, código), la interfaz (F4) ni el panel de admin. |
+| No cubre | El motor de cálculo (F3, código), la interfaz (F4), el panel de admin ni la seguridad del formulario público (`RateLimitCounter`, §1.5). |
 
 > **Dónde está `PUNTUACION.md`.** Este documento lo referencia unas veinte veces
 > como si estuviera al lado, y **no lo está**: las reglas de puntuación completas
@@ -50,18 +50,30 @@ mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` ex
 
 ### 0 bis.1 La regla que se aplica ahora
 
-> **Cada victoria en partida clasificatoria (ranked 1v1 o por equipos) da 1 punto.**
+> **10 puntos por victoria clasificatoria (ranked 1v1 o por equipos) más 37 objetivos
+> especiales.** La definición completa y viva está en `docs/PUNTUACION.md`; lo que
+> resume este capítulo es la forma que toma en la base de datos.
 
-- **Clasificatoria** = `Match.mode ∈ ('rm_solo', 'rm_team')`. Las dos ladders *ranked* del modo
-  competitivo. Nada más cuenta: ni customs (`qm_*`), ni `ew_*`, ni `ffa_*`.
-- Solo puntúan partidas **resueltas** (`result` y `finishedAt` no nulos). Una partida en curso
-  nunca puntúa, ni a favor ni en contra.
+- **Clasificatoria** = `Match.mode ∈ ('rm_solo', 'rm_team')`, partida **resuelta**
+  (`result` y `finishedAt` no nulos) y `startedAt` dentro de la **ventana** del
+  ruleset. Las dos ladders *ranked* del modo competitivo y nada más: ni customs
+  (`qm_*`), ni `ew_*`, ni `ffa_*`. Una partida en curso nunca puntúa, ni a favor
+  ni en contra.
 - Derrota = 0 puntos (pero cuenta como partida jugada).
-- **Sin ventana de fechas, sin duración mínima, sin categorías y sin desempate por rating.**
-  El desempate provisional es `total desc, wins desc, profileId asc`, que termina en un valor
+- **La ventana** es un intervalo `[from, to)` sobre `Match.startedAt`, con `to`
+  opcional (`null` = sin fin). Vive en `Setting`, clave `scoring.ruleset`
+  (`window`), es reconfigurable sin desplegar y **no** sube la versión de las
+  reglas. El valor en el código es de pruebas: **2026-09-15 → 2026-10-15** en
+  medianoche UTC, a la espera de que la organización fije las suyas (§0 bis.2).
+  No hay duración mínima, categorías ni desempate por rating.
+  El desempate es `total desc, wins desc, profileId asc`, que termina en un valor
   único, así que el puesto es un entero denso sin empates que repartir.
-- La versión de reglas es la `1` (`MVP_RULESET_VERSION` en `src/lib/scoring.ts`) y es
-  **provisional**: representa esta regla, no el ruleset Wololo del diseño.
+- La versión de reglas activa es la **`2`**, y la fija el código: `RULESET_VERSION` en
+  `src/lib/scoring.ts`. Los números que sí se pueden tocar sin desplegar (puntos por
+  victoria, puntos por objetivo, mínimos) viven en `Setting`, clave `scoring.ruleset`.
+  La versión 1 (la regla provisional de "1 punto por victoria") ya no la publica
+  nadie: su constante se eliminó y sus filas de `PlayerScore` se borraron con los
+  jugadores que las tenían.
 
 ### 0 bis.2 Aplicado
 
@@ -69,10 +81,14 @@ mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` ex
 |---|---|---|
 | `Match.mode` + correspondencia mecánica | `resolveGameMode()` en `src/lib/aoe4world/normalize.ts` | `rm_1v1` → `rm_solo`; `rm_2v2`/`rm_3v3`/`rm_4v4` → `rm_team`; el resto tal cual (§3.1.1). `leaderboard` **no** se toca. |
 | `Match.civRandomized` | `readOwnCivRandomized()` en el mismo archivo | Se lee de la entrada del jugador con nuestro `profileId` dentro de `rawJson.teams[]`, en las dos formas en que la API la manda (anidada y plana), porque `parse.ts` ya la normaliza (§3.1.2). |
-| `Match`: índice `(mode, startedAt)` | `prisma/schema.prisma` | Como en §3.1.3. |
+| `Match`: índice `(mode, startedAt)` | `prisma/schema.prisma` | Como en §3.1.3. Ya lo usaba el filtro por modo; con la ventana también es el que cubre el rango de fechas. Medido en esta base de datos: el planificador lo elige con `mode = ANY (...)` y `startedAt >= … and < …` como condiciones de índice. |
 | `PlayerScore` (tabla nueva) | `prisma/schema.prisma` | Agregado versionado, con la pk compuesta y el índice `(ruleSetVersion, rank)` de §3.2. **Sin las columnas de categorías Wololo**; el `breakdown` JSON las absorbe. |
 | `Player.scores` | `prisma/schema.prisma` | Relación inversa, como en el borrador de §4. |
-| `Match.points` con valor real | `src/lib/scoring.ts` | **Cambio de fondo respecto a §3.1.4**: allí la columna se quedaba a 0 porque ninguna regla repartía puntos por partida. Aquí sí: vale 1 en cada victoria clasificatoria resuelta y 0 en el resto. Es justamente la "regla de puntos por partida" que §3.1.4 anticipaba, y por eso la columna ya existía y no hubo que crearla. |
+| `RateLimitCounter` (tabla nueva, F6) | `prisma/schema.prisma`, `src/lib/rate-limit.ts` | **Ajena a las reglas de puntuación**: sostiene el límite de frecuencia de los endpoints públicos sin sesión (§1.5). Aditiva, sin RLS ni permisos para los roles de cliente, como las otras. |
+| `Player.contactEmail` (columna nueva, F6) | `prisma/schema.prisma`, `src/lib/player-input.ts` | **Ajena a las reglas de puntuación** por el mismo motivo: es un dato de contacto para que la organización responda dudas, no algo de juego. Nullable, aditiva, sin índice y sin RLS nueva. Ver §1.1 y §3.5. |
+| `Match.points` con valor real | `src/lib/scoring.ts` | **Cambio de fondo respecto a §3.1.4**: allí la columna se quedaba a 0 porque ninguna regla repartía puntos por partida. Aquí sí: vale `ruleset.pointsPerWin` en cada victoria clasificatoria resuelta **y dentro de la ventana**, y 0 en el resto. Es justamente la "regla de puntos por partida" que §3.1.4 anticipaba, y por eso la columna ya existía y no hubo que crearla. |
+| Ventana de fechas del torneo | `src/lib/ranked-match.ts` (definición) y `src/lib/scoring.ts` (ruleset) | `Setting["scoring.ruleset"].window` = `{ from, to }`, instantes ISO-8601 UTC con zona explícita, `[from, to)` sobre `Match.startedAt`, con `to: null` como ventana abierta. **Aplicada**: una partida fuera de la ventana deja `Match.points = 0` y no entra ni en el agregado ni en los objetivos. El filtro vive en un solo módulo y lo consumen las tres consultas del motor. **Sin columnas ni índices nuevos**: el índice `(mode, startedAt)` de §3.1.3 ya lo cubría. |
+| `scoring.lastRun` en `Setting` | `writeScoringLastRun()` en `src/lib/settings.ts` | Rastro de la última pasada (§3.4). Lo escribe el motor **dentro** de su transacción, así que se confirma junto con la clasificación. |
 | *Backfill* de `mode` y `civRandomized` | `npm run backfill:model` (`scripts/backfill-model.ts`) | Los SQL 3a y 3b de §8.1, idempotentes, más sus comprobaciones. |
 
 **Formato exacto de `PlayerScore.breakdown` en el MVP.** Es un objeto con tres campos, y las
@@ -81,12 +97,13 @@ quien lo lea no tenga que defenderse de una clave que puede no existir:
 
 ```json
 {
-  "ruleSetVersion": 1,
-  "rule": "un punto por victoria en partida clasificatoria (ranked)",
+  "ruleSetVersion": 2,
+  "rule": "10 puntos por victoria clasificatoria más 37 objetivos especiales; solo el primero los cobra",
   "byMode": {
-    "rm_solo": { "wins": 3, "points": 3, "matches": 5 },
-    "rm_team": { "wins": 1, "points": 1, "matches": 2 }
-  }
+    "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
+    "rm_team": { "wins": 1, "points": 10, "matches": 2 }
+  },
+  "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1"] }
 }
 ```
 
@@ -103,12 +120,15 @@ reglas que las define.
 |---|---|
 | `ScoreSnapshot` (tabla) | El rastro de cada cálculo completo y su delta es útil cuando hay varias versiones conviviendo. Con una sola versión provisional, la tabla `PlayerScore` ya dice todo. Es el paso 7 de §8.1. |
 | Columnas de categoría de `PlayerScore`: `civsWonCount`, `mapsWonCount`, `crownsCount`, `milestonesReached`, `ratingUsed` | Son una columna por categoría del ruleset Wololo. Con el MVP, `wins`/`matches` cubren la clasificación y `breakdown` recoge lo que la interfaz necesite. |
-| Ruleset completo en `Setting` (`scoring.ruleset.active`, `scoring.ruleset.v{N}`, `scoring.lastRun` de §3.4) | El documento de reglas es lo que hay que versionar, y no hay documento que versionar todavía: la regla del MVP cabe en una constante de código. |
-| Filtros de ventana de fechas y duración mínima | Dependen de las fechas que pone la comunidad (D-02, D-03). |
+| Ruleset completo en `Setting` (`scoring.ruleset.active`, `scoring.ruleset.v{N}` de §3.4) | El reparto en varias versiones de documento y el puntero que las lista solo tienen sentido cuando haya más de una versión que conservar. Hoy hay una sola, y `scoring.ruleset` guarda directamente el documento activo con la v2 fijada por el código. **`scoring.lastRun` sí está aplicado** (§3.4). |
+| Filtro de duración mínima | Depende del dato que pone la comunidad (D-03). El de fechas ya está aplicado (fila anterior de §0 bis.2). |
 | Desempate por ratio y por rating de `rm_solo` | El rating viene de la API y cambia solo; la cadena de desempates provisional acaba en `profileId`, que es único. |
-| RLS sin políticas (§7) | **Diferido por prudencia, no por dificultad.** La comprobación previa (0.1) sí se ha hecho en esta base de datos: el rol de `DATABASE_URL` es `postgres` con `rolbypassrls = true`, así que activarlo **no** dejaría la web sin datos. Aun así, las tablas existentes llevan tiempo funcionando sin RLS y conviene hacerlo con el worker parado y en la misma revisión de permisos. |
 | Índice parcial de partidas en directo (§3.6) | No aplicado: la consulta de F4 (`finishedAt IS NULL` sobre unos pocos miles de filas de las decenas de miles) no lo necesita todavía, y un índice que no está en el schema es una complicación en cada `db push`. |
 | *Backfills* de §8.1 que solo aplican a las reglas | Los pasos 3c, 3d y 3e que hypotheticalmente existieran para categorías que hoy no hay. Los que sí aplican (3a y 3b) están hechos. |
+
+**Lo que sí está aplicado y antes esperaba aquí: RLS sin políticas (§7).** Ya no es una fila de
+esta tabla: está hecho, versionado en `scripts/db-security.ts` y se comprueba con
+`npm run db:security -- --check`. Ver §7 para el detalle y para lo que se comprobó al aplicarlo.
 
 ### 0 bis.4 Lo que esto no cambia del diseño
 
@@ -125,8 +145,12 @@ reglas que las define.
 | Comando | Qué hace |
 |---|---|
 | `npm run score` | Recalcula la clasificación y la imprime. Es lo que hace el worker al final de cada pasada, pero a mano. |
+| `npm run db:security` | Aplica la postura de RLS sin políticas y sin permisos para los roles de cliente (§7). Idempotente. Con `-- --solo-rls` aplica la otra postura, la que hace que la Data API conteste `[]`. |
+| `npm run db:security -- --check` | Solo comprueba la postura y sale con código 1 si no se cumple. Dice cuál de las dos está activa. **Es la comprobación que hay que hacer después de cada `db push`.** |
 | `npm run backfill:model` | Rellena `mode` y `civRandomized` de las partidas que ya había en la base de datos. Idempotente. |
 | `npm run verify:sync -- --db` | Comprueba normalización, guardado, motor de puntuación y lecturas públicas contra la base de datos de verdad, con datos de ejemplo que limpia al terminar. |
+| `npm run simulate:tournament` | Torneo simulado con **jugadores reales** de AoE4World: elige 1 por división, da de alta, importa la ventana del torneo y recalcula. Escribe su manifiesto en `Setting["simulation.roster"]`. Idempotente. Con `-- --select-only` solo elige e informa, sin tocar la base de datos. |
+| `npm run simulate:clean` | Deshace esa simulación. **Verifica la identidad de cada fila contra el manifiesto antes de borrar y aborta si no cuadra**; con `-- --dry-run` comprueba y no borra. Detalle en [`PLAN.md`](./PLAN.md) y en el [`README`](../README.md). |
 
 ## 1. El modelo actual
 
@@ -136,8 +160,10 @@ reglas que las define.
 |---|---|---|
 | `id` | `String` (cuid) | Clave primaria interna. Nunca se expone. |
 | `profileId` | `Int` | Identificador de AoE4World. **Único**: un jugador es una persona en AoE4World. |
-| `name` | `String` | Lo refresca el worker con el nombre de la API. |
+| `name` | `String` | **Nombre de display**: lo escribe quien se inscribió (formulario de inscripción) o el admin. El worker no lo toca nunca. |
+| `aoe4WorldName` | `String?` | **Nombre oficial de AoE4World**, en columna aparte para poder publicar los dos. Lo refresca el worker con `GET /players/:profile_id`; `null` = todavía no sincronizado. Nullable y sin valor por defecto a propósito: las filas que ya existían no tienen oficial y no hay que inventárselo con un *backfill*. |
 | `twitchChannel` | `String?` | Lo rellena el admin. Lo usa F5, no el motor de puntos. |
+| `contactEmail` | `String?` | **Correo de contacto** (F6). Lo exige el formulario público de `/participar` y lo valida `parseEmail` en `src/lib/player-input.ts`, con tope de 254 caracteres (el máximo de RFC 5321) y guardado en minúsculas. **Nullable a propósito:** el alta manual de admin no lo pide y las filas anteriores no lo tienen. El motor no lo lee: no entra en la clasificación ni en ningún desglose. |
 | `status` | `PlayerStatus` (`PENDING`/`APPROVED`/`REJECTED`) | Filtro de la clasificación: solo `APPROVED` puntúa (requisito 11). |
 | `createdAt`, `updatedAt` | `DateTime` | |
 
@@ -162,7 +188,7 @@ resultados, civilizaciones y puntos propios.
 | `startedAt` | `DateTime` | Ancla de la ventana de clasificatorias. |
 | `finishedAt` | `DateTime?` | Derivado (`started_at + duration`). **`null` = en curso**, que es lo que F4 lista como partida en directo. |
 | `durationSeconds` | `Int?` | Alimenta el filtro de duración mínima. |
-| `points` | `Int` (por defecto 0) | **En el diseño completo siempre vale 0.** Ver §3.1.4. En el MVP **sí** vale 1 por victoria clasificatoria: §0 bis.2. |
+| `points` | `Int` (por defecto 0) | **En el diseño completo siempre vale 0.** Ver §3.1.4. Con las reglas activas **sí** vale `ruleset.pointsPerWin` por victoria clasificatoria resuelta: §0 bis.2. |
 | `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** |
 | `createdAt` | `DateTime` | |
 
@@ -193,6 +219,23 @@ resultados, civilizaciones y puntos propios.
 
 Sin índices adicionales: se lee siempre por clave, que es la primaria.
 
+### 1.5 `RateLimitCounter`
+
+No tiene nada que ver con las reglas de puntuación: es la pieza de datos del límite de frecuencia de los endpoints públicos sin sesión (hoy, la inscripción de `/participar`). Vive en el esquema, y no en `Setting`, por una razón concreta: hace falta **una fila por clave y una escritura por intento**, con un incremento atómico. En `Setting` el valor sería un JSON dentro de una fila compartida, y el "leer, comprobar y escribir" no sería una operación atómica sin un cerrojo; además, meter una fila por IP dentro de un JSON de configuración rompería el diseño clave-valor que ya tiene.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `key` | `String` | Clave primaria. Es `ip:<hmac-sha256>` o el cubo compartido `global`. **Nunca es una IP**: lo que se guarda es el HMAC, con `RATE_LIMIT_SALT` (o `CRON_SECRET`) como clave. |
+| `count` | `Int` | Envíos contados en la ventana en curso, este incluido. |
+| `windowStart` | `DateTime` | Inicio de la ventana en curso. La ventana es **fija**, no deslizante: cuando caduca, el contador vuelve a 1. |
+| `updatedAt` | `DateTime` | |
+
+Índices: solo `key` (la primaria). **Ninguno más**, y es deliberado: la única consulta por rango es la purga periódica de filas caducadas (`RATE_LIMIT_STALE_SECONDS`, una vez por minuto como mucho, desde el propio contador), y con una fila por IP vista un recorrido secuencial de una tabla tan pequeña sale más barato que mantener un índice que casi no se usa. La regla de §6 ("un índice que no aparece en una consulta, no se crea") manda también aquí.
+
+**Atomicidad.** El incremento es un `INSERT ... ON CONFLICT DO UPDATE ... RETURNING count` de **una sola sentencia** (`bumpCounter` en `src/lib/rate-limit.ts`). Es lo que hace que dos envíos simultáneos no se cuelen: el `ON CONFLICT` espera a la transacción que ya tiene esa fila y la reevalúa sobre la versión nueva, así que el segundo ve el incremento del primero. Un `SELECT` seguido de un `UPDATE`, o un contador en memoria del proceso, dejarían pasar el umbral tantas veces como instancias serverless hubiera.
+
+**La ventana se decide en SQL** (`now() - $ventana`), no pasando una fecha desde el código: `DateTime` de Prisma es `timestamp` sin zona y mezclarlo con un `Date` de JavaScript depende de la zona horaria de la sesión.
+
 ## 2. Resumen de lo que hay que añadir
 
 | # | Pieza | Tipo de cambio | Requisito de `PUNTUACION.md` §9 |
@@ -202,11 +245,11 @@ Sin índices adicionales: se lee siempre por clave, que es la primaria.
 | 3 | `Match`: índice `(mode, startedAt)` | Índice nuevo | 7 |
 | 4 | `PlayerScore` | **Tabla nueva** | 2 y 3 (agregado versionado y desglose) |
 | 5 | `ScoreSnapshot` | **Tabla nueva** | 5 y 6 (auditoría de cada cálculo) |
-| 6 | Reglas y memoria del motor en `Setting` | Filas nuevas | 4 |
-| 7 | Índice parcial de partidas en directo | **SQL a mano** | 7 (corrigido, ver §3.6) |
-| 8 | RLS sin políticas | **SQL a mano** | 10 |
-| — | `Player` | Sin cambios | 11 (ya resuelto con `status`) |
-| — | `Match.points` | Sin cambios, se queda a 0 | 8 |
+| 6 | Reglas y memoria del motor en `Setting` | Filas nuevas (`scoring.ruleset` y `scoring.lastRun`, hechas) | 4 |
+| 7 | Índice parcial de partidas en directo | **SQL a mano** | 7 (corregido, ver §3.6) |
+| 8 | RLS sin políticas | **SQL a mano** (hecho, §7) | 10 |
+| — | `Player` | Una columna (`contactEmail`, F6; §3.5) | 11 (ya resuelto con `status`) |
+| — | `Match.points` | Sin cambios de schema; la columna ya tomaba valor | 8 |
 
 Dos tablas y dos columnas. Nada se borra ni se renombra.
 
@@ -278,9 +321,10 @@ explícita y no un detalle.
 
 #### 3.1.4 `points` se queda (requisito 8)
 
-> **Lo que sigue describe el diseño completo.** En el MVP esta columna **sí** se usa: vale 1 en
-> cada victoria clasificatoria resuelta. Ver §0 bis.2. El resto del razonamiento de aquí sigue
-> en pie, y es justamente por eso por lo que la columna existía.
+> **Lo que sigue describe el diseño completo.** Con las reglas activas esta columna **sí** se
+> usa: vale `ruleset.pointsPerWin` en cada victoria clasificatoria resuelta. Ver §0 bis.2. El
+> resto del razonamiento de aquí sigue en pie, y es justamente por eso por lo que la columna
+> existía.
 
 `Match.points` **no se borra y no se usa**. En la v1 las cinco categorías son agregadas o por
 puesto: ninguna reparte puntos sobre una partida concreta, así que la columna vale 0 en todas
@@ -393,10 +437,9 @@ Sin tabla nueva. Se reutiliza la que F2 ya usa.
 
 | Clave | Contenido | Quién la escribe | Quién la lee |
 |---|---|---|---|
-| `scoring.ruleset.active` | `{ version, publishedAt, publishedBy, versions: [1, 2, 3] }` | Publicación de versión | El motor, en cada pasada |
-| `scoring.ruleset.v{N}` | El documento completo de las reglas (el YAML de `PUNTUACION` §5.4, en JSON) | Publicación de versión | El motor |
-| `scoring.lastRun` | Resumen de la última pasada: versión, duración, jugadores, contadores, `snapshotId` | Worker | Panel de admin |
-| `scoring.sync.player.{profileId}` | Ya existe desde F2 (cursor) | Worker | Worker |
+| `scoring.ruleset` | El documento de reglas activo, con la versión fijada por el código. Es el equivalente ya simplificado de `scoring.ruleset.active` + `scoring.ruleset.v{N}`: con una sola versión no hace falta el puntero ni el formato de clave por versión. | `ensureRuleset()` en `src/lib/scoring.ts` | El motor, en cada pasada |
+| `scoring.lastRun` | Resultado de la última pasada: versión, duración, jugadores clasificados y retirados, puntos totales, objetivos con poseedor y puntos de objetivos, y partidas con puntos actualizados. **Sin `snapshotId`, porque `ScoreSnapshot` sigue diferido.** | `recomputeScores()`, dentro de su transacción | Panel de admin (todavía no lo pinta nadie) |
+| `aoe4world.sync.player.{profileId}` | Ya existe desde F2 (cursor) | Worker | Worker |
 
 Decisiones detrás de este reparto:
 
@@ -418,10 +461,23 @@ cubre validando en la escritura (el motor no publica una versión sin guardar an
 y no calcula contra una versión que no esté en el puntero), y es un riesgo que solo puede cometer
 el propio código, no un usuario.
 
-### 3.5 `Player`: sin cambios
+### 3.5 `Player`: una columna que no es de las reglas
 
 Requisito 11 cubierto por `status`. Los jugadores `PENDING` y `REJECTED` no entran ni en la
 clasificación ni en el reparto de premios.
+
+Desde F6 hay **una** columna nueva, y no la pidió ninguna regla: `contactEmail`. Es el correo de
+contacto que el formulario público de `/participar` exige para que la organización pueda responder
+dudas, y por eso se distingue de todo lo demás:
+
+- **Es nullable y sin valor por defecto.** El alta manual de admin no lo pide, y las filas que ya
+  existían no lo tienen. Hacerlo obligatorio obligaría a un *backfill* inventado sobre datos que
+  nadie tiene, que es justo lo que este diseño evita en todas partes.
+- **No lleva índice.** No se filtra por correo en ninguna consulta: se escribe una vez (al
+  inscribirse o al reinscribirse) y se lee en el panel. La regla de §6 manda: un índice que no
+  aparece en una consulta no se crea.
+- **No la lee el motor.** No aparece en ningún desglose, ni en `breakdown` ni en la
+  clasificación. Es dato de contacto, no de juego, así que no se mezcla con la regla de puntos.
 
 Lo que se ha considerado y **no** se añade:
 
@@ -430,6 +486,7 @@ Lo que se ha considerado y **no** se añade:
 | `country` (la API lo devuelve) | Ninguna regla de la v1 lo usa. Es un dato de presentación, y se puede pedir cuando F4 lo necesite. |
 | `seasonId` o `tournamentId` | La ventana de fechas del ruleset ya separa temporadas. Una columna más que mantener y que rellenar sería redundante. Ver P-01. |
 | Índice en `status` | La consulta es "jugadores aprobados" sobre una tabla de decenas o pocos cientos de filas, y se ordena por `profileId` (que sí está indexado por ser único). Un índice aquí no se va a usar. |
+| Índice único en `contactEmail` | El correo no es una identidad: se puede compartir en una casa o en un club, y en Postgres los `null` de un índice único no chocan entre sí, así que el índice no sujetaría lo que parece sujetar. Además no hay ninguna consulta que lo necesite (§6). |
 
 ### 3.6 Índices que Prisma no sabe expresar
 
@@ -642,7 +699,8 @@ model Setting {
 ```
 
 Lo que **no** aparece en ese bloque y hay que hacer aparte: el índice parcial de §3.6, los
-`alter table ... enable row level security` de §7 y los *backfills* de §8.
+`alter table ... enable row level security` de §7 (que no están en `prisma/schema.prisma` porque
+Prisma no los modela, sino en `scripts/db-security.ts`) y los *backfills* de §8.
 
 ## 5. Mapa regla → dato
 
@@ -656,7 +714,7 @@ el modelo aguanta.
 | **Categoría 3** (mapas) | `count(distinct Match.map)` de las ganadas, excluyendo nulo y `Unknown Map` | `Match.map` → `mapsWonCount` y `breakdown.maps` | Confirmar el literal exacto del mapa desconocido (comprobación 0.4 de §8.0) |
 | **Categoría 4** (coronas) | Agrupar victorias por civ, quedarse con el máximo de cada civ, con el mínimo de 10 | Derivado de `Match.civ` → `crownsCount` y `breakdown.crowns` | — |
 | **Categoría 5** (hitos) | `PlayerScore.wins` contra los escalones, y la fecha de la `n`-ésima victoria | `Match.finishedAt` + `PlayerScore.milestonesReached` | — |
-| **Ventana de fechas** | Ruleset `window.from` / `window.to` contra `Match.startedAt` | `Setting` + `Match.startedAt` | — |
+| **Ventana de fechas** | Ruleset `window.from` / `window.to` contra `Match.startedAt` | `Setting` + `Match.startedAt` | **Aplicada** (D-02 con fechas de trabajo; §0 bis.2). Sin columnas nuevas. |
 | **Filtro de modo** | Ruleset `modes.include` / `modes.exclude` contra `Match.mode` | `Setting` + `Match.mode` | — |
 | **Filtro de resultado resuelto** | `Match.result is not null and finishedAt is not null` | `Match` | — |
 | **Filtro de duración** | Ruleset `minDurationSeconds` contra `Match.durationSeconds` | `Setting` + `Match.durationSeconds` | — |
@@ -697,18 +755,22 @@ Cada consulta con el índice que la sostiene. Un índice que no aparece aquí, n
 | 6 | `/partidas` en directo | `Match where finishedAt is null order by startedAt desc take 50`, con `Player.status = APPROVED` | Índice parcial de §3.6 | El único índice parcial que se justifica: el predicado es selectivo. |
 | 7 | Worker (sync) | `Match where playerId = X and gameId in (...)` | pk única `(playerId, gameId)` | Sin cambios respecto a F2. |
 | 8 | Worker (sync) | `Match where playerId = X and finishedAt is null and startedAt < cursor` | `@@index([playerId, finishedAt])` | El refetch de partidas en curso. Sin cambios. |
-| 9 | Motor, recálculo completo | `Match where mode = any(...) and startedAt >= from and startedAt < to and result is not null and finishedAt is not null and durationSeconds >= min` | `@@index([mode, startedAt])` | Lee todas las partidas clasificatorias de la temporada. Con 30.000 filas es un escaneo de unos milisegundos; el índice lo hace mejor y evita que crezca mal. |
+| 9 | Motor, recálculo completo | `Match where mode = any(...) and startedAt >= from and startedAt < to and result is not null and finishedAt is not null` (+ `durationSeconds >= min` cuando exista) | `@@index([mode, startedAt])` | Lee todas las partidas clasificatorias de la temporada. Con 30.000 filas es un escaneo de unos milisegundos; el índice lo hace mejor y evita que crezca mal. **Es la consulta que aplica la ventana** (el filtro de duración sigue diferido, así que esa parte de la condición no está en el SQL todavía). |
 | 10 | Motor, agregado de un jugador | Ídem 9 con `playerId = X` | `@@index([playerId, startedAt])` | La columna que más filas trae va en la fecha. |
-| 11 | Motor, orden de los hitos | `Match where playerId = X and result = WIN and finishedAt is not null order by finishedAt, startedAt, gameId` | `@@index([playerId, finishedAt])` | El desempate por fecha de la `n`-ésima victoria. `startedAt` y `gameId` no están en el índice: se resuelve ordenando en memoria, que son ≤ 8 consultas por jugador. |
-| 12 | Motor, reyes por civ | `Match where result = WIN and mode = any(...) group by civ` | Ídem 9 | Se apoya en el mismo índice del recálculo. |
+| 11 | Motor, orden de los hitos | `Match where playerId = X and result = WIN and finishedAt is not null order by finishedAt, startedAt, gameId` | `@@index([playerId, finishedAt])` | El desempate por fecha de la `n`-ésima victoria. `startedAt` y `gameId` no están en el índice: se resuelve ordenando en memoria, que son ≤ 8 consultas por jugador. Con la ventana son las partidas de dentro de la ventana. |
+| 12 | Motor, reyes por civ | `Match where result = WIN and mode = any(...) and startedAt en ventana group by civ` | Ídem 9 | Se apoya en el mismo índice del recálculo. |
 | 13 | `/admin` jugadores | `Player order by profileId` | `Player.profileId` (único) | Decenas de filas. **Sin índice en `status`** (M-09). |
 | 14 | Motor, ruleset | `Setting where key in ('scoring.ruleset.active', 'scoring.ruleset.v3')` | pk | Dos filas por pasada. |
 | 15 | `/admin` historial | `ScoreSnapshot order by asOf desc` | `@@index([asOf(sort: Desc)])` | Pocas filas. |
+| 16 | Inscripción, límite de frecuencia | `insert ... on conflict ("key") do update ... returning count` sobre `RateLimitCounter` | pk | Una fila por IP hasheada (o el cubo `global`). El `ON CONFLICT` bloquea la fila, que es lo que serializa dos envíos simultáneos (§1.5). |
+| 17 | Inscripción, purga de contadores | `delete from "RateLimitCounter" where "windowStart" < $antiguedad` | **Ninguno, a propósito** | Una vez por minuto como mucho, desde el propio contador, y la tabla es de una fila por IP vista. Un recorrido secuencial sale más barato que un índice que casi no se usaría (§1.5). |
 
 Las consultas 9 a 12 son las que corren en cada pasada del worker. Con el volumen de un torneo
 (30 jugadores, 30.000 a 50.000 partidas) son milisegundos: no es un problema de rendimiento, es un
 problema de **correctitud** (que el filtro se aplique en SQL y no se pierda nada por un `join`
-mal hecho).
+mal hecho). Las cuatro llevan hoy la ventana de fechas; y el filtro no está escrito cuatro veces:
+`src/lib/ranked-match.ts` lo construye una vez y lo reparte como filtro de Prisma
+(`rankedMatchWhere`) y como predicado SQL (`rankedMatchSql`).
 
 ## 7. RLS y privilegios
 
@@ -716,48 +778,119 @@ Postura recomendada, y el motivo de que sea esta: **la web no se conecta nunca a
 datos con una clave de cliente.** Todo el acceso pasa por el DAL del servidor con `DATABASE_URL`.
 Así que las tablas no tienen por qué ser legibles para nadie más.
 
+> **Estado: APLICADO, no diferido.** Vive en `scripts/db-security.ts` y se ejecuta con
+> `npm run db:security`. Los cuatro pasos de la tabla se hicieron sobre las cinco tablas que
+> existen (`Player`, `Match`, `PlayerScore`, `Setting` y `RateLimitCounter`); `ScoreSnapshot` no
+> se creará hasta que las reglas cierren lo que le falta, y cuando se cree hay que volver a pasar
+> el script. La lista de `TABLES` en el script es **explícita**: al añadir una tabla al schema hay
+> que añadirla ahí, porque una tabla nueva nace con los permisos por defecto de Supabase y, sin
+> el paso 3, sería legible con la clave publicable a través de la Data API. Pasada esa con
+> `RateLimitCounter` (F6), el `--check` la cazó con `clientes=anon, authenticated`.
+
 | Paso | Qué | Por qué |
 |---|---|---|
-| 1 | `alter table ... enable row level security` en **todas** las tablas de `public` | Es la capa que no se puede olvidar: aunque alguien conceda permisos por error, sin políticas las filas siguen sin salir. |
+| 1 | `alter table ... enable row level security` en **todas** las tablas de `public` | Es la capa que no se puede olvidar: aunque alguien conceda permisos por error, sin políticas las filas siguen no saliendo. |
 | 2 | **Ninguna política.** Cero `create policy` | Una tabla con RLS y sin políticas devuelve **cero filas** a cualquier rol que no tenga `BYPASSRLS`. Eso es exactamente lo que queremos para `anon` y `authenticated`. |
-| 3 | **Ningún `grant`** a `anon` ni a `authenticated` | Refuerzo. Opcional si el paso 1 está bien, pero gratis. |
-| 4 | Comprobar con el asesor | `supabase db advisors` (CLI 2.81.3+) o el equivalente por MCP. Avisa de tablas sin RLS y de permisos demasiado abiertos. |
+| 3 | **Ningún `grant`** a `anon` ni a `authenticated` | Refuerzo, y es el paso que hace que la puerta esté cerrada aunque alguien añada una política el día de mañana. |
+| 4 | Comprobar | `npm run db:security -- --check`, que sale con código 1 si algo no cuadra. |
 
 ```sql
--- Sin políticas. Esto es todo lo que hace falta.
-alter table public."Player"       enable row level security;
-alter table public."Match"        enable row level security;
-alter table public."Setting"      enable row level security;
-alter table public."PlayerScore"  enable row level security;
-alter table public."ScoreSnapshot" enable row level security;
+-- Lo que ejecuta el script, en este orden y sin más.
+alter table public."Player"            enable row level security;
+alter table public."Match"             enable row level security;
+alter table public."PlayerScore"       enable row level security;
+alter table public."Setting"           enable row level security;
+alter table public."RateLimitCounter"  enable row level security;
 
--- Refuerzo opcional: que los roles de cliente no puedan ni intentar leer.
-revoke all on table public."PlayerScore"  from anon, authenticated;
-revoke all on table public."ScoreSnapshot" from anon, authenticated;
+-- Refuerzo: que los roles de cliente no puedan ni intentar leer. Sobre las
+-- secuencias no hace falta hoy (public no tiene ninguna), pero se revoca igual:
+-- si algún día entra una columna con `serial`, la secuencia nace con los
+-- permisos por defecto de Supabase y quedaría expuesta sin que nadie se entere.
+revoke all on all sequences in schema public from anon, authenticated;
+
+revoke all on table public."Player"           from anon, authenticated;
+revoke all on table public."Match"            from anon, authenticated;
+revoke all on table public."PlayerScore"      from anon, authenticated;
+revoke all on table public."Setting"          from anon, authenticated;
+revoke all on table public."RateLimitCounter" from anon, authenticated;
 ```
 
-**Comprobación obligatoria antes de habilitar RLS.** Si el rol de `DATABASE_URL` no tiene
-`BYPASSRLS`, activar RLS sin políticas hará que la web deje de ver datos **en silencio**, sin
-error. Por eso esto va primero:
+### 7 bis. Por qué está en un script y no en el schema
+
+`prisma db push` compara `prisma/schema.prisma` con la base de datos, y **ni RLS ni los
+permisos entran en esa comparación**: no los modela, no los lee y no los toca. Un `alter table`
+hecho a mano desde el panel de Supabase no aparece en ninguna parte del repositorio, así que el
+siguiente `db push` no lo sabría y el siguiente que separe el caso tampoco. Por eso el SQL está
+versionado en `scripts/db-security.ts`, es idempotente y se puede repetir sin miedo.
+
+Comprobado: un `db push` con la base ya sincronizada responde "The database is already in sync"
+y **no toca** ni el RLS ni los permisos; el `--check` posterior sigue dando la postura correcta.
+
+### 7 ter. La comprobación de que la web sigue viendo datos
+
+**Comprobación obligatoria antes de habilitar RLS**, y el script la hace ella solo y **se niega a
+aplicar nada** si no se cumple: si el rol de `DATABASE_URL` no tiene `BYPASSRLS`, activar RLS sin
+políticas hará que la web deje de ver datos **en silencio**, sin error.
 
 ```sql
 -- Debe devolver rolbypassrls = true (o rolsuper = true) para el rol de la app.
 select current_user, rolbypassrls, rolsuper from pg_roles where rolname = current_user;
 ```
 
-**Comprobación de que la postura funciona** (después de aplicar):
+Comprobado en esta base de datos: `postgres`, `rolbypassrls = true`, `rolsuper = false`.
+`anon` y `authenticated` siguen con `rolbypassrls = false` y `rolcanlogin = false`.
 
-```sql
--- Debe salir vacía.
-select relname, relrowsecurity from pg_class
-where relnamespace = 'public'::regnamespace and relkind = 'r'
-  and (not relrowsecurity);
+### 7 quater. Qué contesta la Data API, y por qué NO es `[]`
+
+> **Aviso que hay que leer antes de tocar nada aquí.** Con los cuatro pasos aplicados, la Data
+> API contesta **`401` `permission denied`**, no `[]`.
+
+```json
+{"code":"42501","hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.\"Player\" TO anon;","message":"permission denied for table Player"}
 ```
 
-Y, desde el proyecto, una lectura real con la clave publicable de Supabase debe devolver cero
-filas, no un error.
+No es un fallo de la postura: es la postura. En Postgres **el permiso de tabla se comprueba antes
+que RLS**, así que sin `GRANT SELECT` la consulta ni siquiera llega a evaluarse. Los dos
+resultados son de "no se ve nada" y se midieron por separado:
 
-Nota sobre vistas: si algún día se crea una vista paraSimplificar la clasificación, **una vista
+| Estado | `GET /rest/v1/Player?select=count` con la clave publicable |
+|---|---|
+| RLS desactivada + `SELECT` concedido a `anon` (antes de este trabajo) | `200` `[{"count":10}]` — **los datos de los jugadores, expuestos a cualquiera con la clave del navegador** |
+| RLS activada + `SELECT` concedido a `anon` | `200` `[]` — RLS con cero políticas filtra todo |
+| RLS activada **sin** ningún permiso para `anon` (estado actual) | `401` `permission denied` — la puerta cerrada, sin llegar a consultar |
+
+**Cuál es el estado actual y por qué.** Se eligió el tercero: es el único que no depende de que
+nadie añada nunca una política, que es la condición que hay que mantener para que el segundo siga
+filtrando. El segundo da exactamente la respuesta `[]`, pero a cambio de que la seguridad
+dependa de una condición que nadie vigila.
+
+> **No se "arregle" el 401 concediendo `SELECT` a `anon`.** La pista del mensaje de error de
+> Postgres sugiere exactamente eso, y sería volver a abrir la tabla. Si algún día hace falta
+> que la Data API sirva alguna de estas tablas, la forma no es un `grant`: es una vista con
+> `security_invoker = true` más un `grant` a esa vista, nunca a la tabla.
+
+**Las dos posturas están en el script, y se cambian con un interruptor** (el valor por defecto
+es la fuerte, para que nadie weakens por accidente):
+
+```bash
+npm run db:security                 # "cerrada":   RLS + REVOKE. La Data API contesta 401
+npm run db:security -- --solo-rls   # "solo-rls":  RLS + GRANT SELECT. La Data API contesta []
+npm run db:security -- --check      # dice cuál de las dos está activa y valida RLS y políticas
+```
+
+> **Aviso de seguridad.** La postura `solo-rls` **concede `SELECT` a los roles de cliente**: es
+> literalmente el endurecimiento invertido, y la salida del script avisa de ello. Antes de
+> pasarse a ella, que sea una decisión consciente.
+
+### 7 quinquies. Lo que no se toca, y es deliberado
+
+- `anon` y `authenticated` **conservan el `USAGE` sobre el esquema `public`**. Sin él la Data API
+  no resuelve ni la tabla y contesta 401 por un motivo distinto; con él contesta 401 por el motivo
+  correcto, o `[]` si algún día se restituye el permiso.
+- `service_role` conserva sus permisos y su `BYPASSRLS`: es un rol de infraestructura de
+  Supabase, no un cliente de este torneo.
+
+Nota sobre vistas: si algún día se crea una vista para simplificar la clasificación, **una vista
 se salta RLS por defecto**. Hay que crearla con `security_invoker = true` (Postgres 15+) o
 revocar los permisos de `anon` y `authenticated` sobre ella. Ninguna tabla de este modelo necesita
 vistas hoy.
@@ -793,12 +926,13 @@ where c.contype = 'f'
 
 ### 8.1 Orden
 
-> **Estado real de esta tabla.** Los pasos **1, 2, 3a y 3b están hechos** (rama `feat/mvp-web`):
-> el schema aplicado es el de `prisma/schema.prisma`, el `db push` fue aditivo y sin pérdidas, y
-> los dos *backfills* se ejecutan con `npm run backfill:model`, que es este mismo SQL más sus
-> comprobaciones. Los pasos **4, 5 y 6 están diferidos** (ver §0 bis.3). El paso **7 está hecho a
-> medias**: el motor calcula y publica la clasificación (`npm run score`), pero **no** hay
-> `ScoreSnapshot` porque esa tabla no existe. El paso 8 se cubre en parte con
+> **Estado real de esta tabla.** Los pasos **1, 2, 3a, 3b y 5 están hechos**: el schema aplicado
+> es el de `prisma/schema.prisma`, el `db push` fue aditivo y sin pérdidas, los dos *backfills* se
+> ejecutan con `npm run backfill:model`, y el paso 5 (RLS) con `npm run db:security`, que además
+> es la comprobación que hay que repetir después de cada `db push`. Los pasos **4 y 6 están
+> diferidos** (ver §0 bis.3). El paso **7 está hecho a medias**: el motor calcula y publica la
+> clasificación (`npm run score`) y deja el rastro de la pasada en `Setting["scoring.lastRun"]`,
+> pero **no** hay `ScoreSnapshot` porque esa tabla no existe. El paso 8 se cubre en parte con
 > `npm run verify:sync -- --db`.
 
 | Paso | Qué | Riesgo | Reversible |
@@ -808,7 +942,7 @@ where c.contype = 'f'
 | 3a | *Backfill* de `mode` (§ SQL abajo) | Bajo. Un `UPDATE` de una columna | Sí: `set "mode" = null` y repetir |
 | 3b | *Backfill* de `civRandomized` | Medio: si las claves son incorrectas, las categorías 2 y 4 salen mal | Sí: `set "civRandomized" = false` y repetir |
 | 4 | Índice parcial de partidas en directo | Ninguno | Sí, `drop index` |
-| 5 | RLS en las tablas que falten | **Alto si se hace sin la comprobación 0.1**: la web deja de ver datos sin error | Sí, `disable row level security` |
+| 5 | RLS en las tablas que falten | **Alto si se hace sin la comprobación 0.1**: la web deja de ver datos sin error. El script la hace y se niega a aplicar si falla | Sí, `disable row level security` |
 | 6 | Publicar el ruleset v1 en `Setting` | Ninguno | Sí |
 | 7 | Primera pasada de puntuación + primer `ScoreSnapshot` con `reason = RULESET_PUBLISH` | Ninguno (solo escribe en las tablas nuevas) | Sí, `truncate` de las dos tablas |
 | 8 | Verificación funcional (§6, consultas 1, 4, 6 y 9 a mano, con `EXPLAIN ANALYZE`) | Ninguno | — |
@@ -902,7 +1036,7 @@ Estas se pueden revertir, pero hay que saber qué se rompe.
 | **M-03** | `civRandomized` como columna, con *backfill* | Sí | El conteo de civilizaciones distintas tiene que ser un `group by` en SQL | Sin la columna, el motor tendría que parsear 30.000 documentos JSON en cada recálculo para filtrar, y el filtro quedaría en memoria |
 | **M-04** | Índice de partidas en directo: **parcial a mano** | Parcial | El predicado `finishedAt is null` es selectivo de verdad: unas pocas filas entre decenas de miles | Con `@@index([finishedAt, startedAt])` en Prisma funciona igual de bien y no hay que mantener nada a mano, pero el índice tiene 30.000 entradas en vez de unas pocas |
 | **M-05** | Los puntos a mano (regla `bonus`) **no tienen tabla** | Sin tabla | La regla 7 del Wololo está descartada y `bonus` es un evaluador reservado. Añadir una tabla que no se usa es deuda | Cuando se active, hará falta una tabla `ScoreBonus` (jugador, versión, categoría, cantidad, motivo, quién lo concedió) para que el bonus entre en el recálculo y en la auditoría. **No bloquea la v1.** |
-| **M-06** | `Match.points` se queda sin columna de versión | Se queda | En la v1 vale 0 en todas las filas. Añadir `pointsRuleSetVersion` ahora es una columna muerta | Cuando entre la regla por partida, esa columna se añade con el *backfill* a 0, y las reglas por partida se recalculan desde cero |
+| **M-06** | `Match.points` se queda sin columna de versión | Se queda | Con las reglas activas la columna **sí** se usa, pero siempre la escribe el motor entero de una vez, así que no hay dos versiones conviviendo y no hay nada que versionar. Añadir `pointsRuleSetVersion` sería una columna muerta | Cuando se quisiera conservar el `points` de dos versiones de reglas a la vez, esa columna se añade con el *backfill* a 0, y las reglas por partida se recalculan desde cero |
 | **M-07** | Paginación de la clasificación por `skip`/`take` | `skip`/`take` sobre `rank` | Con decenas o pocos cientos de jugadores no hay problema, y `rank` es un entero denso: no hay filas que se muevan | Con miles de jugadores, `skip` empieza a escanear filas de más. El salto a paginación por cursor sobre `rank` es local a la consulta del DAL |
 | **M-08** | `PlayerScore` sin `seasonId` ni `RuleSet` relacionada | Sin referencias | Una tabla de rulesets daría integridad referencial a `ruleSetVersion`, pero el documento completo pesa poco y `Setting` ya es la memoria del worker. El coste es que nada impide una fila con una versión inexistente, y se cubre validando en la escritura | Si aparece un problema real de integridad, la migración es una tabla `RuleSet(id, version, publishedAt)` y una FK. Nada del resto cambia |
 | **M-09** | Sin índice en `Player.status` | Sin índice | La consulta "jugadores aprobados" es sobre una tabla diminuta y se ordena por `profileId`, que ya está indexado por ser único | Si algún día hubiera 100.000 jugadores, el índice empezaría a merecer. No antes |
@@ -914,11 +1048,11 @@ Estas se pueden revertir, pero hay que saber qué se rompe.
 | Bloqueo | De quién es | Por qué bloquea |
 |---|---|---|
 | **Los nombres exactos de los modos** (D-01) | Producto, con un dato de la API | El filtro de partidas clasificatorias depende de la lista. Se resuelve con la consulta 0.4 y una decisión del cliente |
-| **Las fechas de la ventana** (D-02) | Producto | Sin ventana no hay recálculo posible ni fin de torneo |
-| **La duración mínima** (D-03) | Producto, con un dato de las partidas ya guardadas | Es un parámetro, no un bloqueo técnico: se puede arrancar con 600 s y recalcular cuando el cliente lo cambie |
+| **Las fechas de la ventana** (D-02) | Producto, pero **ya no bloquea** | El motor tiene el filtro aplicado y configurable (`window` en el ruleset, `[from, to)` sobre `startedAt`, fin opcional). Lo que sale del código son fechas de trabajo, 15-sep-2026 → 15-oct-2026; publicarlas es escribir `window` en `Setting`, sin despliegue. |
+| **La duración mínima** (D-03) | Producto, con un dato de las partidas ya guardadas | Es un parámetro, no un bloqueo técnico: se puede arrancar con 600 s y recalcular cuando el cliente lo cambie. Sigue sin existir en el ruleset, así que es el filtro que falta. |
 | **La calibración de las categorías 4 y 5** (D-06, D-07) | Producto | El motor las implementa con los valores que le den. Se puede arrancar con 5 y 3 y recalcular |
 | **Publicar el ruleset v1** | Admin, con el cliente | Sin documento en `Setting` no hay nada que calcular. Es un paso de §8.1, no una decisión de diseño |
-| **La comprobación 0.1 del rol** | Técnica, y es la más urgente | Si el rol de `DATABASE_URL` no tiene `BYPASSRLS` y se activa RLS, la web se queda sin datos sin ningún error. Es el único punto donde un error mío no se vería en el desarrollo |
+| **La comprobación 0.1 del rol** | **Resuelta** | `postgres` tiene `rolbypassrls = true`, así que RLS no deja la web sin datos. Está comprobado y `scripts/db-security.ts` lo verifica antes de aplicar (§7 ter) |
 
 Ninguno de ellos impide **empezar** F3: el motor se puede escribir con el ruleset v1 de
 `PUNTUACION` §5.4, que ya tiene valores. Los bloquean para **publicar una clasificación que no
