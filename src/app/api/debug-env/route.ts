@@ -44,5 +44,24 @@ export async function GET() {
     };
   }
 
-  return Response.json({ nodeEnv: process.env.NODE_ENV ?? null, keys, has, db: dbResult });
+  // Sin `nodejs_compat` los bindings del panel viven en el `env` del handler y
+  // NO se copian a `process.env`, que es justo lo que consulta la app.
+  let nodeOs: string;
+
+  try {
+    const os = await import("node:os");
+    nodeOs = `ok (platform ${os.platform()})`;
+  } catch (error) {
+    nodeOs = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  }
+
+  return Response.json({
+    nodeEnv: process.env.NODE_ENV ?? null,
+    nodeVersion: process.versions?.node ?? null,
+    nodeOs,
+    workerd: typeof globalThis.navigator !== "undefined",
+    keys,
+    has,
+    db: dbResult,
+  });
 }
