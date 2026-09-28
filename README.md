@@ -8,7 +8,7 @@ Web para el seguimiento de la Liga Hispana de Age of Empires IV: torneo individu
 
 - **Next.js 16** (App Router) + **TypeScript** + **TailwindCSS**
 - **Prisma 7** + **PostgreSQL**
-- Despliegue en Vercel (o auto-host Node)
+- Despliegue en **Cloudflare Workers** con OpenNext (en local, Node)
 
 ## Requisitos
 
@@ -77,6 +77,37 @@ Se usa **Supabase** (Postgres cloud). La conexión se define en `.env` (`DATABAS
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Site key pública de Cloudflare Turnstile, la que monta el widget de `/participar`. Sin ella no se pinta el captcha |
 | `TURNSTILE_SECRET_KEY` | Secret key de Cloudflare Turnstile (solo servidor). **Si no está definida el captcha queda desactivado**: el formulario sigue funcionando sin comprobación. En producción hay que definirla |
 | `TURNSTILE_TIMEOUT_MS` | Presupuesto de la llamada a `siteverify`, en ms (5000) |
+
+## Despliegue en Cloudflare Workers
+
+El despliegue es un **Worker** construido con **OpenNext** (`@opennextjs/cloudflare`): `next build` produce `.next/`, OpenNext lo convierte en `.open-next/` y de ahí sale el Worker. La configuración la genera Cloudflare, así que **el repo no tiene `wrangler.jsonc` ni `open-next.config.ts` y no hay que añadirlos**: ambos los crea `@opennextjs/cloudflare` durante el build si no existen. El `wrangler.jsonc` que genera trae `main: ".open-next/worker.js"`, `assets.directory`, el *service binding* `WORKER_SELF_REFERENCE`, el binding `IMAGES` y los *compatibility flags*; escribir uno a mano sin esos campos no "simplifica" nada, cambia cómo Cloudflare detecta y construye el proyecto y rompe el despliegue.
+
+### `pg-cloudflare` es dependencia de producción explícita
+
+`pg` comprueba en runtime si está dentro de un Worker y, si lo está, usa un socket de TCP (`cloudflare:sockets`) en lugar de `net`/`tls` de Node. Para hacerlo hace un `require('pg-cloudflare')` **estático** en `pg/lib/stream.js`, dentro de la rama de Cloudflare: el empaquetador tiene que resolver ese módulo aunque en local la rama no se ejecute nunca. `pg` lo declara como `optionalDependency`, y una dependencia opcional no es una garantía para el empaquetado. El build de Cloudflare falló exactamente por eso:
+
+```
+.open-next/server-functions/default/node_modules/pg/lib/stream.js:41:41: ERROR: Could not resolve "pg-cloudflare"
+```
+
+Por eso `pg-cloudflare` está en `dependencies` de `package.json` y no solo colgada de `pg`. Es el mismo patrón que siguen las librerías con código específico de `workerd`: el paquete publica un *conditional export* bajo la condición `workerd` y un fichero **vacío** en el resto de condiciones, así que si el empaquetador no aplica esa condición el bundle compila sin quejarse pero el socket llega `undefined` en runtime. `wrangler` sí la aplica, y conviene comprobarlo en el bundle si alguna vez se ve un `CloudflareSocket is not a constructor`.
+
+### La base de datos en el Worker: Hyperdrive
+
+En un Worker una conexión TCP solo vive durante la invocación que la abre. Sin nada por medio, cada petición paga el establecimiento completo de la conexión contra la base de datos (handshake TCP, negociación TLS y autenticación: 7 viajes de ida y vuelta antes de poder ejecutar la primera consulta) y la base ve una conexión nueva por petición. **Hyperdrive** es la pieza que Cloudflare pone delante de la base de datos para resolverlo: hace el establecimiento en el edge, junto al Worker, y mantiene un *pool* de conexiones reales cerca de la base de datos, además de cachear lecturas. Es la vía documentada y recomendada para Postgres desde un Worker, y la que usan los ejemplos de Cloudflare con `pg`.
+
+**Crear el Hyperdrive** (Workers & Pages → Hyperdrive → *Create configuration*):
+
+- La cadena que se le da a Hyperdrive es la de la conexión **directa** de Supabase (`db.<ref>.supabase.co`, puerto `5432`), **no** la del *Session pooler*: el *pooling* lo pone Hyperdrive. Ojo, que esto es justo al revés de lo que se usa en el `.env` local, donde hace falta el *Session pooler* porque la directa es solo IPv6.
+- Las credenciales pueden ser las del usuario `postgres` del proyecto, pero mejor un rol propio con los permisos justos (Cloudflare propone crear en el SQL Editor un `CREATE ROLE hyperdrive_user LOGIN PASSWORD '...'` y darle el rol que necesite) en lugar de privilege escalation con el superusuario.
+- No hace falta `?sslmode=require` en esa cadena: es Hyperdrive quien termina el TLS contra la base de datos.
+- Al crearlo, Hyperdrive prueba la conexión para verificar las credenciales, así que si falla el error es de la cadena o del firewall, no del Worker.
+
+El proyecto ya está en el plan **Free**, que incluye **100.000 consultas al día** a Hyperdrive (contadas a las 00:00 UTC: cualquier `SELECT`, `INSERT`, `UPDATE`, `DELETE` o cambio de esquema, cacheada o no). El *pooling* y la caché no se cobran aparte.
+
+**Aviso importante sobre cómo se lee la cadena.** La cadena de conexión de Hyperdrive **no** es una URL que se pueda copiar y pegar en una variable de entorno: solo existe en tiempo de ejecución, en `env.HYPERDRIVE.connectionString`, y se obtiene del *binding* Hyperdrive. Por eso **no hay ningún valor correcto para `DATABASE_URL` en Cloudflare**: la cadena directa de Supabase funciona desde un Worker (el socket TCP no está bloqueado; solo lo están el puerto 25 y las IPs privadas o de Cloudflare), pero paga el establecimiento completo en cada petición, y la de Hyperdrive no existe hasta que hay un binding. `src/lib/db.ts` sigue leyendo `process.env.DATABASE_URL` y **aún no está cableado** para leer el binding: ese es el paso que queda pendiente, y no se puede resolver solo desde el panel.
+
+El resto de variables (`NEXT_PUBLIC_SUPABASE_*`, `TURNSTILE_SECRET_KEY`, `CRON_SECRET`, …) se define en el panel del Worker (Settings → Variables and Secrets), o como *build variables and secrets* si el build las necesita. OpenNext recomienda desplegar con `--keep-vars` para que un despliegue no borre las variables que están en el panel.
 
 ## Inscripción pública
 
