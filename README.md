@@ -92,6 +92,55 @@ El despliegue es un **Worker** construido con **OpenNext** (`@opennextjs/cloudfl
 
 Por eso `pg-cloudflare` está en `dependencies` de `package.json` y no solo colgada de `pg`. Es el mismo patrón que siguen las librerías con código específico de `workerd`: el paquete publica un *conditional export* bajo la condición `workerd` y un fichero **vacío** en el resto de condiciones, así que si el empaquetador no aplica esa condición el bundle compila sin quejarse pero el socket llega `undefined` en runtime. `wrangler` sí la aplica, y conviene comprobarlo en el bundle si alguna vez se ve un `CloudflareSocket is not a constructor`.
 
+### La rama `workerd` de `pg-cloudflare` tiene que entrar en el trace
+
+Con la dependencia declarada el build **siguió fallando** con el mismo error, y esta vez por otra razón que no se arregla tocando dependencias: los dos pasos de OpenNext resuelven el paquete con **condiciones distintas**.
+
+1. **El copiado** (`copyTracedFiles`, en `@opennextjs/aws`) copia, fichero a fichero, lo que aparece en los `.nft.json` que escribe `next build`. El trazador (`@vercel/nft`) resuelve con las condiciones de **Node**, y en `pg-cloudflare` la única de esas es `default`, que apunta a `dist/empty.js`: al `.open-next` solo van `package.json` y `dist/empty.js`.
+2. **El empaquetado** (`bundleServer`, en `@opennextjs/cloudflare`) lanza esbuild con `platform: "node"` y `conditions: ["workerd"]`, así que el mismo `require('pg-cloudflare')` de `pg/lib/stream.js:41` resuelve a la rama `workerd` → `require` → **`dist/index.js`**, que no está en el directorio copiado.
+
+De ahí el `The module "./dist/index.js" was not found on the file system`. El paquete estaba entero; lo que faltaba era en la carpeta del bundle. **El arreglo es `outputFileTracingIncludes` en `next.config.ts`**, que le dice a Next que meta en el trace, para todas las rutas, los ficheros de la rama `workerd`:
+
+```ts
+outputFileTracingIncludes: {
+  "/*": ["node_modules/pg-cloudflare/dist/**/*", "node_modules/pg-cloudflare/esm/**/*"],
+},
+```
+
+`dist` es la rama que se empaqueta (la `require`) y `esm` la `import`, que además importa `../dist/index.js`; sin las dos, el bundle compila pero el socket llega vacío. Con las dos, el `.nft.json` de cada ruta incluye `pg-cloudflare/dist/index.js`, OpenNext lo copia y esbuild lo encuentra con la condición `workerd`.
+
+Por qué esta opción y no las otras:
+
+- **No depende de la versión de `@opennextjs/cloudflare`.** Existe otra vía, la que documenta OpenNext (`serverExternalPackages` + `copyWorkerdPackages`, que copia el paquete entero y reescribe su `package.json` solo con la rama `workerd`), pero `copyWorkerdPackages` **solo** actúa sobre paquetes que estén en `serverExternalPackages` **y** tengan condición `workerd` reconocida ([`workerd.ts`](https://github.com/opennextjs/opennextjs-cloudflare/blob/main/packages/cloudflare/src/cli/build/utils/workerd.ts)). Con las versiones anteriores a [PR #1243](https://github.com/opennextjs/opennextjs-cloudflare/pull/1243) (fusionada el 2026-05-04) esa condición no se reconocía cuando su valor es un **objeto**, que es justo el caso de `pg-cloudflare` (`"workerd": { "import": ..., "require": ... }`). Es decir: la vía "oficial" depende de con qué versión se construya, y aquí la versión la elige el entorno de build de Cloudflare, no el repo.
+- **No toca `node_modules`.** Normalizar el `package.json` de `pg-cloudflare` desde un `postinstall` (dejar `dist/index.js` alcanzable también por `default`) funciona, pero muta el árbol de dependencias, se pierde con cualquier reinstalación y un día `npm ci` lo deshace sin avisar.
+- **No evita la rama estática de `pg`.** Habría que parchear `pg` o cambiar de driver, que es una decisión de stack, no un arreglo de build.
+- **No hace falta tocar `wrangler.jsonc` ni `open-next.config.ts`**: con esto el repo sigue sin ellos, que es lo que recomienda el README de arriba.
+
+Comprobación de que el arreglo funciona. Los dos scripts viven **fuera del repo**, en `<temp>\pgcf-repro` (`repro.mjs` y `runtime-check.mjs`): `repro.mjs` copia a `.open-next/server-functions/default/node_modules/` los ficheros que el trace real de `next build` manda a standalone —el mismo origen que usa `copyTracedFiles`— y luego lanza esbuild con las mismas opciones que `bundleServer`.
+
+```bash
+# así es como construye OpenNext: fuerza el modo standalone
+# (en PowerShell: $env:NEXT_PRIVATE_STANDALONE="true"; npm run build)
+NEXT_PRIVATE_STANDALONE=true npm run build
+
+node <temp>\pgcf-repro\repro.mjs broken
+# -> Build failed with 1 error: .../pg/lib/stream.js:41:41: ERROR: Could not resolve "pg-cloudflare"
+#    The module "./dist/index.js" was not found on the file system
+
+node <temp>\pgcf-repro\repro.mjs traced
+# -> ESBUILD OK; el metafile mete pg-cloudflare/dist/index.js y el bundle trae cloudflare:sockets
+
+node <temp>\pgcf-repro\runtime-check.mjs <temp>\pgcf-repro\opennext-traced
+# -> getStream(false) devuelve: CloudflareSocket
+```
+
+`broken` quita del trace la rama `workerd`, que es exactamente como se quedaba sin el arreglo; `traced` copia el trace tal cual. `runtime-check.mjs` falsea `navigator.userAgent = "Cloudflare-Workers"` para ejecutar la rama de Cloudflare fuera de `workerd` y comprobar que la clase del socket es la buena.
+
+Dos avisos que quedan para cuando se cablee el binding de Hyperdrive:
+
+- `pg` **no** tiene condición `workerd`: el socket se elige en runtime. Si el bundle saliera sin esa rama, el build pasaría y fallaría luego con `CloudflareSocket is not a constructor` (o `proxy request failed`, si lo que falta es el socket y no la clase). Merece la pena mirar `handler.mjs` una vez, buscando `cloudflare:sockets`.
+- Cloudflare documenta crear un cliente nuevo **por petición** ("create a new `Client` instance for each request"), porque en un Worker una conexión no se puede reutilizar entre invocaciones. `src/lib/db.ts` cachea el cliente por proceso, así que el cableado de Hyperdrive tendrá que tener eso en cuenta.
+
 ### La base de datos en el Worker: Hyperdrive
 
 En un Worker una conexión TCP solo vive durante la invocación que la abre. Sin nada por medio, cada petición paga el establecimiento completo de la conexión contra la base de datos (handshake TCP, negociación TLS y autenticación: 7 viajes de ida y vuelta antes de poder ejecutar la primera consulta) y la base ve una conexión nueva por petición. **Hyperdrive** es la pieza que Cloudflare pone delante de la base de datos para resolverlo: hace el establecimiento en el edge, junto al Worker, y mantiene un *pool* de conexiones reales cerca de la base de datos, además de cachear lecturas. Es la vía documentada y recomendada para Postgres desde un Worker, y la que usan los ejemplos de Cloudflare con `pg`.
