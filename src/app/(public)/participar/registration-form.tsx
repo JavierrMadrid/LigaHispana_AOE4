@@ -4,6 +4,7 @@ import type { ComponentPropsWithoutRef } from "react";
 import { useActionState, useEffect } from "react";
 import Link from "next/link";
 import { CONTACT_EMAIL_MAX_LENGTH } from "@/lib/player-input";
+import { REGISTRATION_IS_CLOSED } from "@/lib/registration-open";
 import { registerPlayer, type RegistrationFormState } from "./actions";
 import { TurnstileWidget, resetTurnstileWidget } from "./turnstile-widget";
 
@@ -36,6 +37,10 @@ const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "
  * los datos rellenos y sin respuesta. El contexto sobre qué se pide vive en las
  * pistas de cada campo, no en un bloque aparte que se quedaría colgando tras
  * enviar.
+ *
+ * Con el plazo cerrado (`REGISTRATION_IS_CLOSED`) el botón se desactiva y el
+ * motivo se lee a su lado, enlazado con `aria-describedby`. El servidor lo
+ * rechaza igualmente: esto es la cara visible del mismo flag, no la defensa.
  */
 export function RegistrationForm() {
   const [state, formAction, pending] = useActionState(registerPlayer, initialState);
@@ -161,14 +166,22 @@ export function RegistrationForm() {
 
         {turnstileSiteKey !== "" ? <TurnstileWidget siteKey={turnstileSiteKey} /> : null}
 
-        <div>
+        <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
-            disabled={pending}
+            disabled={pending || REGISTRATION_IS_CLOSED}
+            aria-describedby={REGISTRATION_IS_CLOSED ? "registration-closed-note" : undefined}
             className="inline-flex h-10 items-center justify-center rounded-md border border-accent-strong/70 bg-linear-to-b from-accent-strong to-accent px-5 text-sm font-semibold text-accent-ink transition-colors hover:border-accent-strong hover:to-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
           >
             {pending ? "Enviando…" : "Enviar solicitud"}
           </button>
+          {REGISTRATION_IS_CLOSED ? (
+            // Aviso, no error: se queda en `muted` para no competir con el rojo
+            // que este formulario reserva a los fallos.
+            <p id="registration-closed-note" className="max-w-[42ch] text-sm leading-relaxed text-muted">
+              La organización abrirá las inscripciones más adelante, una vez que se acerquen las fechas del torneo.
+            </p>
+          ) : null}
         </div>
       </form>
     </section>

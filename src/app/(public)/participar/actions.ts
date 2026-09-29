@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
+import { logDatabaseFailure } from "@/lib/db-errors";
 import { Prisma } from "@/generated/prisma/client";
 import { PlayerStatus } from "@/generated/prisma/enums";
 import {
@@ -13,6 +14,7 @@ import {
 } from "@/lib/player-input";
 import { consumePublicFormAttempt } from "@/lib/rate-limit";
 import { checkAoe4WorldProfile } from "@/lib/registration";
+import { REGISTRATION_IS_CLOSED } from "@/lib/registration-open";
 import { readTurnstileToken, verifyTurnstile } from "@/lib/turnstile";
 
 /**
@@ -44,11 +46,17 @@ export type RegistrationFormState = {
   };
 };
 
+/** Lo que se devuelve al envío real con el plazo cerrado. */
+const REGISTRATION_CLOSED_MESSAGE =
+  "El torneo todavía no es oficial, así que las inscripciones no están abiertas. La organización las abrirá más adelante, una vez que se acerquen las fechas del mismo."
 /**
  * Confirmación de la inscripción. La comparten el envío real y el que cae en el
  * campo trampa, a propósito: un bot no debe poder distinguir uno del otro. La
  * comparte también la reinscripción de un `REJECTED`, porque para quien la manda
  * el resultado es el mismo: su solicitud vuelve a estar en la cola de revisión.
+ *
+ * El camino del campo trampa la sigue devolviendo aunque el plazo esté cerrado
+ * (ver `REGISTRATION_IS_CLOSED`): el cierre no se le revela a un bot.
  */
 const CONFIRMATION =
   "Solicitud recibida. La organización la revisa antes de que entres en la clasificación.";
@@ -59,6 +67,16 @@ const DUPLICATE_FAILED_MESSAGE = "No hemos podido completar la inscripción.";
 
 const FAILED_MESSAGE =
   "No hemos podido guardar la inscripción. Inténtalo de nuevo en unos minutos.";
+
+/**
+ * Fallo de la base de datos **antes** de escribir (contador de frecuencia o
+ * comprobación de duplicado). No es un "no hemos podido guardar" —nada se ha
+ * intentado guardar— ni un "has enviado demasiadas solicitudes", que sería
+ * untrue: el formulario se queda sin poder comprobar nada. El motivo concreto se
+ * queda en el log del servidor, con el prefijo `[db]`.
+ */
+const DATABASE_UNAVAILABLE_MESSAGE =
+  "No hemos podido registrar la inscripción ahora mismo. Inténtalo de nuevo en unos minutos.";
 
 const UNKNOWN_PROFILE_ERROR =
   "No encontramos ese perfil en AoE4World. Revisa el número: es el que aparece " +
@@ -177,10 +195,7 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
 
     // El detalle se queda en el log del servidor. Al formulario solo vuelve un
     // mensaje que no enseña ni mensaje de la base de datos ni traza.
-    console.error(
-      "[participar] No se ha podido registrar la solicitud:",
-      error instanceof Error ? error.message : String(error),
-    );
+    logDatabaseFailure("participar/alta", error);
 
     return "failed";
   }
@@ -196,6 +211,13 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
  *
  * Lo que la mantiene a salvo del abuso son cinco capas, en el orden en que se
  * aplican:
+ *
+ * Antes de todas está el **interruptor de plazo** (`REGISTRATION_IS_CLOSED`, que
+ * vive en `src/lib/registration-open.ts` para que el formulario y esta acción lean
+ * el mismo flag), que no es una capa de defensa sino una decisión de producto: con
+ * el plazo cerrado el envío real se rechaza con un mensaje general y no se aplica
+ * ninguna, porque no se va a escribir nada. Sale después del campo trampa para que
+ * un bot siga viendo la misma confirmación.
  *
  * 1. **Campo trampa** (`website`): no se escribe nada y se devuelve la misma
  *    confirmación que un alta buena, para que un bot no pueda aprender a
@@ -244,11 +266,36 @@ export async function registerPlayer(
     return { status: "success", message: CONFIRMATION, fieldErrors: {} };
   }
 
+  // Plazo cerrado: primera comprobación del camino real y la más barata, porque
+  // no se va a escribir nada y no tiene sentido gastar un intento de una IP real,
+  // un captcha ni validaciones en un envío que ya está descartado. Va después del
+  // campo trampa a propósito: un bot tiene que seguir viendo la misma
+  // confirmación y no poder deducir de la respuesta que el plazo está cerrado.
+  if (REGISTRATION_IS_CLOSED) {
+    return {
+      status: "error",
+      message: REGISTRATION_CLOSED_MESSAGE,
+      fieldErrors: {},
+    };
+  }
+
   // El límite va antes que los validadores por lo que se ha dicho en la cabecera:
   // lo que se protege es el formulario, no solo la escritura. Si el cubo es el
   // compartido (la petición no traía IP identificable) el mensaje no señala a
   // nadie: se dice que hay saturación, no que el límite es por tu conexión.
-  const rateLimit = await consumePublicFormAttempt();
+  //
+  // El contador vive en Postgres, así que un corte de la base lo tumba también. Se
+  // captura para que el envío no acabe en un 500: se pide reintentar y se avisa en
+  // el log, sin inventar un "demasiadas solicitudes" que sería falso.
+  let rateLimit: Awaited<ReturnType<typeof consumePublicFormAttempt>>;
+
+  try {
+    rateLimit = await consumePublicFormAttempt();
+  } catch (error) {
+    logDatabaseFailure("participar/rate-limit", error);
+
+    return { status: "error", message: DATABASE_UNAVAILABLE_MESSAGE, fieldErrors: {} };
+  }
 
   if (!rateLimit.allowed) {
     return {
@@ -336,10 +383,21 @@ export async function registerPlayer(
     };
   }
 
-  const existing = await db.player.findUnique({
-    where: { profileId },
-    select: { id: true, status: true },
-  });
+  // Solo la lectura a la base va dentro del `try`: si falla, no se crea nada y se
+  // pide reintentar. Lo que viene después (la comprobación del perfil en
+  // AoE4World) tiene su propio tratamiento y su propio mensaje.
+  let existing: { id: string; status: PlayerStatus } | null;
+
+  try {
+    existing = await db.player.findUnique({
+      where: { profileId },
+      select: { id: true, status: true },
+    });
+  } catch (error) {
+    logDatabaseFailure("participar/duplicado", error);
+
+    return { status: "error", message: DATABASE_UNAVAILABLE_MESSAGE, fieldErrors: {} };
+  }
 
   // Solo se reinscribe desde `REJECTED`. Los otros dos estados son un cierre: o la
   // persona ya está en la liga, o su solicitud está esperando y mandarle otra
