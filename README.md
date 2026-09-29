@@ -82,7 +82,9 @@ Se usa **Supabase** (Postgres cloud). La conexión se define en `.env` (`DATABAS
 
 ## Despliegue en Cloudflare Workers
 
-El despliegue es un **Worker** construido con **OpenNext** (`@opennextjs/cloudflare`): `next build` produce `.next/`, OpenNext lo convierte en `.open-next/` y de ahí sale el Worker. La configuración la genera Cloudflare, así que **el repo no tiene `wrangler.jsonc` ni `open-next.config.ts` y no hay que añadirlos**: ambos los crea `@opennextjs/cloudflare` durante el build si no existen. El `wrangler.jsonc` que genera trae `main: ".open-next/worker.js"`, `assets.directory`, el *service binding* `WORKER_SELF_REFERENCE`, el binding `IMAGES` y los *compatibility flags*; escribir uno a mano sin esos campos no "simplifica" nada, cambia cómo Cloudflare detecta y construye el proyecto y rompe el despliegue.
+El despliegue es un **Worker** construido con **OpenNext** (`@opennextjs/cloudflare`): `next build` produce `.next/`, OpenNext lo convierte en `.open-next/` y de ahí sale el Worker.
+
+**`wrangler.jsonc` y `open-next.config.ts` están versionados a propósito.** `@opennextjs/cloudflare` los crea durante el build si no existen, pero entonces su contenido se pierde en cada despliegue: las variables y secretos que estén en el panel dejan de viajar al Worker, porque `wrangler deploy` reconstruye el Worker solo con lo que trae el archivo. Ver [Si los bindings no llegan al Worker](#si-los-bindings-no-llegan-al-worker-caso-2). El `wrangler.jsonc` versionado trae `main: ".open-next/worker.js"`, el `name` del Worker, `assets.directory`, el *service binding* `WORKER_SELF_REFERENCE`, el binding `IMAGES` y los *compatibility flags*; **los secretos no van ahí**, se siguen poniendo en el panel.
 
 ### `pg-cloudflare` es dependencia de producción explícita
 
@@ -116,7 +118,7 @@ Por qué esta opción y no las otras:
 - **No depende de la versión de `@opennextjs/cloudflare`.** Existe otra vía, la que documenta OpenNext (`serverExternalPackages` + `copyWorkerdPackages`, que copia el paquete entero y reescribe su `package.json` solo con la rama `workerd`), pero `copyWorkerdPackages` **solo** actúa sobre paquetes que estén en `serverExternalPackages` **y** tengan condición `workerd` reconocida ([`workerd.ts`](https://github.com/opennextjs/opennextjs-cloudflare/blob/main/packages/cloudflare/src/cli/build/utils/workerd.ts)). Con las versiones anteriores a [PR #1243](https://github.com/opennextjs/opennextjs-cloudflare/pull/1243) (fusionada el 2026-05-04) esa condición no se reconocía cuando su valor es un **objeto**, que es justo el caso de `pg-cloudflare` (`"workerd": { "import": ..., "require": ... }`). Es decir: la vía "oficial" depende de con qué versión se construya, y aquí la versión la elige el entorno de build de Cloudflare, no el repo.
 - **No toca `node_modules`.** Normalizar el `package.json` de `pg-cloudflare` desde un `postinstall` (dejar `dist/index.js` alcanzable también por `default`) funciona, pero muta el árbol de dependencias, se pierde con cualquier reinstalación y un día `npm ci` lo deshace sin avisar.
 - **No evita la rama estática de `pg`.** Habría que parchear `pg` o cambiar de driver, que es una decisión de stack, no un arreglo de build.
-- **No hace falta tocar `wrangler.jsonc` ni `open-next.config.ts`**: con esto el repo sigue sin ellos, que es lo que recomienda el README de arriba.
+- **No necesita tocar `wrangler.jsonc` ni `open-next.config.ts`**: el arreglo va en `next.config.ts`, así que el Worker se sigue construyendo con el `name` y los bindings de siempre.
 
 Comprobación de que el arreglo funciona. Los dos scripts viven **fuera del repo**, en `<temp>\pgcf-repro` (`repro.mjs` y `runtime-check.mjs`): `repro.mjs` copia a `.open-next/server-functions/default/node_modules/` los ficheros que el trace real de `next build` manda a standalone —el mismo origen que usa `copyTracedFiles`— y luego lanza esbuild con las mismas opciones que `bundleServer`.
 
@@ -142,6 +144,50 @@ Dos avisos que quedan para cuando se cablee el binding de Hyperdrive:
 
 - `pg` **no** tiene condición `workerd`: el socket se elige en runtime. Si el bundle saliera sin esa rama, el build pasaría y fallaría luego con `CloudflareSocket is not a constructor` (o `proxy request failed`, si lo que falta es el socket y no la clase). Merece la pena mirar `handler.mjs` una vez, buscando `cloudflare:sockets`.
 - Cloudflare documenta crear un cliente nuevo **por petición** ("create a new `Client` instance for each request"), porque en un Worker una conexión no se puede reutilizar entre invocaciones. `src/lib/db.ts` cachea el cliente por proceso, así que el cableado de Hyperdrive tendrá que tener eso en cuenta.
+
+### Prisma 7 necesita `runtime = "workerd"`: sin esto no hay base de datos
+
+Síntoma en el Worker desplegado: la web entera responde 500 y `GET /api/debug-env` dice
+
+```json
+"db": { "ok": false, "name": "CompileError",
+        "message": "WebAssembly.Module(): Wasm code generation disallowed by embedder" }
+```
+
+No es un problema de secretos ni de conexión. Prisma 7 no lleva el motor de consultas como binario, sino el *query compiler* como **WASM**, y con el runtime por defecto (`nodejs`) el cliente generado lo mete **en base64 dentro del propio JS** y lo compila en runtime (`src/generated/prisma/internal/class.ts`):
+
+```ts
+async function decodeBase64AsWasm(wasmBase64: string): Promise<WebAssembly.Module> {
+  const wasmArray = Buffer.from(wasmBase64, "base64");
+  return new WebAssembly.Module(wasmArray);   // <- prohibido en workerd
+}
+```
+
+`workerd` prohíbe eso por completo, y no es un matiz: `WebAssembly.compile`, `WebAssembly.instantiate` y el constructor síncrono `new WebAssembly.Module` están bloqueados, porque construir un módulo desde *bytes* es **generación de código**, igual que `eval` o `new Function` (["el módulo tiene que venir ya compilado de fuera"](https://developers.cloudflare.com/workers/runtime-apis/webassembly/), [workerd#3345](https://github.com/cloudflare/workerd/issues/3345)). Es el bug abierto [prisma/prisma#28657](https://github.com/prisma/prisma/issues/28657) y ocurre con **cualquier** datasource, así que no se esquiva cambiando de base de datos ni de driver.
+
+El arreglo es una línea en el bloque `generator` de [`prisma/schema.prisma`](prisma/schema.prisma):
+
+```prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  runtime  = "workerd"
+}
+```
+
+Con `workerd`, el cliente generado **importa el `.wasm` como módulo** en vez de compilarlo desde un base64, y desaparece el `CompileError`. De ahí en adelante lo resuelve la cadena habitual: Turbopack emite el `.wasm` como *chunk* en `.next/server/chunks/`, `next build` lo mete en el trace (`.nft.json`) y OpenNext parchea los ayudantes de carga de Turbopack (`loadWebAssemblyModule`, `compileModule`, `instantiateStreaming`, que `workerd` tampoco tiene) para que pasen por su `loadWasmChunk`, un `switch` de `import()` estáticos que el empaquetador puede descubrir. Ese parche para Next 16.3+ está en `@opennextjs/cloudflare` 1.20.7, que es la versión fijada aquí.
+
+**Después de tocar el schema hay que regenerar**, o el cambio no existe: `npx prisma generate` (lo hace el `postinstall` de `npm install`).
+
+Dos cosas que **no** hay que confundir con esto:
+
+- **Los secretos no tienen nada que ver.** Si `db` devuelve este error, el `DATABASE_URL` está bien resuelto; el fallo ocurre al *arrancar* el cliente, antes de abrir conexión. Un `DATABASE_URL no está definida` es un problema distinto, de configuración.
+- **En local no se reproduce y no hay que tocar nada.** En Node `new WebAssembly.Module` es legal, así que `next dev` funciona con cualquiera de los dos runtimes. Los reportes de que `runtime = "workerd"` rompe el desarrollo local son de proyectos con Vite; con Turbopack y esta configuración no aparece ningún problema. Se puede comprobar en local levantando `npm run dev` y mirando `db.ok` en `/api/debug-env`.
+- **`workerd` sí rompe los scripts de `scripts/`, que corren con `tsx`.** No es un problema de Turbopack sino del runtime elegido: Prisma emite el import `"./query_compiler_fast_bg.wasm?module"` **solo** en los runtimes edge (`workerd` y `vercel-edge`, [commit 9b8e186](https://github.com/prisma/prisma/commit/9b8e1867de8e34334d521c9e736ac87a4cbb797e)), y `?module` es una convención de empaquetador: ni Node ni `tsx` la entienden, así que el import resuelve a `undefined` y la consulta falla con `The loaded wasm module was unexpectedly undefined or null once loaded`. `cloudflare` es un alias de `workerd`, no una variante, así que no hay un valor del generator que valga para los dos lados a la vez.
+
+  **Y no se arregla generando los dos clientes**, que es lo primero que parece: `src/lib` es compartido. `scripts/verify-sync.ts` importa `@/lib/scoring` y `@/lib/settings`, y con ellos `@/lib/aoe4world/sync`, `@/lib/aoe4world/ladder`, `@/lib/public`, `@/lib/rate-limit` y `@/lib/simulation/roster`; los siete importan `@/lib/db`. O sea, que `db` tendría que elegir el cliente en runtime, y entonces los dos clientes entran en el bundle del Worker: el de Node lleva el query compiler entero en base64 dentro del JS (~4,6 MB) **encima** del `.wasm` del de `workerd` (~3,4 MB). Separar los clientes obligaría a duplicar medio `src/lib` para los scripts, o a moverlos dentro del Worker.
+
+  Y lo que sí funciona hoy, porque el Worker ya expone el trabajo por HTTP: la sincronización y el recálculo de puntos se hacen con `POST /api/cron/sync` (ver [Sincronización](#sincronización-con-aoe4world)), que usa el cliente de `workerd` y va bien. Lo que queda atado a la terminal son las herramientas de desarrollo y mantenimiento que **consultan** la base (`mock:tournament`, `simulate:tournament`, `sync`, `score`, `backfill:model` y `verify:sync --db`): fallan al ejecutar la primera consulta, no al importar. Los que solo normalizan datos sin tocar la base siguen bien (`verify:sync` sin `--db`).
 
 ### Cómo se lee la configuración en el Worker
 

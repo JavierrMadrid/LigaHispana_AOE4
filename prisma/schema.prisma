@@ -4,6 +4,16 @@
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
+  // El despliegue es un Worker de Cloudflare (OpenNext). Con el runtime por
+  // defecto (`nodejs`) el cliente generado mete el query compiler como WASM en
+  // base64 y lo compila en runtime con `new WebAssembly.Module(...)`, que
+  // `workerd` prohibe por ser generacion de codigo: todo lo que lee de la base
+  // revienta con "Wasm code generation disallowed by embedder"
+  // (prisma/prisma#28657). Con `workerd` el `.wasm` se importa como modulo y lo
+  // enlaza el empaquetador, sin generacion de codigo en runtime. Detalle en el
+  // README, seccion "Prisma 7 necesita `runtime = \"workerd\"`".
+  // Tras tocar esto hay que regenerar: `npx prisma generate`.
+  runtime = "workerd"
 }
 
 datasource db {
