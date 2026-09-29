@@ -21,8 +21,13 @@ const items = [
 export function SiteNav() {
   const pathname = usePathname();
 
+  // `overscroll-x-contain` corta el encadenado del desplazamiento: llegar al
+  // final de la barra no arrastra a la página.
   return (
-    <nav aria-label="Principal" className="-mx-1.5 overflow-x-auto py-1">
+    <nav
+      aria-label="Principal"
+      className="-mx-1.5 overflow-x-auto overscroll-x-contain py-1"
+    >
       <ul className="flex items-center gap-1.5 px-1.5">
         {items.map((item) => {
           const active =
@@ -33,7 +38,7 @@ export function SiteNav() {
               <Link
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`relative block whitespace-nowrap rounded-md px-3.5 py-2 text-[15px] transition-colors ${
+                className={`relative block whitespace-nowrap rounded-md px-3.5 py-2.5 text-[15px] leading-5 transition-colors ${
                   active
                     ? "font-semibold text-accent"
                     : "text-muted hover:bg-surface hover:text-foreground"

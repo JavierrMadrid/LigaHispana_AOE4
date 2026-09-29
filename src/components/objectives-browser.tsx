@@ -270,7 +270,7 @@ function FilterPill({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-semibold transition-colors ${
+      className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-xs font-semibold transition-colors ${
         active
           ? "border-accent bg-accent text-accent-ink"
           : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"

@@ -43,6 +43,43 @@ export default function RulesPage() {
     <div className="flex flex-col gap-10">
       <PageHead title="Reglas" />
 
+      {/* Índice de secciones para pantallas estrechas: el índice lateral solo
+          existe a partir de `lg`, así que por debajo se ofrece plegado, con la
+          misma lista y el mismo rótulo. */}
+      <nav aria-label="Secciones de las reglas" className="lg:hidden">
+        <details className="group rounded-lg border border-line bg-surface">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 sm:px-4 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
+            En esta página
+            <svg
+              viewBox="0 0 12 12"
+              aria-hidden="true"
+              className="size-3 shrink-0 text-muted transition-transform motion-reduce:transition-none group-open:rotate-180"
+            >
+              <path
+                d="M2.5 4.5 6 8l3.5-3.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </summary>
+          <ul className="flex flex-col border-t border-line py-1">
+            {SECTIONS.map((section) => (
+              <li key={section.id}>
+                <a
+                  href={`#${section.id}`}
+                  className="block px-4 py-2.5 text-sm text-muted transition-colors hover:text-foreground"
+                >
+                  {section.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      </nav>
+
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_13rem] lg:gap-14">
         <div className="flex min-w-0 flex-col gap-16">
           <section id="formato" className="scroll-mt-24">
@@ -158,20 +195,23 @@ export default function RulesPage() {
               puntos.
             </p>
 
-            <div className="mt-6 overflow-x-auto rounded-lg border border-line">
-              <table className="w-full min-w-[32rem] border-collapse text-sm">
+            {/* Sin ancho mínimo: con el relleno compacto de móvil las tres
+                columnas caben por sí solas en un teléfono, así que no hay que
+                desplazar. El `overflow-x-auto` queda como red de seguridad. */}
+            <div className="mt-6 overflow-x-auto overscroll-x-contain rounded-lg border border-line">
+              <table className="w-full border-collapse text-sm">
                 <caption className="sr-only">
                   Modos de juego de Age of Empires IV y si puntúan en la liga.
                 </caption>
                 <thead className="bg-surface">
                   <tr className="text-left text-xs font-medium text-muted">
-                    <th scope="col" className="px-4 py-3">
+                    <th scope="col" className="px-3 py-3 sm:px-4">
                       Modo
                     </th>
-                    <th scope="col" className="px-4 py-3">
+                    <th scope="col" className="px-3 py-3 sm:px-4">
                       Identificador en AoE4World
                     </th>
-                    <th scope="col" className="px-4 py-3 text-right">
+                    <th scope="col" className="px-3 py-3 sm:px-4 text-right">
                       Puntúa
                     </th>
                   </tr>
@@ -179,8 +219,8 @@ export default function RulesPage() {
                 <tbody className="divide-y divide-line">
                   {MODES.map((row) => (
                     <tr key={row.mode}>
-                      <td className="px-4 py-3 text-foreground">{row.mode}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-3 sm:px-4 text-foreground">{row.mode}</td>
+                      <td className="px-3 py-3 sm:px-4">
                         {row.ladder === "" ? (
                           <span className="text-muted">sin ladder ranked</span>
                         ) : (
@@ -188,7 +228,7 @@ export default function RulesPage() {
                         )}
                       </td>
                       <td
-                        className={`px-4 py-3 text-right font-medium ${
+                        className={`px-3 py-3 sm:px-4 text-right font-medium ${
                           row.counts ? "text-accent" : "text-muted"
                         }`}
                       >

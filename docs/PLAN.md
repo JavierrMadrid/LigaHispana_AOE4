@@ -342,7 +342,8 @@ referencia ordreduwololo.fr y soloqchallenge.gg solo mandan en comportamiento, n
   repetían lo que dice `/reglas`.
 - [x] **`/streams` eliminada** (el requisito de streams se resuelve con el icono de Twitch en
   la clasificación); `getTwitchChannels()` se conserva como base de F5 y de `verify:sync`.
-- [x] Estados vacíos como primera clase, responsive (scroll horizontal en la tabla) y
+- [x] Estados vacíos como primera clase, responsive (clasificación en tarjetas apiladas por
+  debajo de `lg` y tabla completa a partir de ahí) y
   `dynamic = "force-dynamic"` en las páginas con datos.
 - [x] `StandingRow.matches` retirado del contrato público (la UI calcula `wins + losses`);
   `joinNames()` retirado de `format.ts`.
@@ -437,13 +438,21 @@ Pendiente de F4:
       - Home: masthead de torneo (estado de emisión + recuento + enlace a reglas), podio con
         medallas en Cinzel, tabla con **ordenación por columna** (`aria-sort`, 3 estados),
         "Quitar filtros" también con resultados, `EmptyState` reutilizado.
-      - `/partidas`, `/reglas` (sección de objetivos + tabla con scroll en móvil), `/objetivos`
+      - `/partidas`, `/reglas` (sección de objetivos + tabla de modos compacta en móvil), `/objetivos`
         (recuento por grupo, pills a 40px), `/login` y `/admin` migrados al mismo dialecto
         (fuera `neutral-*`/`amber-*`, sin doble foco). Copy normativo de `/reglas` intacto.
       - Terminología unificada: **en partida** = estado del jugador, **en juego** = partidas que
         se juegan, **en directo** = solo Twitch.
       - `eslint.config.mjs` ignora `.agents/**` y `.opencode/**` (el binario de la skill generaba
         94 warnings); lint 0/0 y build OK.
+- [x] **Pulido responsive (móvil)**: revisión completa con las skills de diseño. La clasificación
+      deja el scroll horizontal y pasa a **tarjetas apiladas** por debajo de `lg` (misma
+      información, con un control de orden `Ordenar` en chips que reproduce el ciclo de 3
+      estados) y vuelve a la tabla completa a partir de `lg`. La tabla de admin colapsa las
+      columnas secundarias bajo el nombre; `/reglas` gana un índice "En esta página" plegado y su
+      tabla de modos cabe sin desplazar; la cabecera pública blinda el `min-w-0` de la nav y ajusta
+      el CTA a 320 px; refuerzo de tamaño táctil en pills, botones y enlaces. Sin cambios de
+      identidad, tokens ni copy.
 
 ## Requisitos del cliente (frozen)
 

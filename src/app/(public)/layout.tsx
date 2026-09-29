@@ -56,7 +56,10 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             <ParticipateCta />
           </div>
 
-          <div className="col-span-2 row-start-2 w-full xl:col-span-1 xl:col-start-2 xl:row-start-1 xl:w-auto">
+          {/* `min-w-0`: sin él, el ancho mínimo de la lista de navegación (con
+              enlaces que no se parten) empujaría la rejilla y abriría scroll de
+              página en lugar de desplazarse solo la barra. */}
+          <div className="col-span-2 row-start-2 min-w-0 w-full xl:col-span-1 xl:col-start-2 xl:row-start-1 xl:w-auto">
             <SiteNav />
           </div>
         </div>

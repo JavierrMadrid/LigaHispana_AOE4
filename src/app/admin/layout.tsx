@@ -15,18 +15,25 @@ export default async function AdminLayout({
             Liga Hispana · Admin
           </span>
           <nav className="flex items-center gap-4 text-sm">
-            <Link href="/admin" className="text-muted transition-colors hover:text-foreground">
+            <Link
+              href="/admin"
+              className="-my-2 py-2 text-muted transition-colors hover:text-foreground"
+            >
               Resumen
             </Link>
             <Link
               href="/admin/jugadores"
-              className="text-muted transition-colors hover:text-foreground"
+              className="-my-2 py-2 text-muted transition-colors hover:text-foreground"
             >
               Jugadores
             </Link>
           </nav>
-          <div className="ml-auto flex items-center gap-3 text-sm text-muted">
-            <span>{user.email}</span>
+          {/* El correo puede ser largo y no tiene por qué partirse: en móvil se
+              recorta y se lee entero en el `title`, en vez de empujar la barra. */}
+          <div className="ml-auto flex min-w-0 items-center gap-3 text-sm text-muted">
+            <span className="max-w-[10rem] truncate sm:max-w-none" title={user.email}>
+              {user.email}
+            </span>
             <form action={logout}>
               <button
                 type="submit"

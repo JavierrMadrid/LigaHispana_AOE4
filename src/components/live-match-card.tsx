@@ -67,15 +67,17 @@ export function LiveMatchCard({ match }: { match: LiveMatch }) {
         />
 
         <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
-          <span className="inline-flex items-center gap-2 rounded-full border border-line bg-background/80 px-2.5 py-1 text-xs font-semibold text-foreground backdrop-blur">
+          <span className="inline-flex min-w-0 items-center gap-2 rounded-full border border-line bg-background/80 px-2.5 py-1 text-xs font-semibold text-foreground backdrop-blur">
             <LiveDot />
-            {match.format}
+            {/* El tipo de partida es lo único que puede estirarse: en un móvil
+                estrecho se recorta antes que empujar el tiempo fuera de la banda. */}
+            <span className="truncate">{match.format}</span>
             <span className="sr-only">en juego</span>
           </span>
 
           <span
             title={`Empezó a las ${formatAbsoluteTime(match.startedAt)}`}
-            className="rounded-full border border-line bg-background/80 px-2.5 py-1 text-xs tabular-nums text-muted backdrop-blur"
+            className="shrink-0 rounded-full border border-line bg-background/80 px-2.5 py-1 text-xs tabular-nums text-muted backdrop-blur"
           >
             {formatElapsed(match.elapsedSeconds)}
           </span>

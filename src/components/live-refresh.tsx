@@ -34,7 +34,7 @@ export function LiveRefresh() {
       type="button"
       disabled={pending}
       onClick={() => startTransition(() => router.refresh())}
-      className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-foreground transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-50"
+      className="inline-flex h-10 items-center rounded-md border border-line bg-surface px-3 text-sm text-foreground transition-colors hover:border-accent/50 hover:text-accent disabled:opacity-50"
     >
       {pending ? "Actualizando" : "Actualizar"}
     </button>

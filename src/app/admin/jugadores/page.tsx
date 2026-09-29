@@ -49,36 +49,70 @@ export default async function PlayersPage() {
             Todavía no hay jugadores registrados.
           </p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-line">
+          <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
+            {/* En móvil la tabla se queda con el nombre y las acciones; Profile
+                ID, Twitch, contacto y estado se leen bajo el nombre, en la misma
+                fila, en vez de comprimir siete columnas. A partir de `lg`
+                vuelven todas. */}
             <table className="w-full text-left text-sm">
               <thead className="bg-surface text-muted">
                 <tr>
-                  <th scope="col" className="px-4 py-3 font-medium">#</th>
+                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">#</th>
                   <th scope="col" className="px-4 py-3 font-medium">Nombre</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Profile ID</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Twitch</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Contacto</th>
-                  <th scope="col" className="px-4 py-3 font-medium">Estado</th>
+                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">Profile ID</th>
+                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">Twitch</th>
+                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">Contacto</th>
+                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">Estado</th>
                   <th scope="col" className="px-4 py-3 font-medium">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
                 {players.map((player, index) => (
                   <tr key={player.id}>
-                    <td className="px-4 py-3 tabular-nums text-muted">
+                    <td className="hidden px-4 py-3 tabular-nums text-muted lg:table-cell">
                       {index + 1}
                     </td>
-                    <td className="px-4 py-3">{player.name}</td>
-                    <td className="px-4 py-3 tabular-nums text-muted">
+                    <td className="px-4 py-3">
+                      <span className="block break-words font-medium text-foreground">
+                        {player.name}
+                      </span>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted lg:hidden">
+                        <span
+                          className={`inline-block rounded-full border px-2 py-0.5 font-medium ${statusStyles[player.status]}`}
+                        >
+                          {statusLabels[player.status]}
+                        </span>
+                        <span className="tabular-nums">Profile ID {player.profileId}</span>
+                        {player.twitchChannel !== null ? (
+                          <span className="break-all">Twitch {player.twitchChannel}</span>
+                        ) : null}
+                        {player.contactEmail !== null ? (
+                          <span className="break-all">{player.contactEmail}</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="hidden px-4 py-3 tabular-nums text-muted lg:table-cell">
                       {player.profileId}
                     </td>
-                    <td className="px-4 py-3 text-muted">
-                      {player.twitchChannel ?? "—"}
+                    <td className="hidden px-4 py-3 text-muted lg:table-cell">
+                      {player.twitchChannel === null ? (
+                        "—"
+                      ) : (
+                        <span className="block max-w-[8rem] truncate" title={player.twitchChannel}>
+                          {player.twitchChannel}
+                        </span>
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-muted">
-                      {player.contactEmail ?? "—"}
+                    <td className="hidden px-4 py-3 text-muted lg:table-cell">
+                      {player.contactEmail === null ? (
+                        "—"
+                      ) : (
+                        <span className="block max-w-[14rem] truncate" title={player.contactEmail}>
+                          {player.contactEmail}
+                        </span>
+                      )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="hidden px-4 py-3 lg:table-cell">
                       <span
                         className={`inline-block rounded-full border px-2 py-0.5 text-xs ${statusStyles[player.status]}`}
                       >
@@ -96,7 +130,7 @@ export default async function PlayersPage() {
                             />
                             <button
                               type="submit"
-                              className="h-8 rounded-md border border-emerald-500/40 px-2.5 text-xs text-emerald-300 transition-colors hover:bg-emerald-500/10"
+                              className="h-9 rounded-md border border-emerald-500/40 px-2.5 text-xs text-emerald-300 transition-colors hover:bg-emerald-500/10"
                             >
                               Aprobar
                             </button>
@@ -112,7 +146,7 @@ export default async function PlayersPage() {
                             />
                             <button
                               type="submit"
-                              className="h-8 rounded-md border border-line-strong px-2.5 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+                              className="h-9 rounded-md border border-line-strong px-2.5 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
                             >
                               Rechazar
                             </button>
@@ -123,7 +157,7 @@ export default async function PlayersPage() {
                           <input type="hidden" name="playerId" value={player.id} />
                           <button
                             type="submit"
-                            className="h-8 rounded-md border border-red-500/40 px-2.5 text-xs text-red-300 transition-colors hover:bg-red-500/10"
+                            className="h-9 rounded-md border border-red-500/40 px-2.5 text-xs text-red-300 transition-colors hover:bg-red-500/10"
                           >
                             Eliminar
                           </button>

@@ -24,10 +24,12 @@ export function ParticipateCta() {
   return (
     <Link
       href="/participar"
-      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md bg-accent px-4 py-2.5 text-sm font-medium text-accent-ink transition-colors hover:bg-accent-strong focus-visible:outline-accent-ink focus-visible:-outline-offset-2 xl:-my-3 xl:self-stretch xl:rounded-none xl:py-0"
+      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md bg-accent px-3.5 py-2.5 text-sm font-medium text-accent-ink transition-colors hover:bg-accent-strong focus-visible:outline-accent-ink focus-visible:-outline-offset-2 sm:px-4 xl:-my-3 xl:self-stretch xl:rounded-none xl:py-0"
     >
       Inscríbete
-      <RegistrationIcon className="size-5 shrink-0" />
+      {/* En el móvil más estrecho (320 px) el icono cede su sitio al wordmark,
+          que si no se queda sin ancho útil; el texto ya nombra la acción. */}
+      <RegistrationIcon className="hidden size-5 shrink-0 sm:block" />
     </Link>
   );
 }

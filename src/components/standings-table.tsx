@@ -70,6 +70,48 @@ type SortKey =
   | "streak";
 type SortState = { key: SortKey; direction: "asc" | "desc" } | null;
 
+/** "V - D" en color: comparte forma entre cabecera y control de orden de móvil. */
+const RECORD_VISUAL = (
+  <>
+    <span className="text-win">V</span>
+    <span className="text-muted"> - </span>
+    <span className="text-loss">D</span>
+  </>
+);
+
+/**
+ * Campos que ofrece el control de orden de móvil, en el mismo orden que las
+ * columnas. Por debajo de `lg` la tabla esconde las cabeceras secundarias (para
+ * no obligar a desplazar), así que el orden por cualquier columna se concentra
+ * en este único control.
+ */
+const SORT_FIELDS: { key: SortKey; label: string; visual?: ReactNode }[] = [
+  { key: "rank", label: "Puesto" },
+  { key: "name", label: "Jugador" },
+  { key: "matches", label: "Partidas" },
+  { key: "points", label: "Puntos" },
+  { key: "elo", label: "Elo" },
+  { key: "record", label: "V - D", visual: RECORD_VISUAL },
+  { key: "streak", label: "Racha" },
+];
+
+/**
+ * Texto accesible del control de orden. El ciclo tiene tres estados (ascendente,
+ * descendente y sin orden), así que el `aria-label` tiene que anticipar el
+ * siguiente, no solo describir el actual.
+ */
+function sortHint(label: string, state: "none" | "asc" | "desc"): string {
+  if (state === "asc") {
+    return `${label}: orden ascendente. Pulsar para descendente`;
+  }
+
+  if (state === "desc") {
+    return `${label}: orden descendente. Pulsar para quitar la ordenación`;
+  }
+
+  return `Ordenar por ${label}`;
+}
+
 /**
  * Los nulos nunca participan del sentido de la ordenación: van al final tanto en
  * ascendente como en descendente. Así un jugador sin clasificar no encabeza la
@@ -298,94 +340,109 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
           </button>
         </div>
       ) : (
-        <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-          <table className="w-full min-w-[960px] border-separate border-spacing-y-1.5 text-sm">
-            <caption className="sr-only">
-              Clasificación de la liga: puesto, jugador, partidas jugadas,
-              puntos totales con su desglose por victorias y objetivos, elo,
-              victorias y derrotas, racha y enlace al perfil de AoE4World.
-            </caption>
-            <thead>
-              <tr>
-                <SortableHeader
-                  label="Puesto"
-                  sortKey="rank"
-                  sort={sort}
-                  onSort={toggleSort}
-                  className="w-14"
-                />
-                {/* El jugador es la única columna flexible: se queda con el
-                    ancho sobrante, de modo que las dos primeras columnas viven
-                    a la izquierda de la tabla y las cifras se agrupan a la
-                    derecha, todas con el mismo margen de celda entre ellas. */}
-                <SortableHeader
-                  label="Jugador"
-                  sortKey="name"
-                  sort={sort}
-                  onSort={toggleSort}
-                  align="left"
-                />
-                <SortableHeader
-                  label="Partidas"
-                  sortKey="matches"
-                  sort={sort}
-                  onSort={toggleSort}
-                  className="w-20"
-                />
-                <SortableHeader
-                  label="Puntos"
-                  sublabel="victorias / objetivos"
-                  sortKey="points"
-                  sort={sort}
-                  onSort={toggleSort}
-                  className="w-44"
-                />
-                <SortableHeader
-                  label="Elo"
-                  sortKey="elo"
-                  sort={sort}
-                  onSort={toggleSort}
-                  className="w-24"
-                />
-                <SortableHeader
-                  label="V - D"
-                  visual={
-                    <>
-                      <span className="text-win">V</span>
-                      <span className="text-muted"> - </span>
-                      <span className="text-loss">D</span>
-                    </>
-                  }
-                  sortKey="record"
-                  sort={sort}
-                  onSort={toggleSort}
-                  className="w-24"
-                />
-                <SortableHeader
-                  label="Racha"
-                  sortKey="streak"
-                  sort={sort}
-                  onSort={toggleSort}
-                  className="w-20"
-                />
-                <th scope="col" className={`${HEADING} w-20 text-center`}>
-                  Stats
-                </th>
-              </tr>
-            </thead>
-            {/* Una `tbody` por participante: así la fila y su panel de
-                objetivos forman un mismo grupo y el resalte al pasar el ratón
-                abarca a los dos. */}
+        <>
+          <SortControls sort={sort} onSort={toggleSort} />
+
+          {/* Por debajo de `lg` la clasificación se lee como tarjetas apiladas:
+              con ocho columnas la tabla solo cabría desplazando en horizontal.
+              Es la misma fila, con las cifras secundarias bajo el jugador. */}
+          <ul className="flex flex-col gap-2 lg:hidden">
             {sorted.map((row) => (
-              <StandingsRow
+              <StandingsCard
                 key={row.profileId}
                 row={row}
                 objectivesExpanded={expanded.has(row.profileId)}
                 onToggleObjectives={toggleObjectives}
               />
             ))}
-          </table>
-        </div>
+          </ul>
+
+          {/* A partir de `lg` vuelve la tabla completa, con su `caption` y sus
+              `<th>`. La tabla no se oculta columna a columna: eso dejaría el
+              `colSpan` del desplegable de objetivos descuadrado, porque un
+              `colspan` mayor que las columnas visibles añade columnas vacías. */}
+          <div className="hidden lg:block">
+            <div className="overflow-x-auto overscroll-x-contain">
+              <table className="w-full min-w-[900px] border-separate border-spacing-y-1.5 text-sm">
+                <caption className="sr-only">
+                  Clasificación de la liga: puesto, jugador, partidas jugadas,
+                  puntos totales con su desglose por victorias y objetivos, elo,
+                  victorias y derrotas, racha y enlace al perfil de AoE4World.
+                </caption>
+                <thead>
+                  <tr>
+                    <SortableHeader
+                      label="Puesto"
+                      sortKey="rank"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="w-14"
+                    />
+                    {/* El jugador es la única columna flexible: se queda con el
+                        ancho sobrante, de modo que las dos primeras columnas viven
+                        a la izquierda de la tabla y las cifras se agrupan a la
+                        derecha, todas con el mismo margen de celda entre ellas. */}
+                    <SortableHeader
+                      label="Jugador"
+                      sortKey="name"
+                      sort={sort}
+                      onSort={toggleSort}
+                      align="left"
+                    />
+                    <SortableHeader
+                      label="Partidas"
+                      sortKey="matches"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="w-20"
+                    />
+                    <SortableHeader
+                      label="Puntos"
+                      sublabel="victorias / objetivos"
+                      sortKey="points"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="w-44"
+                    />
+                    <SortableHeader
+                      label="Elo"
+                      sortKey="elo"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="w-24"
+                    />
+                    <SortableHeader
+                      label="V - D"
+                      visual={RECORD_VISUAL}
+                      sortKey="record"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="w-24"
+                    />
+                    <SortableHeader
+                      label="Racha"
+                      sortKey="streak"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="w-20"
+                    />
+                    <th scope="col" className={`${HEADING} w-20 text-center`}>
+                      Stats
+                    </th>
+                  </tr>
+                </thead>
+                {sorted.map((row) => (
+                  <StandingsRow
+                    key={row.profileId}
+                    row={row}
+                    objectivesExpanded={expanded.has(row.profileId)}
+                    onToggleObjectives={toggleObjectives}
+                  />
+                ))}
+              </table>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
@@ -421,12 +478,6 @@ function SortableHeader({
 
   const ariaSort =
     state === "asc" ? "ascending" : state === "desc" ? "descending" : "none";
-  const hint =
-    state === "asc"
-      ? `${label}: orden ascendente. Pulsar para descendente`
-      : state === "desc"
-        ? `${label}: orden descendente. Pulsar para quitar la ordenación`
-        : `Ordenar por ${label}`;
 
   const alignment = align === "center" ? "text-center" : "text-left";
   const stack = align === "center" ? "items-center" : "items-start";
@@ -437,7 +488,7 @@ function SortableHeader({
         <button
           type="button"
           onClick={() => onSort(sortKey)}
-          aria-label={hint}
+          aria-label={sortHint(label, state)}
           className="group/header inline-flex items-center gap-1 whitespace-nowrap rounded-sm transition-colors hover:text-foreground"
         >
           {visual ?? label}
@@ -450,6 +501,55 @@ function SortableHeader({
         ) : null}
       </span>
     </th>
+  );
+}
+
+/**
+ * Orden de la clasificación en pantallas estrechas.
+ *
+ * Por debajo de `lg` la tabla completa se sustituye por tarjetas, así que sus
+ * cabeceras ordenables no están; este control reproduce el mismo ciclo de tres
+ * estados (ascendente, descendente y sin orden) sobre todos los campos. A partir
+ * de `lg` desaparece y el orden vuelve a las cabeceras.
+ */
+function SortControls({
+  sort,
+  onSort,
+}: {
+  sort: SortState;
+  onSort: (key: SortKey) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Ordenar la clasificación"
+      className="flex flex-wrap items-center gap-1.5 lg:hidden"
+    >
+      <span aria-hidden="true" className="text-xs text-muted">
+        Ordenar
+      </span>
+      {SORT_FIELDS.map((field) => {
+        const state: "none" | "asc" | "desc" =
+          sort?.key === field.key ? sort.direction : "none";
+
+        return (
+          <button
+            key={field.key}
+            type="button"
+            aria-label={sortHint(field.label, state)}
+            onClick={() => onSort(field.key)}
+            className={`inline-flex h-10 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors ${
+              state === "none"
+                ? "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
+                : "border-accent/50 bg-accent/10 text-accent"
+            }`}
+          >
+            {field.visual ?? field.label}
+            {state === "none" ? null : <SortIndicator state={state} />}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -534,28 +634,12 @@ function StandingsRow({
             <PlayerAvatar row={row} />
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <PlayerName row={row} />
-              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                {row.isPlaying ? (
-                  <span title="En partida ahora mismo" className="inline-flex">
-                    <LiveDot />
-                    <span className="sr-only">En partida ahora mismo</span>
-                  </span>
-                ) : null}
-                {row.twitchChannel !== null ? <TwitchLink row={row} /> : null}
-                {row.twitchIsLive ? (
-                  <span className="inline-flex shrink-0 items-center rounded-full bg-twitch/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-twitch-soft">
-                    En directo
-                  </span>
-                ) : null}
-                {row.objectives.length > 0 ? (
-                  <ObjectivesToggle
-                    count={row.objectives.length}
-                    expanded={objectivesExpanded}
-                    controls={objectivesPanelId}
-                    onClick={() => onToggleObjectives(row.profileId)}
-                  />
-                ) : null}
-              </div>
+              <PlayerChips
+                row={row}
+                objectivesExpanded={objectivesExpanded}
+                objectivesPanelId={objectivesPanelId}
+                onToggleObjectives={onToggleObjectives}
+              />
             </div>
           </div>
         </td>
@@ -654,6 +738,171 @@ function StandingsRow({
 }
 
 /**
+ * Fila de la clasificación como tarjeta, para pantallas estrechas.
+ *
+ * Es la misma información que la fila de la tabla, pero apilada: el puesto y el
+ * avatar a la izquierda, la identidad y las cifras en el centro y el total de
+ * puntos a la derecha, con los objetivos plegados justo debajo. Solo se pinta por
+ * debajo de `lg`; a partir de ahí manda la tabla.
+ */
+function StandingsCard({
+  row,
+  objectivesExpanded,
+  onToggleObjectives,
+}: {
+  row: StandingRow;
+  objectivesExpanded: boolean;
+  onToggleObjectives: (profileId: number) => void;
+}) {
+  const objectivesPanelId = `objetivos-movil-${row.profileId}`;
+
+  return (
+    <li
+      className={`rounded-lg border bg-surface p-3 transition-colors ${
+        row.rank === 1 ? "border-accent/40" : "border-line"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <RankBadge rank={row.rank} />
+        <PlayerAvatar row={row} />
+
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <PlayerName row={row} />
+            <PlayerChips
+              row={row}
+              objectivesExpanded={objectivesExpanded}
+              objectivesPanelId={objectivesPanelId}
+              onToggleObjectives={onToggleObjectives}
+            />
+          </div>
+          <CompactStats row={row} />
+        </div>
+
+        <div className="shrink-0 text-right">
+          <span
+            className={`block font-semibold tabular-nums ${
+              row.rank === 1 ? "text-accent" : "text-foreground"
+            }`}
+          >
+            {row.points}
+          </span>
+          <span className="block whitespace-nowrap text-[11px] leading-none tabular-nums text-muted">
+            {row.pointsByWins}
+            <span aria-hidden="true"> / </span>
+            {row.pointsByObjectives}
+          </span>
+        </div>
+      </div>
+
+      {objectivesExpanded ? (
+        <div id={objectivesPanelId} className="mt-3 border-t border-line pt-3">
+          <ObjectivesDetail objectives={row.objectives} />
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/**
+ * Señales de estado del jugador en la fila: en partida, canal de Twitch, en
+ * directo y el desplegable de objetivos. Vive aparte porque la fila de la tabla
+ * y la tarjeta de móvil comparten exactamente los mismos distintivos; solo cambia
+ * a qué panel de objetivos apunta el botón.
+ */
+function PlayerChips({
+  row,
+  objectivesExpanded,
+  objectivesPanelId,
+  onToggleObjectives,
+}: {
+  row: StandingRow;
+  objectivesExpanded: boolean;
+  objectivesPanelId: string;
+  onToggleObjectives: (profileId: number) => void;
+}) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      {row.isPlaying ? (
+        <span title="En partida ahora mismo" className="inline-flex">
+          <LiveDot />
+          <span className="sr-only">En partida ahora mismo</span>
+        </span>
+      ) : null}
+      {row.twitchChannel !== null ? <TwitchLink row={row} /> : null}
+      {row.twitchIsLive ? (
+        <span className="inline-flex shrink-0 items-center rounded-full bg-twitch/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-twitch-soft">
+          En directo
+        </span>
+      ) : null}
+      {row.objectives.length > 0 ? (
+        <ObjectivesToggle
+          count={row.objectives.length}
+          expanded={objectivesExpanded}
+          controls={objectivesPanelId}
+          onClick={() => onToggleObjectives(row.profileId)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Cifras secundarias del jugador por debajo de `lg`.
+ *
+ * La tarjeta de móvil no tiene las columnas de partidas, elo, victorias-derrotas,
+ * racha ni el enlace al perfil, así que esas cifras se leen aquí, en el mismo
+ * orden que en la tabla, y no se pierde ningún dato.
+ */
+function CompactStats({ row }: { row: StandingRow }) {
+  const league = rankLevelToLeague(row.rankLevel);
+  const matches = row.wins + row.losses;
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs text-muted">
+      <span className="tabular-nums">
+        {matches} {matches === 1 ? "partida" : "partidas"}
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="sr-only">Victorias y derrotas:</span>
+        <span className="tabular-nums">
+          <span className="text-win">{row.wins}</span>
+          <span aria-hidden="true"> - </span>
+          <span className="text-loss">{row.losses}</span>
+        </span>
+      </span>
+      <span className="inline-flex items-center gap-1 tabular-nums">
+        Elo {row.elo === null ? "-" : row.elo}
+        {league !== null ? (
+          <span
+            title={league.label}
+            className="inline-flex"
+            style={{ color: divisionColor(league.division) }}
+          >
+            <LeagueIcon rank={league} label={league.label} className="h-5 w-3.5" />
+          </span>
+        ) : null}
+      </span>
+      <span className="inline-flex items-center gap-1">
+        Racha <StreakValue streak={row.streak} />
+      </span>
+      <a
+        href={row.profileUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="font-medium underline-offset-4 transition-colors hover:text-accent hover:underline"
+      >
+        Stats
+        <span className="sr-only">
+          {" "}
+          de {row.name} en AoE4World (se abre en una pestaña nueva)
+        </span>
+      </a>
+    </div>
+  );
+}
+
+/**
  * Control del desplegable de objetivos: un botón de texto, en el mismo registro
  * discreto que los enlaces de la tabla ("Stats", "Quitar filtros"), con un
  * chevron que señala el estado. Se pinta el texto y el icono dentro del mismo
@@ -676,7 +925,7 @@ function ObjectivesToggle({
       aria-expanded={expanded}
       aria-controls={controls}
       onClick={onClick}
-      className={`inline-flex shrink-0 items-center gap-1 rounded-sm text-xs font-medium underline-offset-4 transition-colors hover:underline ${
+      className={`-my-1 inline-flex shrink-0 items-center gap-1 rounded-sm py-1 text-xs font-medium underline-offset-4 transition-colors hover:underline ${
         expanded ? "text-accent" : "text-muted hover:text-accent"
       }`}
     >
@@ -796,6 +1045,24 @@ function PlayerName({ row }: { row: StandingRow }) {
   );
 }
 
+/**
+ * Puesto del jugador como distintivo de la tarjeta de móvil. Usa los mismos
+ * colores de podio que la columna de la tabla, para que el primero siga leyéndose
+ * en oro sin depender de la posición de una columna.
+ */
+function RankBadge({ rank }: { rank: number }) {
+  return (
+    <span
+      className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised tabular-nums ${
+        RANK_CLASS[rank] ?? "text-sm font-semibold text-muted"
+      }`}
+    >
+      <span className="sr-only">Puesto </span>
+      {rank}
+    </span>
+  );
+}
+
 function PlayerAvatar({ row }: { row: StandingRow }) {
   if (row.avatarUrl === null) {
     return (
@@ -833,7 +1100,7 @@ function TwitchLink({ row }: { row: StandingRow }) {
       aria-label={`Canal de Twitch de ${row.name}${
         live ? ", en directo ahora mismo" : ""
       } (se abre en una pestaña nueva)`}
-      className={`inline-flex shrink-0 transition-colors ${
+      className={`-m-1 inline-flex shrink-0 items-center justify-center p-1 transition-colors ${
         live ? "text-twitch hover:opacity-80" : "text-muted/70 hover:text-muted"
       }`}
     >
