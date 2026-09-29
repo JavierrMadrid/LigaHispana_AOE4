@@ -25,18 +25,6 @@ const eslintConfig = defineConfig([
     // no código del proyecto; no pasan por el linter de TypeScript.
     "scripts/**/*.cjs",
   ]),
-  {
-    // El entrypoint del Worker importa el `worker.js` que genera
-    // `opennextjs-cloudflare build`. Ese fichero existe o no segun se haya
-    // construido ya en el arbol de trabajo, asi que la linea del import falla
-    // en unos sitios y resuelve en otros: `@ts-expect-error` daria "directiva
-    // sin usar" cuando ya esta generado. Aqui se admite `@ts-ignore`, con
-    // descripcion obligatoria para que siga diciendo por que esta.
-    files: ["custom-worker.ts"],
-    rules: {
-      "@typescript-eslint/ban-ts-comment": ["error", { "ts-ignore": "allow-with-description" }],
-    },
-  },
 ]);
 
 export default eslintConfig;

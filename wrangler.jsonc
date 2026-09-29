@@ -9,9 +9,7 @@
   //
   // Plantilla oficial: https://opennext.js.org/cloudflare/get-started
   "$schema": "node_modules/wrangler/config-schema.json",
-  // Entrypoint propio (no el `.open-next/worker.js` generado): reenvia su `fetch`
-  // y añade el `scheduled` del Cron Trigger. Ver `custom-worker.ts`.
-  "main": "./custom-worker.ts",
+  "main": ".open-next/worker.js",
   "name": "ligahispana-aoe4",
   // Requisito de @opennextjs/cloudflare: 2024-09-23 o posterior para nodejs_compat.
   "compatibility_date": "2025-03-25",
@@ -72,23 +70,6 @@
   //     "id": "04fab935a8f34fce814ccebfc4301042"
   //   }
   // ],
-  // Cron Trigger nativo: es lo que dispara el sync de AoE4World. El handler
-  // `scheduled` vive en `custom-worker.ts` y llama al mismo endpoint
-  // `POST /api/cron/sync` por el binding `WORKER_SELF_REFERENCE`.
-  //
-  // Antes esto lo hacia un `schedule` de GitHub Actions, y se cambio porque
-  // GitHub no lo cumple: documenta que los workflows programados se retrasan, y
-  // con `*/5` el intervalo real medido era de varias horas (se veia una pasada
-  // cada 4-6 h). El README evitaba el cron nativo por los 10 ms de CPU del plan
-  // Free, pero eso no aplica aqui: la misma pasada medida en Workers Logs gasto
-  // 548 ms de CPU, muy por debajo del limite del plan, asi que el disparo nativo
-  // no tiene ese problema.
-  //
-  // Cloudflare soporta expresiones de cinco campos, igual que el `schedule` que
-  // sustituye. Un cambio aqui puede tardar hasta 15 minutos en propagarse.
-  "triggers": {
-    "crons": ["*/5 * * * *"]
-  },
   // Workers Logs (observabilidad), en este archivo por el mismo motivo que el
   // comentario de arriba: `wrangler deploy` reconstruye el Worker solo con lo
   // que trae este archivo, asi que si el bloque `observability` no esta aqui,
