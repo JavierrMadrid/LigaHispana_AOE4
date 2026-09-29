@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { db } from "@/lib/db";
+import { Client } from "pg";
 
 /**
  * Postura de seguridad de la base de datos: RLS sin políticas y sin permisos para
@@ -10,20 +10,31 @@ import { db } from "@/lib/db";
  *   npm run db:security -- --check   # solo comprueba, no escribe
  *   npm run db:security -- --solo-rls  # la otra postura: RLS filtra, hay SELECT
  *
- * Por qué es un script y no un fichero `.sql` suelto: `prisma db push` calcula la
- * diferencia entre `prisma/schema.prisma` y la base de datos, y **ni RLS ni los
- * GRANT entran en esa comparación**. Un `alter table` hecho a mano desde el panel
- * de Supabase no está en ninguna parte del repositorio, así que el siguiente
- * `db push` o el siguiente que separe el caso no sabría ni que existe. Esto lo
- * deja escrito, repetible y comprobable, con las mismas convenciones que el resto
- * de `scripts/`.
+ * ## Por qué habla con `pg` y no con Prisma
+ *
+ * Todo lo que hace este script es SQL crudo, así que usa `pg` directamente en vez
+ * de `@/lib/db`. No es una preferencia: el cliente de Prisma de la web está
+ * generado con `runtime = "workerd"` (obligatorio, porque `workerd` prohíbe
+ * `new WebAssembly.Module`) y ese cliente **no puede cargar su query compiler
+ * bajo `tsx`**, que es como corren los scripts. Con `pg` el script no depende de
+ * Prisma en absoluto y sigue funcionando con cualquiera de los dos clientes
+ * generados. No volver esto a "usar Prisma como el resto de scripts": es
+ * exactamente lo que lo rompe.
+ *
+ * ## Por qué es un script y no un fichero `.sql` suelto
+ *
+ * `prisma db push` calcula la diferencia entre `prisma/schema.prisma` y la base de
+ * datos, y **ni RLS ni los GRANT entran en esa comparación**. Un `alter table`
+ * hecho a mano desde el panel de Supabase no está en ninguna parte del
+ * repositorio, así que el siguiente `db push` o el siguiente que separe el caso no
+ * sabría ni que existe. Esto lo deja escrito, repetible y comprobable.
  *
  * La postura es la de `docs/MODELO-DATOS.md` §7, y cabe en tres frases:
  * - la web **nunca** se conecta con una clave de cliente: todo pasa por el DAL con
  *   `DATABASE_URL`, así que las tablas no tienen por qué ser legibles por nadie más;
  * - con RLS activada y **ninguna** política, un rol sin `BYPASSRLS` ve cero filas;
  * - quitar además los permisos a `anon` y `authenticated` es el refuerzo: que ni
- * siquiera puedan intentar la lectura.
+ *   siquiera puedan intentar la lectura.
  *
  * Lo que **no** se toca, y es deliberado:
  * - `anon` y `authenticated` conservan el `USAGE` sobre el esquema `public`. Sin él
@@ -56,7 +67,8 @@ type RoleRow = { rolname: string; rolbypassrls: boolean; rolsuper: boolean };
 type TablePostureRow = {
   tabla: string;
   rls: boolean;
-  politicas: bigint;
+  /** `count()::bigint` vuelve como texto en `pg`, no como `bigint`. */
+  politicas: bigint | string;
   permisos_de_cliente: string;
 };
 
@@ -85,8 +97,8 @@ function quote(identifier: string): string {
  * silencio: activar RLS sin políticas deja al rol de la aplicación sin ver datos,
  * **sin error**. Por eso se comprueba antes de aplicar y no después.
  */
-async function assertAppRoleCanBypassRls(): Promise<void> {
-  const rows = await db.$queryRawUnsafe<RoleRow[]>(
+async function assertAppRoleCanBypassRls(sql: Client): Promise<void> {
+  const { rows } = await sql.query<RoleRow>(
     `select rolname, rolbypassrls, rolsuper
        from pg_roles
       where rolname = current_user`,
@@ -109,13 +121,13 @@ async function assertAppRoleCanBypassRls(): Promise<void> {
   );
 }
 
-async function applyPosture(postura: Postura): Promise<void> {
+async function applyPosture(sql: Client, postura: Postura): Promise<void> {
   console.log("");
   console.log(`--- Aplicando (postura "${postura}") ---`);
 
   for (const table of TABLES) {
     // Idempotente por naturaleza: repetirlo solo emite un aviso.
-    await db.$executeRawUnsafe(`alter table public.${quote(table)} enable row level security`);
+    await sql.query(`alter table public.${quote(table)} enable row level security`);
     console.log(`RLS activada: public."${table}"`);
   }
 
@@ -128,38 +140,32 @@ async function applyPosture(postura: Postura): Promise<void> {
         "filtra es RLS. Si algún día se añade una política permisiva, las tablas quedan " +
         "abiertas a la clave publicable.",
     );
-    console.warn("");
+    console.log("");
   }
 
   // Hoy `public` no tiene ninguna secuencia (todas las claves son texto o las pone
   // la aplicación), pero el permiso se revoca igualmente: si algún día entra una
   // columna con `serial`, la secuencia nace con los permisos por defecto de Supabase
   // y quedaría expuesta sin que nadie se dé cuenta.
-  await db.$executeRawUnsafe(
-    `revoke all on all sequences in schema public from ${ROLES_CLIENTE}`,
-  );
+  await sql.query(`revoke all on all sequences in schema public from ${ROLES_CLIENTE}`);
   console.log(`Permisos de secuencias de public revocados a: ${ROLES_CLIENTE}`);
 
   for (const table of TABLES) {
     if (postura === "cerrada") {
-      await db.$executeRawUnsafe(
-        `revoke all on table public.${quote(table)} from ${ROLES_CLIENTE}`,
-      );
+      await sql.query(`revoke all on table public.${quote(table)} from ${ROLES_CLIENTE}`);
       console.log(`Permisos revocados a ${ROLES_CLIENTE}: public."${table}"`);
     } else {
       // `SELECT` es lo mínimo que hace falta para que la petición llegue a RLS. Con
       // solo eso y cero políticas, la Data API devuelve `[]` en vez de 401.
-      await db.$executeRawUnsafe(
-        `grant select on table public.${quote(table)} to ${ROLES_CLIENTE}`,
-      );
+      await sql.query(`grant select on table public.${quote(table)} to ${ROLES_CLIENTE}`);
       console.log(`SELECT concedido a ${ROLES_CLIENTE}: public."${table}"`);
     }
   }
 }
 
 /** Qué postura hay ahora mismo, deducida de si queda algún permiso a los clientes. */
-async function readPostura(): Promise<Postura> {
-  const rows = await db.$queryRawUnsafe<GrantRow[]>(`
+async function readPostura(sql: Client): Promise<Postura> {
+  const { rows } = await sql.query<GrantRow>(`
     select exists (
       select 1
         from pg_class c
@@ -175,8 +181,8 @@ async function readPostura(): Promise<Postura> {
   return rows[0]?.granted === true ? "solo-rls" : "cerrada";
 }
 
-async function checkPosture(): Promise<boolean> {
-  const rows = await db.$queryRawUnsafe<TablePostureRow[]>(`
+async function checkPosture(sql: Client): Promise<boolean> {
+  const { rows } = await sql.query<TablePostureRow>(`
     select
       c.relname::text as tabla,
       c.relrowsecurity as rls,
@@ -201,7 +207,7 @@ async function checkPosture(): Promise<boolean> {
      order by c.relname
   `);
 
-  const postura = await readPostura();
+  const postura = await readPostura(sql);
 
   console.log("");
   console.log(`--- Comprobación (postura "${postura}") ---`);
@@ -262,31 +268,44 @@ async function main(): Promise<void> {
   const soloComprobar = args.includes("--check");
   const soloRls = args.includes("--solo-rls");
 
-  if (!soloComprobar) {
-    console.log("Postura de la base de datos.");
-    await assertAppRoleCanBypassRls();
-    await applyPosture(soloRls ? "solo-rls" : "cerrada");
-  } else {
-    console.log("Comprobando la postura de la base de datos.");
+  const connectionString = process.env.DATABASE_URL;
+
+  if (!connectionString) {
+    throw new Error("DATABASE_URL no está definida.");
   }
 
-  const correcto = await checkPosture();
+  const sql = new Client({ connectionString });
+  await sql.connect();
 
-  if (!correcto) {
-    process.exitCode = 1;
-    console.error("");
-    console.error("La postura de la base de datos no es la esperada. Revisar el listado de arriba.");
-    return;
+  try {
+    if (!soloComprobar) {
+      console.log("Postura de la base de datos.");
+      await assertAppRoleCanBypassRls(sql);
+      await applyPosture(sql, soloRls ? "solo-rls" : "cerrada");
+    } else {
+      console.log("Comprobando la postura de la base de datos.");
+    }
+
+    const correcto = await checkPosture(sql);
+
+    if (!correcto) {
+      process.exitCode = 1;
+      console.error("");
+      console.error("La postura de la base de datos no es la esperada. Revisar el listado de arriba.");
+      return;
+    }
+
+    const espera =
+      (await readPostura(sql)) === "cerrada"
+        ? "La Data API debería contestar 401 permission denied: en Postgres el permiso de " +
+            "tabla se comprueba antes que RLS, y no hay permiso. No es un 401 que haya que arreglar."
+        : "La Data API debería contestar 200 []: el SELECT pasa y RLS, sin políticas, no deja pasar ninguna fila.";
+
+    console.log("");
+    console.log(espera);
+  } finally {
+    await sql.end();
   }
-
-  const espera =
-    (await readPostura()) === "cerrada"
-      ? "La Data API debería contestar 401 permission denied: en Postgres el permiso de " +
-        "tabla se comprueba antes que RLS, y no hay permiso. No es un 401 que haya que arreglar."
-      : "La Data API debería contestar 200 []: el SELECT pasa y RLS, sin políticas, no deja pasar ninguna fila.";
-
-  console.log("");
-  console.log(espera);
 }
 
 void main();
