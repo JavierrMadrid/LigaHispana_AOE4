@@ -329,10 +329,12 @@ El resultado siempre se deja en `PENDING`: aprobar o rechazar es decisión de la
 
 El worker descarga las partidas de **todos** los participantes aprobados y las guarda con deduplicación por `(playerId, gameId)`. Trae **todas** las ladders (no solo `rm_solo`): cada partida guarda su `leaderboard` y el JSON crudo de la API para que el motor de puntuación pueda filtrar y recalcular sin volver a historicarlo.
 
-Hay un único punto de entrada, `POST /api/cron/sync` (y `GET`, porque Vercel Cron solo emite `GET`). Acepta dos formas de autenticación:
+Hay **dos** puntos de entrada, y los dos hacen el mismo trabajo (`syncApprovedPlayers()`):
 
-- sesión de un admin de Supabase (misma protección que el resto de `/admin`), o
-- `Authorization: Bearer $CRON_SECRET` (imprescindible para un cron externo, que no manda cookies).
+- **`POST /api/cron/sync`** (y `GET`, porque Vercel Cron solo emite `GET`). Es el del cron. Acepta dos formas de autenticación:
+  - sesión de un admin de Supabase (misma protección que el resto de `/admin`), o
+  - `Authorization: Bearer $CRON_SECRET` (imprescindible para un cron externo, que no manda cookies).
+- **`POST /api/sync`**, público, detrás del botón "Actualizar" de `/partidas`. Exige `content-type: application/json`, que es lo que descarta un POST de otro sitio (un formulario solo manda tipos "simples"), y lleva un candado **global** de un sync cada 60 s para que nadie pueda machacar la API de AoE4World desde el navegador. Si se pide antes de tiempo responde `{ "status": "cooldown" }` con 200, porque no es un error: la pasada se hizo hace nada. Si el candado no se puede comprobar, **no** lanza la pasada y responde 503.
 
 ```bash
 # Desde la terminal, sin levantar el servidor
@@ -341,19 +343,26 @@ npm run sync -- 4635035 8139502     # solo esos profileId
 
 # Como route handler (mismo trabajo)
 curl -X POST http://localhost:3000/api/cron/sync -H "Authorization: Bearer $CRON_SECRET"
+
+# El disparo público del botón (necesita el content-type, por lo del CSRF)
+curl -X POST http://localhost:3000/api/sync -H "content-type: application/json" -d '{}'
 ```
 
-Devuelve un resumen en JSON con el detalle por jugador (partidas vistas, nuevas, actualizadas, descartadas, resueltas por refetch y abandonadas) y los contadores de la API (peticiones, reintentos, pausas por *rate limit*).
+`/api/cron/sync` devuelve un resumen en JSON con el detalle por jugador (partidas vistas, nuevas, actualizadas, descartadas, resueltas por refetch y abandonadas) y los contadores de la API (peticiones, reintentos, pausas por *rate limit*). `/api/sync` devuelve solo los contadores: al navegador no le aporta nada el detalle.
 
 ### Cadencia recomendada
 
 **Cada 5 minutos**. La API pide uso responsable y ya ha devuelto 429; por debajo de 3 minutos el worker dispara demasiadas peticiones por minuto solo con un puñado de jugadores. Con más jugadores, sube `AOE4WORLD_MIN_REQUEST_INTERVAL_MS` antes que la frecuencia. Para F4 ("en directo") 5 minutos es suficiente: una partida en directo se detecta en la siguiente pasada y se marca con `finishedAt = null`.
 
-El disparo lo hace un **cron externo** (cron-job.org, EasyCron, o un workflow programado de GitHub Actions): una petición a `https://<dominio>/api/cron/sync` con `Authorization: Bearer $CRON_SECRET`, cada 5 minutos. El endpoint acepta `GET` y `POST`, así que vale cualquier servicio que sepa mandar una cabecera. El proyecto solo necesita `CRON_SECRET` definido en las variables de entorno del hosting.
+El disparo lo hace el **Cron Trigger nativo de Cloudflare**. `triggers.crons` de [`wrangler.jsonc`](wrangler.jsonc) declara `*/5 * * * *`, y el handler `scheduled` de [`custom-worker.ts`](custom-worker.ts) llama al endpoint por el binding `WORKER_SELF_REFERENCE` con `Authorization: Bearer $CRON_SECRET`. No hay servicio externo ni dominio que configurar: el binding apunta a este mismo Worker, así que la petición no sale a Internet.
 
-El repo trae un workflow listo en [`.github/workflows/cron-sync.yml`](.github/workflows/cron-sync.yml). Para usarlo, define en el repositorio la variable `SITE_URL` y el secreto `CRON_SECRET` (Settings > Secrets and variables > Actions). Aviso: los workflows programados de GitHub pueden retrasarse unos minutos y se desactivan tras 60 días sin actividad del repositorio.
+`custom-worker.ts` es un *entrypoint* propio que reenvía el `fetch` que genera `@opennextjs/cloudflare` y añade el `scheduled`; es el patrón que OpenNext documenta como ["Custom Worker"](https://opennext.js.org/cloudflare/howtos/custom-worker). Por eso `main` de `wrangler.jsonc` apunta ahí y no a `.open-next/worker.js`.
 
-Se evita el cron nativo del hosting a propósito: en Vercel el plan Hobby lo limita a **una vez al día**, y en Cloudflare el plan Free da **10 ms de CPU por disparo**, que no llegan para una pasada del worker. Un cron externo no depende de ninguna de las dos cosas.
+Antes esto lo hacía un `schedule` de GitHub Actions, y se cambió porque GitHub no lo cumple: sus workflows programados se retrasan durante los picos, y medido con `*/5` el intervalo real era de **varias horas** (una pasada cada 4-6 h, ~21 veces lo pedido). Aviso: en Cloudflare, un cambio de `triggers.crons` puede tardar hasta 15 minutos en propagarse.
+
+El workflow [`.github/workflows/cron-sync.yml`](.github/workflows/cron-sync.yml) se queda, pero solo con `workflow_dispatch`: es un botón para lanzar una pasada a mano sin esperar al cron. Necesita la variable `SITE_URL` y el secreto `CRON_SECRET` en el repositorio. Se le quitó el `schedule` a propósito, para no tener dos pasadas a la vez de vez en cuando.
+
+Sobre el temor al CPU del plan Free: un Cron Trigger gasta el mismo presupuesto que una petición HTTP, y una pasada medida en Workers Logs gastó **548 ms de CPU** y terminó bien, así que cabe de sobra en el límite real de esta cuenta.
 
 ### Decisiones de la fase F2
 
