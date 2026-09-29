@@ -19,7 +19,7 @@ import { TwitchIcon } from "@/components/twitch-icon";
 const HEADING = "px-3 pb-2 text-xs font-medium text-muted";
 const CELL = "bg-surface px-3 py-2.5 transition-colors group-hover:bg-surface-raised";
 /** La fila desplegable de objetivos ocupa el ancho de toda la tabla. */
-const OBJECTIVE_COLUMNS = 8;
+const OBJECTIVE_COLUMNS = 7;
 
 /** Podio: el oro de la casa para el 1.º, plata y bronce para el 2.º y el 3.º. */
 const RANK_CLASS: Record<number, string> = {
@@ -344,7 +344,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
           <SortControls sort={sort} onSort={toggleSort} />
 
           {/* Por debajo de `lg` la clasificación se lee como tarjetas apiladas:
-              con ocho columnas la tabla solo cabría desplazando en horizontal.
+              con siete columnas la tabla solo cabría desplazando en horizontal.
               Es la misma fila, con las cifras secundarias bajo el jugador. */}
           <ul className="flex flex-col gap-2 lg:hidden">
             {sorted.map((row) => (
@@ -367,7 +367,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                 <caption className="sr-only">
                   Clasificación de la liga: puesto, jugador, partidas jugadas,
                   puntos totales con su desglose por victorias y objetivos, elo,
-                  victorias y derrotas, racha y enlace al perfil de AoE4World.
+                  victorias y derrotas y racha. El nombre de cada jugador enlaza
+                  con su perfil de AoE4World.
                 </caption>
                 <thead>
                   <tr>
@@ -426,9 +427,6 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                       onSort={toggleSort}
                       className="w-20"
                     />
-                    <th scope="col" className={`${HEADING} w-20 text-center`}>
-                      Stats
-                    </th>
                   </tr>
                 </thead>
                 {sorted.map((row) => (
@@ -689,27 +687,12 @@ function StandingsRow({
           <span className="text-loss">{row.losses}</span>
         </td>
 
-        <td className={`${CELL} text-center tabular-nums`}>
-          <StreakValue streak={row.streak} />
-        </td>
-
         <td
           className={`${CELL} ${
             objectivesExpanded ? "rounded-tr-lg" : "rounded-r-lg"
-          } text-center`}
+          } text-center tabular-nums`}
         >
-          <a
-            href={row.profileUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs font-medium text-muted underline-offset-4 transition-colors hover:text-accent hover:underline"
-          >
-            Stats
-            <span className="sr-only">
-              {" "}
-              de {row.name} en AoE4World (se abre en una pestaña nueva)
-            </span>
-          </a>
+          <StreakValue streak={row.streak} />
         </td>
       </tr>
 
@@ -850,9 +833,9 @@ function PlayerChips({
 /**
  * Cifras secundarias del jugador por debajo de `lg`.
  *
- * La tarjeta de móvil no tiene las columnas de partidas, elo, victorias-derrotas,
- * racha ni el enlace al perfil, así que esas cifras se leen aquí, en el mismo
- * orden que en la tabla, y no se pierde ningún dato.
+ * La tarjeta de móvil no tiene las columnas de partidas, elo, victorias-derrotas
+ * ni racha, así que esas cifras se leen aquí, en el mismo orden que en la tabla,
+ * y no se pierde ningún dato.
  */
 function CompactStats({ row }: { row: StandingRow }) {
   const league = rankLevelToLeague(row.rankLevel);
@@ -886,25 +869,13 @@ function CompactStats({ row }: { row: StandingRow }) {
       <span className="inline-flex items-center gap-1">
         Racha <StreakValue streak={row.streak} />
       </span>
-      <a
-        href={row.profileUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="font-medium underline-offset-4 transition-colors hover:text-accent hover:underline"
-      >
-        Stats
-        <span className="sr-only">
-          {" "}
-          de {row.name} en AoE4World (se abre en una pestaña nueva)
-        </span>
-      </a>
     </div>
   );
 }
 
 /**
  * Control del desplegable de objetivos: un botón de texto, en el mismo registro
- * discreto que los enlaces de la tabla ("Stats", "Quitar filtros"), con un
+ * discreto que los controles en texto de la tabla ("Quitar filtros"), con un
  * chevron que señala el estado. Se pinta el texto y el icono dentro del mismo
  * botón, así que cualquiera de los dos abre y cierra.
  */
@@ -1018,6 +989,8 @@ function groupObjectives(
  *
  * El segundo se omite cuando no aporta: si aún no se ha sincronizado (`null`) o
  * si coincide con el de display, repetirlo bajo el primero solo añadiría ruido.
+ * Todo el bloque enlaza con el perfil de AoE4World, así que la fila de la tabla
+ * y la tarjeta de móvil comparten el enlace en la propia identidad.
  */
 function PlayerName({ row }: { row: StandingRow }) {
   const officialName =
@@ -1026,22 +999,28 @@ function PlayerName({ row }: { row: StandingRow }) {
       : null;
 
   return (
-    <div className="flex min-w-0 flex-col">
+    <a
+      href={row.profileUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group/name flex min-w-0 flex-col rounded-sm"
+    >
       <span
         title={row.name}
-        className="max-w-[16rem] truncate font-medium text-foreground"
+        className="max-w-[21rem] truncate font-medium text-foreground underline-offset-4 transition-colors group-hover/name:text-accent group-hover/name:underline"
       >
         {row.name}
       </span>
       {officialName !== null ? (
         <span
           title={officialName}
-          className="max-w-[16rem] truncate text-xs text-muted"
+          className="max-w-[21rem] truncate text-xs text-muted underline-offset-4 transition-colors group-hover/name:text-accent group-hover/name:underline"
         >
           {officialName}
         </span>
       ) : null}
-    </div>
+      <span className="sr-only">(se abre en una pestaña nueva)</span>
+    </a>
   );
 }
 
