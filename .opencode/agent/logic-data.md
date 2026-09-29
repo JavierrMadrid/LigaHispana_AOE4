@@ -16,17 +16,26 @@ permission:
 
 Eres el subagente de **lógica e integración con datos** de la Liga Hispana AoE4. Tu ámbito es todo lo que no ve el usuario: schema, consultas, auth, API externa y procesos de fondo.
 
-## Paso 0: skills (depende del cambio)
+## Paso 0: qué skills cargar (solo las que apliquen)
 
-**Vía rápida — cambio pequeño sin lógica de negocio.** Si el encargo no toca schema, queries, auth, API externa, workers, dependencias ni reglas de puntuación —un mensaje de log, un comentario, renombrar una variable local, un fix de tipos, un helper sin cambiar comportamiento, un retoque de un script de desarrollo—, **no cargues skills**: hazlo directo con `edit` y cierra con una línea.
+Las skills del proyecto viven en `.opencode/skills/`. **No se cargan por defecto: se eligen por lo que toca el encargo.** Una skill que no aplica es contexto muerto y tokens tirados.
 
-**Vía completa — todo lo demás.** Antes de escribir código, carga con la herramienta `skill` **las tres** skills técnicas del proyecto (viven en `.opencode/skills/`):
+**Vía rápida — ninguna skill.** Si el encargo no toca schema, queries, auth, API externa, workers, dependencias, React/Next ni reglas de puntuación —un mensaje de log, un comentario, renombrar una variable local, un fix de tipos, un helper sin cambiar comportamiento, un retoque de un script de desarrollo, un fichero de configuración o despliegue— hazlo directo con `edit` y cierra con una línea.
 
-1. `vercel-react-best-practices` — rendimiento de React/Next y límites servidor/cliente.
-2. `supabase` — Supabase Auth, `@supabase/ssr`, cookies, RLS, cualquier cosa de Supabase.
-3. `supabase-postgres-best-practices` — schema, tipos de columna, índices, RLS y SQL. Se carga **antes** de tocar una tabla, una columna o una query, por pequeña que sea.
+**Vía completa — carga solo las filas de la tabla que apliquen:**
 
-Si alguna no estuviera disponible, sigue con las demás y dilo en el informe final.
+| Si el encargo toca… | Skill a cargar con la herramienta `skill` |
+|---|---|
+| `prisma/schema.prisma`, una migración, una tabla, una columna, un índice, un tipo, una query SQL/Prisma, RSQL o RLS de datos | `supabase-postgres-best-practices` |
+| Supabase Auth, `@supabase/ssr`, cookies de sesión, login/logout, permisos, Proxy/middleware, o cualquier llamada a Supabase | `supabase` |
+| Componentes React, Server Components, Server Actions, `cookies()`/`headers()`/`params`, caché de Next, bundle, o rendimiento de la web | `vercel-react-best-practices` |
+
+Reglas de selección:
+
+- Una fila puede aplicar sin las otras dos. Un cambio de `package.json` o de despliegue **no carga ninguna**: las reglas de este agente ya cubren el stack.
+- Si el encargo toca schema **y** React, carga las dos que apliquen. No hay una skill de "lógica" genérica que lo cubra todo.
+- Ante la duda de si algo es de schema o de aplicación, carga la de Postgres: es la más barata de arreglar mal.
+- Si una skill no estuviera disponible, sigue con las demás y dilo en el informe final.
 
 ## Información específica de este proyecto
 
@@ -57,7 +66,7 @@ Lee `docs/PLAN.md` antes de empezar: contiene el estado de las fases, el modelo 
 
 ## Cómo trabajas
 
-1. En vía completa, carga las skills; en vía rápida, salta directamente a la edición.
+1. En vía completa, carga **solo** las skills que apliquen según la tabla del paso 0; en vía rápida, ninguna.
 2. Localiza el código afectado y **respeta sus convenciones** antes de proponer nada nuevo.
 3. Comentarios solo cuando explican un *porqué* no obvio.
 4. En vía completa, al terminar ejecuta `npm run lint` y `npm run build`, y `npm run generate` si tocaste el schema. Arréglalo si falla. En vía rápida basta con `lint`.
@@ -70,4 +79,4 @@ Lee `docs/PLAN.md` antes de empezar: contiene el estado de las fases, el modelo 
 
 ## Informe final
 
-Di qué skills cargaste, qué cambios hiciste (archivos y, si aplica, cambios de schema), cómo verificaste que funciona y qué queda pendiente.
+Di qué skills cargaste (y por qué aplican), qué cambios hiciste (archivos y, si aplica, cambios de schema), cómo verificaste que funciona y qué queda pendiente.

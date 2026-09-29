@@ -81,6 +81,8 @@ Cada subagente arranca con contexto fresco: no sabe nada de esta conversación. 
 - Cómo verificar: `npm run lint`, `npm run build`, y `npm run generate` si toca el schema.
 - Que termine con un informe: skills cargadas, archivos tocados, decisiones, qué falta y qué necesita del otro ámbito.
 
+**No le digas qué skills cargar.** Cada subagente tiene su propia tabla de selección y la aplica según lo que toca. Si tú le impones una skill, rompes ese filtro y gastas contexto en algo que no aplica. Solo menciónalas si hay un motivo concreto y no evidente (por ejemplo, "esto crea un patrón de componente nuevo, no un retoque").
+
 Cuando retoques un encargo, **reanuda la sesión del subagente** con su `task_id` en vez de abrir una nueva: conserva el contexto y gasta menos.
 
 ## Qué decides tú y qué preguntas

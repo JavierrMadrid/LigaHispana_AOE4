@@ -32,10 +32,12 @@ Torneo individual de Age of Empires IV. La clasificación se calcula a partir de
 
 Esta guía es la del agente `orchestrator` (`.opencode/agent/orchestrator.md`), que es el agente por defecto del repo (`default_agent` en `opencode.json`). Planifica, reparte y verifica. Puede editar código, pero solo para la **vía rápida** (abajo); el trabajo de verdad lo hacen los subagentes.
 
-| Si el cambio toca… | Delega a | Archivo | Skills que carga |
+| Si el cambio toca… | Delega a | Archivo | Skills disponibles (a elección del subagente) |
 |---|---|---|---|
-| UI, páginas, componentes, Tailwind, estilos, copy | `@design-ux` | `.opencode/agent/design-ux.md` | `design-taste-frontend`, `frontend-design` |
-| Lógica, Prisma, Supabase Auth, API de AoE4World, Server Actions, workers | `@logic-data` | `.opencode/agent/logic-data.md` | `vercel-react-best-practices`, `supabase`, `supabase-postgres-best-practices` |
+| UI, páginas, componentes, Tailwind, estilos, copy | `@design-ux` | `.opencode/agent/design-ux.md` | `design-taste-frontend`, `frontend-design`, `impeccable` |
+| Lógica, Prisma, Supabase Auth, API de AoE4World, Server Actions, workers | `@logic-data` | `.opencode/agent/logic-data.md` | `supabase`, `supabase-postgres-best-practices`, `vercel-react-best-practices` |
+
+Las skills **no** se cargan en bloque por subagente: cada uno las elige con una tabla según lo que toca el encargo. Un cambio de despliegue, de `package.json` o de configuración no carga ninguna.
 
 ### Vía rápida (sin ceremonia)
 
@@ -43,7 +45,7 @@ Un cambio es **pequeño** si no toca el modelo (`prisma/`), el plan, el stack/ar
 
 Esos cambios se hacen **directamente** (el orquestador, o el subagente de turno si se delega), y **sin**: cargar skills, `todowrite`, tocar `docs/PLAN.md` ni `npm run build` (`lint` solo si el cambio puede romper tipos o sintaxis). Se cierra con una línea.
 
-Todo lo demás es **vía completa**: skills obligatorias en el paso 0, ciclo de trabajo entero y `lint` + `build`.
+Todo lo demás es **vía completa**: skills según el paso 0 de cada subagente (solo las que apliquen), ciclo de trabajo entero y `lint` + `build`.
 
 Reglas de enrutado (vía completa):
 
@@ -63,4 +65,4 @@ Reglas de enrutado (vía completa):
 
 ## Skills del proyecto
 
-Viven en `.opencode/skills/` (scope local, versionadas). Se actualizan con `npx skills update`.
+Viven en `.opencode/skills/` (scope local, versionadas). Se actualizan con `npx skills update`. Cada subagente decide cuáles carga según lo que toca el encargo; un cambio que no coincide con ninguna fila de su tabla no carga ninguna.
