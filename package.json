@@ -22,7 +22,7 @@
     "simulate:clean": "tsx --conditions=react-server scripts/simulate-tournament.ts --clean",
     "brand:assets": "tsx scripts/build-brand-assets.ts",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy --keep-vars",
     "postinstall": "prisma generate"
   },
   "dependencies": {
