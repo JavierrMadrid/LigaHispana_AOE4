@@ -1,5 +1,7 @@
 import "server-only";
 
+import { readRuntimeEnv } from "@/lib/runtime-env";
+
 /**
  * Configuración del cliente de AoE4World.
  *
@@ -7,6 +9,10 @@ import "server-only";
  * proyecto debe funcionar sin configurar nada, pero las cifras que afectan al
  * ritmo de peticiones (intervalo mínimo, reintentos, tamaño de página) se
  * pueden ajustar por entorno para afinar el consumo de la API.
+ *
+ * Las lecturas van por `readRuntimeEnv` (bindings de Cloudflare y `process.env`),
+ * menos `NODE_ENV`: ese no es configuración, es el modo de compilación del bundle
+ * y Next lo sustituye por un literal, así que nunca llega como binding.
  *
  * La única excepción es `AOE4WORLD_MOCK`: no cambia ninguna cifra, solo decide
  * si las peticiones salen a la red o se resuelven con las fixtures locales de
@@ -17,7 +23,7 @@ const DEFAULT_API_BASE = "https://aoe4world.com";
 const DEFAULT_USER_AGENT = "LigaHispanaAOE4/0.1 (sync AoE4World)";
 
 function readPositiveInt(name: string, fallback: number): number {
-  const raw = process.env[name];
+  const raw = readRuntimeEnv(name);
 
   if (raw === undefined || raw.trim() === "") {
     return fallback;
@@ -33,7 +39,7 @@ function readPositiveInt(name: string, fallback: number): number {
 }
 
 function readNonNegativeInt(name: string, fallback: number): number {
-  const raw = process.env[name];
+  const raw = readRuntimeEnv(name);
 
   if (raw === undefined || raw.trim() === "") {
     return fallback;
@@ -49,12 +55,12 @@ function readNonNegativeInt(name: string, fallback: number): number {
 }
 
 function readString(name: string, fallback: string): string {
-  const raw = process.env[name];
+  const raw = readRuntimeEnv(name);
   return raw !== undefined && raw.trim() !== "" ? raw.trim() : fallback;
 }
 
 function readBoolean(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
+  const raw = readRuntimeEnv(name);
 
   if (raw === undefined || raw.trim() === "") {
     return fallback;

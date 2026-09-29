@@ -21,6 +21,8 @@
     "simulate:tournament": "tsx --conditions=react-server scripts/simulate-tournament.ts",
     "simulate:clean": "tsx --conditions=react-server scripts/simulate-tournament.ts --clean",
     "brand:assets": "tsx scripts/build-brand-assets.ts",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -36,6 +38,7 @@
     "server-only": "^0.0.1"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.20.7",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.23.1",
@@ -48,6 +51,7 @@
     "sharp": "^0.35.5",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "^4.143.0"
   }
 }

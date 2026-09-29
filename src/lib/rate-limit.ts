@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto";
 import { headers } from "next/headers";
 
 import { db } from "@/lib/db";
+import { readRuntimeEnv } from "@/lib/runtime-env";
 
 /**
  * Límite de frecuencia para los endpoints públicos y sin sesión. Hoy, el único
@@ -96,7 +97,7 @@ const IPV6_BODY = /^[0-9a-f:.%]+$/i;
 const MAX_IP_LENGTH = 45;
 
 function readPositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
+  const raw = readRuntimeEnv(name);
 
   if (raw === undefined || raw.trim() === "") {
     return fallback;
@@ -177,8 +178,8 @@ export function readClientIp(requestHeaders: Headers): string | null {
  * solo se usa aquí.
  */
 function readSalt(): string {
-  const configured = process.env.RATE_LIMIT_SALT?.trim() ?? "";
-  const cronSecret = process.env.CRON_SECRET?.trim() ?? "";
+  const configured = readRuntimeEnv("RATE_LIMIT_SALT")?.trim() ?? "";
+  const cronSecret = readRuntimeEnv("CRON_SECRET")?.trim() ?? "";
 
   if (configured !== "") {
     return configured;

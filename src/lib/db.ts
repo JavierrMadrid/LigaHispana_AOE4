@@ -2,6 +2,7 @@ import "server-only";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/generated/prisma/client";
+import { readRuntimeEnv } from "@/lib/runtime-env";
 
 /**
  * Cliente de Prisma, **perezoso**.
@@ -23,7 +24,11 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 let porProceso: PrismaClient | undefined;
 
 function createPrismaClient(): PrismaClient {
-  const connectionString = process.env.DATABASE_URL;
+  // Lectura en dos capas (bindings de Cloudflare y `process.env`), y **aquí** y no
+  // al importar el módulo: es lo que mantiene `next build` sin necesitar la
+  // variable, porque en la recapitulación de datos de página no hay petición y no
+  // hay ningún binding al que preguntar.
+  const connectionString = readRuntimeEnv("DATABASE_URL");
 
   if (!connectionString) {
     throw new Error("DATABASE_URL no está definida.");

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { readRuntimeEnv } from "@/lib/runtime-env";
 import { TURNSTILE_RESPONSE_FIELD } from "@/lib/turnstile-contract";
 
 /**
@@ -64,7 +65,7 @@ export type VerifyTurnstileOptions = {
 };
 
 function readSecret(explicit?: string): string {
-  const raw = explicit ?? process.env.TURNSTILE_SECRET_KEY ?? "";
+  const raw = explicit ?? readRuntimeEnv("TURNSTILE_SECRET_KEY") ?? "";
 
   return raw.trim();
 }
@@ -74,7 +75,7 @@ function readTimeoutMs(explicit?: number): number {
     return Math.floor(explicit);
   }
 
-  const raw = process.env.TURNSTILE_TIMEOUT_MS?.trim() ?? "";
+  const raw = readRuntimeEnv("TURNSTILE_TIMEOUT_MS")?.trim() ?? "";
 
   if (raw === "") {
     return DEFAULT_TIMEOUT_MS;

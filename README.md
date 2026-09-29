@@ -50,6 +50,8 @@ Se usa **Supabase** (Postgres cloud). La conexión se define en `.env` (`DATABAS
 
 ### Variables de entorno (`.env`)
 
+> En producción, en el Worker, la lectura es de dos capas (bindings y `process.env`): ver ["Cómo se lee la configuración en el Worker"](#cómo-se-leye-la-configuración-en-el-worker). Las `NEXT_PUBLIC_*` de esta tabla son la excepción y necesitan estar además en *Build variables and secrets*.
+
 | Variable | Uso |
 |---|---|
 | `DATABASE_URL` | Conexión PostgreSQL para Prisma |
@@ -141,6 +143,76 @@ Dos avisos que quedan para cuando se cablee el binding de Hyperdrive:
 - `pg` **no** tiene condición `workerd`: el socket se elige en runtime. Si el bundle saliera sin esa rama, el build pasaría y fallaría luego con `CloudflareSocket is not a constructor` (o `proxy request failed`, si lo que falta es el socket y no la clase). Merece la pena mirar `handler.mjs` una vez, buscando `cloudflare:sockets`.
 - Cloudflare documenta crear un cliente nuevo **por petición** ("create a new `Client` instance for each request"), porque en un Worker una conexión no se puede reutilizar entre invocaciones. `src/lib/db.ts` cachea el cliente por proceso, así que el cableado de Hyperdrive tendrá que tener eso en cuenta.
 
+### Cómo se lee la configuración en el Worker
+
+En un Worker `process.env` **no** es el entorno del proceso. Cloudflare lo dice sin rodeos: *"In the Workers implementation, there is no process-level environment, so by default `env` is an empty object"*, y solo se puebla con los bindings cuando está el flag `nodejs_compat_populate_process_env` (activo por defecto para `compatibility_date` de 2025-04-01 o posterior) — [docs de Cloudflare](https://developers.cloudflare.com/workers/runtime-apis/nodejs/process/#processenv). Por su parte, `@opennextjs/cloudflare` copia también a `process.env` las entradas de texto del `env` que recibe el `fetch`, en la primera invocación del isolate ([`populateProcessEnv`](https://github.com/opennextjs/opennextjs-cloudflare/blob/main/packages/cloudflare/src/cli/templates/init.ts)).
+
+Ese doble camino es frágil: si no ocurre, la variable está en el panel y `process.env` sale sin ella, y la app cree que no está configurada. Ya pasó aquí: con `DATABASE_URL`, `CRON_SECRET`, `RATE_LIMIT_SALT` y `TURNSTILE_SECRET_KEY` definidos en el panel, el Worker desplegado no veía ninguna, y lo observable era `DATABASE_URL no está definida.`, el captcha desactivado en silencio y el cron sin poder autenticarse.
+
+Por eso **toda lectura de configuración del servidor pasa por `src/lib/runtime-env.ts`**, que lee **los bindings de Cloudflare primero y `process.env` como reserva**:
+
+```ts
+import { readRuntimeEnv } from "@/lib/runtime-env";
+
+const secret = readRuntimeEnv("CRON_SECRET");
+```
+
+- **Sin condicionales por entorno.** Donde no hay Worker no hay bindings y sale `process.env`: en local (Node y `.env`), en los scripts de `scripts/` y en cualquier otro hosting sigue funcionando igual que antes.
+- **El módulo no importa nada**: ni `@opennextjs/cloudflare`, ni `server-only`. Lee el símbolo global `__cloudflare-context__` que publica el entrypoint del Worker, que es literalmente lo que devuelve `getCloudflareContext()`. Así no hace falta declarar `@opennextjs/cloudflare` como dependencia de producción —lleva `wrangler` y `next` como *peer dependencies* que `npm` instalaría, cambiando lo que Cloudflare construye— ni tocar `next.config.ts`, que es justo el fichero que decide cómo se detecta y se construye el proyecto.
+- **`src/lib/db.ts` sigue siendo perezoso.** La lectura sigue estando en la primera llamada, no al importar, así que `next build` continúa sin necesitar `DATABASE_URL`.
+
+**Lo que no pasa por ahí, y por qué:**
+
+- **`NEXT_PUBLIC_*`** (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `NEXT_PUBLIC_SITE_URL`). Next las sustituye por un literal al compilar, y solo lo hace con la forma **estática** `process.env.NEXT_PUBLIC_ALGO`: un acceso por nombre dinámico no se sustituye y en el cliente valdría `undefined` (*"dynamic lookups will not be inlined"*, [docs de Next](https://nextjs.org/docs/app/guides/environment-variables#bundling-environment-variables-for-the-browser)). Un binding del Worker no puede llegar al bundle del navegador de ninguna manera. Consecuencia práctica: definirlas **también en *Build variables and secrets***, que es lo que hace que existan cuando `next build` compila ([OpenNext, env vars](https://opennext.js.org/cloudflare/howtos/env-vars#workers-builds)); en runtime quedan de adorno para el servidor.
+- **`NODE_ENV`.** No es configuración: Next lo sustituye por un literal (`production` en build) y no existe como binding.
+
+#### Cómo comprobar que funciona
+
+`GET /api/debug-env` es una ruta **temporal de diagnóstico**, y hay que **borrarla al cerrar este arreglo**. No devuelve ningún valor, solo nombres y booleanos:
+
+| Campo | Qué dice |
+|---|---|
+| `bindings` | Nombres de los bindings que ve el Worker |
+| `processEnvKeys` | Nombres de lo que hay en `process.env` |
+| `env.<VARIABLE>.source` | `"binding"`, `"process"` o `null`: de dónde sale el valor que usa la app |
+| `env.<VARIABLE>.inBinding` / `.inProcessEnv` | En qué capa está cada variable |
+| `db` | Si la consulta a la base funciona, y el error si no |
+
+Los tres casos, y qué hacer en cada uno:
+
+1. **`bindings` trae `DATABASE_URL`** → el arreglo funciona. Da igual que `inProcessEnv` sea `false`: la app lee los bindings. Con eso, `db.ok = true` y el resto de la app en pie.
+2. **`bindings` está vacío o sin las variables** → el binding no ha llegado al Worker. Ningún cambio de código lo arregla; es configuración de despliegue (ver más abajo).
+3. **`bindings` las trae y `inProcessEnv` también** → `populateProcessEnv` funcionó y todo va por el camino antiguo. También es correcto.
+
+#### Si los bindings no llegan al Worker (caso 2)
+
+Ningún cambio de código lo arregla: es configuración de despliegue. El siguiente paso es **versionar un `wrangler.jsonc` en el repo**, que es donde se declaran el nombre del Worker, la fecha de compatibilidad y los bindings. El que usa hoy lo genera `@opennextjs/cloudflare` desde su plantilla (`node_modules/@opennextjs/cloudflare/templates/wrangler.jsonc` una vez instalado el paquete), y sale así:
+
+```jsonc
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "<WORKER_NAME>",                  // el nombre exacto del Worker del panel
+  "compatibility_date": "<COMPATIBILITY_DATE>",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [
+    { "binding": "WORKER_SELF_REFERENCE", "service": "<WORKER_NAME>" }
+  ],
+  "r2_buckets": [
+    { "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "<WORKER_NAME>-opennext-cache" }
+  ],
+  "images": { "binding": "IMAGES" }
+}
+```
+
+Lo que hay que tener delante al escribirlo:
+
+- **`name` tiene que ser el Worker donde están las variables.** Si no coincide, se despliega a otro Worker, sin bindings, y todo lo anterior pasa desapercibido porque la app responde igual. Es la primera causa que hay que descartar.
+- **`compatibility_date` de 2025-04-01 o posterior** activa `nodejs_compat_populate_process_env`. La que genera la CLI sale del último `workerd` de npm, así que hoy ya es moderna; bajarla a una anterior desactivaría el relleno de `process.env` y solo se vería en los bindings.
+- **Los secretos no van aquí.** Se siguen poniendo en el panel (Settings → Variables and Secrets) y se despliega con `npx wrangler deploy --keep-vars`. Solo las *vars* de texto que Next u OpenNext necesitan en build (p. ej. `NEXTJS_ENV`) van en el archivo.
+- Para **ver el `compatibility_date` y el `name` que se están usando hoy** sin desplegar: `npx wrangler deploy --dry-run` imprime a qué Worker y con qué configuración sube, y falla si el archivo no cuadra con lo que hay en `.open-next`.
+
 ### La base de datos en el Worker: Hyperdrive
 
 En un Worker una conexión TCP solo vive durante la invocación que la abre. Sin nada por medio, cada petición paga el establecimiento completo de la conexión contra la base de datos (handshake TCP, negociación TLS y autenticación: 7 viajes de ida y vuelta antes de poder ejecutar la primera consulta) y la base ve una conexión nueva por petición. **Hyperdrive** es la pieza que Cloudflare pone delante de la base de datos para resolverlo: hace el establecimiento en el edge, junto al Worker, y mantiene un *pool* de conexiones reales cerca de la base de datos, además de cachear lecturas. Es la vía documentada y recomendada para Postgres desde un Worker, y la que usan los ejemplos de Cloudflare con `pg`.
@@ -154,9 +226,9 @@ En un Worker una conexión TCP solo vive durante la invocación que la abre. Sin
 
 El proyecto ya está en el plan **Free**, que incluye **100.000 consultas al día** a Hyperdrive (contadas a las 00:00 UTC: cualquier `SELECT`, `INSERT`, `UPDATE`, `DELETE` o cambio de esquema, cacheada o no). El *pooling* y la caché no se cobran aparte.
 
-**Aviso importante sobre cómo se lee la cadena.** La cadena de conexión de Hyperdrive **no** es una URL que se pueda copiar y pegar en una variable de entorno: solo existe en tiempo de ejecución, en `env.HYPERDRIVE.connectionString`, y se obtiene del *binding* Hyperdrive. Por eso **no hay ningún valor correcto para `DATABASE_URL` en Cloudflare**: la cadena directa de Supabase funciona desde un Worker (el socket TCP no está bloqueado; solo lo están el puerto 25 y las IPs privadas o de Cloudflare), pero paga el establecimiento completo en cada petición, y la de Hyperdrive no existe hasta que hay un binding. `src/lib/db.ts` sigue leyendo `process.env.DATABASE_URL` y **aún no está cableado** para leer el binding: ese es el paso que queda pendiente, y no se puede resolver solo desde el panel.
+**Aviso importante sobre cómo se lee la cadena.** La cadena de conexión de Hyperdrive **no** es una URL que se pueda copiar y pegar en una variable de entorno: solo existe en tiempo de ejecución, en `env.HYPERDRIVE.connectionString`, y se obtiene del *binding* Hyperdrive. Por eso **no hay ningún valor correcto para `DATABASE_URL` en Cloudflare**: la cadena directa de Supabase funciona desde un Worker (el socket TCP no está bloqueado; solo lo están el puerto 25 y las IPs privadas o de Cloudflare), pero paga el establecimiento completo en cada petición, y la de Hyperdrive no existe hasta que hay un binding. `src/lib/db.ts` lee `DATABASE_URL` por [`readRuntimeEnv`](#cómo-se-leye-la-configuración-en-el-worker), así que ya admite un binding: cuando exista el de Hyperdrive, el cableado es añadirlo a esa lectura (y dejar de cachear el cliente entre peticiones, porque en un Worker una conexión no se reutiliza entre invocaciones). Hoy, sin Hyperdrive, la cadena tiene que venir del panel.
 
-El resto de variables (`NEXT_PUBLIC_SUPABASE_*`, `TURNSTILE_SECRET_KEY`, `CRON_SECRET`, …) se define en el panel del Worker (Settings → Variables and Secrets), o como *build variables and secrets* si el build las necesita. OpenNext recomienda desplegar con `--keep-vars` para que un despliegue no borre las variables que están en el panel.
+El resto de variables (`NEXT_PUBLIC_SUPABASE_*`, `TURNSTILE_SECRET_KEY`, `CRON_SECRET`, …) se define en el panel del Worker (Settings → Variables and Secrets), y además en *Build variables and secrets* las que sean `NEXT_PUBLIC_*`, porque Next las compila dentro del bundle. OpenNext recomienda desplegar con `--keep-vars` para que un despliegue no borre las variables que están en el panel.
 
 ## Inscripción pública
 

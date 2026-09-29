@@ -1,0 +1,31 @@
+{
+  // Configuracion de OpenNext para Workers, versionada a proposito.
+  //
+  // Sin este archivo, `@opennextjs/cloudflare` lo genera durante el build y su
+  // contenido se pierde en cada despliegue: las variables y secretos que esten
+  // en el panel dejan de viajar al Worker, porque `wrangler deploy` reconstruye
+  // el Worker solo con lo que trae este archivo. Versionarlo hace que el
+  // despliegue sea reproducible y que las variables del panel sobrevivan.
+  //
+  // Plantilla oficial: https://opennext.js.org/cloudflare/get-started
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "main": ".open-next/worker.js",
+  "name": "ligahispana-aoe4",
+  // Requisito de @opennextjs/cloudflare: 2024-09-23 o posterior para nodejs_compat.
+  "compatibility_date": "2025-03-25",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      // La autoreferencia debe usar el mismo nombre que el Worker.
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "ligahispana-aoe4"
+    }
+  ],
+  "images": {
+    "binding": "IMAGES"
+  }
+}

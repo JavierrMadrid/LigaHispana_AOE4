@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# opennext (salida del build del Worker)
+/.open-next/
+
 # production
 /build
 

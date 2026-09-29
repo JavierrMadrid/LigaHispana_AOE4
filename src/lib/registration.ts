@@ -3,6 +3,7 @@ import "server-only";
 import { createAoe4WorldClient, type Aoe4WorldClient } from "@/lib/aoe4world/client";
 import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 import type { Aoe4WorldPlayer } from "@/lib/aoe4world/types";
+import { readRuntimeEnv } from "@/lib/runtime-env";
 
 /**
  * Comprobación de que un `profileId` existe de verdad en AoE4World, para la
@@ -58,7 +59,7 @@ export type ProfileCheckOptions = {
  * respuesta correcta.
  */
 function readProfileTimeoutMs(): number {
-  const raw = process.env.REGISTRATION_PROFILE_TIMEOUT_MS?.trim() ?? "";
+  const raw = readRuntimeEnv("REGISTRATION_PROFILE_TIMEOUT_MS")?.trim() ?? "";
 
   if (raw === "") {
     return DEFAULT_PROFILE_TIMEOUT_MS;

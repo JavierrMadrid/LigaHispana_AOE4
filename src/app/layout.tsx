@@ -31,6 +31,10 @@ const cinzel = Cinzel({
 //      en tiempo de build, sin protocolo; se usa también en los despliegues de
 //      rama para que las tarjetas sociales apunten siempre a producción.
 //   3. `http://localhost:3000`: fallback de desarrollo local.
+//
+// Se evalúa al importar el módulo, o sea en `next build`: son variables de build
+// (`NEXT_PUBLIC_*` las sustituye Next por un literal), no de runtime, así que aquí
+// no tiene sentido mirar los bindings del Worker.
 function getSiteUrl(): URL {
   const configured = process.env.NEXT_PUBLIC_SITE_URL;
   if (configured) return new URL(configured);

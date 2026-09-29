@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { readAuthenticatedUser } from "@/lib/auth";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
+import { readRuntimeEnv } from "@/lib/runtime-env";
 
 /**
  * Punto de entrada del worker de sincronización.
@@ -26,7 +27,7 @@ function safeEquals(a: string, b: string): boolean {
 
 /** `Authorization: Bearer <CRON_SECRET>`. Si no hay secreto configurado, nunca se acepta. */
 function hasValidCronSecret(request: Request): boolean {
-  const secret = process.env.CRON_SECRET;
+  const secret = readRuntimeEnv("CRON_SECRET");
 
   if (secret === undefined || secret === "") {
     return false;
