@@ -108,7 +108,13 @@ export async function readAuthUser(
     const { data, error } = await Promise.race([supabase.auth.getUser(), timeout]);
 
     if (error) {
-      logAuthFailure(scope, error);
+      // "No hay sesion" no es un fallo: es el caso normal de quien entra sin
+      // haber iniciado sesion, y ocurre en cada visita anonima a `/login` y a
+      // `/admin`. Registrarlo como error llenaria el log de ruido y taparia los
+      // fallos de verdad, que son los que interesa ver con el prefijo `[auth]`.
+      if (error.name !== "AuthSessionMissingError") {
+        logAuthFailure(scope, error);
+      }
 
       return null;
     }
