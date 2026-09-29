@@ -8,23 +8,26 @@ import Link from "next/link";
  * llamada no cambia de aspecto en su propia página (el formulario que encuentra
  * allí ya da el contexto) y así la cabecera se queda sin JavaScript.
  *
- * El tratamiento es texto más sello, no placa: la etiqueta anuncia la acción en
- * marfil y el icono la respalda dentro de un aro dorado. Así sigue siendo la
- * acción principal, pero el oro vuelve a ser filete y no relleno, como manda el
- * dialecto del sitio (la elevación se declara con filete o con relleno, nunca
- * con los dos). El aro se enciende al pasar el ratón, y el enlace entero es la
- * zona pulsable, de modo que texto e icono llevan al mismo sitio.
+ * El tratamiento es una cinta de oro relleno: la etiqueta anuncia la acción en
+ * tinta oscura (`--accent-ink`), no en oro, para que el texto no quede en oro
+ * sobre oro, y el icono viaja dentro de la misma cinta. El relleno es el
+ * mismo de los demás controles primarios del sitio (entrar, filtros activos),
+ * así que el dialecto se mantiene: la elevación se declara con relleno y sin
+ * filete. A partir de `xl` —cuando marca, navegación y CTA comparten una sola
+ * fila— la cinta abandona el radio y se estira todo el alto de la barra, de modo
+ * que la cabecera se cierra en oro; por debajo de `xl` la navegación baja a su
+ * propia fila y la cinta vuelve a ser un control redondeado de alto propio. El
+ * enlace entero es la zona pulsable, y el foco se dibuja por dentro en tinta
+ * oscura para seguir viéndose sobre el oro.
  */
 export function ParticipateCta() {
   return (
     <Link
       href="/participar"
-      className="group inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap text-sm font-medium text-foreground transition-colors hover:text-accent active:translate-y-px"
+      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md bg-accent px-4 py-2.5 text-sm font-medium text-accent-ink transition-colors hover:bg-accent-strong focus-visible:outline-accent-ink focus-visible:-outline-offset-2 xl:-my-3 xl:self-stretch xl:rounded-none xl:py-0"
     >
       Inscríbete
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-accent/40 text-accent transition-colors group-hover:border-accent/70 group-hover:bg-accent/10 group-hover:text-accent-strong">
-        <RegistrationIcon className="size-5" />
-      </span>
+      <RegistrationIcon className="size-5 shrink-0" />
     </Link>
   );
 }

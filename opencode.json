@@ -1,4 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "default_agent": "orchestrator"
+  "default_agent": "orchestrator",
+  "mcp": {
+    "cloudflare-observability": {
+      "type": "remote",
+      "url": "https://observability.mcp.cloudflare.com/mcp",
+      "oauth": {},
+      "enabled": true
+    }
+  }
 }

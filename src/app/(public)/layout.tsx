@@ -52,7 +52,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             </span>
           </Link>
 
-          <div className="col-start-2 row-start-1 justify-self-end xl:col-start-3">
+          <div className="col-start-2 row-start-1 flex justify-self-end xl:col-start-3 xl:self-stretch">
             <ParticipateCta />
           </div>
 
