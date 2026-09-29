@@ -1,15 +1,21 @@
 name: Sincronización AoE4World
 
-# Cron externo del worker (ver README, "Cadencia recomendada").
-# Llama a `GET/POST /api/cron/sync` cada 5 minutos con `Authorization: Bearer`.
+# Disparo manual del sync del worker (ver README, "Cadencia recomendada").
+#
+# La cadencia de verdad la lleva el **Cron Trigger nativo** de Cloudflare
+# (`triggers.crons` en `wrangler.jsonc`), no esto. Antes era un `schedule` de
+# GitHub, y se quito porque GitHub no lo cumple: documenta que los workflows
+# programados se retrasan, y con `*/5` el intervalo real era de varias horas.
+# Dejarlo puesto ademas de el de Cloudflare haria dos syncs a la vez de vez en
+# cuando, que es lo que este workflow evita con su `concurrency`.
+#
+# Queda como boton de emergencia para lanzar una pasada sin esperar al cron.
+# Llama a `GET/POST /api/cron/sync` con `Authorization: Bearer`.
 # Necesita, en el repositorio:
 #   - variable `SITE_URL` (Settings > Secrets and variables > Actions > Variables)
 #   - secreto `CRON_SECRET` (mismo sitio, pestaña Secrets)
-# `workflow_dispatch` permite lanzarlo a mano desde la pestaña Actions.
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 # Si una pasada tarda más que el intervalo, la siguiente espera en vez de solaparse.
