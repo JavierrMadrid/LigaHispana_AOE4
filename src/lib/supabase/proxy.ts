@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
-import type { User } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseEnv } from "./env";
+import { createAuthFetch, readAuthUser } from "./session";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -9,6 +9,7 @@ export async function updateSession(request: NextRequest) {
   const { url, key } = getSupabaseEnv();
 
   const supabase = createServerClient(url, key, {
+    global: { fetch: createAuthFetch() },
     cookies: {
       getAll() {
         return request.cookies.getAll();
@@ -31,9 +32,10 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // `null` significa tanto "no hay sesión" como "no se ha podido comprobar".
+  // Para este archivo es lo mismo: quien decide qué hacer con esa ausencia es
+  // `src/proxy.ts`, y en ambos casos su respuesta es proteger o redirigir.
+  const user = await readAuthUser("proxy", supabase);
 
-  return { supabaseResponse, user: user as User | null };
+  return { supabaseResponse, user };
 }
