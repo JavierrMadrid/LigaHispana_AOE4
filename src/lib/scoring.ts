@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { MatchResult, PlayerStatus } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
+import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { isRecord } from "@/lib/json";
 import {
   OBJECTIVE_POINTS,
@@ -413,8 +414,17 @@ function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode
  * `window` se publica para que `/reglas` y `/objetivos` puedan decir qué periodo
  * cuenta, sin que el copy de la interfaz tenga que escribir fechas a mano que
  * acabarían mintiendo el día que se cambien en `Setting`.
+ *
+ * Con la base de datos caída devuelve `{ status: "degraded", data: null }`: los
+ * 37 objetivos existen siempre (es el catálogo), pero **quién posee cada uno**
+ * solo existe en la base, y publicar una tabla de objetivos sin poseedores
+ * serían los 37 sin dueño, que no es lo que hay.
  */
-export async function getObjectives(): Promise<ObjectiveView> {
+export async function getObjectives(): Promise<PublicRead<ObjectiveView>> {
+  return readFromDatabase("public/getObjectives", loadObjectives);
+}
+
+async function loadObjectives(): Promise<ObjectiveView> {
   const ruleset = await readRuleset();
   const players = await loadObjectivePlayers(db, ruleset);
   const { options } = computeObjectives(players, ruleset);

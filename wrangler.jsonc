@@ -27,5 +27,60 @@
   ],
   "images": {
     "binding": "IMAGES"
-  }
+  },
+  // Hyperdrive, commented a proposito hasta que exista la configuracion.
+  //
+  // Por que esta aqui y no activo: `wrangler deploy` manda el `id` de este bloque
+  // a la API de Cloudflare como parte de los bindings del Worker, asi que un `id`
+  // que no exista hace fallar el despliegue entero. Y en `wrangler dev` (que es lo
+  // que usa `npm run preview`) un binding de Hyperdrive sin `localConnectionString`
+  // tampoco arranca. Ningun despliegue puede romperse por añadir un bloque de
+  // configuracion progresiva que todavia no se ha creado en el panel.
+  //
+  // Que hay que hacer, en este orden:
+  //   1. Crear la configuracion en Workers & Pages -> Hyperdrive -> Create
+  //      configuration, con la cadena DIRECTA de Supabase (db.<ref>.supabase.co,
+  //      puerto 5432) y sin `?sslmode=require`: el TLS lo termina Hyperdrive. Ojo:
+  //      al reves que en el `.env` local, donde hace falta el Session pooler
+  //      porque la directa es solo IPv6.
+  //   2. Copiar aqui el `id` que devuelve el panel, y descomentar el bloque.
+  //   3. Desplegar con `npx wrangler deploy --keep-vars`, para no perder las
+  //      variables del panel.
+  //
+  // Mientras tanto el codigo funciona igual: `src/lib/db.ts` lee el binding si
+  // existe y cae a `DATABASE_URL` si no, que es lo que necesitan `next dev` y
+  // los scripts de `scripts/`. Ver README.md, "La base de datos en el Worker".
+  // "hyperdrive": [
+  //   {
+  //     "binding": "HYPERDRIVE",
+  //     "id": "<ID_DE_LA_CONFIGURACION_DE_HYPERDRIVE>"
+  //   }
+  // ],
+  // Workers Logs (observabilidad), en este archivo por el mismo motivo que el
+  // comentario de arriba: `wrangler deploy` reconstruye el Worker solo con lo
+  // que trae este archivo, asi que si el bloque `observability` no esta aqui,
+  // el Worker se vuelve a desplegar sin trazas y el problema se repite en cada
+  // despliegue.
+  //
+  // Sin este bloque, `/`, `/partidas` y `/objetivos` fallan con frecuencia y no
+  // hay forma de saber por que: son las paginas que leen de Postgres, asi que
+  // hace falta el error del servidor, no el del navegador.
+  //
+  // `head_sampling_rate: 1` (el maximo) porque el trafico del torneo es bajo:
+  // sin muestreo se guarda cada peticion y no queda ningun fallo fuera, que es
+  // justo lo que se necesita para diagnosticar. Si algun dia el trafico sube,
+  // bajarlo es un numero aqui y un redespliegue.
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    }
+  },
 }

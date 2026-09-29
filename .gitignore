@@ -20,6 +20,9 @@
 # opennext (salida del build del Worker)
 /.open-next/
 
+# cache local de wrangler (wrangler dev / npm run preview)
+/.wrangler/
+
 # production
 /build
 

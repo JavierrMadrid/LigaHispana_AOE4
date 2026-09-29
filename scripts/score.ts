@@ -1,5 +1,6 @@
 import "dotenv/config";
 
+import { unwrapRead } from "@/lib/db-errors";
 import { getStandings } from "@/lib/public";
 import { RULE_LABEL, recomputeScores } from "@/lib/scoring";
 
@@ -33,7 +34,10 @@ async function main(): Promise<void> {
   console.log(`Duración: ${result.durationMs} ms`);
   console.log("");
 
-  const standings = await getStandings();
+  // `unwrapRead` y no el dato pelado: una herramienta de terminal tiene que
+  // abortar si la base de datos no responde, no imprimir una clasificación vacía
+  // como si el torneo no tuviera jugadores.
+  const standings = unwrapRead(await getStandings(), "score");
 
   if (standings.length === 0) {
     console.log("Todavía no hay jugadores aprobados con partidas clasificatorias resueltas.");

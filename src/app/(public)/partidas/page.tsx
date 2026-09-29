@@ -15,7 +15,13 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function LiveMatchesPage() {
-  const matches = await getLiveMatches();
+  const read = await getLiveMatches();
+
+  // `data` es `null` cuando la base de datos no ha podido leer, y no una lista
+  // vacía: un vacío se leería como "ninguna partida en juego ahora mismo", que
+  // es justo lo que no sabemos. El estado degradado lo pinta la interfaz.
+  const degraded = read.status === "degraded";
+  const matches = read.data ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -34,7 +40,12 @@ export default async function LiveMatchesPage() {
         }
       />
 
-      {matches.length === 0 ? (
+      {degraded ? (
+        <EmptyState
+          title="No se han podido cargar las partidas"
+          body="La base de datos no ha respondido, así que no se sabe si hay partidas en juego. No es lo mismo que no haber ninguna. Vuelve a cargar la página en unos minutos."
+        />
+      ) : matches.length === 0 ? (
         <EmptyState
           title="Ninguna partida en juego ahora mismo"
           body="No significa que la liga esté parada: significa que en este momento ningún jugador de la liga tiene una partida de ranked en juego. En cuanto alguien juegue una, aparecerá aquí sola."

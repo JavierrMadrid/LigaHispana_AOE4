@@ -12,6 +12,10 @@ type EmptyStateProps = {
  * No es un texto suelto: es un bloque con la misma caja que el resto del sitio que
  * explica qué falta y por qué, y siempre ofrece el siguiente paso. En las páginas
  * de datos "no hay nada" suele ser la primera impresión, no un error.
+ *
+ * También cubre el caso en que la base de datos no responde: es la misma caja,
+ * pero con un texto que distingue "no hay datos" de "no se han podido leer", que
+ * para quien mira la página son cosas distintas.
  */
 export function EmptyState({ title, body, action }: EmptyStateProps) {
   return (

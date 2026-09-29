@@ -4,6 +4,7 @@ import { createAoe4WorldClient } from "@/lib/aoe4world/client";
 import { getAoe4WorldConfig } from "@/lib/aoe4world/env";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { db } from "@/lib/db";
+import { unwrapRead } from "@/lib/db-errors";
 import { DIVISIONS } from "@/lib/divisions";
 import { getLiveMatches, getStandings } from "@/lib/public";
 import { SCORING_LAST_RUN_KEY } from "@/lib/settings";
@@ -287,7 +288,7 @@ async function runSimulation(argv: string[]): Promise<void> {
   console.log("");
   console.log("--- 5. Comprobación de lo que ve la web ---");
 
-  const [standings, liveMatches, matches, lastRun] = await Promise.all([
+  const [standingsRead, liveMatchesRead, matches, lastRun] = await Promise.all([
     getStandings(),
     // El DAL tal cual lo usa `/partidas`, no una consulta equivalente: lo que se
     // comprueba es lo que vería un lector.
@@ -295,6 +296,11 @@ async function runSimulation(argv: string[]): Promise<void> {
     db.match.count({ where: { player: { profileId: { in: profileIds } } } }),
     db.setting.findUnique({ where: { key: SCORING_LAST_RUN_KEY } }),
   ]);
+
+  // Comprobación de lo que ve la web: si la base no ha podido leer, esto tiene que
+  // abortar en vez de "verificar" contra una clasificación vacía.
+  const standings = unwrapRead(standingsRead, "simulate:tournament");
+  const liveMatches = unwrapRead(liveMatchesRead, "simulate:tournament");
 
   const simulated = standings.filter((row) => profileIds.includes(row.profileId));
 

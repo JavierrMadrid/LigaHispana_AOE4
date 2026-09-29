@@ -46,9 +46,22 @@ const CLOUDFLARE_CONTEXT_SYMBOL: unique symbol = Symbol.for("__cloudflare-contex
 /** Los *bindings* del Worker: texto, JSON y objetos de la plataforma (KV, R2, D1…). */
 type CloudflareBindings = Record<string, unknown>;
 
+/**
+ * La parte de `ctx` (el `ExecutionContext` del Worker) que se usa aquí.
+ *
+ * Existe porque `ctx.waitUntil` es la primitiva que alarga la invocación: lo que
+ * se le pasa se ejecuta antes de que el runtime dé por terminada la petición. Es
+ * lo que permite cerrar el *pool* de Postgres al final de la invocación sin
+ * depender de Next.
+ */
+type CloudflareExecutionContext = {
+  waitUntil(promise: Promise<unknown>): void;
+};
+
 /** La parte de `getCloudflareContext()` que se usa aquí. */
-type CloudflareRequestContext = {
+export type CloudflareRequestContext = {
   readonly env?: CloudflareBindings;
+  readonly ctx?: CloudflareExecutionContext;
 };
 
 /**
@@ -61,16 +74,6 @@ type GlobalWithCloudflareContext = {
   [key: symbol]: CloudflareRequestContext | undefined;
 };
 
-/** De dónde ha salido el valor que se está usando. */
-export type RuntimeEnvSource = "binding" | "process";
-
-export type RuntimeEnvLookup = {
-  /** El valor, o `undefined` si no está en ninguna de las dos capas. */
-  value: string | undefined;
-  /** La capa de la que sale, o `null` si no está en ninguna. */
-  source: RuntimeEnvSource | null;
-};
-
 function cloudflareBindings(): CloudflareBindings | undefined {
   const context = (globalThis as unknown as GlobalWithCloudflareContext)[CLOUDFLARE_CONTEXT_SYMBOL];
   const env = context?.env;
@@ -79,9 +82,31 @@ function cloudflareBindings(): CloudflareBindings | undefined {
 }
 
 /**
+ * Contexto de la invocación de Cloudflare en curso, o `undefined` si no estamos
+ * dentro de un Worker.
+ *
+ * Es la lectura del **mismo** símbolo global que usa `getCloudflareContext()`,
+ * hecha sin importarlo, y por eso devuelve `undefined` en lugar de lanzar:
+ * `getCloudflareContext()` lanza cuando no hay contexto, y aquí `undefined` es
+ * justo la respuesta que se necesita para distinguir "Worker" de "Node".
+ *
+ * Sirve además de **identidad de la invocación**: el *entrypoint* del Worker
+ * crea un objeto de contexto nuevo en cada petición
+ * (`runWithCloudflareRequestContext`), así que la identidad del objeto es la de
+ * la petición, y `src/lib/db.ts` la usa como clave de un `WeakMap` para tener un
+ * cliente de Prisma por petición sin retener nada entre invocaciones.
+ */
+export function readCloudflareContext(): CloudflareRequestContext | undefined {
+  return (globalThis as unknown as GlobalWithCloudflareContext)[CLOUDFLARE_CONTEXT_SYMBOL];
+}
+
+/**
+ * Un binding de texto no vacío, o `undefined`.
+ *
  * Un binding vacío equivale a "no configurado": se cae a `process.env` en vez de
  * tapar con una cadena vacía lo que haya debajo. Los *bindings* no-texto (KV, R2,
- * Durable Objects…) tampoco sirven aquí, y se ignoran por el mismo `typeof`.
+ * Hyperdrive, Durable Objects…) tampoco sirven aquí, y se ignoran por el mismo
+ * `typeof`.
  */
 function bindingValue(name: string): string | undefined {
   const value = cloudflareBindings()?.[name];
@@ -90,23 +115,31 @@ function bindingValue(name: string): string | undefined {
 }
 
 /**
- * Resuelve una variable y dice de qué capa sale. Pensado para diagnóstico
- * (`/api/debug-env`), donde hace falta distinguir "está en el panel" de "llega".
+ * El binding de Hyperdrive, que no es un binding de texto.
+ *
+ * `env.HYPERDRIVE` es un **objeto** con la cadena de conexión ya montada, y esa
+ * cadena solo existe en runtime: no se puede copiar en una variable de entorno
+ * ni en el panel, sale del propio binding. Por eso no se lee con
+ * `readRuntimeEnv`, que descarta lo que no sea texto a propósito, y por eso
+ * tiene su propia función.
  */
-export function lookupRuntimeEnv(name: string): RuntimeEnvLookup {
-  const fromBinding = bindingValue(name);
+type HyperdriveBinding = { readonly connectionString?: unknown };
 
-  if (fromBinding !== undefined) {
-    return { value: fromBinding, source: "binding" };
+/**
+ * Cadena de conexión del binding de Hyperdrive, o `undefined` si el Worker no lo
+ * tiene. Es la ruta de configuración progresiva: sin el binding se sigue usando
+ * `DATABASE_URL`, que es lo que necesitan `next dev` y los scripts de `scripts/`.
+ */
+export function readHyperdriveConnectionString(): string | undefined {
+  const hyperdrive = cloudflareBindings()?.HYPERDRIVE as HyperdriveBinding | undefined;
+
+  if (typeof hyperdrive !== "object" || hyperdrive === null) {
+    return undefined;
   }
 
-  const fromProcess: string | undefined = process.env[name];
+  const { connectionString } = hyperdrive;
 
-  if (fromProcess !== undefined) {
-    return { value: fromProcess, source: "process" };
-  }
-
-  return { value: undefined, source: null };
+  return typeof connectionString === "string" && connectionString !== "" ? connectionString : undefined;
 }
 
 /**
@@ -115,12 +148,4 @@ export function lookupRuntimeEnv(name: string): RuntimeEnvLookup {
  */
 export function readRuntimeEnv(name: string): string | undefined {
   return bindingValue(name) ?? process.env[name];
-}
-
-/**
- * Nombres de los *bindings* presentes en el contexto de Cloudflare. Solo para
- * diagnóstico: devuelve claves, nunca valores.
- */
-export function listRuntimeBindings(): string[] {
-  return Object.keys(cloudflareBindings() ?? {}).sort();
 }

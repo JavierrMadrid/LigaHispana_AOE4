@@ -142,16 +142,16 @@ node <temp>\pgcf-repro\runtime-check.mjs <temp>\pgcf-repro\opennext-traced
 
 Dos avisos que quedan para cuando se cablee el binding de Hyperdrive:
 
-- `pg` **no** tiene condición `workerd`: el socket se elige en runtime. Si el bundle saliera sin esa rama, el build pasaría y fallaría luego con `CloudflareSocket is not a constructor` (o `proxy request failed`, si lo que falta es el socket y no la clase). Merece la pena mirar `handler.mjs` una vez, buscando `cloudflare:sockets`.
-- Cloudflare documenta crear un cliente nuevo **por petición** ("create a new `Client` instance for each request"), porque en un Worker una conexión no se puede reutilizar entre invocaciones. `src/lib/db.ts` cachea el cliente por proceso, así que el cableado de Hyperdrive tendrá que tener eso en cuenta.
+- `pg` **no** tiene condición `workerd`: el socket se elige en runtime. Si el bundle saliera sin esa rama, el build pasaría y fallaría luego con `CloudflareSocket is not a constructor` (o `proxy request failed`, si lo que falta es el socket y no la clase). **Comprobado**: `.open-next/server-functions/default/handler.mjs` trae `cloudflare:sockets`, así que la rama de `workerd` sí está empaquetada.
+- Cloudflare documenta crear un cliente nuevo **por petición** ("create a new `Client` instance for each request"), porque en un Worker una conexión no se puede reutilizar entre invocaciones. **Ya está arreglado**: `src/lib/db.ts` crea un cliente por invocación (ver [El cliente de Prisma](#el-cliente-de-prisma-por-petición-en-el-worker-y-uno-fuera-de-él)). Cachear el cliente entre invocaciones hacía que, en la siguiente petición, el *pool* sacara un socket que `workerd` ya había cerrado **sin emitir `error`**: el `write` se perdía, nada resolvía ni rechazaba la promesa, la consulta se quedaba colgada para siempre y Cloudflare mataba la invocación con el error 1101.
 
 ### Prisma 7 necesita `runtime = "workerd"`: sin esto no hay base de datos
 
-Síntoma en el Worker desplegado: la web entera responde 500 y `GET /api/debug-env` dice
+Síntoma en el Worker desplegado: la web entera responde 500, y la primera consulta a la base muere con
 
 ```json
-"db": { "ok": false, "name": "CompileError",
-        "message": "WebAssembly.Module(): Wasm code generation disallowed by embedder" }
+{ "ok": false, "name": "CompileError",
+  "message": "WebAssembly.Module(): Wasm code generation disallowed by embedder" }
 ```
 
 No es un problema de secretos ni de conexión. Prisma 7 no lleva el motor de consultas como binario, sino el *query compiler* como **WASM**, y con el runtime por defecto (`nodejs`) el cliente generado lo mete **en base64 dentro del propio JS** y lo compila en runtime (`src/generated/prisma/internal/class.ts`):
@@ -182,7 +182,7 @@ Con `workerd`, el cliente generado **importa el `.wasm` como módulo** en vez de
 Dos cosas que **no** hay que confundir con esto:
 
 - **Los secretos no tienen nada que ver.** Si `db` devuelve este error, el `DATABASE_URL` está bien resuelto; el fallo ocurre al *arrancar* el cliente, antes de abrir conexión. Un `DATABASE_URL no está definida` es un problema distinto, de configuración.
-- **En local no se reproduce y no hay que tocar nada.** En Node `new WebAssembly.Module` es legal, así que `next dev` funciona con cualquiera de los dos runtimes. Los reportes de que `runtime = "workerd"` rompe el desarrollo local son de proyectos con Vite; con Turbopack y esta configuración no aparece ningún problema. Se puede comprobar en local levantando `npm run dev` y mirando `db.ok` en `/api/debug-env`.
+- **En local no se reproduce y no hay que tocar nada.** En Node `new WebAssembly.Module` es legal, así que `next dev` funciona con cualquiera de los dos runtimes. Los reportes de que `runtime = "workerd"` rompe el desarrollo local son de proyectos con Vite; con Turbopack y esta configuración no aparece ningún problema. Se puede comprobar en local levantando `npm run dev` y consultando la base; en el Worker se comprueba con la sonda de [Cómo comprobar que funciona](#cómo-comprobar-que-funciona).
 - **`workerd` sí rompe los scripts de `scripts/`, que corren con `tsx`.** No es un problema de Turbopack sino del runtime elegido: Prisma emite el import `"./query_compiler_fast_bg.wasm?module"` **solo** en los runtimes edge (`workerd` y `vercel-edge`, [commit 9b8e186](https://github.com/prisma/prisma/commit/9b8e1867de8e34334d521c9e736ac87a4cbb797e)), y `?module` es una convención de empaquetador: ni Node ni `tsx` la entienden, así que el import resuelve a `undefined` y la consulta falla con `The loaded wasm module was unexpectedly undefined or null once loaded`. `cloudflare` es un alias de `workerd`, no una variante, así que no hay un valor del generator que valga para los dos lados a la vez.
 
   **Y no se arregla generando los dos clientes**, que es lo primero que parece: `src/lib` es compartido. `scripts/verify-sync.ts` importa `@/lib/scoring` y `@/lib/settings`, y con ellos `@/lib/aoe4world/sync`, `@/lib/aoe4world/ladder`, `@/lib/public`, `@/lib/rate-limit` y `@/lib/simulation/roster`; los siete importan `@/lib/db`. O sea, que `db` tendría que elegir el cliente en runtime, y entonces los dos clientes entran en el bundle del Worker: el de Node lleva el query compiler entero en base64 dentro del JS (~4,6 MB) **encima** del `.wasm` del de `workerd` (~3,4 MB). Separar los clientes obligaría a duplicar medio `src/lib` para los scripts, o a moverlos dentro del Worker.
@@ -216,25 +216,21 @@ const secret = readRuntimeEnv("CRON_SECRET");
 
 #### Cómo comprobar que funciona
 
-`GET /api/debug-env` es una ruta **temporal de diagnóstico**, y hay que **borrarla al cerrar este arreglo**. No devuelve ningún valor, solo nombres y booleanos:
+No queda ninguna sonda en el repo: la que se usó para cerrar este arreglo (`GET /api/debug-env`, que devolvía nombres y booleanos, nunca valores) se borró al terminar, porque una ruta de diagnóstico no debe quedarse en producción. Para volver a mirar el entorno del Worker hay que recrearla.
 
-| Campo | Qué dice |
+Lo que se miraba, y qué hacer con cada resultado:
+
+| Señal | Qué dice |
 |---|---|
-| `bindings` | Nombres de los bindings que ve el Worker |
-| `processEnvKeys` | Nombres de lo que hay en `process.env` |
-| `env.<VARIABLE>.source` | `"binding"`, `"process"` o `null`: de dónde sale el valor que usa la app |
-| `env.<VARIABLE>.inBinding` / `.inProcessEnv` | En qué capa está cada variable |
-| `db` | Si la consulta a la base funciona, y el error si no |
+| `bindings` trae `DATABASE_URL` | El arreglo funciona. Da igual que no esté en `process.env`: la app lee los bindings. |
+| `bindings` vacío o sin las variables | El binding no ha llegado al Worker. Ningún cambio de código lo arregla; es configuración de despliegue (ver más abajo). |
+| `bindings` las trae y también están en `process.env` | `populateProcessEnv` funcionó y todo va por el camino antiguo. También es correcto. |
 
-Los tres casos, y qué hacer en cada uno:
-
-1. **`bindings` trae `DATABASE_URL`** → el arreglo funciona. Da igual que `inProcessEnv` sea `false`: la app lee los bindings. Con eso, `db.ok = true` y el resto de la app en pie.
-2. **`bindings` está vacío o sin las variables** → el binding no ha llegado al Worker. Ningún cambio de código lo arregla; es configuración de despliegue (ver más abajo).
-3. **`bindings` las trae y `inProcessEnv` también** → `populateProcessEnv` funcionó y todo va por el camino antiguo. También es correcto.
+Y una advertencia que costó entender: **`NEXT_PUBLIC_*` no aparecen en ninguna de esas señales, y no es que falten.** Next las sustituye por literales al compilar, así que nunca viajan como binding ni a `process.env`. Verlas ausentes en el Worker es lo esperado, no un síntoma.
 
 #### Si los bindings no llegan al Worker (caso 2)
 
-Ningún cambio de código lo arregla: es configuración de despliegue. El siguiente paso es **versionar un `wrangler.jsonc` en el repo**, que es donde se declaran el nombre del Worker, la fecha de compatibilidad y los bindings. El que usa hoy lo genera `@opennextjs/cloudflare` desde su plantilla (`node_modules/@opennextjs/cloudflare/templates/wrangler.jsonc` una vez instalado el paquete), y sale así:
+Ningún cambio de código lo arregla: es configuración de despliegue. La causa era que el `wrangler.jsonc` no estaba versionado, así que `@opennextjs/cloudflare` lo generaba en cada build y `wrangler deploy` reconstruía el Worker solo con lo que traía ese archivo, perdiendo las variables del panel. Ya está versionado (ver arriba); el que trae el repo sale de la plantilla de `@opennextjs/cloudflare` (`node_modules/@opennextjs/cloudflare/templates/wrangler.jsonc` una vez instalado el paquete):
 
 ```jsonc
 {
@@ -274,9 +270,48 @@ En un Worker una conexión TCP solo vive durante la invocación que la abre. Sin
 
 El proyecto ya está en el plan **Free**, que incluye **100.000 consultas al día** a Hyperdrive (contadas a las 00:00 UTC: cualquier `SELECT`, `INSERT`, `UPDATE`, `DELETE` o cambio de esquema, cacheada o no). El *pooling* y la caché no se cobran aparte.
 
-**Aviso importante sobre cómo se lee la cadena.** La cadena de conexión de Hyperdrive **no** es una URL que se pueda copiar y pegar en una variable de entorno: solo existe en tiempo de ejecución, en `env.HYPERDRIVE.connectionString`, y se obtiene del *binding* Hyperdrive. Por eso **no hay ningún valor correcto para `DATABASE_URL` en Cloudflare**: la cadena directa de Supabase funciona desde un Worker (el socket TCP no está bloqueado; solo lo están el puerto 25 y las IPs privadas o de Cloudflare), pero paga el establecimiento completo en cada petición, y la de Hyperdrive no existe hasta que hay un binding. `src/lib/db.ts` lee `DATABASE_URL` por [`readRuntimeEnv`](#cómo-se-leye-la-configuración-en-el-worker), así que ya admite un binding: cuando exista el de Hyperdrive, el cableado es añadirlo a esa lectura (y dejar de cachear el cliente entre peticiones, porque en un Worker una conexión no se reutiliza entre invocaciones). Hoy, sin Hyperdrive, la cadena tiene que venir del panel.
+**Aviso importante sobre cómo se lee la cadena.** La cadena de conexión de Hyperdrive **no** es una URL que se pueda copiar y pegar en una variable de entorno: solo existe en tiempo de ejecución, en `env.HYPERDRIVE.connectionString`, y se obtiene del *binding* Hyperdrive. Por eso **no hay ningún valor correcto para `DATABASE_URL` en Cloudflare**: la cadena directa de Supabase funciona desde un Worker (el socket TCP no está bloqueado; solo lo están el puerto 25 y las IPs privadas o de Cloudflare), pero paga el establecimiento completo en cada petición, y la de Hyperdrive no existe hasta que hay un binding.
+
+**El cableado ya está hecho, y funciona en los dos estados.** `src/lib/db.ts` lee el binding con `readHyperdriveConnectionString()` de [`src/lib/runtime-env.ts`](src/lib/runtime-env.ts) y, si no está, cae a `DATABASE_URL` por [`readRuntimeEnv`](#cómo-se-leye-la-configuración-en-el-worker). No es un apaño: es lo que permite que `next dev` y los scripts de `scripts/` sigan funcionando sin el binding, y en cuanto exista en el panel pasa a usarse sin tocar código. El bloque `hyperdrive` de [`wrangler.jsonc`](wrangler.jsonc) va **comentado** a propósito: `wrangler deploy` manda su `id` a la API de Cloudflare, así que un `id` inexistente rompe el despliegue entero, y en `wrangler dev` (lo que usa `npm run preview`) un binding sin `localConnectionString` tampoco arranca. Los tres pasos para activarlo están en el propio bloque. Hoy, sin Hyperdrive, la cadena tiene que venir del panel.
+
+### El cliente de Prisma: uno por petición en el Worker, y uno fuera de él
+
+Lo que obliga a esto no es Hyperdrive: es el runtime. En `workerd` un socket TCP creado con `connect()` **solo es válido durante la invocación que lo abre**, y al terminar la petición el runtime lo cierra **sin emitir `error`**. Con el cliente cacheado por proceso, la siguiente petición sacaba del *pool* ese socket ya muerto, el `write` se perdía y **nada resolvía ni rechazaba la promesa**: la consulta se quedaba colgada para siempre y Cloudflare mataba la invocación con el error 1101 ("your Worker's code had hung and would never generate a response"). Era intermitente y afectaba solo a las páginas que leen Postgres (`/`, `/partidas`, `/objetivos`, las tres con `force-dynamic`).
+
+Lo que hace ahora `src/lib/db.ts`:
+
+- **En el Worker, un cliente por invocación**, en un `WeakMap` indexado por el propio contexto de Cloudflare. El *entrypoint* de `@opennextjs/cloudflare` crea un objeto de contexto nuevo en cada petición, así que la identidad de la clave es la identidad de la invocación, y el `WeakMap` no retiene nada entre peticiones.
+- **Fuera del Worker** (`next dev` y los scripts de `scripts/`, que son Node de proceso largo) **una sola instancia** guardada en `globalThis`, como antes, para que el hot reload no abra una conexión nueva en cada recarga.
+- **La distinción no usa `process.env.NODE_ENV`**, porque en el bundle del Worker es un literal sustituido al compilar y siempre valdría `"production"`. Usa la existencia del contexto de Cloudflare, leído del símbolo global `Symbol.for("__cloudflare-context__")` — el mismo que devuelve `getCloudflareContext()`, pero sin importar `@opennextjs/cloudflare`, que es una dependencia de desarrollo con *peer dependencies* sobre `wrangler` y `next` (ver [`src/lib/runtime-env.ts`](src/lib/runtime-env.ts)).
+- **Las conexiones se cierran al final de la petición** con `after()` de `next/server`, que en el Worker aterriza en `ctx.waitUntil`: la invocación sigue viva hasta que `pool.end()` resuelve, así que el cierre ocurre con el socket todavía válido. Se descarta `ctx.waitUntil` directamente porque su promesa **empieza en el momento de registrarla** y cerraría el *pool* mientras la página todavía está consultando; y se descarta un finalizador en `AsyncLocalStorage` porque `db.ts` no es la entrada de la petición, así que no hay ningún ámbito que abrir ni que cerrar.
+- Los errores de un cliente **ocioso** del *pool* ya no se tragan: se registran con `onPoolError` de `PrismaPg`, que es justo la firma de un socket que el runtime ya cerró.
+
+Cuando la base de datos falla (límite de conexiones de Supabase, reinicio, corte de red), las tres páginas públicas ya **no** devuelven un 500: `getStandings()`, `getLiveMatches()` y `getObjectives()` devuelven un `PublicRead<T>` con `status: "degraded"` y `data: null`, y el log lleva una línea con prefijo `[db]` y el motivo. Ver [Qué ve la web cuando la base de datos no responde](#qué-ve-la-web-cuando-la-base-de-datos-no-responde).
 
 El resto de variables (`NEXT_PUBLIC_SUPABASE_*`, `TURNSTILE_SECRET_KEY`, `CRON_SECRET`, …) se define en el panel del Worker (Settings → Variables and Secrets), y además en *Build variables and secrets* las que sean `NEXT_PUBLIC_*`, porque Next las compila dentro del bundle. OpenNext recomienda desplegar con `--keep-vars` para que un despliegue no borre las variables que están en el panel.
+
+## Qué ve la web cuando la base de datos no responde
+
+Un corte puntual de la base (límite de conexiones de Supabase, un reinicio, un pico de red) no puede ser un 500 con una traza en el log: la web del torneo tiene que seguir contestando y decir que no ha podido leer. Las tres lecturas de `src/lib/public.ts` y `src/lib/scoring.ts` devuelven por eso un discriminante en vez del dato pelado:
+
+```ts
+type PublicRead<T> = { status: "ok"; data: T } | { status: "degraded"; data: null };
+```
+
+```ts
+const { status, data } = await getStandings(); // StandingRow[] | LiveMatch[] | ObjectiveView
+```
+
+- `status: "ok"` → `data` es el valor de siempre y la pantalla se pinta como ahora.
+- `status: "degraded"` → `data` es **`null`**, y a propósito **no** una lista vacía: un vacío se leería como "no hay participantes" o "no hay partidas en juego ahora mismo", que es una afirmación falsa. Quien pinte tiene que distinguir los dos casos y decir que no se ha podido leer.
+
+El motivo del fallo **no** viaja en el objeto: esto se serializa al navegador dentro del *payload* de RSC. Se queda en el log del servidor, con el prefijo `[db]` y el `scope` de la lectura, por ejemplo:
+
+```
+[db] public/getStandings: PrismaClientKnownRequestError (P1001): Can't reach database server at db.abc.supabase.co
+```
+
+El mensaje va saneado: se elimina el usuario y la clave de cualquier URL de conexión y los parámetros `password=`, y se conserva el host, que es lo que hace falta para diagnosticar. Los scripts de `scripts/` y `verify:sync --db` usan `unwrapRead()` de `@/lib/db-errors`, que **aborta** en vez de devolver vacío: una comprobación que se traga un corte de la base y sale con "todo correcto" es peor que no comprobar nada.
 
 ## Inscripción pública
 

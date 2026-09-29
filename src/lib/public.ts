@@ -4,6 +4,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { PlayerStatus } from "@/generated/prisma/enums";
 import { parseGamePlayer } from "@/lib/aoe4world/parse";
 import { db } from "@/lib/db";
+import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
 import { aoe4WorldProfileUrl, describeMode, describeTeamSize } from "@/lib/format";
 import { isRecord } from "@/lib/json";
@@ -26,6 +27,15 @@ export type {
 export { OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
 export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
+
+/**
+ * El resultado de una lectura de las pantallas públicas: o los datos, o la
+ * señal de que la base de datos no ha podido leer.
+ *
+ * Se reexporta desde aquí para que quien pinta importe del mismo sitio que las
+ * funciones: `import { type PublicRead } from "@/lib/public"`.
+ */
+export type { PublicRead };
 
 /**
  * Capa de lectura de las páginas públicas.
@@ -52,6 +62,29 @@ export type { Division, DivisionId } from "@/lib/divisions";
  *
  * Alternativa si se prefiere dejar la decisión en el componente: llamar a
  * `await connection()` de `next/server` antes de leer.
+ *
+ * ## Por qué devuelven `PublicRead<T>` y no el dato pelado
+ *
+ * Un corte de la base de datos (límite de conexiones de Supabase, un reinicio, un
+ * pico de red) no puede ser un 500 con una traza en el log. Las tres funciones que
+ * leen Postgres devuelven un `PublicRead<T>`:
+ *
+ * ```ts
+ * const { status, data } = await getStandings();
+ * // status === "ok"       -> data es StandingRow[]
+ * // status === "degraded" -> data es null; hay que decirlo, no pintar un vacío
+ * ```
+ *
+ * `data` es `null` y **no** una lista vacía a propósito: una lista vacía la leería
+ * la pantalla como "no hay participantes" o "no hay partidas en juego", que es una
+ * afirmación falsa. Con `null` quien pinte está obligado a distinguir "no hay
+ * nada" de "no lo hemos podido saber", que es justo lo que se le pide. El motivo
+ * del fallo no viene en el objeto: esto se serializa al navegador dentro del
+ * *payload* de RSC, así que el detalle se queda en el log del servidor, con el
+ * prefijo `[db]`.
+ *
+ * Para las **herramientas de `scripts/`**, que sí deben abortar cuando la base no
+ * responde, está `unwrapRead()` de `@/lib/db-errors`.
  *
  * No hace falta cachear nada más: son decenas de filas con índices pensados para
  * estas consultas, y el cuello de botella del sitio no es la base de datos sino la
@@ -237,8 +270,15 @@ function earnedObjectivesPoints(breakdown: unknown): number {
  * Tres consultas planas, ninguna por fila: la de partidas en directo sirve para
  * marcar `isPlaying` sin N+1 y la del ruleset (una clave de `Setting`) trae los
  * puntos reales de cada objetivo, por si se han retocado sin desplegar.
+ *
+ * Con la base de datos caída devuelve `{ status: "degraded", data: null }` en vez
+ * de propagar el error: la portada del torneo tiene que seguir contestando.
  */
-export async function getStandings(): Promise<StandingRow[]> {
+export async function getStandings(): Promise<PublicRead<StandingRow[]>> {
+  return readFromDatabase("public/getStandings", loadStandings);
+}
+
+async function loadStandings(): Promise<StandingRow[]> {
   const [rows, liveRows, ruleset] = await Promise.all([
     db.playerScore.findMany({
       where: { ruleSetVersion: RULESET_VERSION },
@@ -632,8 +672,14 @@ function matchFormat(
  * Si aparece una partida sin resolver dentro de más de una hora, es normal: el
  * worker borra las abandonadas de forma perezosa, en su siguiente pasada. No es
  * una partida colgada.
+ *
+ * Con la base de datos caída devuelve `{ status: "degraded", data: null }`.
  */
-export async function getLiveMatches(): Promise<LiveMatch[]> {
+export async function getLiveMatches(): Promise<PublicRead<LiveMatch[]>> {
+  return readFromDatabase("public/getLiveMatches", loadLiveMatches);
+}
+
+async function loadLiveMatches(): Promise<LiveMatch[]> {
   const now = new Date();
 
   const [rows, leagueRows] = await Promise.all([

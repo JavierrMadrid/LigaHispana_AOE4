@@ -9,6 +9,12 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Salida de `opennextjs-cloudflare build` (preview/deploy): bundle de terceros,
+    // no código del proyecto.
+    ".open-next/**",
+    // Cache de `wrangler dev` / `npm run preview`: bundles intermedios de terceros
+    // que wrangler deja en el árbol de trabajo.
+    ".wrangler/**",
     "out/**",
     "build/**",
     "next-env.d.ts",

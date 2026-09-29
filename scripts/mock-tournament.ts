@@ -9,6 +9,7 @@ import {
 } from "@/lib/aoe4world/mock/players";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { db } from "@/lib/db";
+import { unwrapRead } from "@/lib/db-errors";
 import { OBJECTIVE_POINTS } from "@/lib/objectives";
 import { DIVISIONS, getStandings } from "@/lib/public";
 import { DEFAULT_RULESET, RULESET_VERSION } from "@/lib/scoring";
@@ -216,7 +217,9 @@ async function runMockTournament(): Promise<void> {
   const externalLiveTotal = externalRows.filter((row) => row.finishedAt === null).length;
   const externalFinishedTotal = externalRows.length - externalLiveTotal;
 
-  const standings = (await getStandings()).filter((row) =>
+  // `unwrapRead` para que un corte de la base no se confunda con un torneo
+  // simulado que no ha sincronizado a nadie.
+  const standings = unwrapRead(await getStandings(), "mock:tournament").filter((row) =>
     MOCK_PROFILE_IDS.includes(row.profileId),
   );
 

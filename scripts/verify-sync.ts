@@ -7,6 +7,7 @@ import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/pars
 import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 
 import { isKnownCivilization } from "@/lib/civs";
+import { unwrapRead } from "@/lib/db-errors";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import {
   countsAsRanked,
@@ -776,7 +777,11 @@ async function runWindowChecks(
 
       // La vista pública solo enseña los tres primeros, así que este jugador
       // puede no salir: si sale, sus números tienen que ser los de la ventana.
-      const vista = await getObjectives();
+      // `unwrapRead` en todos los sitios donde se lee de la base: una
+      // comprobación que se traga un corte de la base y sigue con datos vacíos
+      // daría "todo correcto" sin haber mirado nada. Aquí la lectura degradada
+      // tiene que abortar.
+      const vista = unwrapRead(await getObjectives(), "verify:objetivos/ventana");
 
       for (const option of vista.options) {
         const contendiente = option.ranking.find(
@@ -1317,7 +1322,7 @@ async function runDatabaseChecks(): Promise<void> {
     await check("los objetivos se publican con el contrato previsto", async () => {
       const { OBJECTIVE_COUNT, OBJECTIVE_GROUP_LABELS } = await import("@/lib/objectives");
 
-      const view = await getObjectives();
+      const view = unwrapRead(await getObjectives(), "verify:objetivos/contrato");
 
       assert.equal(view.ruleSetVersion, RULESET_VERSION);
       assert.equal(view.rule, RULE_LABEL, "la etiqueta pública es la del código");
@@ -1507,7 +1512,7 @@ async function runDatabaseChecks(): Promise<void> {
           },
         });
 
-        const standings = await getStandings();
+        const standings = unwrapRead(await getStandings(), "verify:clasificacion");
         const fila = standings.find((row) => row.profileId === SAMPLE_PROFILE_ID);
 
         assert.ok(fila !== undefined, "el jugador de muestra sale en la clasificación");
@@ -1548,7 +1553,7 @@ async function runDatabaseChecks(): Promise<void> {
           "los puestos son un entero denso y en orden",
         );
 
-        const vivos = await getLiveMatches();
+        const vivos = unwrapRead(await getLiveMatches(), "verify:partidas-en-curso");
         assert.equal(
           vivos.some((match) =>
             match.participants.some(
@@ -1616,7 +1621,7 @@ async function runDatabaseChecks(): Promise<void> {
           ],
         });
 
-        const conCruce = await getLiveMatches();
+        const conCruce = unwrapRead(await getLiveMatches(), "verify:partidas-cruce");
 
         assert.equal(
           conCruce.filter((match) => match.gameId === gameIdCruce).length,
