@@ -24,7 +24,7 @@ De ella se derivan los requisitos que ya estructuran las fases: clasificación s
 | BBDD | **PostgreSQL** vía **Supabase** (cloud) | Relacional, encaja con el modelo; Supabase gratis + auth integrada |
 | ORM | **Prisma 7** (`prisma-client`) | Tipado, migraciones; schema en `prisma/schema.prisma` |
 | Auth | **Supabase Auth** (solo admin) | Ya tenemos proyecto Supabase; `@supabase/ssr` para sesiones en Next |
-| Tareas en segundo plano | Cron (Vercel Cron o `node-cron`) | Polling periódico de la API de AoE4World |
+| Tareas en segundo plano | **Supabase Cron** (`pg_cron` + `pg_net`) que llama por HTTP al Worker; workflow de GitHub como red de seguridad | El reloj vive en la base de datos, no en el Worker: en el plan Free de Cloudflare el sync no cabe en el presupuesto de CPU (ver README, "El límite de CPU del plan Free") |
 | Twitch | Helix API (requiere app registrada) | Detectar streamers en directo |
 
 ## Estado actual
@@ -474,9 +474,15 @@ Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes d
   configurable sin desplegar (D-02: `[from, to)` sobre `startedAt`, en el ruleset); lo que
   queda por decidir son las fechas oficiales y si el fin se deja abierto. La **duración
   mínima** (D-03) sigue sin existir: es un parámetro del ruleset cuando el cliente lo pida.
-- [ ] **Cómo se cumple el requisito 2 ("en todo momento")**: el worker corre cada 5 minutos y
-  ya recalcula la clasificación al final de cada pasada. Falta decidir si F4 relee el servidor
-  en cada visita (que es lo que hace el DAL actual) o si añade revalidación por etiqueta.
+- [x] **Cómo se cumple el requisito 2 ("en todo momento")**: resuelto con **Supabase Cron**
+  (`npm run db:cron`, [`scripts/db-cron.ts`](../scripts/db-cron.ts)). Un job de `pg_cron` llama
+  cada 5 minutos por HTTP a `POST /api/sync` con `pg_net`, y la web relee el servidor en cada
+  visita (el DAL ya es `force-dynamic`), así que no hace falta revalidación por etiqueta. El
+  workflow de GitHub queda solo como red de seguridad, porque GitHub retrasa su `schedule` a una
+  pasada cada 4-6 h. El reloj **no** puede ser un Cron Trigger de Cloudflare: en el plan Free cada
+  invocación tiene 10 ms de CPU y una pasada del sync gasta ~500 ms, así que un cron nativo cada
+  5 minutos acaba matando el *isolate* con el error 1102. Se probó y se retiró (commit `459ed27`);
+  el detalle medido está en el README, "El límite de CPU del plan Free".
 - [ ] Rival en partidas por equipos: el schema tiene un único par de campos, así que en
   `rm_2v2` y superiores se guarda solo el primer jugador del equipo contrario (el equipo
   completo está en `rawJson`). Si las reglas necesitaran "partida contra dos rivales", habría
@@ -495,3 +501,5 @@ Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes d
 - **Next.js 16**: *middleware* → **Proxy** (`src/proxy.ts`). Los helpers de tipos `LayoutProps<"/ruta">` se generan con `next dev/build/typegen`.
 - **Supabase Auth**: sesiones en cookies SSR; el Proxy refresca el token y aplica las cabeceras anti-caché, el DAL hace la verificación segura.
 - **Rate limits AoE4World**: resueltos en F2 (backoff exponencial con jitter, separación mínima entre peticiones, pausa global ante `Retry-After`). Pendiente solo el ritmo del cron en producción y si hace falta cacheo.
+- **El plan Free de Cloudflare es el techo del sync**: 10 ms de CPU por invocación contra los ~500 ms que gasta una pasada. Un disparo **esporádico** se tolera (el *isolate* tiene flexibilidad para pasarse de vez en cuando); uno **consistente** se mata con el error 1102. Por eso el reloj es Supabase Cron y no un Cron Trigger, y por eso el candado del botón de `/partidas` es de 5 minutos. Si algún día se necesita más margen, la salida es Workers Paid (5 $/mes); el *handler* `scheduled` ya se probó y funcionaba.
+- **Los Cron Triggers se declaran explícitamente**: en `wrangler.jsonc`, `"triggers": { "crons": [] }`. No es decorativo: `wrangler deploy` solo reemplaza los triggers existentes por los del archivo, y con la clave `undefined` **los deja como están**. Quitar la clave al retirar el cron nativo dejó el trigger vivo disparando cada 5 minutos contra un Worker sin handler `scheduled` hasta que se declaró el array vacío.

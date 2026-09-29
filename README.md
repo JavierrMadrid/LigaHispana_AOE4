@@ -71,6 +71,7 @@ Se usa **Supabase** (Postgres cloud). La conexión se define en `.env` (`DATABAS
 | `AOE4WORLD_SYNC_DEADLINE_MS` | Plazo global de una pasada (240000) |
 | `AOE4WORLD_MOCK` | `1` para responder con las fixtures locales de `src/lib/aoe4world/mock/` en vez de salir a la red (`0` por defecto; imposible con `NODE_ENV=production`) |
 | `CRON_SECRET` | Secreto para llamar a `POST /api/cron/sync` sin sesión |
+| `SITE_URL` | URL pública del Worker de la que parte el job de Supabase Cron. Solo la lee `scripts/db-cron.ts`; por defecto `https://ligahispana-aoe4.javierr-ma93.workers.dev`. Ver ["El disparo desde Supabase Cron"](#el-disparo-desde-supabase-cron-npm-run-dbcron) |
 | `RATE_LIMIT_MAX_ATTEMPTS` | Envíos de inscripción permitidos por IP y ventana (5) |
 | `RATE_LIMIT_WINDOW_SECONDS` | Longitud de la ventana del límite, en segundos (3600) |
 | `RATE_LIMIT_STALE_SECONDS` | Antigüedad a partir de la cual se purga una fila de contador, en segundos (86400) |
@@ -334,7 +335,7 @@ Hay **dos** puntos de entrada, y los dos hacen el mismo trabajo (`syncApprovedPl
 - **`POST /api/cron/sync`** (y `GET`, porque Vercel Cron solo emite `GET`). Es el del cron. Acepta dos formas de autenticación:
   - sesión de un admin de Supabase (misma protección que el resto de `/admin`), o
   - `Authorization: Bearer $CRON_SECRET` (imprescindible para un cron externo, que no manda cookies).
-- **`POST /api/sync`**, público, detrás del botón "Actualizar" de `/partidas`. Exige `content-type: application/json`, que es lo que descarta un POST de otro sitio (un formulario solo manda tipos "simples"), y lleva un candado **global** de un sync cada 60 s para que nadie pueda machacar la API de AoE4World desde el navegador. Si se pide antes de tiempo responde `{ "status": "cooldown" }` con 200, porque no es un error: la pasada se hizo hace nada. Si el candado no se puede comprobar, **no** lanza la pasada y responde 503.
+- **`POST /api/sync`**, público, detrás del botón "Actualizar" de `/partidas`. Exige `content-type: application/json`, que es lo que descarta un POST de otro sitio (un formulario solo manda tipos "simples"), y lleva un candado **global** de un sync cada 5 min (300 s, no 60: ver ["El límite de CPU del plan Free"](#el-límite-de-cpu-del-plan-free-por-qué-el-cron-es-externo)) para que nadie pueda machacar la API de AoE4World desde el navegador. Si se pide antes de tiempo responde `{ "status": "cooldown" }` con 200, porque no es un error: la pasada se hizo hace nada. Si el candado no se puede comprobar, **no** lanza la pasada y responde 503.
 
 ```bash
 # Desde la terminal, sin levantar el servidor
@@ -354,20 +355,75 @@ curl -X POST http://localhost:3000/api/sync -H "content-type: application/json" 
 
 **Cada 5 minutos**. La API pide uso responsable y ya ha devuelto 429; por debajo de 3 minutos el worker dispara demasiadas peticiones por minuto solo con un puñado de jugadores. Con más jugadores, sube `AOE4WORLD_MIN_REQUEST_INTERVAL_MS` antes que la frecuencia. Para F4 ("en directo") 5 minutos es suficiente: una partida en directo se detecta en la siguiente pasada y se marca con `finishedAt = null`.
 
-El disparo lo hace un **cron externo**: una petición a `https://<dominio>/api/cron/sync` con `Authorization: Bearer $CRON_SECRET`. El repo trae un workflow listo en [`.github/workflows/cron-sync.yml`](.github/workflows/cron-sync.yml) con `schedule: */5 * * * *`; para usarlo, define en el repositorio la variable `SITE_URL` y el secreto `CRON_SECRET` (Settings > Secrets and variables > Actions).
+Hay **dos relojes**, y el primario ya no es GitHub:
 
-### El límite de CPU del plan Free: por qué el cron es externo y flojo
+| Reloj | Qué es | Frecuencia real |
+|---|---|---|
+| **Supabase Cron** (primario) | Un job de `pg_cron` en la propia base de datos que llama por HTTP a `POST /api/sync` con `pg_net` | **5 minutos**, con alguna vuelta dentro del candado anterior (ver abajo) |
+| [Workflow de GitHub](.github/workflows/cron-sync.yml) (red de seguridad) | Una petición a `POST /api/cron/sync` con `Authorization: Bearer $CRON_SECRET` | GitHub la retrasa a **una cada 4-6 h** |
+
+Se pone el primario abajo; el de GitHub se queda como está, con su `SITE_URL` y su `CRON_SECRET` definidos en el repositorio (Settings > Secrets and variables > Actions), que es lo que necesita para poder seguir funcionando si el otro se cae.
+
+### El disparo desde Supabase Cron (`npm run db:cron`)
+
+```bash
+npm run db:cron              # aplica: extensiones + job de 5 minutos (idempotente)
+npm run db:cron -- --check   # solo comprueba, no escribe; sale con 1 si no cuadra
+npm run db:cron -- --remove  # desprograma el job (vuelta atrás)
+```
+
+El script es [`scripts/db-cron.ts`](scripts/db-cron.ts), con el mismo patrón que `scripts/db-security.ts`: SQL crudo con `pg` y `DATABASE_URL`, idempotente, y un `--check` que no escribe. Existe por la misma razón que aquel: **`prisma db push` no gestiona ni las extensiones ni `cron.job`**, así que un job hecho a mano desde el panel de Supabase no estaría en ninguna parte del repositorio.
+
+Aplica exactamente esto:
+
+```sql
+create schema if not exists extensions;
+create extension if not exists pg_cron;
+create extension if not exists pg_net with schema extensions;
+
+select cron.schedule(
+  'ligahispana-sync',
+  '*/5 * * * *',
+  $$select net.http_post(
+       url := 'https://ligahispana-aoe4.javierr-ma93.workers.dev/api/sync',
+       body := '{}'::jsonb,
+       headers := '{"Content-Type": "application/json"}'::jsonb,
+       timeout_milliseconds := 240000
+     );$$
+);
+```
+
+Cuatro decisiones que no son obvias:
+
+- **Apunta a `/api/sync` (público), no a `/api/cron/sync` (con `CRON_SECRET`).** Para no escribir un secreto en la base de datos: `cron.job.command` es texto plano y `cron.job_run_details` guarda una copia del comando de cada ejecución. El endpoint público no necesita ninguno, y aun así no es una puerta abierta, porque `src/app/api/sync/route.ts` pone las dos condiciones que lo cierran: exige `content-type: application/json` (que es lo que `pg_net` manda siempre, y lo que descarta un POST de formulario de otro sitio) y lleva un **candado global de 5 minutos** (clave `public/manual-sync`). Con eso, ni este job ni quien descubra la URL pueden provocar más de una pasada por ventana. Si alguien pulsa "Actualizar" en `/partidas` dentro de la ventana, el cron recibe `{"status":"cooldown"}` con 200 y no duplica trabajo. Y le pasa también **sin nadie delante**: el job dispara en punto y el candado de la pasada anterior expira unos segundos después de su propio multiplo, así que de vez en cuando el cron llega demasiado pronto y esa vuelta se salta sola (medido: 1 de cada 5 pasadas). No es un fallo, es el precio de reutilizar el candado del botón en vez de llevar un secreto en la base de datos; la cadencia real queda entre 5 y 10 minutos.
+- **El nombre del job es fijo** (`ligahispana-sync`) porque `cron.schedule(nombre, ...)` hace *upsert* sobre `jobname_username_uniq`: repetir el script actualiza el job existente en vez de crear un segundo.
+- **`timeout_milliseconds` va explícito a 240 s** porque el valor por defecto de `net.http_post` son 2-5 s y una pasada tarda ~15 s: con el valor por defecto la petición se cortaría antes de que el Worker terminara.
+- **`pg_net` se instala en `extensions`**, no en `public`: es donde lo pone Supabase y es lo que evita el aviso del *Security Advisor*.
+
+`SITE_URL` sale del entorno y por defecto es `https://ligahispana-aoe4.javierr-ma93.workers.dev`; no hace falta definirlo mientras el dominio no cambie.
+
+**Cómo se comprueba que está disparando.** `npm run db:cron -- --check` imprime las dos extensiones con su versión y esquema, el `jobid`, el `schedule` y el comando tal cual están grabados, el resto de jobs de la base, y las **tres últimas respuestas de `pg_net`** con su código, su hora y su cuerpo (se guardan 6 h). El cuerpo es lo que separa los dos casos que comparten `200`: `"status":"ok"` es una pasada de verdad y `"status":"cooldown"` quiere decir que alguien usó antes el botón "Actualizar" dentro de la ventana. Un `error` o un `sin respuesta (timeout)` en `net._http_response` significa que la petición no salió de la base de datos. También se puede mirar `cron.job_run_details` desde el panel de Supabase y `net._http_response` en el *SQL Editor*.
+
+**Vuelta atrás**: `npm run db:cron -- --remove` desprograma el job y deja las extensiones, que son inertes. Es reversible y repetible: si el job no está, lo dice y no rompe.
+
+Comprobado contra la base de datos real (septiembre de 2026): a través del *Session pooler* de Supabase funcionan `create schema`, `create extension`, `cron.schedule(nombre, ...)` y `cron.unschedule(nombre)`, y el job se crea, se lee y se borra. El pooler no da ningún problema aquí.
+
+Lo único que queda por mirar en vivo es que `cron.use_background_workers` está en **`off`** en este proyecto (es lo que trae Supabase), así que cada ejecución del job **abre una conexión nueva a `cron.host`**, que es `localhost`. Debería funcionar, pero si algún día dejara de poder abrirse el job se programarían igual, no daría ningún error, y solo se vería en `cron.job_run_details`. Por eso `--check` imprime ese ajuste.
+
+### El límite de CPU del plan Free: por qué el cron es externo
 
 Esto no es una preferencia, es la restricción que manda, así que conviene tenerlo medido y escrito.
 
 En el plan **Free**, Cloudflare da **10 ms de CPU por invocación**, y cuenta igual en una petición HTTP que en un Cron Trigger. Una pasada del sync gasta del orden de **500 ms de CPU** (Prisma con su *query compiler* en WASM, el parseo del JSON de la API y el recálculo de la puntuación): unas **50 veces** el presupuesto.
 
-Cada *isolate* tolera que una invocación se pase del límite **de forma esporádica**; lo que no tolera es que se pase de forma consistente, y entonces la mata con `Worker exceeded CPU time limit.` (error 1102). Medido: con un Cron Trigger nativo cada 5 minutos (que se probó y se retiró) el isolate aguantó una hora y a partir de ahí mató **todas** las pasadas — 44 errores en una hora, ni un solo sync terminado. Con el workflow de GitHub, que GitHub retrasa a cada 4-6 h, el exceso es esporádico y pasa. La falta de puntualidad de GitHub, que es lo que llevó a buscar el cron nativo, resulta ser también lo que mantiene el sync dentro de lo que el isolate tolera.
+Cada *isolate* tolera que una invocación se pase del límite **de forma esporádica**; lo que no tolera es que se pase de forma consistente, y entonces la mata con `Worker exceeded CPU time limit.` (error 1102). Medido: con un Cron Trigger nativo cada 5 minutos (que se probó y se retiró, commit `459ed27`) el isolate aguantó una hora y a partir de ahí mató **todas** las pasadas — 44 errores en una hora, ni un solo sync terminado. Con el workflow de GitHub, que GitHub retrasa a cada 4-6 h, el exceso es esporádico y pasa. La falta de puntualidad de GitHub, que es lo que llevó a buscar el cron nativo, resulta ser también lo que mantiene el sync dentro de lo que el isolate tolera.
+
+**Supabase Cron no cambia el presupuesto, cambia la cuenta.** La hipótesis detrás de `npm run db:cron` es que el fallo anterior no lo causaba el volumen sino el *self-fetch* del Cron Trigger nativo (dos invocaciones sobre el mismo isolate): con un disparo HTTP externo hay **una sola invocación por evento**, con nada que la comparta. La primera hora de prueba la respalda: entre las 16:05 y las 17:05 UTC del 29-sep-2026, trece pasadas disparadas por `pg_cron`, todas con `200` y **cero** `Worker exceeded CPU time limit`, con la CPU por pasada en 589 ms de media y 852 ms de máximo. **No es una garantía** —el Cron Trigger nativo también aguantó una hora antes de empezar a morir—, así que merece la pena mirar Workers Logs de vez en cuando: si el isolate vuelve a morir con 1102, la conclusión es que el límite no perdona ni así, y toca el plan Paid.
 
 De ahí las dos consecuencias:
 
 - **Un sync cada 5 minutos de verdad necesita el plan Workers Paid** ($5/mes): el presupuesto sube a 30 s por Cron Trigger y 5 min por petición, y el mismo código sobra. Si algún día se sube, el camino ya está andado: el *handler* `scheduled` sobre un *custom worker* de OpenNext (["Custom Worker"](https://opennext.js.org/cloudflare/howtos/custom-worker)) funcionó; lo que no cabía era el CPU, no el mecanismo.
-- **Mientras se siga en Free**, el botón "Actualizar" de `/partidas` (`POST /api/sync`) dispara el mismo trabajo y está sujeto a lo mismo: pasa cuando es esporádico. Por eso su candado es de **5 minutos** y no de uno: en Free, insistir es lo único que garantiza que Cloudflare empiece a matar pasadas.
+- **Mientras se siga en Free**, el botón "Actualizar" de `/partidas` (`POST /api/sync`) dispara el mismo trabajo y está sujeto a lo mismo: pasa cuando es esporádico. Por eso su candado es de **5 minutos** y no de uno —y por eso el job de Supabase Cron reutiliza ese mismo candado en vez de tener el suyo—: en Free, insistir es lo único que garantiza que Cloudflare empiece a matar pasadas.
 
 ### Decisiones de la fase F2
 

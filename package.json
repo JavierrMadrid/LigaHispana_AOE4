@@ -11,6 +11,7 @@
     "migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:security": "tsx --conditions=react-server scripts/db-security.ts",
+    "db:cron": "tsx --conditions=react-server scripts/db-cron.ts",
     "studio": "prisma studio",
     "sync": "tsx --conditions=react-server scripts/sync.ts",
     "score": "tsx --conditions=react-server scripts/score.ts",
