@@ -22,8 +22,16 @@ import { consumeRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 300;
 
-/** Lo que hay que esperar entre dos pasadas manuales (y con el cron, no se coordina). */
-const COOLDOWN_SECONDS = 60;
+/**
+ * Lo que hay que esperar entre dos pasadas manuales (y con el cron, no se coordina).
+ *
+ * Son 5 minutos y no uno por el plan: en el plan Free cada invocación tiene 10 ms
+ * de CPU y una pasada del sync gasta ~500 ms, así que el *isolate* solo lo tolera
+ * si es esporádico. Insistir es justo lo que hace que Cloudflare empiece a matar
+ * pasadas con `Worker exceeded CPU time limit`. Ver README, "El límite de CPU del
+ * plan Free".
+ */
+const COOLDOWN_SECONDS = 300;
 
 /** Clave del candado global: fija, no sale de la petición. */
 const COOLDOWN_KEY = "public/manual-sync";

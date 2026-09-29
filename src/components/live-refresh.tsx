@@ -26,7 +26,7 @@ type ManualState = "idle" | "running" | "cooldown" | "error";
 
 type ManualResponse = { status?: string };
 
-const COOLDOWN_MESSAGE = "Se ha actualizado hace un momento; prueba en unos segundos.";
+const COOLDOWN_MESSAGE = "Se ha actualizado hace poco; inténtalo de nuevo en un rato.";
 const ERROR_MESSAGE = "No se ha podido actualizar ahora mismo.";
 
 export function LiveRefresh() {

@@ -354,15 +354,20 @@ curl -X POST http://localhost:3000/api/sync -H "content-type: application/json" 
 
 **Cada 5 minutos**. La API pide uso responsable y ya ha devuelto 429; por debajo de 3 minutos el worker dispara demasiadas peticiones por minuto solo con un puñado de jugadores. Con más jugadores, sube `AOE4WORLD_MIN_REQUEST_INTERVAL_MS` antes que la frecuencia. Para F4 ("en directo") 5 minutos es suficiente: una partida en directo se detecta en la siguiente pasada y se marca con `finishedAt = null`.
 
-El disparo lo hace el **Cron Trigger nativo de Cloudflare**. `triggers.crons` de [`wrangler.jsonc`](wrangler.jsonc) declara `*/5 * * * *`, y el handler `scheduled` de [`custom-worker.ts`](custom-worker.ts) llama al endpoint por el binding `WORKER_SELF_REFERENCE` con `Authorization: Bearer $CRON_SECRET`. No hay servicio externo ni dominio que configurar: el binding apunta a este mismo Worker, así que la petición no sale a Internet.
+El disparo lo hace un **cron externo**: una petición a `https://<dominio>/api/cron/sync` con `Authorization: Bearer $CRON_SECRET`. El repo trae un workflow listo en [`.github/workflows/cron-sync.yml`](.github/workflows/cron-sync.yml) con `schedule: */5 * * * *`; para usarlo, define en el repositorio la variable `SITE_URL` y el secreto `CRON_SECRET` (Settings > Secrets and variables > Actions).
 
-`custom-worker.ts` es un *entrypoint* propio que reenvía el `fetch` que genera `@opennextjs/cloudflare` y añade el `scheduled`; es el patrón que OpenNext documenta como ["Custom Worker"](https://opennext.js.org/cloudflare/howtos/custom-worker). Por eso `main` de `wrangler.jsonc` apunta ahí y no a `.open-next/worker.js`.
+### El límite de CPU del plan Free: por qué el cron es externo y flojo
 
-Antes esto lo hacía un `schedule` de GitHub Actions, y se cambió porque GitHub no lo cumple: sus workflows programados se retrasan durante los picos, y medido con `*/5` el intervalo real era de **varias horas** (una pasada cada 4-6 h, ~21 veces lo pedido). Aviso: en Cloudflare, un cambio de `triggers.crons` puede tardar hasta 15 minutos en propagarse.
+Esto no es una preferencia, es la restricción que manda, así que conviene tenerlo medido y escrito.
 
-El workflow [`.github/workflows/cron-sync.yml`](.github/workflows/cron-sync.yml) se queda, pero solo con `workflow_dispatch`: es un botón para lanzar una pasada a mano sin esperar al cron. Necesita la variable `SITE_URL` y el secreto `CRON_SECRET` en el repositorio. Se le quitó el `schedule` a propósito, para no tener dos pasadas a la vez de vez en cuando.
+En el plan **Free**, Cloudflare da **10 ms de CPU por invocación**, y cuenta igual en una petición HTTP que en un Cron Trigger. Una pasada del sync gasta del orden de **500 ms de CPU** (Prisma con su *query compiler* en WASM, el parseo del JSON de la API y el recálculo de la puntuación): unas **50 veces** el presupuesto.
 
-Sobre el temor al CPU del plan Free: un Cron Trigger gasta el mismo presupuesto que una petición HTTP, y una pasada medida en Workers Logs gastó **548 ms de CPU** y terminó bien, así que cabe de sobra en el límite real de esta cuenta.
+Cada *isolate* tolera que una invocación se pase del límite **de forma esporádica**; lo que no tolera es que se pase de forma consistente, y entonces la mata con `Worker exceeded CPU time limit.` (error 1102). Medido: con un Cron Trigger nativo cada 5 minutos (que se probó y se retiró) el isolate aguantó una hora y a partir de ahí mató **todas** las pasadas — 44 errores en una hora, ni un solo sync terminado. Con el workflow de GitHub, que GitHub retrasa a cada 4-6 h, el exceso es esporádico y pasa. La falta de puntualidad de GitHub, que es lo que llevó a buscar el cron nativo, resulta ser también lo que mantiene el sync dentro de lo que el isolate tolera.
+
+De ahí las dos consecuencias:
+
+- **Un sync cada 5 minutos de verdad necesita el plan Workers Paid** ($5/mes): el presupuesto sube a 30 s por Cron Trigger y 5 min por petición, y el mismo código sobra. Si algún día se sube, el camino ya está andado: el *handler* `scheduled` sobre un *custom worker* de OpenNext (["Custom Worker"](https://opennext.js.org/cloudflare/howtos/custom-worker)) funcionó; lo que no cabía era el CPU, no el mecanismo.
+- **Mientras se siga en Free**, el botón "Actualizar" de `/partidas` (`POST /api/sync`) dispara el mismo trabajo y está sujeto a lo mismo: pasa cuando es esporádico. Por eso su candado es de **5 minutos** y no de uno: en Free, insistir es lo único que garantiza que Cloudflare empiece a matar pasadas.
 
 ### Decisiones de la fase F2
 
