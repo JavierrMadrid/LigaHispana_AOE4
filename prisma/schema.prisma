@@ -12,6 +12,11 @@ generator client {
   // (prisma/prisma#28657). Con `workerd` el `.wasm` se importa como modulo y lo
   // enlaza el empaquetador, sin generacion de codigo en runtime. Detalle en el
   // README, seccion "Prisma 7 necesita `runtime = \"workerd\"`".
+  // El precio es que `?module` solo lo entienden los empaquetadores: los scripts
+  // de `scripts/` (Node con tsx) cargan el WASM con
+  // `scripts/prisma-wasm-node.mjs`, que se pasa con `--import`. No es un valor
+  // del generator distinto para Node: seria duplicar el cliente, y con el
+  // `src/lib` compartido los dos entran en el bundle del Worker.
   // Tras tocar esto hay que regenerar: `npx prisma generate`.
   runtime = "workerd"
 }

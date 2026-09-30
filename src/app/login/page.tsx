@@ -5,7 +5,7 @@ import { LoginForm } from "./login-form";
 export const metadata: Metadata = {
   // `absolute` evita que la plantilla del layout raíz ("%s · Liga Hispana AoE4")
   // se aplique dos veces.
-  title: { absolute: "Acceso admin · Liga Hispana AoE4" },
+  title: { absolute: "Admin · Liga Hispana AoE4" },
 };
 
 export default function LoginPage() {

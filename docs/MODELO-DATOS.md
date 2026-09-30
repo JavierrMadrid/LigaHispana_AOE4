@@ -50,7 +50,7 @@ mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` ex
 
 ### 0 bis.1 La regla que se aplica ahora
 
-> **10 puntos por victoria clasificatoria (ranked 1v1 o por equipos) más 37 objetivos
+> **10 puntos por victoria clasificatoria (ranked 1v1 o por equipos) más 38 objetivos
 > especiales.** La definición completa y viva está en `docs/PUNTUACION.md`; lo que
 > resume este capítulo es la forma que toma en la base de datos.
 
@@ -98,7 +98,7 @@ quien lo lea no tenga que defenderse de una clave que puede no existir:
 ```json
 {
   "ruleSetVersion": 2,
-  "rule": "10 puntos por victoria clasificatoria más 37 objetivos especiales; solo el primero los cobra",
+  "rule": "10 puntos por victoria clasificatoria más 38 objetivos especiales; solo el primero los cobra",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
     "rm_team": { "wins": 1, "points": 10, "matches": 2 }

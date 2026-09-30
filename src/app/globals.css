@@ -115,6 +115,30 @@
   /* Roles de tipografía: Cinzel (capital romana inscripcional) para titulares
      y wordmark; Geist para lectura y cifras tabulares. */
   --font-display: var(--font-cinzel);
+  /* Entrada del diálogo de clasificación: un solo gesto, el fondo funde y el
+     panel sube un pelo. Se anula con `motion-reduce`. */
+  --animate-overlay-in: overlay-in 150ms ease-out;
+  --animate-dialog-in: dialog-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 body {

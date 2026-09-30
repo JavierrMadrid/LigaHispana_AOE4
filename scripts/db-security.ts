@@ -13,13 +13,13 @@ import { Client } from "pg";
  * ## Por qué habla con `pg` y no con Prisma
  *
  * Todo lo que hace este script es SQL crudo, así que usa `pg` directamente en vez
- * de `@/lib/db`. No es una preferencia: el cliente de Prisma de la web está
+ * de `@/lib/db`. El motivo original era que el cliente de Prisma de la web está
  * generado con `runtime = "workerd"` (obligatorio, porque `workerd` prohíbe
- * `new WebAssembly.Module`) y ese cliente **no puede cargar su query compiler
- * bajo `tsx`**, que es como corren los scripts. Con `pg` el script no depende de
- * Prisma en absoluto y sigue funcionando con cualquiera de los dos clientes
- * generados. No volver esto a "usar Prisma como el resto de scripts": es
- * exactamente lo que lo rompe.
+ * `new WebAssembly.Module`) y ese cliente no cargaba su query compiler bajo
+ * `tsx`. Eso ya no lo bloquea: `scripts/prisma-wasm-node.mjs` lo resuelve. Aun
+ * así se sigue con `pg`, y a propósito: nada de esto es una tabla de Prisma, y
+ * así el script no depende de que el cliente generado se pueda cargar en Node.
+ * No volver esto a "usar Prisma como el resto de scripts" sin motivo.
  *
  * ## Por qué es un script y no un fichero `.sql` suelto
  *

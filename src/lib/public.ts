@@ -18,13 +18,14 @@ import { RULESET_VERSION, readRuleset, type ScoringRuleset } from "@/lib/scoring
 export { getObjectives } from "@/lib/scoring";
 export type {
   ObjectiveContender,
+  ObjectiveDefinition,
   ObjectiveDetail,
   ObjectiveGroup,
   ObjectiveMetric,
   ObjectiveOption,
   ObjectiveView,
 } from "@/lib/objectives";
-export { OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
+export { MASTERIZAR_TODOS_ID, OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
 export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
 
@@ -173,7 +174,7 @@ export type StandingRow = {
 };
 
 /**
- * Índice `id -> objetivo` de los 37 del catálogo, con los puntos del ruleset
+ * Índice `id -> objetivo` de los 38 del catálogo, con los puntos del ruleset
  * activo ya aplicados.
  *
  * Se construye en cada llamada (no en el módulo) porque depende de la

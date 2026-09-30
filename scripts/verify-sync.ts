@@ -6,7 +6,7 @@ import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame, readOwnCivRandomized, r
 import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/parse";
 import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 
-import { isKnownCivilization } from "@/lib/civs";
+import { CIVILIZATIONS, isKnownCivilization } from "@/lib/civs";
 import { unwrapRead } from "@/lib/db-errors";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import {
@@ -38,6 +38,13 @@ const SAMPLE_ALLY_ID = 9_000_003;
 const SAMPLE_RIVAL_ID = 9_000_004;
 /** Segundo jugador, para comprobar que las lecturas públicas filtran por estado. */
 const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
+
+/**
+ * Objetivos que fija `docs/PUNTUACION.md`. Vive como constante y no como
+ * `OBJECTIVE_COUNT` para que el número no pueda cambiar en los dos sitios a la vez
+ * sin que se note.
+ */
+const EXPECTED_OBJECTIVE_COUNT = 38;
 /**
  * Tercer jugador, solo para la ventana: sus partidas se colocan justo en los bordes
  * de `[from, to)` y son las que deciden qué cuenta.
@@ -524,6 +531,164 @@ async function checkNormalization(): Promise<void> {
 }
 
 /**
+ * El catálogo de objetivos, sin tocar la base de datos.
+ *
+ * Lo que decide el motor (qué objetivos hay, en qué orden, con qué rótulo, con
+ * qué descripción y cuántos puntos) es código, no datos: se puede comprobar sin
+ * `--db`. Lo que sí necesita la base es **quién posee cada uno**, y eso vive en
+ * la otra mitad (`--db`).
+ */
+async function checkObjectiveCatalogue(): Promise<void> {
+  console.log("Catálogo de objetivos");
+
+  const {
+    MASTERIZAR_TODOS_ID,
+    OBJECTIVE_COUNT,
+    OBJECTIVE_DEFINITIONS,
+    OBJECTIVE_GROUP_LABELS,
+    OBJECTIVE_POINTS,
+    computeObjectives,
+  } = await import("@/lib/objectives");
+
+  await check(`el catálogo tiene los ${EXPECTED_OBJECTIVE_COUNT} objetivos de docs/PUNTUACION.md`, () => {
+    assert.equal(OBJECTIVE_COUNT, EXPECTED_OBJECTIVE_COUNT);
+    assert.equal(OBJECTIVE_DEFINITIONS.length, EXPECTED_OBJECTIVE_COUNT);
+    assert.equal(
+      new Set(OBJECTIVE_DEFINITIONS.map((definition) => definition.id)).size,
+      EXPECTED_OBJECTIVE_COUNT,
+      "los ids del catálogo no se repiten",
+    );
+    assert.deepEqual(
+      [...new Set(OBJECTIVE_DEFINITIONS.map((definition) => definition.group))],
+      ["actividad", "racha", "division", "formato", "civilizacion"],
+      "los grupos salen en el orden documentado, sin intercalarse",
+    );
+  });
+
+  await check("cada objetivo trae rótulo y descripción de la regla", () => {
+    for (const definition of OBJECTIVE_DEFINITIONS) {
+      assert.ok(definition.label.trim().length > 0, `${definition.id}: falta el rótulo`);
+      assert.ok(
+        definition.description.trim().length > 0,
+        `${definition.id}: falta la descripción de la regla`,
+      );
+      assert.ok(
+        definition.description.length <= 90,
+        `${definition.id}: la descripción es una frase, no un párrafo`,
+      );
+      assert.equal(
+        definition.description.endsWith("."),
+        true,
+        `${definition.id}: la descripción es una frase completa`,
+      );
+      assert.ok(definition.points > 0, `${definition.id}: los puntos por defecto son un entero`);
+      assert.equal(
+        definition.group in OBJECTIVE_GROUP_LABELS,
+        true,
+        `${definition.id}: el grupo no tiene rótulo`,
+      );
+    }
+  });
+
+  await check("ninguna descripción escribe un número del ruleset", () => {
+    // El único número configurable que aparece en una regla es el mínimo
+    // (`minimums.masterizar`), y por eso las descripciones no lo escriben: si lo
+    // hicieran, dejarían de ser ciertas el día que se cambiara en `Setting`.
+    // Los dígitos de "1v1" o de un nombre de civ no son números de configuración.
+    for (const definition of OBJECTIVE_DEFINITIONS) {
+      for (const minimum of Object.values(DEFAULT_RULESET.minimums)) {
+        assert.equal(
+          new RegExp(`\\b${minimum}\\b`).test(definition.description),
+          false,
+          `${definition.id}: la descripción escribe el mínimo ${minimum}, que es configurable`,
+        );
+      }
+    }
+  });
+
+  await check("masterizarlos-a-todos: carrera al final del grupo de civilizaciones", () => {
+    const ultimo = OBJECTIVE_DEFINITIONS.at(-1);
+    const masterizarlos = OBJECTIVE_DEFINITIONS.find(
+      (definition) => definition.id === MASTERIZAR_TODOS_ID,
+    );
+
+    assert.ok(masterizarlos !== undefined, "el objetivo existe en el catálogo");
+    assert.equal(ultimo?.id, MASTERIZAR_TODOS_ID, "se presenta al final del grupo");
+    assert.equal(masterizarlos.group, "civilizacion");
+    assert.equal(masterizarlos.label, "Masterízalos a todos", "el rótulo es copy del cliente");
+    assert.equal(
+      masterizarlos.description,
+      "El primero en ganar una partida con cada civilización.",
+    );
+    assert.equal(masterizarlos.metric, "victorias", "ordena por civilizaciones de forma entera");
+    assert.ok(
+      masterizarlos.points > Math.max(...CIVILIZATIONS.map(() => 70)),
+      "los 100 puntos superan a los 70 de un masterizar-*",
+    );
+    assert.equal(
+      DEFAULT_RULESET.objectives[MASTERIZAR_TODOS_ID],
+      masterizarlos.points,
+      "los puntos por defecto están en el ruleset",
+    );
+    assert.equal(
+      MASTERIZAR_TODOS_ID.startsWith("masterizar-"),
+      false,
+      "el id no empieza por `masterizar-`, que es el prefijo de las civilizaciones",
+    );
+  });
+
+  await check("el ruleset publica un punto por objetivo y ninguno de más", () => {
+    const guardados = Object.keys(DEFAULT_RULESET.objectives);
+
+    assert.deepEqual(
+      guardados.sort(),
+      OBJECTIVE_DEFINITIONS.map((definition) => definition.id).sort(),
+      "`scoring.ruleset.objectives` tiene exactamente las claves del catálogo",
+    );
+
+    for (const definition of OBJECTIVE_DEFINITIONS) {
+      assert.equal(
+        DEFAULT_RULESET.objectives[definition.id],
+        OBJECTIVE_POINTS[definition.id],
+        `${definition.id}: el ruleset y el catálogo dicen lo mismo`,
+      );
+    }
+  });
+
+  await check("los puntos en juego son los de la tabla de §4", () => {
+    const porGrupo = new Map<string, number>();
+
+    for (const definition of OBJECTIVE_DEFINITIONS) {
+      porGrupo.set(definition.group, (porGrupo.get(definition.group) ?? 0) + definition.points);
+    }
+
+    assert.equal(porGrupo.get("actividad"), 130, "Actividad");
+    assert.equal(porGrupo.get("racha"), 110, "Racha");
+    assert.equal(porGrupo.get("division"), 290, "Divisiones");
+    assert.equal(porGrupo.get("formato"), 180, "Formatos");
+    assert.equal(porGrupo.get("civilizacion"), 1710, "Civilizaciones");
+    assert.equal(
+      [...porGrupo.values()].reduce((suma, puntos) => suma + puntos, 0),
+      2420,
+      "el total en juego",
+    );
+  });
+
+  await check("sin partidas no hay poseedores, y el ranking sale vacío", () => {
+    const { options, pointsByPlayer, holders } = computeObjectives([], DEFAULT_RULESET);
+
+    assert.equal(options.length, OBJECTIVE_COUNT, "los objetivos existen aunque no haya datos");
+    assert.equal(holders, 0, "nadie posee nada sin partidas");
+    assert.equal(pointsByPlayer.size, 0, "y nadie cobra");
+    assert.equal(
+      options.every((option) => option.holder === null && option.ranking.length === 0),
+      true,
+      "cada objetivo sale sin poseedor y con el ranking vacío, no relleno con ceros",
+    );
+  });
+}
+
+/**
  * Cliente falso: no toca la red, solo sirve los payloads de ejemplo. El listado
  * y el detalle son independientes a propósito, para poder reproducir el caso en
  * el que el listado ya no alcanza una partida y solo el detalle la resuelve.
@@ -775,8 +940,9 @@ async function runWindowChecks(
       });
       assert.equal(suyo?.matches, score?.matches, "objetivos y clasificación cuentan lo mismo");
 
-      // La vista pública solo enseña los tres primeros, así que este jugador
-      // puede no salir: si sale, sus números tienen que ser los de la ventana.
+      // La vista pública publica la clasificación entera de cada objetivo, así
+      // que este jugador sale en todos los objetivos donde ha jugado. Si sale,
+      // sus números tienen que ser los de la ventana.
       // `unwrapRead` en todos los sitios donde se lee de la base: una
       // comprobación que se traga un corte de la base y sigue con datos vacíos
       // daría "todo correcto" sin haber mirado nada. Aquí la lectura degradada
@@ -1320,7 +1486,9 @@ async function runDatabaseChecks(): Promise<void> {
     });
 
     await check("los objetivos se publican con el contrato previsto", async () => {
-      const { OBJECTIVE_COUNT, OBJECTIVE_GROUP_LABELS } = await import("@/lib/objectives");
+      const { MASTERIZAR_TODOS_ID, OBJECTIVE_COUNT, OBJECTIVE_GROUP_LABELS } = await import(
+        "@/lib/objectives"
+      );
 
       const view = unwrapRead(await getObjectives(), "verify:objetivos/contrato");
 
@@ -1341,7 +1509,11 @@ async function runDatabaseChecks(): Promise<void> {
         DEFAULT_RULESET.minimums,
         "los mínimos salen del ruleset activo",
       );
-      assert.equal(view.options.length, OBJECTIVE_COUNT, "hay los 37 objetivos de docs/PUNTUACION.md");
+      assert.equal(
+        view.options.length,
+        OBJECTIVE_COUNT,
+        `hay los ${OBJECTIVE_COUNT} objetivos de docs/PUNTUACION.md`,
+      );
 
       const groups = view.options.map((option) => option.group);
       assert.deepEqual(
@@ -1394,6 +1566,59 @@ async function runDatabaseChecks(): Promise<void> {
         "prohibido-perder sigue decidiéndose por ratio",
       );
 
+      // `masterizarlos-a-todos`: el objetivo que abarca las 23 civilizaciones,
+      // al final del grupo y con la etiqueta fijada por el cliente.
+      const todos = porId.get(MASTERIZAR_TODOS_ID);
+
+      assert.ok(todos !== undefined, "masterizarlos-a-todos existe");
+      assert.equal(
+        view.options.at(-1)?.id,
+        MASTERIZAR_TODOS_ID,
+        "masterizarlos-a-todos se presenta al final del grupo de civilizaciones",
+      );
+      assert.equal(
+        todos.group,
+        "civilizacion",
+        "masterizarlos-a-todos va en el grupo Civilizaciones",
+      );
+      assert.equal(
+        todos.label,
+        "Masterízalos a todos",
+        "el rótulo de `masterizarlos-a-todos` es copy del cliente",
+      );
+      assert.equal(
+        todos.points,
+        DEFAULT_RULESET.objectives[MASTERIZAR_TODOS_ID],
+        "los 100 de masterizarlos-a-todos salen del ruleset, como los demás",
+      );
+      assert.equal(
+        porId.get("masterizar-japanese")?.points,
+        DEFAULT_RULESET.objectives["masterizar-japanese"],
+        "y un masterizar-* sigue valiendo lo que diga el ruleset",
+      );
+      // Nadie que no haya ganado con todas las civs puede tenerlo, así que en
+      // la prueba (que no llega a las 23) el objetivo tiene que salir vacío.
+      assert.equal(
+        todos.holder,
+        null,
+        "sin las 23 civilizaciones dominadas el objetivo no tiene poseedor",
+      );
+      for (const contender of todos.ranking) {
+        assert.ok(
+          contender.value <= CIVILIZATIONS.length,
+          `masterizarlos-a-todos: ${contender.value} civilizaciones no puede pasar de ${CIVILIZATIONS.length}`,
+        );
+        assert.equal(
+          contender.eligible,
+          contender.value === CIVILIZATIONS.length,
+          "masterizarlos-a-todos: solo es elegible quien las tiene todas",
+        );
+        assert.ok(
+          contender.matches >= contender.value,
+          "masterizarlos-a-todos: cada civ dominada necesita al menos una partida",
+        );
+      }
+
       // El detalle de `otp`: la civilización del jugador, en el catálogo.
       const otp = porId.get("otp");
 
@@ -1428,7 +1653,27 @@ async function runDatabaseChecks(): Promise<void> {
           DEFAULT_RULESET.objectives[option.id],
           `${option.id}: los puntos salen del ruleset`,
         );
-        assert.ok(option.ranking.length <= 3, `${option.id}: el ranking va acotado a 3`);
+        assert.ok(
+          option.description.trim().length > 0,
+          `${option.id}: la descripción de la regla no está vacía`,
+        );
+        // Sin mínimos dentro: el único configurable es `minimums.masterizar`
+        // (y los de ratio y racha), y si uno estuviera escrito en la
+        // descripción dejaría de ser cierto el día que se cambiara en
+        // `Setting`. Los dígitos de "1v1" o de una civ no cuentan: no son
+        // números de configuración.
+        for (const minimum of Object.values(view.minimums)) {
+          assert.equal(
+            new RegExp(`\\b${minimum}\\b`).test(option.description),
+            false,
+            `${option.id}: la descripción no escribe el mínimo ${minimum}, que es configurable`,
+          );
+        }
+        assert.equal(
+          new Set(option.ranking.map((contender) => contender.profileId)).size,
+          option.ranking.length,
+          `${option.id}: el ranking no repite jugador`,
+        );
 
         for (const contender of option.ranking) {
           assert.equal(typeof contender.value, "number", `${option.id}: value es numérico`);
@@ -1447,6 +1692,14 @@ async function runDatabaseChecks(): Promise<void> {
         if (option.holder !== null) {
           holders.add(option.id);
           assert.equal(option.holder.eligible, true, `${option.id}: el poseedor cumple el mínimo`);
+          // El ranking va entero, así que el poseedor tiene que salir en él con
+          // la posición que le da su métrica: no se extrae ni se pone el primero.
+          assert.ok(
+            option.ranking.some(
+              (contender) => contender.profileId === option.holder?.profileId,
+            ),
+            `${option.id}: el poseedor aparece en el ranking, marcado por holder`,
+          );
         }
       }
 
@@ -1694,6 +1947,8 @@ async function runDatabaseChecks(): Promise<void> {
 
 async function main(): Promise<void> {
   await checkNormalization();
+  console.log("");
+  await checkObjectiveCatalogue();
   console.log("");
 
   if (process.argv.includes("--db")) {

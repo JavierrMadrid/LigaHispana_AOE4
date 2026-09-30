@@ -158,7 +158,7 @@ export default function RulesPage() {
             <SectionHeading title="Objetivos especiales" />
             <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
-                El torneo reparte 2320 puntos extra entre 37 objetivos. Cada objetivo
+                El torneo reparte 2420 puntos extra entre 38 objetivos. Cada objetivo
                 lo cobra una sola persona, la que va primera en su clasificación: no
                 hay puestos parciales ni puntos repartidos.
               </p>
@@ -253,7 +253,7 @@ export default function RulesPage() {
             <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
                 El sistema de puntuación que se aplica hoy es la versión 2 del
-                reglamento: 10 puntos por victoria clasificatoria más los 37
+                reglamento: 10 puntos por victoria clasificatoria más los 38
                 objetivos especiales. Sigue abierto mientras la organización cierra
                 los últimos detalles, como los puntos exactos de cada objetivo;
                 cualquier cambio de estructura sube la versión y se recalcula la

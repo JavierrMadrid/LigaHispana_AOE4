@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/empty-state";
 import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
 import { LiveDot } from "@/components/live-dot";
 import { ObjectiveIcon } from "@/components/objective-icon";
+import { PlayerAvatar } from "@/components/player-avatar";
 import { StandingsFilters } from "@/components/standings-filters";
 import { TwitchIcon } from "@/components/twitch-icon";
 
@@ -49,15 +50,6 @@ function normalize(value: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((word) => word.charAt(0))
-    .join("")
-    .toUpperCase();
 }
 
 type SortKey =
@@ -629,7 +621,7 @@ function StandingsRow({
 
         <td className={CELL}>
           <div className="flex items-center gap-3">
-            <PlayerAvatar row={row} />
+            <PlayerAvatar name={row.name} avatarUrl={row.avatarUrl} className="size-9 text-xs" />
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <PlayerName row={row} />
               <PlayerChips
@@ -747,7 +739,7 @@ function StandingsCard({
     >
       <div className="flex items-start gap-3">
         <RankBadge rank={row.rank} />
-        <PlayerAvatar row={row} />
+        <PlayerAvatar name={row.name} avatarUrl={row.avatarUrl} className="size-9 text-xs" />
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -1039,32 +1031,6 @@ function RankBadge({ rank }: { rank: number }) {
       <span className="sr-only">Puesto </span>
       {rank}
     </span>
-  );
-}
-
-function PlayerAvatar({ row }: { row: StandingRow }) {
-  if (row.avatarUrl === null) {
-    return (
-      <span
-        aria-hidden="true"
-        className="flex size-9 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised text-xs font-semibold text-muted"
-      >
-        {initials(row.name)}
-      </span>
-    );
-  }
-
-  return (
-    // eslint-disable-next-line @next/next/no-img-element -- los avatares vienen de AoE4World (o como data: en el mock); next/image exigiría declarar el host remoto.
-    <img
-      src={row.avatarUrl}
-      alt=""
-      width={36}
-      height={36}
-      loading="lazy"
-      decoding="async"
-      className="size-9 shrink-0 rounded-md border border-line bg-surface-raised object-cover"
-    />
   );
 }
 

@@ -101,6 +101,14 @@ function GenericIcon({ option, className }: { option: ObjectiveIconInput; classN
     );
   }
 
+  // `masterizarlos-a-todos` es el único objetivo de civilización que no es un
+  // `masterizar-<civ>`: su id no encaja con ninguna del catálogo, así que llega
+  // aquí. Se pinta con el escudo estrellado que evoca "todas las
+  // civilizaciones", no con el estandarte de reserva.
+  if (option.group === "civilizacion") {
+    return <AllCivsIcon className={className} />;
+  }
+
   return <CivilizationPlaceholderIcon className={className} />;
 }
 
@@ -159,6 +167,24 @@ function StreakIcon({ className }: { className?: string }) {
   return (
     <Glyph className={className}>
       <path d="M12 3.5c.5 2.6 2.4 3.8 3.5 5.4a5.3 5.3 0 1 1-8.8 3.2c0-1.8.9-3.2 1.9-4.4.3 1 .8 1.7 1.6 2.1-.4-2.4.2-4.6 1.8-6.3Z" />
+    </Glyph>
+  );
+}
+
+/**
+ * `masterizarlos-a-todos`: un escudo con estrella, emblema de haber dominado
+ * las 23 civilizaciones. El escudo es el blasón de la liga; la estrella que
+ * carga dentro es el distintivo de la gesta completa.
+ */
+function AllCivsIcon({ className }: { className?: string }) {
+  return (
+    <Glyph className={className}>
+      <path d="M12 3.5 18.5 5.7V10c0 3.9-2.6 6.8-6.5 9.5C8.1 16.8 5.5 13.9 5.5 10V5.7Z" />
+      <path
+        d="M12 7.5 12.73 9.49 14.85 9.57 13.19 10.89 13.76 12.93 12 11.75 10.24 12.93 10.81 10.89 9.15 9.57 11.27 9.49Z"
+        fill="currentColor"
+        stroke="none"
+      />
     </Glyph>
   );
 }

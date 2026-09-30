@@ -50,10 +50,10 @@ import { Client } from "pg";
  * ## Por qué habla con `pg` y no con Prisma
  *
  * Igual que `scripts/db-security.ts` y por el mismo motivo: el cliente de Prisma
- * de la web está generado con `runtime = "workerd"` y no puede cargar su query
- * compiler bajo `tsx`. Además, nada de esto es una tabla de Prisma: son
- * extensiones y el catálogo de `cron`, y `prisma db push` no las gestiona ni las
- * conoce.
+ * de la web está generado con `runtime = "workerd"`. (La carga de su query
+ * compiler bajo `tsx` ya la resuelve `scripts/prisma-wasm-node.mjs`.) Además,
+ * nada de esto es una tabla de Prisma: son extensiones y el catálogo de `cron`,
+ * y `prisma db push` no las gestiona ni las conoce.
  *
  * ## Por qué es un script y no un `.sql` suelto
  *

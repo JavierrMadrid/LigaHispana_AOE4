@@ -24,7 +24,7 @@ import { writeScoringLastRun } from "@/lib/settings";
  * Motor de puntuación (reglas v2).
  *
  * La regla completa está en `docs/PUNTUACION.md`: 10 puntos por victoria
- * clasificatoria más los 37 objetivos winner-takes-all de `objectives.ts`.
+ * clasificatoria más los 38 objetivos winner-takes-all de `objectives.ts`.
  * Aquí vive lo que no es cálculo: el ruleset (configurable en `Setting`),
  * el agregado (`PlayerScore`) y el orden final de la clasificación.
  *
@@ -91,7 +91,7 @@ export const RULESET_VERSION = 2;
  * guardada para que un lector directo de la tabla no vea texto de otra versión.
  */
 export const RULE_LABEL =
-  "10 puntos por victoria clasificatoria más 37 objetivos especiales; solo el primero los cobra";
+  "10 puntos por victoria clasificatoria más 38 objetivos especiales; solo el primero los cobra";
 
 export type ScoringMinimums = {
   /** Mínimo de partidas clasificatorias para `prohibido-perder`. */
@@ -369,7 +369,7 @@ export type ScoreBreakdownMode = {
  * ```json
  * {
  *   "ruleSetVersion": 2,
- *   "rule": "10 puntos por victoria clasificatoria más 37 objetivos…",
+ *   "rule": "10 puntos por victoria clasificatoria más 38 objetivos…",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 10, "matches": 2 }
@@ -404,7 +404,7 @@ function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode
 /* -------------------------------------------------------------------------- */
 
 /**
- * Los 37 objetivos con sus poseedores, listos para pintar.
+ * Los 38 objetivos con sus poseedores, listos para pintar.
  *
  * Dos consultas y ninguna por fila: una para el ruleset (una clave de
  * `Setting`) y una para las partidas clasificatorias. Se lee en cada llamada,
@@ -416,9 +416,9 @@ function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode
  * acabarían mintiendo el día que se cambien en `Setting`.
  *
  * Con la base de datos caída devuelve `{ status: "degraded", data: null }`: los
- * 37 objetivos existen siempre (es el catálogo), pero **quién posee cada uno**
+ * 38 objetivos existen siempre (es el catálogo), pero **quién posee cada uno**
  * solo existe en la base, y publicar una tabla de objetivos sin poseedores
- * serían los 37 sin dueño, que no es lo que hay.
+ * serían los 38 sin dueño, que no es lo que hay.
  */
 export async function getObjectives(): Promise<PublicRead<ObjectiveView>> {
   return readFromDatabase("public/getObjectives", loadObjectives);
@@ -458,7 +458,7 @@ export type RecomputeScoresResult = {
   playersUnranked: number;
   /** Suma de `PlayerScore.total`: partidas y objetivos. */
   totalPoints: number;
-  /** Objetivos con poseedor en este recálculo (de 37). */
+  /** Objetivos con poseedor en este recálculo (de 38). */
   objectivesAwarded: number;
   /** Puntos repartidos por objetivos. */
   objectivesPoints: number;
