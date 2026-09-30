@@ -4,8 +4,8 @@ import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
+import { describeTeamSize, formatRelativeTime, teamSizesFromRawJson } from "@/lib/format";
 import { isRecord } from "@/lib/json";
-import { formatRelativeTime } from "@/lib/format";
 import { classificatoryWhere, readInstant } from "@/lib/ranked-match";
 import { RULESET_VERSION, readRuleset } from "@/lib/scoring";
 import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/settings";
@@ -365,6 +365,8 @@ export type AdminMatchHistoryQuery = AdminPageQuery & {
   from?: AdminQueryParam;
   /** Límite superior **exclusivo** sobre `startedAt`. */
   to?: AdminQueryParam;
+  /** `WIN` o `LOSS`; cualquier otra cosa se trata como ausencia de filtro. */
+  resultado?: AdminQueryParam;
 };
 
 /** Una partida del historial, con el jugador de la liga ya resuelto. */
@@ -380,6 +382,14 @@ export type AdminMatchHistoryRow = {
   opponentName: string | null;
   opponentProfileId: number | null;
   result: MatchResult | null;
+  /**
+   * Tamaño real del partido («1vs1», «2v2», «3v3»…), leído de `rawJson.teams`.
+   *
+   * No se puede sacar de `mode`/`leaderboard`: un ranked por equipos llega con
+   * `leaderboard: "rm_team"`, que no dice cuántos juegan. `null` cuando el payload no
+   * lo permite, y entonces la interfaz cae en `describeMode`.
+   */
+  teamSize: string | null;
   /** Puntos que aporta con el ruleset activo; `0` en una partida no ganada. */
   points: number;
   mode: string | null;
@@ -478,6 +488,23 @@ function startedAtWhere(query: AdminMatchHistoryQuery): StartedAtRange {
 }
 
 /**
+ * El filtro de resultado de la URL, ya validado.
+ *
+ * Solo `WIN` y `LOSS` son válidos y cualquier otra cosa se trata como **ausencia de
+ * filtro**, igual que el `playerId` mal formado: una URL manipulada con
+ * `?resultado=TODAS` se comporta como si no filtrara, en vez de devolver cero filas y
+ * hacer creer que ese jugador no tiene ninguna partida. El listado solo trae
+ * clasificatorias resueltas (`classificatoryWhere` exige `result is not null`), así
+ * que un `result` nulo nunca llega a la tabla: no hace falta un valor para "sin
+ * resolver".
+ */
+function readResultFilter(value: AdminQueryParam): MatchResult | null {
+  const raw = readSingleParam(value);
+
+  return raw === MatchResult.WIN || raw === MatchResult.LOSS ? raw : null;
+}
+
+/**
  * Historial de partidas clasificatorias, paginado en servidor y de la más reciente a
  * la más antigua.
  *
@@ -514,12 +541,17 @@ export async function getAdminMatchHistory(
     const ruleset = await readRuleset();
     const playerId = readSingleParam(query.playerId);
     const rango = startedAtWhere(query);
+    const resultado = readResultFilter(query.resultado);
     const filtrandoFechas = rango.gte !== undefined || rango.lt !== undefined;
 
+    // Los filtros se suman, no se eligen: `where` es una conjunción, así que jugador
+    // + fechas + resultado se combinan solos. No hace falta ninguna lógica de "si hay
+    // dos, el segundo gana", que es justo donde estos filtros se suelen equivocar.
     const where: Prisma.MatchWhereInput = {
       ...classificatoryWhere(ruleset.modes, ruleset.window),
       ...(playerId !== null && PLAYER_ID_PATTERN.test(playerId) ? { playerId } : {}),
       ...(filtrandoFechas ? { startedAt: rango } : {}),
+      ...(resultado === null ? {} : { result: resultado }),
     };
 
     return adminPage<AdminMatchHistoryRow>(async (wanted) => {
@@ -542,6 +574,7 @@ export async function getAdminMatchHistory(
             leaderboard: true,
             map: true,
             revertedAt: true,
+            rawJson: true,
             player: { select: { name: true, profileId: true } },
           },
         }),
@@ -560,6 +593,9 @@ export async function getAdminMatchHistory(
           opponentName: row.opponentName,
           opponentProfileId: row.opponentProfileId,
           result: row.result,
+          // El tamaño se resuelve aquí y no en la interfaz: `rawJson` es el payload
+          // literal de la API y no debe salir del DAL.
+          teamSize: describeTeamSize(teamSizesFromRawJson(row.rawJson)),
           points: row.points,
           mode: row.mode,
           leaderboard: row.leaderboard,

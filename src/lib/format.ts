@@ -120,3 +120,28 @@ export function describeTeamSize(teamSizes: readonly number[]): string | null {
   // Mismo criterio de etiqueta que `describeMode`: el 1v1 se escribe "1vs1".
   return first === 1 ? "1vs1" : `${first}v${first}`;
 }
+
+/**
+ * Cuántos jugadores tiene cada equipo de la partida, leído de `rawJson.teams`.
+ *
+ * Existe para el historial, que no tiene la alineación a la vista y aun así necesita
+ * el tamaño: en las columnas, un ranked 2v2 viene con `leaderboard: "rm_team"`, que no
+ * dice cuántos juegan, y la alineación completa solo está en el payload. Es la misma
+ * fuente que usa `/partidas`, pero aquí solo hacen falta los recuentos.
+ *
+ * Devuelve `[]` cuando el payload no permite asegurarlo, y quien llama cae en
+ * `describeMode`: una partida vieja o un `rawJson` raro no debe inventar un 2v2.
+ */
+export function teamSizesFromRawJson(rawJson: unknown): number[] {
+  if (typeof rawJson !== "object" || rawJson === null || !("teams" in rawJson)) {
+    return [];
+  }
+
+  const { teams } = rawJson as { teams: unknown };
+
+  if (!Array.isArray(teams)) {
+    return [];
+  }
+
+  return teams.filter(Array.isArray).map((team) => (team as unknown[]).length);
+}

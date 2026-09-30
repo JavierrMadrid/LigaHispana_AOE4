@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { AdminActionType } from "@/generated/prisma/enums";
 import { EmptyState } from "@/components/empty-state";
+import { PageSizeSelect } from "@/components/page-size-select";
 import { getAdminActions } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
 import { formatAbsoluteTime } from "@/lib/format";
@@ -41,6 +42,10 @@ export default async function AdminActionsPage({ searchParams }: PageProps<"/adm
 
   const params = await searchParams;
   const actions = await getAdminActions(params);
+
+  // El historial de acciones no tiene filtros, pero sí tamaño de página: viaja en la
+  // URL y hay que devolvérselo a la paginación, o al pasar de página volvería a 25.
+  const pageSize = Array.isArray(params.pageSize) ? params.pageSize[0] : params.pageSize;
 
   return (
     <div className="flex flex-col gap-6">
@@ -131,14 +136,17 @@ export default async function AdminActionsPage({ searchParams }: PageProps<"/adm
             </table>
           </div>
 
-          <Pagination
-            page={actions.data.page}
-            pageCount={actions.data.pageCount}
-            shown={actions.data.rows.length}
-            total={actions.data.total}
-            basePath="/admin/acciones"
-            query={{}}
-          />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <PageSizeSelect />
+            <Pagination
+              page={actions.data.page}
+              pageCount={actions.data.pageCount}
+              shown={actions.data.rows.length}
+              total={actions.data.total}
+              basePath="/admin/acciones"
+              query={{ pageSize }}
+            />
+          </div>
         </>
       )}
     </div>

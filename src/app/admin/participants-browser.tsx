@@ -8,6 +8,11 @@ import type { AdminParticipant } from "@/lib/admin";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
+import {
+  DEFAULT_PAGE_SIZE_VALUE,
+  PAGE_SIZE_OPTIONS,
+  readPageSize,
+} from "@/components/page-size-select";
 import { PendingButton } from "@/components/pending-button";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { PLAYER_STATUS_LABELS, PLAYER_STATUS_STYLES } from "./participant-status";
@@ -43,15 +48,19 @@ const CELL = "px-4 py-3 align-top";
 /**
  * Listado completo de participantes con buscador y filtro por estado en cliente.
  *
- * El DAL manda la lista entera (son decenas de filas, no hay paginación) y aquí
- * solo se filtra y se pinta, así que buscar no recarga la página. Los estados no
- * aprobados no se esconden: se marcan, y cuando el jugador no tiene fila en la
- * clasificación los números salen como raya y no como cero, que afirmaría algo
- * falso.
+ * El DAL manda la lista entera (son decenas de filas) y aquí solo se filtra, se pagina
+ * y se pinta, así que buscar no recarga la página. **La paginación es de cliente a
+ * propósito**: con la búsqueda filtrando sobre lo que ya hay, paginar en servidor haría
+ * que buscar solo encontrara lo de la página visible, que es el fallo clásico de
+ * combinar las dos cosas. Los estados no aprobados no se esconden: se marcan, y cuando
+ * el jugador no tiene fila en la clasificación los números salen como raya y no como
+ * cero, que afirmaría algo falso.
  */
 export function ParticipantsBrowser({ participants }: { participants: AdminParticipant[] }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("ALL");
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE_VALUE);
+  const [page, setPage] = useState(1);
 
   const counts = useMemo(() => {
     const map: Record<StatusFilter, number> = {
@@ -92,9 +101,30 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
 
   const hasFilters = query.trim() !== "" || status !== "ALL";
 
+  /**
+   * La página que se pinta, acotada a las que existen.
+   *
+   * Se acota aquí y no con un `useEffect` que reinicie al cambiar los filtros: si la
+   * página 3 deja de existir porque el filtro reduce la lista, esto cae solo en la
+   * última válida, sin un renderizado de más ni un estado intermedio incoherente.
+   */
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+
+  const paged = useMemo(
+    () => filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [filtered, currentPage, pageSize],
+  );
+
   function clearFilters() {
     setQuery("");
     setStatus("ALL");
+    setPage(1);
+  }
+
+  function changePageSize(next: number) {
+    setPageSize(next);
+    setPage(1);
   }
 
   return (
@@ -109,7 +139,10 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
               id="buscar-participante"
               type="search"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
               placeholder="Buscar por nombre, perfil o canal"
               autoComplete="off"
               className="h-10 w-full rounded-md border border-line bg-surface px-3 text-sm text-foreground transition-colors placeholder:text-muted"
@@ -129,7 +162,10 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
                   key={item.id}
                   type="button"
                   aria-pressed={active}
-                  onClick={() => setStatus(active && item.id !== "ALL" ? "ALL" : item.id)}
+                  onClick={() => {
+                    setStatus(active && item.id !== "ALL" ? "ALL" : item.id);
+                    setPage(1);
+                  }}
                   className={`inline-flex h-10 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-colors ${
                     active
                       ? "border-accent bg-accent text-accent-ink"
@@ -196,45 +232,93 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">
-                Jugadores del torneo: nombre, perfil de AoE4World, canal de Twitch,
-                estado, partidas clasificatorias y puntos. Una raya significa que el
-                jugador no tiene fila en la clasificación.
-              </caption>
-              <thead className="bg-surface text-muted">
-                <tr>
-                  <th scope="col" className="px-4 py-3 font-medium">
-                    Jugador
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                    AoE4World
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                    Twitch
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                    Estado
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 text-right font-medium lg:table-cell">
-                    Partidas
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 text-right font-medium lg:table-cell">
-                    Puntos
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-right font-medium">
-                    Acciones
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {filtered.map((player) => (
-                  <ParticipantRow key={player.id} player={player} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
+              <table className="w-full text-left text-sm">
+                <caption className="sr-only">
+                  Jugadores del torneo: nombre, perfil de AoE4World, canal de Twitch,
+                  estado, partidas clasificatorias y puntos. Una raya significa que el
+                  jugador no tiene fila en la clasificación.
+                </caption>
+                <thead className="bg-surface text-muted">
+                  <tr>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Jugador
+                    </th>
+                    <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
+                      AoE4World
+                    </th>
+                    <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
+                      Twitch
+                    </th>
+                    <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
+                      Estado
+                    </th>
+                    <th scope="col" className="hidden px-4 py-3 text-right font-medium lg:table-cell">
+                      Partidas
+                    </th>
+                    <th scope="col" className="hidden px-4 py-3 text-right font-medium lg:table-cell">
+                      Puntos
+                    </th>
+                    <th scope="col" className="px-4 py-3 text-right font-medium">
+                      Acciones
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {paged.map((player) => (
+                    <ParticipantRow key={player.id} player={player} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2 text-xs text-muted">
+                <label htmlFor="participantes-page-size">Filas por página</label>
+                <select
+                  id="participantes-page-size"
+                  value={String(pageSize)}
+                  onChange={(event) => changePageSize(readPageSize(event.target.value))}
+                  className="h-10 rounded-md border border-line bg-background px-2 text-foreground"
+                >
+                  {PAGE_SIZE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <nav aria-label="Paginación" className="flex flex-wrap items-center gap-3">
+                <p className="text-xs text-muted">
+                  Mostrando {paged.length} de {filtered.length}
+                  {pageCount > 1 ? ` · página ${currentPage} de ${pageCount}` : ""}
+                </p>
+
+                {pageCount > 1 ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPage(currentPage - 1)}
+                      disabled={currentPage <= 1}
+                      className="inline-flex h-10 items-center rounded-md border border-line bg-surface px-3 text-sm text-foreground transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPage(currentPage + 1)}
+                      disabled={currentPage >= pageCount}
+                      className="inline-flex h-10 items-center rounded-md border border-line bg-surface px-3 text-sm text-foreground transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                ) : null}
+              </nav>
+            </div>
+          </>
         )}
       </div>
     </ActionFeedbackProvider>

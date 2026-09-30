@@ -3,6 +3,7 @@ import { revertMatchPoints, restoreMatchPoints } from "@/app/admin/actions";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
+import { PageSizeSelect } from "@/components/page-size-select";
 import {
   getAdminMatchHistory,
   getAdminParticipants,
@@ -23,39 +24,88 @@ function puntos(count: number): string {
 }
 
 /**
+ * Etiqueta y color de la columna de resultado.
+ *
+ * Va en su propia columna, y no solo dentro de la frase, porque la columna es lo que
+ * permite recorrer el historial de un vistazo buscando «solo las que perdió» sin
+ * tener que leer la descripción entera de cada fila. Es el mismo recurso que en
+ * `/admin/acciones`: el color diferencia y la etiqueta confirma, para que el color no
+ * sea lo único que transmite el dato.
+ */
+const RESULT_LABELS = { WIN: "Victoria", LOSS: "Derrota" } as const;
+
+const RESULT_STYLES = {
+  WIN: "border-win/40 text-win",
+  LOSS: "border-loss/40 text-loss",
+} as const;
+
+/**
+ * La etiqueta del formato de la partida, en un solo sitio.
+ *
+ * La usan la frase y la línea secundaria, y tienen que decir lo mismo: si la frase
+ * dijera "ganó partida 2v2" y debajo pusiera "Por equipos", el historial estaría
+ * contradiciéndose en la misma celda. `teamSize` es el recuento real de `rawJson` y
+ * manda; `describeMode` es el respaldo para lo que el payload no permite asegurar.
+ */
+function formatLabel(row: AdminMatchHistoryRow): string {
+  return row.teamSize ?? describeMode(row.mode, row.leaderboard);
+}
+
+/**
  * La frase de una partida en el historial.
  *
- * La fila es la del jugador de la liga, así que el resultado manda la forma y el
- * sujeto siempre es él: una victoria dice a quién ganó y cuánto sumó; una
- * derrota dice contra quién perdió y deja claro que sumó cero, que es el
- * resultado real y no un dato que falte. Si la API no dio el nombre del rival, la
- * frase sigue siendo correcta sin él ("ganó la partida") en vez de quedarse a
- * medias ("ganó a ").
+ * En un **1v1** se nombra al rival, que es lo que añade información: "ganó a X".
  *
- * Una partida revertida se describe sin cifra: el motor ya le ha puesto los
- * puntos a cero, así que afirmar "sin puntos" confundiría el estado actual con lo
- * que valía. La marca de revertida, en la misma celda, es la que aclara que esos
- * puntos se quitaron a mano.
+ * En una partida **por equipos** no, y es importante: `Match` guarda un solo rival (el
+ * primer jugador del equipo contrario), así que decir "ganó a X" en un 2v2 nombra a
+ * uno de los dos y hace creer que era un 1v1. Se dice el **formato** en su lugar —
+ * "ganó la partida 2v2"—, que es el dato que sí es cierto y completo. El tamaño sale
+ * de `teamSize`, leído de `rawJson`, porque `leaderboard` publica `rm_team` sin decir
+ * cuántos juegan.
+ *
+ * El sujeto siempre es el jugador de la liga. Una victoria dice cuánto sumó; una
+ * derrota dice que sumó cero, que es el resultado real y no un dato que falte. Si la
+ * API no dio el nombre del rival, la frase sigue siendo correcta sin él ("ganó la
+ * partida") en vez de quedarse a medias ("ganó a ").
+ *
+ * Una partida revertida se describe sin cifra: el motor ya le ha puesto los puntos a
+ * cero, así que afirmar "sin puntos" confundiría el estado actual con lo que valía. La
+ * marca de revertida, en la misma columna, es la que aclara que esos puntos se
+ * quitaron a mano.
  */
 function describeResult(row: AdminMatchHistoryRow): string {
-  const rival = row.opponentName;
   const reverted = row.revertedAt !== null;
 
-  if (row.result === "WIN") {
-    const outcome = rival === null ? "ganó la partida" : `ganó a ${rival}`;
-
-    return reverted
-      ? `${row.playerName} ${outcome}`
-      : `${row.playerName} ${outcome}: +${puntos(row.points)}`;
+  if (row.result === null) {
+    return `${row.playerName} tiene una partida sin resultado resuelto`;
   }
 
-  if (row.result === "LOSS") {
-    const outcome = rival === null ? "perdió la partida" : `perdió contra ${rival}`;
+  const gano = row.result === "WIN";
 
-    return reverted ? `${row.playerName} ${outcome}` : `${row.playerName} ${outcome}: 0 puntos`;
+  // `teamSize` manda sobre `describeMode` cuando existe: es el recuento real de
+  // `rawJson`, no una etiqueta deducida. "1vs1" es individual; lo demás, por equipos.
+  const formato = formatLabel(row);
+  const individual = formato === "1vs1";
+
+  const outcome = individual
+    ? row.opponentName === null
+      ? gano
+        ? "ganó la partida"
+        : "perdió la partida"
+      : gano
+        ? `ganó a ${row.opponentName}`
+        : `perdió contra ${row.opponentName}`
+    : gano
+      ? `ganó partida ${formato}`
+      : `perdió partida ${formato}`;
+
+  if (reverted) {
+    return `${row.playerName} ${outcome}`;
   }
 
-  return `${row.playerName} tiene una partida sin resultado resuelto`;
+  return gano
+    ? `${row.playerName} ${outcome}: +${puntos(row.points)}`
+    : `${row.playerName} ${outcome}: 0 puntos`;
 }
 
 /** Un valor de `searchParams` reducido a texto, para los enlaces de paginación. */
@@ -82,9 +132,14 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
     playerId: single(params.playerId),
     from: single(params.from),
     to: single(params.to),
+    resultado: single(params.resultado),
+    pageSize: single(params.pageSize),
   };
   const hasFilters =
-    query.playerId !== undefined || query.from !== undefined || query.to !== undefined;
+    query.playerId !== undefined ||
+    query.from !== undefined ||
+    query.to !== undefined ||
+    query.resultado !== undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -125,14 +180,18 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                 <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
                   <table className="w-full text-left text-sm">
                     <caption className="sr-only">
-                      Partidas clasificatorias: fecha, descripción con los puntos que
-                      aporta y la acción de revertir o restaurar sus puntos. Por debajo
-                      de la pantalla mediana la fecha se lee dentro de la descripción.
+                      Partidas clasificatorias: fecha, resultado, descripción con los
+                      puntos que aporta y la acción de revertir o restaurar sus puntos.
+                      Por debajo de la pantalla mediana la fecha se lee dentro de la
+                      descripción.
                     </caption>
                     <thead className="bg-surface text-muted">
                       <tr>
                         <th scope="col" className="hidden w-44 px-4 py-3 font-medium md:table-cell">
                           Fecha
+                        </th>
+                        <th scope="col" className="w-28 px-4 py-3 font-medium">
+                          Resultado
                         </th>
                         <th scope="col" className="px-4 py-3 font-medium">
                           Descripción
@@ -159,6 +218,20 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                             </td>
 
                             <td className="px-4 py-3 align-top">
+                              {row.result === null ? (
+                                <span className="text-xs text-muted">—</span>
+                              ) : (
+                                <span
+                                  className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${
+                                    RESULT_STYLES[row.result]
+                                  }`}
+                                >
+                                  {RESULT_LABELS[row.result]}
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="px-4 py-3 align-top">
                               {/* La fecha es una columna secundaria: por debajo de `md`
                                   se lee aquí, bajo la descripción, en vez de forzar
                                   el scroll horizontal de una tabla de tres columnas. */}
@@ -177,7 +250,7 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                                 {describeResult(row)}
                               </p>
                               <p className="mt-0.5 text-xs text-muted">
-                                {describeMode(row.mode, row.leaderboard)}
+                                {formatLabel(row)}
                                 {row.map !== null ? ` · ${row.map}` : ""}
                               </p>
                               {reverted && row.revertedAt !== null ? (
@@ -239,14 +312,17 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                   </table>
                 </div>
 
-                <Pagination
-                  page={history.data.page}
-                  pageCount={history.data.pageCount}
-                  shown={history.data.rows.length}
-                  total={history.data.total}
-                  basePath="/admin/historial"
-                  query={query}
-                />
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <PageSizeSelect />
+                  <Pagination
+                    page={history.data.page}
+                    pageCount={history.data.pageCount}
+                    shown={history.data.rows.length}
+                    total={history.data.total}
+                    basePath="/admin/historial"
+                    query={query}
+                  />
+                </div>
               </>
             )}
           </div>
