@@ -1,95 +1,150 @@
-import type { ObjectiveContender, ObjectiveMetric, ObjectiveOption } from "@/lib/public";
+import { CIVILIZATION_IDS } from "@/lib/civs";
+import type {
+  ObjectiveContender,
+  ObjectiveMetric,
+  ObjectiveOption,
+  ObjectiveView,
+} from "@/lib/public";
 import { ObjectiveIcon } from "@/components/objective-icon";
+import { PlayerAvatar } from "@/components/player-avatar";
 
 /**
  * Tarjeta de un objetivo especial.
  *
- * El objetivo no es un premio: es un puesto de la clasificación que se cobra al
- * instante, así que la tarjeta se lee de arriba abajo como un marcador: qué se
- * juega y cuánto vale, quién lo tiene (o por qué está vacante) y quién va
- * detrás. A la izquierda del título va el icono que identifica el objetivo
- * (emblema de liga, civilización o glifo de grupo).
+ * Se lee como un cartel del premio: arriba el emblema, el nombre y la regla en
+ * una frase, con los puntos en juego en una placa a la derecha; debajo, quién
+ * lo posee (o por qué está vacante). El top de contendientes ya no vive aquí:
+ * la lista entera se enseña en el diálogo de `ObjectiveRankingDialog`, así que
+ * la tarjeta se escanea de un vistazo. El pie es la puerta a esa clasificación.
  */
-export function ObjectiveCard({ option }: { option: ObjectiveOption }) {
-  const chasers = option.ranking.filter(
-    (contender) => contender.profileId !== option.holder?.profileId,
-  );
+type ObjectiveCardProps = {
+  option: ObjectiveOption;
+  /** Abre la clasificación completa del objetivo. */
+  onOpen: () => void;
+};
+
+export function ObjectiveCard({
+  option,
+  onOpen,
+}: ObjectiveCardProps) {
+  const held = option.holder !== null;
 
   return (
     <article
-      className={`flex h-full flex-col rounded-lg border bg-surface p-4 ${
-        option.holder === null ? "border-line" : "border-accent/30"
+      className={`flex h-full flex-col rounded-lg border bg-surface p-5 ${
+        held ? "border-accent/35" : "border-line"
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <h3 className="flex min-w-0 items-center gap-2 font-semibold text-foreground">
-          <ObjectiveIcon option={option} />
-          <span className="min-w-0">{option.label}</span>
-        </h3>
-        <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold tabular-nums text-accent">
-          +{option.points}
-          <span className="sr-only"> puntos</span>
+      <div className="flex items-center gap-4">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
+          <ObjectiveIcon option={option} className="size-6 shrink-0" />
         </span>
+        <h3 className="min-w-0 flex-1 font-display text-base font-semibold leading-snug text-foreground">
+          {option.label}
+        </h3>
+        <PrizePlate points={option.points} />
       </div>
 
-      {option.holder === null ? (
-        <p className="mt-3 rounded-md border border-dashed border-line bg-surface-raised/40 p-3 text-sm leading-relaxed text-muted">
-          {emptyMessage(option)}
-        </p>
-      ) : (
-        <div className="mt-3 flex items-center gap-3 rounded-md border border-accent/25 bg-accent/5 p-3">
-          <ContenderAvatar contender={option.holder} className="size-9 text-xs" />
-          <div className="min-w-0 flex-1">
-            <a
-              href={`https://aoe4world.com/players/${option.holder.profileId}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block truncate font-medium text-foreground underline-offset-4 hover:text-accent hover:underline"
-            >
-              {option.holder.name}
-              <span className="sr-only"> en AoE4World (se abre en una pestaña nueva)</span>
-            </a>
-            <p className="mt-0.5 text-xs tabular-nums text-accent">
-              {formatValue(option.metric, option.holder)}
-            </p>
-          </div>
-          <span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent">
-            Poseedor
-          </span>
-        </div>
-      )}
+      <p className="mt-3 pb-6 text-sm leading-relaxed text-muted">{option.description}</p>
 
-      {chasers.length === 0 ? null : (
-        <div className="mt-4 border-t border-line pt-3">
-          <p className="text-xs text-muted">{chasersHeading(option)}</p>
-          <ol className="mt-2 flex flex-col gap-2">
-            {chasers.map((contender) => (
-              <li key={contender.profileId} className="flex items-center gap-2 text-sm">
-                <span
-                  aria-hidden="true"
-                  className="w-4 shrink-0 text-center text-xs tabular-nums text-muted"
-                >
-                  {option.ranking.indexOf(contender) + 1}
-                </span>
-                <ContenderAvatar contender={contender} className="size-6 text-[10px]" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-foreground/90">{contender.name}</span>
-                  {contender.eligible ? null : (
-                    <span className="block text-[11px] text-muted">
-                      {ineligibleTag(option)}
-                    </span>
-                  )}
-                </span>
-                <span className="shrink-0 text-xs tabular-nums text-muted">
-                  {formatValue(option.metric, contender)}
-                </span>
-              </li>
-            ))}
-          </ol>
+      {/*
+        Pie en una sola línea bajo un filete fino: a la izquierda el poseedor
+        (rótulo pequeño y debajo el nombre), a la derecha el enlace a la
+        clasificación. El valor de la métrica y el motivo de vacante viven en
+        el diálogo, no aquí.
+      */}
+      <div className="mt-auto flex items-end justify-between gap-4 border-t border-line pt-4">
+        <div className="min-w-0">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Poseedor</p>
+          {option.holder === null ? (
+            <p className="mt-1 truncate text-sm text-muted">Sin poseedor todavía</p>
+          ) : (
+            <div className="mt-1 flex items-center gap-2">
+              <PlayerAvatar
+                name={option.holder.name}
+                avatarUrl={option.holder.avatarUrl}
+                className="size-6 shrink-0 text-[10px]"
+              />
+              <ContenderName
+                contender={option.holder}
+                className="truncate text-sm font-medium text-foreground"
+              />
+            </div>
+          )}
         </div>
-      )}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="shrink-0 text-sm font-medium text-accent underline-offset-4 transition-colors hover:underline focus-visible:underline"
+        >
+          Ver clasificación
+        </button>
+      </div>
     </article>
   );
+}
+
+/** La placa del premio: los puntos que reparte el objetivo, a la derecha. */
+function PrizePlate({ points }: { points: number }) {
+  return (
+    <span className="shrink-0 rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-right">
+      <span className="block font-display text-xl font-semibold leading-none tabular-nums text-accent">
+        +{points}
+      </span>
+      <span className="mt-1 block text-[10px] font-medium uppercase tracking-wide text-muted">
+        puntos
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Nombre de un contendiente, enlazado a su perfil de AoE4World cuando la API
+ * publicó un id. Sin él se queda en texto, que es más honesto que un enlace
+ * roto.
+ */
+export function ContenderName({
+  contender,
+  className,
+}: {
+  contender: ObjectiveContender;
+  className: string;
+}) {
+  if (contender.profileUrl === null) {
+    return <span className={`block ${className}`}>{contender.name}</span>;
+  }
+
+  return (
+    <a
+      href={contender.profileUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`block underline-offset-4 transition-colors hover:text-accent hover:underline ${className}`}
+    >
+      {contender.name}
+      <span className="sr-only"> en AoE4World (se abre en una pestaña nueva)</span>
+    </a>
+  );
+}
+
+/**
+ * Valor de la métrica de un contendiente, en la unidad que se lee de un vistazo.
+ *
+ * En `masterizarlos-a-todos` el valor no son victorias sino **civilizaciones
+ * dominadas** del catálogo, así que se ramifica por id y no por métrica: añadir
+ * un miembro a `ObjectiveMetric` rompería el `switch` exhaustivo de
+ * `formatValue`.
+ */
+export function contenderValue(
+  option: ObjectiveOption,
+  contender: ObjectiveContender,
+  masterizarTodosId: string,
+): string {
+  if (option.id === masterizarTodosId) {
+    return `${contender.value}/${CIVILIZATION_IDS.length} civilizaciones`;
+  }
+
+  return formatValue(option.metric, contender);
 }
 
 /**
@@ -122,78 +177,40 @@ export function formatValue(metric: ObjectiveMetric, contender: ObjectiveContend
 }
 
 /** Por qué el objetivo está vacante, con el matiz de cada familia. */
-function emptyMessage(option: ObjectiveOption): string {
+export function emptyMessage(
+  option: ObjectiveOption,
+  minimums: ObjectiveView["minimums"],
+  masterizarTodosId: string,
+): string {
+  if (option.id === masterizarTodosId) {
+    return "Carrera abierta: nadie ha ganado todavía con las 23 civilizaciones.";
+  }
+
   if (option.group === "civilizacion") {
-    return "Carrera abierta: nadie ha llegado a 10 victorias con esta civilización todavía.";
+    return `Carrera abierta: nadie ha llegado a ${minimums.masterizar} victorias con esta civilización todavía.`;
   }
 
   if (option.metric === "winrate" || option.metric === "racha") {
+    const minimo = option.metric === "winrate" ? minimums.winrate : minimums.streak;
+
     return option.ranking.length === 0
       ? "Sin candidatos todavía: nadie ha jugado una partida clasificatoria."
-      : "Nadie cumple el mínimo de 10 partidas clasificatorias.";
+      : `Nadie cumple el mínimo de ${minimo} partidas clasificatorias.`;
   }
 
   switch (option.group) {
     case "division":
-      return "Aún sin poseedor: nadie de esta división ha ganado una partida todavía.";
+      return "Nadie de esta división ha ganado una partida todavía.";
     case "formato":
-      return "Aún sin poseedor: nadie ha ganado todavía en este formato.";
+      return "Nadie ha ganado todavía en este formato.";
     default:
       return option.metric === "victorias"
-        ? "Aún sin poseedor: nadie ha ganado todavía con una civilización fija."
-        : "Aún sin poseedor: todavía no hay partidas clasificatorias jugadas.";
+        ? "Nadie ha ganado todavía con una civilización fija."
+        : "Todavía no hay partidas clasificatorias jugadas.";
   }
-}
-
-/** Rótulo de la lista de aspirantes, según haya poseedor o no. */
-function chasersHeading(option: ObjectiveOption): string {
-  if (option.holder !== null) {
-    return "Persiguen el objetivo";
-  }
-
-  return option.group === "civilizacion" ? "En carrera" : "Mejores aspirantes";
 }
 
 /** Por qué un aspirante no puede cobrar todavía el objetivo. */
-function ineligibleTag(option: ObjectiveOption): string {
+export function ineligibleTag(option: ObjectiveOption): string {
   return option.group === "civilizacion" ? "en camino" : "no llega al mínimo";
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((word) => word.charAt(0))
-    .join("")
-    .toUpperCase();
-}
-
-function ContenderAvatar({
-  contender,
-  className,
-}: {
-  contender: ObjectiveContender;
-  className: string;
-}) {
-  if (contender.avatarUrl === null) {
-    return (
-      <span
-        aria-hidden="true"
-        className={`${className} flex shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised font-semibold text-muted`}
-      >
-        {initials(contender.name)}
-      </span>
-    );
-  }
-
-  return (
-    // eslint-disable-next-line @next/next/no-img-element -- los avatares vienen de AoE4World (o como data: en el mock); next/image exigiría declarar el host remoto.
-    <img
-      src={contender.avatarUrl}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      className={`${className} shrink-0 rounded-md border border-line bg-surface-raised object-cover`}
-    />
-  );
 }

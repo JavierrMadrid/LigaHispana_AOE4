@@ -2,7 +2,7 @@
 
 Estado: **propuesta para validación del cliente**. Este documento es la fuente de
 las reglas; el código que las aplica vive en `src/lib/scoring.ts` (ruleset,
-tabla y desempate general) y `src/lib/objectives.ts` (los 37 objetivos).
+tabla y desempate general) y `src/lib/objectives.ts` (los 38 objetivos).
 
 El resumen de cambios respecto a la regla provisional del MVP (1 punto por
 victoria, versión de reglas 1) está en §9.
@@ -75,7 +75,7 @@ familias); si algún día hiciera falta, el ruleset admite un `pointsByMode`.
 
 ## 3. Los objetivos
 
-**37 objetivos**, repartidos en 5 grupos. Solo el **primero** se lleva los puntos
+**38 objetivos**, repartidos en 5 grupos. Solo el **primero** se lleva los puntos
 (*winner takes all*): no hay puestos parciales ni puntos repartidos.
 
 ### 3.1 Grupos y orden
@@ -86,14 +86,14 @@ familias); si algún día hiciera falta, el ruleset admite un `pointsByMode`.
 | `racha` | 2 | `golpe-de-suerte`: victorias seguidas; `prohibido-perder`: ratio global |
 | `division` | 6 | victorias totales |
 | `formato` | 4 | victorias en ese formato |
-| `civilizacion` | 23 | victorias con esa civilización |
+| `civilizacion` | 24 | victorias con esa civilización; y el objetivo que las abarca todas |
 
 Ese es también el orden de presentación (`ObjectiveView.options`), y dentro de
 cada grupo el orden de la lista: en `actividad`, `loco-por-ganar` antes que
 `otp`; en `racha`, `golpe-de-suerte` antes que `prohibido-perder` (el grupo se
 llama Racha, así que la racha se lee primero); divisiones de Bronce a
 Conquistador; formatos de 1v1 a 4v4; civilizaciones por orden alfabético de
-`id`.
+`id` y, **al final del grupo**, `masterizarlos-a-todos`.
 
 ### 3.2 Actividad — `loco-por-ganar` (70) y `otp` (60)
 
@@ -110,8 +110,9 @@ presenta es la de **más partidas jugadas** con ella (y si aún así empata, la 
 desempate 3 (§5) no dependan del orden del mapa.
 
 Las partidas con civilización aleatoria (`civRandomized`) **no** cuentan para
-`otp` ni para `masterizar-*`; sí cuentan para el resto (siguen siendo partidas
-clasificatorias). El interruptor es `countRandomizedCivs` del ruleset.
+`otp`, para `masterizar-*` ni para `masterizarlos-a-todos`; sí cuentan para el
+resto (siguen siendo partidas clasificatorias). El interruptor es
+`countRandomizedCivs` del ruleset.
 
 ### 3.3 Racha — `golpe-de-suerte` (50) y `prohibido-perder` (60)
 
@@ -157,7 +158,7 @@ grupo.
 | `rey-3v3` | 40 |
 | `rey-4v4` | 40 |
 
-### 3.6 Civilizaciones — `masterizar-<civilización>` (70 cada uno)
+### 3.6 Civilizaciones — `masterizar-<civilización>` (70) y `masterizarlos-a-todos` (100)
 
 Un objetivo por civilización (23). Gana quien llegue **primero a 10 victorias**
 con esa civilización (`minimums.masterizar`); hasta que alguien llega a 10, el
@@ -167,6 +168,40 @@ que guarda `Match.civ`.
 
 `src/lib/civs.ts` es el catálogo (id → nombre en español) y también la lista
 que fija el orden.
+
+#### `masterizarlos-a-todos` (100)
+
+El objetivo que **abarca las 23 civilizaciones**: gana quien sea el primero en
+ganar **al menos una partida con cada una** del catálogo. Se presenta al final
+del grupo `civilizacion`, después de los 23 `masterizar-*`.
+
+Es una **carrera**, igual que ellos: hasta que alguien cierra las 23 nadie cobra,
+y una vez cerrada la carrera no se reabre. El poseedor lo decide el instante
+(`finishedAt` de la partida, en milisegundos) de la victoria con la **última**
+civilización que le faltaba, con desempate por `profileId` si dos jugadores la
+completan en la misma partida. Por debajo del poseedor, la clasificación se
+ordena por **civilizaciones distintas con al menos una victoria** (23 en total),
+luego por victorias totales y luego por antigüedad (§5).
+
+- **`matches`** del contendiente: la suma de las partidas jugadas **con las
+  civilizaciones con las que ya tiene alguna victoria**, que son las que producen
+  el `value`. Se descarta así lo que no ha servido para el objetivo: no es el
+  total del jugador ni el de todas sus partidas clasificatorias.
+- **`eligible`** solo cuando tiene victoria con **las 23**. Una civilización que
+  no esté en el catálogo (una civ de un DLC que `civs.ts` todavía no conoce) no
+  cuenta ni para el `value` ni para cerrar la carrera.
+- Las partidas con civ aleatoria quedan fuera, igual que en `masterizar-*`
+  (`countRandomizedCivs`): no se sabe qué civilización se jugó.
+- Quien no ha ganado con ninguna civilización del catálogo no entra en la
+  carrera, igual que en `otp`: sin progreso no hay clasificación que enseñar.
+- Los **100 puntos** son una propuesta: el objetivo es mucho más difícil que un
+  `masterizar-*` (70) porque no basta con llegar a 10 victorias con una civ, hay
+  que ganar con cada una, y hay al menos dos que son las que más se juego. Sube
+  el total en juego de 2320 a 2420 (§4).
+
+`minimums.masterizar` no aplica aquí: basta una victoria por civ, así que el
+objetivo no tiene ningún umbral configurable y por eso **no** aparece en
+`minimums` de la vista.
 
 ### 3.7 Contrato de lectura — `getObjectives()`
 
@@ -188,17 +223,18 @@ type ObjectiveView = {
     streak: number; // mín. partidas de golpe-de-suerte (§3.3)
     masterizar: number; // victorias de masterizar-* (§3.6)
   };
-  options: ObjectiveOption[]; // los 37, en el orden de §3.1
+  options: ObjectiveOption[]; // los 38, en el orden de §3.1
 };
 
 type ObjectiveOption = {
   id: string;
   group: "actividad" | "racha" | "division" | "formato" | "civilizacion";
   label: string; // copy exacto, p. ej. "¿Golpe de suerte?"
+  description: string; // la regla en una frase corta (§3.7)
   metric: "partidas" | "winrate" | "racha" | "victorias";
   points: number; // del ruleset activo, no de la constante
   holder: ObjectiveContender | null; // null = sin poseedor
-  ranking: ObjectiveContender[]; // hasta 3 (§5)
+  ranking: ObjectiveContender[]; // todos, ordenados por §5
 };
 
 type ObjectiveContender = {
@@ -220,6 +256,20 @@ type ObjectiveContender = {
   cambien en `Setting`.
 - `rule` es `RULE_LABEL`, texto que fija el código (§8).
 - `profileUrl` sigue el mismo criterio que `StandingRow.profileUrl`.
+- `description` vive en el catálogo, no en la interfaz, porque es la regla: si
+  el copy estuviera en el componente, cada tarjeta podría acabar contando una
+  cosa distinta de la que el motor aplica. No lleva dentro números
+  configurables (el de `masterizar-*` sale de `minimums.masterizar`), así que no
+  puede quedarse mintiendo cuando cambien en `Setting`. Las 23
+  `masterizar-<civ>` comparten plantilla con el nombre de la civ.
+- `ranking` es la **lista entera** de contendientes, ordenada por la cadena de
+  §5: no hay tope y la paginación la hace el cliente. Solo entra quien tiene al
+  menos una partida dentro del objetivo (mismo criterio que antes, que descartaba
+  a los que no habían jugado); **no** se rellena con jugadores a cero. El
+  poseedor **no** se pone el primero: aparece en la posición que le da su
+  métrica y lo distingue `holder`, que es lo único que hace falta porque en las
+  carreras `masterizar-*` el que más victorias tiene puede no ser quien llegó
+  antes al mínimo.
 - `detail` hoy solo lo rellena `otp` (§3.2): la civilización con la que el
   jugador acumula sus victorias, como `{ id, label }` con el nombre en español;
   en el resto de objetivos llega a `null`. El campo queda reservado para futuros
@@ -233,12 +283,12 @@ type ObjectiveContender = {
 | Racha | 2 | 110 |
 | Divisiones | 6 | 290 |
 | Formatos | 4 | 180 |
-| Civilizaciones | 23 | 1610 |
-| **Total** | **37** | **2320** |
+| Civilizaciones | 24 | 1710 |
+| **Total** | **38** | **2420** |
 
-Los 14 objetivos que no son de civilización suman 710 puntos; los de
-civilización, 1610. Como solo un jugador puede coger cada uno, en la práctica
-un participante rara vez pasa de 5 u 6 objetivos (≈ 250–350 puntos).
+Los 14 objetivos que no son de civilización suman 710 puntos; los 24 de
+civilización, 1710. Como solo un jugador puede coger cada uno, en la práctica un
+participante rara vez pasa de 5 u 6 objetivos (≈ 250–350 puntos).
 
 ## 5. Desempates dentro de un objetivo
 
@@ -254,18 +304,20 @@ Cadena lineal y estable, en este orden:
    lo logró primero.
 4. **`profileId`**, ascendente (único, así que el empate siempre se rompe).
 
-En `masterizar-*` la regla 1 no aplica: manda **quien llegó primero a 10
-victorias** (y después `profileId`), porque es una carrera y no una tabla.
+En el grupo `civilizacion` la regla 1 no aplica: manda **quien llegó primero a
+completar la carrera** —a 10 victorias con su civ en `masterizar-*`, a las 23 en
+`masterizarlos-a-todos`— (y después `profileId`), porque son carreras y no una
+tabla.
 
 ## 6. Calendario: "en caliente" y carreras congeladas
 
 - Todos los objetivos se resuelven **en caliente**, es decir, en cada recálculo
   del worker (cada 5 minutos) con los datos que hay ahora mismo. Si hoy gana
   uno y mañana otro, el poseedor cambia.
-- **Excepción `masterizar-*`**: esos objetivos se resuelven **solo al
-  completarse**. Antes de que alguien llegue a 10 victorias con la civ no hay
-  poseedor; una vez completada, la carrera no se reabre (ver §5.4: gana el que
-  llegó primero).
+- **Excepción, grupo `civilizacion`**: esos objetivos se resuelven **solo al
+  completarse**. Antes de que alguien llegue a 10 victorias con la civ —o a las
+  23 civilizaciones, en `masterizarlos-a-todos`— no hay poseedor; una vez
+  completada, la carrera no se reabre (ver §5: gana el que llegó primero).
 
 ## 7. Ejemplo de reparto
 
@@ -287,13 +339,13 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
 ```json
 {
   "version": 2,
-  "label": "10 puntos por victoria clasificatoria más 37 objetivos especiales; solo el primero los cobra",
+  "label": "10 puntos por victoria clasificatoria más 38 objetivos especiales; solo el primero los cobra",
   "modes": ["rm_solo", "rm_team"],
   "window": { "from": "2026-09-15T00:00:00.000Z", "to": "2026-10-15T00:00:00.000Z" },
   "pointsPerWin": 10,
   "minimums": { "winrate": 10, "streak": 10, "masterizar": 10 },
   "countRandomizedCivs": false,
-  "objectives": { "loco-por-ganar": 70, "masterizar-japanese": 70 }
+  "objectives": { "loco-por-ganar": 70, "masterizar-japanese": 70, "masterizarlos-a-todos": 100 }
 }
 ```
 
@@ -330,31 +382,37 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
 Cambia:
 
 - 1 → **10 puntos por victoria** (§2).
-- Se añaden **37 objetivos** (§3) y sus desempates (§5).
+- Se añaden **38 objetivos** (§3) y sus desempates (§5).
 - `PlayerScore.breakdown` añade el bloque `objectives` (`points` y `earned`);
   `byMode.points` sigue siendo solo puntos de partidas.
 - Reagrupación: desaparece el grupo **Dominio**; `otp` pasa a **Actividad** y
   `prohibido-perder` a **Racha** (§3.1). Solo cambia la agrupación y el orden de
   presentación: `id`, puntos, métricas y mínimos no se tocan.
 - `otp` decide por **victorias con la misma civilización**, sin umbral (§3.2).
-- Rótulos públicos fijados por el cliente: **¿Golpe de suerte?** y
-  **El Sensei de &lt;división&gt;** (§3.3, §3.4).
+- Se añade **`masterizarlos-a-todos`** al final del grupo Civilizaciones: carrera
+  a ganar con las 23 (§3.6), 100 puntos.
+- Rótulos públicos fijados por el cliente: **¿Golpe de suerte?**,
+  **El Sensei de &lt;división&gt;** (§3.3, §3.4) y **Masterízalos a todos**
+  (§3.6).
 - **Ventana de fechas** del torneo sobre `Match.startedAt`, configurable en el
   ruleset y aplicada por igual a las victorias, al agregado y a los objetivos
   (§1). Con el worker guardando el histórico entero, como hasta ahora.
 - La vista de objetivos entrega los números vivos (`pointsPerWin`, `window`,
-  `minimums`), `profileUrl` y el `detail` de `otp` (§3.7).
+  `minimums`), `profileUrl`, el `detail` de `otp`, una `description` por objetivo
+  y el `ranking` **completo** en vez del top 3 (§3.7).
 
 Abierto, a decidir por el cliente:
 
-1. **37 objetivos, no 36**: 14 sin civilización (2 actividad + 2 racha + 6
-   divisiones + 4 formatos) + 23 civilizaciones. El número que se
-   manejó al empezar (36) no cuadra con 23 civs; si se quiere 36, sobra uno
-   (candidato natural: fundir `rey-3v3` y `rey-4v4`).
+1. **38 objetivos**: 14 sin civilización (2 actividad + 2 racha + 6
+   divisiones + 4 formatos) + 24 de civilización (23 `masterizar-*` más
+   `masterizarlos-a-todos`). El número que se manejó al empezar (36) no cuadraba
+   con 23 civs; si se quisiera recortar, el candidato natural sigue siendo fundir
+   `rey-3v3` y `rey-4v4`.
 2. **Puntos exactos** (§4): todas las cifras son propuesta, no están cerradas.
-   En particular, los 60 de `otp` se propusieron con la métrica de ratio y
-   ahora que gana el máximo de victorias con una civ el objetivo se coge más
-   fácil: si compensa, ese es el sitio natural para ajustar.
+   En particular, los 100 de `masterizarlos-a-todos` (los últimos puntos de
+   §3.6) y los 60 de `otp`, que se propusieron con la métrica de ratio y ahora
+   que gana el máximo de victorias con una civ el objetivo se coge más fácil: si
+   compensa, ese es el sitio natural para ajustar.
 3. **Traducciones de civilizaciones**: los nombres en español de
    `src/lib/civs.ts` son propuesta (p. ej. `jeanne_darc` → "Juana de Arco").
 4. **Sin ponderación por formato** (§2). Y la **ventana de fechas** (§1) ya

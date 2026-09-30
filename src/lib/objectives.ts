@@ -1,14 +1,14 @@
 import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
-import { CIVILIZATIONS, civilizationName } from "@/lib/civs";
+import { CIVILIZATIONS, CIVILIZATION_IDS, civilizationName } from "@/lib/civs";
 import { DIVISIONS, divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { rankedMatchSql, type ScoringWindow } from "@/lib/ranked-match";
 import type { ScoringMinimums, ScoringRuleset } from "@/lib/scoring";
 
 /**
- * Los 37 objetivos de `docs/PUNTUACION.md`.
+ * Los 38 objetivos de `docs/PUNTUACION.md`.
  *
  * Este módulo no decide nada por su cuenta: recibe las partidas clasificatorias
  * ya cargadas y el ruleset activo, y devuelve qué objetivo posee cada jugador.
@@ -36,6 +36,16 @@ export type ObjectiveDefinition = {
   id: string;
   group: ObjectiveGroup;
   label: string;
+  /**
+   * Una frase corta con la regla, para la tarjeta y el modal del objetivo.
+   *
+   * Se escribe aquí y no en la interfaz porque es la **regla**: si el copy viviera
+   * en el componente, cada tarjeta podría acabar contando una cosa distinta de la
+   * que el motor aplica. No lleva números configurables dentro (el mínimo de
+   * `masterizar-*` está en `ruleset.minimums`, y la interfaz lo compone si quiere),
+   * para que no pueda quedarse mintiendo cuando cambien en `Setting`.
+   */
+  description: string;
   metric: ObjectiveMetric;
   /** Puntos por defecto; el ruleset activo puede sobrescribirlos por id. */
   points: number;
@@ -73,12 +83,24 @@ export type ObjectiveOption = {
   id: string;
   group: ObjectiveGroup;
   label: string;
+  /** La regla en una frase, tal cual está en el catálogo (`ObjectiveDefinition`). */
+  description: string;
   metric: ObjectiveMetric;
   /** Puntos que otorga poseerlo, ya con el overrides del ruleset aplicado. */
   points: number;
   /** Poseedor actual; `null` si nadie cumple (o si la carrera no se ha completado). */
   holder: ObjectiveContender | null;
-  /** Tres primeros por la cadena de desempate, con o sin mínimo cumplido. */
+  /**
+   * **Todos** los contendientes, ordenados por la cadena de desempate (§5).
+   *
+   * Va entero, sin acotar: quien pinta decide cuánto enseña y con qué paginación,
+   * y así no hay un número mágico repartido entre el servidor y el cliente. No se
+   * rellena con jugadores a cero: solo entra quien tiene al menos una partida
+   * dentro del objetivo (ver `candidatesFor`). El poseedor **no** se pone el
+   * primero: aparece en la posición que le da su métrica y lo marca `holder`, que
+   * es lo que lo distingue en las carreras `masterizar-*`, donde el que más
+   * victorias tiene puede no ser quien llegó antes al mínimo.
+   */
   ranking: ObjectiveContender[];
 };
 
@@ -124,9 +146,6 @@ export const FORMAT_IDS = ["1v1", "2v2", "3v3", "4v4"] as const;
 
 export type FormatId = (typeof FORMAT_IDS)[number];
 
-/** Cuántos contendientes salen en el ranking de cada objetivo. */
-const RANKING_LIMIT = 3;
-
 /** Puntos por división, en el orden de `DIVISIONS` (§3.4). */
 const SENSEI_POINTS = [40, 40, 45, 50, 55, 60];
 
@@ -134,6 +153,26 @@ const SENSEI_POINTS = [40, 40, 45, 50, 55, 60];
 const REY_POINTS = [55, 45, 40, 40];
 
 const MASTERIZAR_POINTS = 70;
+
+/**
+ * Puntos del objetivo que abarca las 23 civilizaciones.
+ *
+ * Valen más que un `masterizar-*` (70) porque son mucho más difíciles: no basta
+ * con llegar a 10 victorias con una civ, hay que **ganar al menos una** con cada
+ * una, y al menos dos de ellas (Chinos y Japanes) son las que más se juego. El
+ * total de puntos extra en juego pasa de 2320 a 2420 (§4 del documento).
+ */
+const MASTERIZAR_TODOS_POINTS = 100;
+
+/**
+ * Id estable del objetivo "Masterízalos a todos" (§3.6).
+ *
+ * Va en el grupo `civilizacion` y al final de él, y es carrera como los
+ * `masterizar-<civ>`: cobra el primero que la completa. Su id **no** empieza por
+ * `masterizar-`, así que `ObjectiveIcon` no lo confunde con una civilización y
+ * cae en el glifo de grupo.
+ */
+export const MASTERIZAR_TODOS_ID = "masterizarlos-a-todos";
 
 /**
  * Los 14 objetivos que no son de civilización, en su orden de presentación.
@@ -148,14 +187,23 @@ const NON_CIVILIZATION_DEFINITIONS: ObjectiveDefinition[] = [
     id: "loco-por-ganar",
     group: "actividad",
     label: "Loco por ganar",
+    description: "El jugador con más partidas clasificatorias jugadas en el torneo.",
     metric: "partidas",
     points: 70,
   },
-  { id: "otp", group: "actividad", label: "OTP", metric: "victorias", points: 60 },
+  {
+    id: "otp",
+    group: "actividad",
+    label: "OTP",
+    description: "Quien más victorias suma con una misma civilización.",
+    metric: "victorias",
+    points: 60,
+  },
   {
     id: "golpe-de-suerte",
     group: "racha",
     label: "¿Golpe de suerte?",
+    description: "La racha más larga de victorias seguidas, con mínimo de partidas.",
     metric: "racha",
     points: 50,
   },
@@ -163,6 +211,7 @@ const NON_CIVILIZATION_DEFINITIONS: ObjectiveDefinition[] = [
     id: "prohibido-perder",
     group: "racha",
     label: "Prohibido perder",
+    description: "El mejor ratio de victorias sobre partidas clasificatorias jugadas.",
     metric: "winrate",
     points: 60,
   },
@@ -170,6 +219,7 @@ const NON_CIVILIZATION_DEFINITIONS: ObjectiveDefinition[] = [
     id: `sensei-${division.id}`,
     group: "division" as const,
     label: `El Sensei de ${division.label}`,
+    description: `El jugador con más victorias en la división ${division.label}.`,
     metric: "victorias" as const,
     points: SENSEI_POINTS[index],
   })),
@@ -177,17 +227,22 @@ const NON_CIVILIZATION_DEFINITIONS: ObjectiveDefinition[] = [
     id: `rey-${format}`,
     group: "formato" as const,
     label: `Rey del ${format}`,
+    description: `El jugador con más victorias jugando en formato ${format}.`,
     metric: "victorias" as const,
     points: REY_POINTS[index],
   })),
 ];
 
 /**
- * Los 37 objetivos en orden de presentación.
+ * Los 38 objetivos en orden de presentación.
  *
  * El `id` es estable y forma parte de la configuración guardada en `Setting`
  * (`scoring.ruleset.objectives`) y del desglose de `PlayerScore`: renombrarlo
  * deja huérfanos los puntos ya publicados.
+ *
+ * `masterizarlos-a-todos` va **al final** del grupo `civilizacion`: los 23
+ * `masterizar-<civ>` se leen como una lista alfabética y el objetivo que las
+ * abarca todas tiene que salir después, como el remate del grupo.
  */
 export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
   ...NON_CIVILIZATION_DEFINITIONS,
@@ -195,12 +250,24 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     id: `masterizar-${civ.id}`,
     group: "civilizacion" as const,
     label: `Masterizando ${civ.name}`,
+    // El número de victorias sale de `minimums.masterizar`, que es configurable,
+    // así que la descripción no lo escribe: si lo hiciera, dejaría de ser cierta
+    // el día que se cambiara en `Setting`.
+    description: `El primero en ganar el mínimo de victorias con ${civ.name}.`,
     metric: "victorias" as const,
     points: MASTERIZAR_POINTS,
   })),
+  {
+    id: MASTERIZAR_TODOS_ID,
+    group: "civilizacion" as const,
+    label: "Masterízalos a todos",
+    description: "El primero en ganar una partida con cada civilización.",
+    metric: "victorias" as const,
+    points: MASTERIZAR_TODOS_POINTS,
+  },
 ];
 
-/** Total de objetivos: 14 sin civilización + 23 con ella. */
+/** Total de objetivos: 14 sin civilización + 23 con ella + el que las abarca todas. */
 export const OBJECTIVE_COUNT = OBJECTIVE_DEFINITIONS.length;
 
 /** Puntos por defecto de cada objetivo, indexados por id. */
@@ -303,6 +370,15 @@ type CivRecord = {
   lastAt: number;
   /** Última victoria con esta civ. */
   lastWinAt: number;
+  /**
+   * Primera victoria con esta civ.
+   *
+   * Marca cuándo el jugador descubrió esa civilización, que es lo que necesita
+   * el desempate 3 (§5) de `masterizarlos-a-todos`: el instante en que alcanzó
+   * su número actual de civilizaciones dominadas es la de su última primera
+   * victoria.
+   */
+  firstWinAt: number;
   /** Cuándo se consiguieron `minimums.masterizar` victorias, si se llegaron. */
   completedAt: number | null;
 };
@@ -327,9 +403,29 @@ export type PlayerAggregate = {
   /** Victorias seguidas más larga y cuándo terminó. */
   streak: number;
   streakEndsAt: number;
+  /**
+   * Instante de la victoria con la que el jugador completó el catálogo de
+   * civilizaciones (ganó al menos una vez con las 23), o `null` si todavía no.
+   *
+   * Es el `raceAt` de `masterizarlos-a-todos`: como las filas llegan ordenadas
+   * por `finishedAt`, se anotan aquí en el mismo barrido en el que la 23.ª civ
+   * entra en el juego. Los `masterizar-*` guardan lo equivalente por civ en
+   * `CivRecord.completedAt`.
+   */
+  allCivsAt: number | null;
   byFormat: Map<FormatId, FormatRecord>;
   byCiv: Map<string, CivRecord>;
 };
+
+/**
+ * Los ids del catálogo en `Set`, para el recuento de civilizaciones dominadas.
+ *
+ * `byCiv` no se limita al catálogo: guarda la civ que venga en la partida, que
+ * puede ser de un DLC que el catálogo todavía no conoce. Para `masterizarlos-a-todos`
+ * solo cuentan las del catálogo, y por eso el filtro es explícito en vez de
+ * contar entradas del mapa.
+ */
+const CATALOG_CIVS: ReadonlySet<string> = new Set(CIVILIZATION_IDS);
 
 /**
  * El tamaño de la partida, si se puede determinar.
@@ -375,6 +471,7 @@ function emptyPlayer(meta: PlayerMeta, rankLevel: string | null): PlayerAggregat
     lastWinAt: 0,
     streak: 0,
     streakEndsAt: 0,
+    allCivsAt: null,
     byFormat: new Map(),
     byCiv: new Map(),
   };
@@ -386,6 +483,12 @@ function emptyPlayer(meta: PlayerMeta, rankLevel: string | null): PlayerAggregat
  * La racha se calcula aquí, en el mismo barrido: es el único cálculo que
  * depende del orden, y hacerlo en el cliente de la consulta obligaría a
  * guardar la partida entera en memoria.
+ *
+ * El barrido también es el que anota **cuándo** se completó el catálogo de
+ * civilizaciones, que es el orden de llegada de `masterizarlos-a-todos` y el
+ * `achievedAt` del desempate 3 (§5): como las filas vienen ordenadas por
+ * `finishedAt`, la última "primera victoria con una civ nueva" es exactamente el
+ * instante en que el jugador alcanzó su valor actual.
  */
 function aggregatePlayer(
   aggregate: PlayerAggregate,
@@ -394,6 +497,9 @@ function aggregatePlayer(
 ): void {
   let run = 0;
   let runEndsAt = 0;
+  // Civilizaciones del catálogo con las que ya se ha ganado alguna vez, para
+  // saber cuál fue la última en entrar y cerrar la cuenta.
+  const dominadas = new Set<string>();
 
   for (const row of rows) {
     const won = row.result === "WIN";
@@ -430,7 +536,8 @@ function aggregatePlayer(
     }
 
     // Las partidas con civ aleatoria no dicen nada de la civilización de
-    // nadie: se excluyen de `otp` y de `masterizar-*` (§3.2 del documento).
+    // nadie: se excluyen de `otp`, de `masterizar-*` y de `masterizarlos-a-todos`
+    // (§3.2 del documento).
     if (row.civ === null || (!ruleset.countRandomizedCivs && row.civRandomized)) {
       continue;
     }
@@ -440,6 +547,7 @@ function aggregatePlayer(
       wins: 0,
       lastAt: 0,
       lastWinAt: 0,
+      firstWinAt: 0,
       completedAt: null,
     };
 
@@ -450,12 +558,31 @@ function aggregatePlayer(
       civ.wins += 1;
       civ.lastWinAt = row.finishedAtMs;
 
+      if (civ.firstWinAt === 0) {
+        civ.firstWinAt = row.finishedAtMs;
+      }
+
       if (civ.completedAt === null && civ.wins >= ruleset.minimums.masterizar) {
         civ.completedAt = row.finishedAtMs;
       }
     }
 
     aggregate.byCiv.set(row.civ, civ);
+
+    // La victoria con la que el jugador domina una civilización que aún no tenía
+    // dominada. Cuando son las 23 del catálogo, ese es el instante de la carrera
+    // y el objetivo queda cerrado para siempre (por eso `allCivsAt` no se vuelve
+    // a escribir: si más adelante se añadiera una civ nueva al catálogo, quien ya
+    // la hubiera ganado antes seguiría siendo el primero en completarlo).
+    if (won && aggregate.allCivsAt === null && CATALOG_CIVS.has(row.civ)) {
+      if (!dominadas.has(row.civ)) {
+        dominadas.add(row.civ);
+
+        if (dominadas.size === CATALOG_CIVS.size) {
+          aggregate.allCivsAt = row.finishedAtMs;
+        }
+      }
+    }
   }
 }
 
@@ -736,6 +863,50 @@ function candidatesFor(
     });
   }
 
+  if (definition.id === MASTERIZAR_TODOS_ID) {
+    // Civilizaciones del catálogo con las que el jugador lleva al menos una
+    // victoria. Solo entran del catálogo: una civ de un DLC que el catálogo no
+    // conoce no acerca a nadie a cerrar las 23.
+    return players.flatMap((player) => {
+      let civs = 0;
+      let matches = 0;
+      // Instante en que alcanzó su valor actual: la última de sus primeras
+      // victorias con una civ del catálogo, que es lo que decide el desempate 3
+      // (§5) cuando dos jugadores tienen las mismas civilizaciones dominadas.
+      let achievedAt = 0;
+
+      for (const civId of CIVILIZATION_IDS) {
+        const record = player.byCiv.get(civId);
+
+        if (record === undefined || record.wins < 1) {
+          continue;
+        }
+
+        civs += 1;
+        matches += record.matches;
+        achievedAt = Math.max(achievedAt, record.firstWinAt);
+      }
+
+      // Igual que en `otp`: quien no ha ganado con ninguna civilización del
+      // catálogo no entra en la carrera, porque no hay progreso que medir.
+      if (civs === 0) {
+        return [];
+      }
+
+      return [
+        candidate(
+          player,
+          "victorias",
+          civs,
+          matches,
+          civs === CIVILIZATION_IDS.length,
+          achievedAt,
+          player.allCivsAt,
+        ),
+      ];
+    });
+  }
+
   // Último caso: `masterizar-<civilización>` (grupo `civilizacion`).
   const civ = definition.id.slice("masterizar-".length);
   const result: ObjectiveCandidate[] = [];
@@ -766,9 +937,11 @@ function candidatesFor(
 /**
  * Quién posee el objetivo.
  *
- * En las carreras `masterizar-*` no gana el que más victorias tiene, sino el
- * que llegó primero a `minimums.masterizar`: son carreras y se resuelven una
- * sola vez (§6). El resto se resuelven en caliente, con el primero de la lista.
+ * En el grupo `civilizacion` no gana el que más victorias tiene, sino el que
+ * llegó primero a completar la carrera: a `minimums.masterizar` con su civ en
+ * los `masterizar-<civ>` y a las 23 en `masterizarlos-a-todos`. Son carreras y
+ * se resuelven una sola vez (§6). El resto se resuelven en caliente, con el
+ * primero de la lista.
  */
 function pickHolder(
   definition: ObjectiveDefinition,
@@ -799,7 +972,7 @@ function pickHolder(
 }
 
 /**
- * Resuelve los 37 objetivos contra las reglas activas.
+ * Resuelve los 38 objetivos contra las reglas activas.
  *
  * Devuelve también los puntos por jugador, que es lo que suma el motor a la
  * clasificación: solo el poseedor de cada objetivo recibe sus puntos, nadie
@@ -831,10 +1004,13 @@ export function computeObjectives(
       id: definition.id,
       group: definition.group,
       label: definition.label,
+      description: definition.description,
       metric: definition.metric,
       points,
       holder: holder === null ? null : toContender(holder),
-      ranking: sorted.slice(0, RANKING_LIMIT).map(toContender),
+      // La lista entera: el poseedor no se extrae ni se pone arriba, se queda en
+      // el puesto que le da su métrica y lo distingue el campo `holder`.
+      ranking: sorted.map(toContender),
     });
   }
 

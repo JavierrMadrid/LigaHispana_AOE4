@@ -243,7 +243,7 @@ El sistema de puntuación real está definido e implementado. La rama antigua de
 [`docs/PUNTUACION.md`](./PUNTUACION.md), que es la fuente de verdad de las reglas.
 
 - [x] **Reglas v2**: 10 puntos por victoria clasificatoria (`mode` en `rm_solo` o `rm_team`,
-  partida resuelta) más **37 objetivos especiales** *winner-takes-all* (solo el primero los
+  partida resuelta) más **38 objetivos especiales** *winner-takes-all* (solo el primero los
   cobra), reflejados en caliente: si cambia el poseedor, los puntos se trasladan.
 - [x] Ruleset versionado (versión 2) publicado en `Setting` (`scoring.ruleset`); los números
   (puntos por victoria, puntos por objetivo, mínimos) se reconfiguran sin despliegue y el
@@ -255,19 +255,23 @@ El sistema de puntuación real está definido e implementado. La rama antigua de
   y sin columnas ni índices nuevos. El worker sigue importando el histórico entero. Las
   fechas del código son **de pruebas** (15-sep-2026 → 15-oct-2026) y las oficiales se
   reconfiguran en `Setting` sin desplegar.
-- [x] **37 objetivos en 5 grupos** tras la reagrupación del cliente: Actividad
+- [x] **38 objetivos en 5 grupos** tras la reagrupación del cliente: Actividad
   (`loco-por-ganar`, `otp`), Racha (`golpe-de-suerte`, `prohibido-perder`), Divisiones
   (6 `sensei-*`), Formatos (4 `rey-*`) y Civilizaciones (23 `masterizar-*`, carreras a
-  10 victorias: nadie cobra hasta que alguien llega a 10).
+  10 victorias: nadie cobra hasta que alguien llega a 10, más
+  `masterizarlos-a-todos`: el primero en ganar una partida con **las 23** civilizaciones
+  del catálogo, al final del grupo, 100 puntos).
 - [x] Mínimos de 10 partidas clasificatorias para los objetivos de ratio y racha; desempates
   deterministas documentados en `docs/PUNTUACION.md` §5.
 - [x] Catálogo de civilizaciones (`src/lib/civs.ts`: 23 civs, slug de AoE4World → nombre en
   español) y divisiones movidas a `src/lib/divisions.ts` (6, incluido platino).
 - [x] `ScoreBreakdown` v2 (`byMode` + desglose de objetivos por id y grupo) y contrato
-  `getObjectives()` en `src/lib/public.ts`: poseedor, top 3, mínimos y `pointsPerWin` vivos,
+  `getObjectives()` en `src/lib/public.ts`: poseedor, **ranking completo** (la paginación la
+  hace el cliente), `description` por objetivo, mínimos y `pointsPerWin` vivos,
   `profileUrl` y detalle de civilización en `otp`.
-- [x] `npm run score` y `verify:sync` ampliado (22/22 con `--db`), con comprobación del
-  contrato de objetivos. Sin cambios de schema.
+- [x] `npm run score` y `verify:sync` ampliado, con comprobación del contrato de objetivos
+  (23 comprobaciones sin base de datos —incluido el catálogo de los 38 objetivos— y el
+  contrato publicado con `--db`). Sin cambios de schema.
 - [x] **RLS sin políticas y sin permisos para los roles de cliente** sobre las cuatro tablas,
   versionado en `scripts/db-security.ts` (`npm run db:security`, y `-- --check` después de cada
   `db push`): `prisma db push` no gestiona RLS ni GRANTs, así que si solo se hiciera a mano
@@ -288,7 +292,7 @@ El sistema de puntuación real está definido e implementado. La rama antigua de
 
 Pendiente:
 
-- [ ] **Validar con el cliente la tabla de puntos** (10/victoria; objetivos de 40 a 70; 2320
+- [ ] **Validar con el cliente la tabla de puntos** (10/victoria; objetivos de 40 a 100; 2420
   puntos extra en juego). La propuesta estadística está en `docs/PUNTUACION.md` §4 y los
   números se retocan en `Setting` sin tocar código.
 - [ ] Los números del copy de la UI (`10 puntos`, `10 partidas`, `10 victorias`) siguen
@@ -340,8 +344,9 @@ referencia ordreduwololo.fr y soloqchallenge.gg solo mandan en comportamiento, n
     contrario (ahora se ve la alineación completa); solo la puntuación sigue siendo por jugador.
 - [x] `/reglas` — Conocimiento del torneo: formato, puntuación (10 puntos por victoria),
   sección de objetivos especiales y qué cuenta como partida clasificatoria.
-- [x] `/objetivos` — Los 37 objetivos especiales por grupos, con los puntos de cada uno, el
-  poseedor en caliente y el top 3 (`getObjectives()`); cada tarjeta explica su regla.
+- [x] `/objetivos` — Los 38 objetivos especiales por grupos, con los puntos de cada uno, el
+  poseedor en caliente y la clasificación deتميز (`getObjectives()`); cada tarjeta explica
+  su regla.
 - [x] **Limpieza visual del cliente**: fuera los títulos visibles de las páginas públicas, los
   leads descriptivos, los contadores de relleno del home y de `/objetivos`, y los textos que
   repetían lo que dice `/reglas`.
@@ -535,7 +540,7 @@ Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes d
 
 - [x] **Qué cuenta como partida clasificatoria y cómo se puntúa.** Resuelto en la versión 2 de
   las reglas: [`docs/PUNTUACION.md`](./PUNTUACION.md) es la fuente de verdad (10 puntos por
-  victoria clasificatoria + 37 objetivos especiales, solo el primero los cobra). La rama de
+  victoria clasificatoria + 38 objetivos especiales, solo el primero los cobra). La rama de
   reglas antigua (`docs/f3-puntuacion`) se borró al empezar de cero. Queda por validar la
   tabla de puntos con el cliente; el agregado sigue versionado por si cambian las reglas.
 - [x] **Ventana de clasificatorias y duración mínima.** La ventana **sí aplica** y es

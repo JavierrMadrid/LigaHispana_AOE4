@@ -1,49 +1,39 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { ReactNode } from "react";
-import type { ObjectiveGroup, ObjectiveOption } from "@/lib/public";
+import { useMemo, useState, type ReactNode } from "react";
+import type { ObjectiveGroup, ObjectiveOption, ObjectiveView } from "@/lib/public";
 import { ObjectiveCard } from "@/components/objective-card";
+import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
 
 /**
- * Objetivos especiales con filtros y secciones plegables.
+ * Objetivos especiales agrupados por familia.
  *
- * El servidor le pasa los objetivos ya resueltos y aquí solo se filtra y se
- * pinta: dos categorías de filtro que se combinan con AND (el tipo de objetivo
- * y si tiene poseedor) y una sección plegable por grupo. Las secciones arrancan
+ * El servidor entrega los objetivos ya resueltos y aquí solo se agrupa y se
+ * filtra por tipo. El `ranking` completo de un objetivo no se pinta en la
+ * tarjeta: se enseña entero en el diálogo que abre "Ver clasificación", para
+ * que la rejilla se pueda escanear de un vistazo. Las secciones arrancan
  * abiertas porque el contenido es la página; plegarlas es una comodidad para
  * quien quiere ir directo a un grupo.
  */
-
-/** Qué se juega cada grupo. El orden es el de `ObjectiveGroup`. */
-const GROUP_DESCRIPTIONS: Record<ObjectiveGroup, string> = {
-  actividad:
-    "Jugar mucho y hacerlo bien: quien más partidas clasificatorias acumula y quien más victorias suma con una misma civilización.",
-  racha:
-    "Ir en racha: la mejor cadena de victorias seguidas y el mejor ratio. Los dos piden un mínimo de partidas clasificatorias.",
-  division: "El jugador con más victorias dentro de cada división de la ladder.",
-  formato: "El jugador con más victorias en cada tamaño de partida.",
-  civilizacion:
-    "Carrera a 10 victorias con la misma civilización. Nadie cobra hasta que alguien llega a 10.",
-};
-
-type HolderFilter = "todos" | "con" | "sin";
-
-const HOLDER_FILTERS: { id: HolderFilter; label: string }[] = [
-  { id: "todos", label: "Todos" },
-  { id: "con", label: "Con poseedor" },
-  { id: "sin", label: "Sin poseedor" },
-];
 
 type ObjectivesBrowserProps = {
   options: ObjectiveOption[];
   /** Rótulos de grupo del catálogo, para no duplicarlos en el cliente. */
   groupLabels: Record<ObjectiveGroup, string>;
+  /** Mínimos del ruleset, para el copy de las carreras (`masterizar-*`). */
+  minimums: ObjectiveView["minimums"];
+  /** Id del objetivo que abarca las 23 civilizaciones (única fuente: el servidor). */
+  masterizarTodosId: string;
 };
 
-export function ObjectivesBrowser({ options, groupLabels }: ObjectivesBrowserProps) {
+export function ObjectivesBrowser({
+  options,
+  groupLabels,
+  minimums,
+  masterizarTodosId,
+}: ObjectivesBrowserProps) {
   const [group, setGroup] = useState<ObjectiveGroup | null>(null);
-  const [holder, setHolder] = useState<HolderFilter>("todos");
+  const [active, setActive] = useState<ObjectiveOption | null>(null);
 
   // El orden de los grupos se toma de los propios objetivos, que ya llegan en
   // el orden de presentación de `docs/PUNTUACION.md`.
@@ -59,60 +49,31 @@ export function ObjectivesBrowser({ options, groupLabels }: ObjectivesBrowserPro
     return order;
   }, [options]);
 
-  // El filtro de poseedor decide qué objetivos existen para el resto de la
-  // vista, incluidos los recuentos de los tipos.
-  const byHolder = useMemo(
-    () =>
-      options.filter((option) => {
-        if (holder === "con") {
-          return option.holder !== null;
-        }
-
-        if (holder === "sin") {
-          return option.holder === null;
-        }
-
-        return true;
-      }),
-    [options, holder],
-  );
-
   const visible = useMemo(
-    () => (group === null ? byHolder : byHolder.filter((option) => option.group === group)),
-    [byHolder, group],
+    () => (group === null ? options : options.filter((option) => option.group === group)),
+    [options, group],
   );
 
-  // Un grupo sin objetivos que pasen el filtro de poseedor no pinta sección:
-  // mejor una lista más corta que un titular vacío.
   const sections = useMemo(
     () =>
       groups
         .filter((item) => group === null || item === group)
         .map((item) => {
           const groupOptions = options.filter((option) => option.group === item);
-          const shown = byHolder.filter((option) => option.group === item);
 
           return {
             id: item,
             label: groupLabels[item],
-            shown,
+            shown: groupOptions,
             totals: {
               count: groupOptions.length,
               points: groupOptions.reduce((total, option) => total + option.points, 0),
               holders: groupOptions.filter((option) => option.holder !== null).length,
             },
           };
-        })
-        .filter((section) => section.shown.length > 0),
-    [groups, group, byHolder, options, groupLabels],
+        }),
+    [groups, group, options, groupLabels],
   );
-
-  const hasFilters = group !== null || holder !== "todos";
-
-  function clearFilters() {
-    setGroup(null);
-    setHolder("todos");
-  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -120,7 +81,7 @@ export function ObjectivesBrowser({ options, groupLabels }: ObjectivesBrowserPro
         <FilterCategory label="Tipos" id="filtro-tipos">
           <FilterPill active={group === null} onClick={() => setGroup(null)}>
             Todos
-            <Count value={byHolder.length} />
+            <Count value={options.length} />
           </FilterPill>
           {groups.map((item) => (
             <FilterPill
@@ -129,59 +90,43 @@ export function ObjectivesBrowser({ options, groupLabels }: ObjectivesBrowserPro
               onClick={() => setGroup(group === item ? null : item)}
             >
               {groupLabels[item]}
-              <Count value={byHolder.filter((option) => option.group === item).length} />
-            </FilterPill>
-          ))}
-        </FilterCategory>
-
-        <FilterCategory label="Poseedor" id="filtro-poseedor">
-          {HOLDER_FILTERS.map((item) => (
-            <FilterPill
-              key={item.id}
-              active={holder === item.id}
-              onClick={() => setHolder(item.id)}
-            >
-              {item.label}
+              <Count value={options.filter((option) => option.group === item).length} />
             </FilterPill>
           ))}
         </FilterCategory>
       </div>
 
-      {hasFilters ? (
+      {group === null ? null : (
         <div className="flex flex-wrap items-center justify-between gap-3">
-          {/* Con resultados, el recuento se lee; sin resultados, el aviso grande
-              de abajo ya lo dice y esto queda solo para lectores de pantalla. */}
-          <p role="status" className={visible.length === 0 ? "sr-only" : "text-xs text-muted"}>
+          <p role="status" className="text-xs text-muted">
             {visible.length === 1
-              ? "1 objetivo coincide con los filtros"
-              : `${visible.length} objetivos coinciden con los filtros`}
+              ? "1 objetivo coincide con el filtro"
+              : `${visible.length} objetivos coinciden con el filtro`}
           </p>
-          {visible.length > 0 ? (
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="text-xs font-medium text-muted underline-offset-4 transition-colors hover:text-accent hover:underline"
-            >
-              Quitar filtros
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => setGroup(null)}
+            className="text-xs font-medium text-muted underline-offset-4 transition-colors hover:text-accent hover:underline"
+          >
+            Quitar filtro
+          </button>
         </div>
-      ) : null}
+      )}
 
       {visible.length === 0 ? (
         <div className="rounded-lg border border-line bg-surface px-6 py-12 text-center">
           <p className="font-display text-lg font-semibold text-foreground">
-            Ningún objetivo coincide con los filtros
+            No hay objetivos en este tipo
           </p>
           <p className="mt-2 text-sm text-muted">
-            Prueba a cambiar el tipo de objetivo o el poseedor.
+            Elige otro tipo de objetivo para ver su clasificación.
           </p>
           <button
             type="button"
-            onClick={clearFilters}
+            onClick={() => setGroup(null)}
             className="mt-5 inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong"
           >
-            Quitar filtros
+            Ver todos los objetivos
           </button>
         </div>
       ) : (
@@ -218,18 +163,28 @@ export function ObjectivesBrowser({ options, groupLabels }: ObjectivesBrowserPro
                 </span>
               </summary>
 
-              <p className="mt-3 max-w-[68ch] text-sm leading-relaxed text-muted">
-                {GROUP_DESCRIPTIONS[section.id]}
-              </p>
-
               <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {section.shown.map((option) => (
-                  <ObjectiveCard key={option.id} option={option} />
+                  <ObjectiveCard
+                    key={option.id}
+                    option={option}
+                    onOpen={() => setActive(option)}
+                  />
                 ))}
               </div>
             </details>
           ))}
         </div>
+      )}
+
+      {active === null ? null : (
+        <ObjectiveRankingDialog
+          key={active.id}
+          option={active}
+          minimums={minimums}
+          masterizarTodosId={masterizarTodosId}
+          onClose={() => setActive(null)}
+        />
       )}
     </div>
   );
