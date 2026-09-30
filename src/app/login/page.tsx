@@ -14,13 +14,23 @@ export const metadata: Metadata = {
  *
  * Es asíncrona para comprobar la sesión antes de pintar el formulario; leer las
  * cookies es lo que la vuelve dinámica (`ƒ` en el build en lugar de `○`).
+ *
+ * El flujo de invitación redirige aquí con `?error=enlace` cuando el enlace del
+ * correo caducó o ya se usó; en ese caso se lo contamos al usuario en la propia
+ * tarjeta. Cualquier otro valor de `error` se ignora a propósito.
  */
-export default async function LoginPage() {
+export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   await redirectIfAuthenticated();
+
+  const { error } = await searchParams;
+  const message =
+    error === "enlace"
+      ? "El enlace de invitación no es válido o ha caducado. Pide uno nuevo a la organización."
+      : undefined;
 
   return (
     <main className="flex flex-1 items-center justify-center px-4 py-16">
-      <LoginPanel />
+      <LoginPanel message={message} />
     </main>
   );
 }

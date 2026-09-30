@@ -9,8 +9,12 @@ import { LoginForm } from "./login-form";
  * formulario— para que la ruta propia y el modal no puedan divergir. Es un
  * Server Component: no tiene estado ni eventos. El formulario, que sí los
  * necesita, se aísla en `LoginForm`.
+ *
+ * `message` es opcional: solo la página propia lo usa para explicar por qué se
+ * ha llegado hasta aquí (por ejemplo, un enlace de invitación caducado). En el
+ * modal no viene y la tarjeta se ve igual que siempre.
  */
-export function LoginPanel() {
+export function LoginPanel({ message }: { message?: string }) {
   return (
     <div className="w-full max-w-sm rounded-lg border border-line bg-surface p-6">
       <Image
@@ -21,9 +25,12 @@ export function LoginPanel() {
         className="mb-4 size-14"
       />
       <h1 className="mb-1 text-xl font-semibold text-foreground">Panel de administración</h1>
-      <p className="mb-6 text-sm text-muted">
-        Solo para la organización. Inicia sesión con tu cuenta de Supabase.
-      </p>
+      <div className="mb-6">
+        <p className="text-sm text-muted">
+          Solo para la organización. Inicia sesión con tu cuenta de Supabase.
+        </p>
+        {message ? <p className="mt-2 text-sm text-red-400">{message}</p> : null}
+      </div>
       <LoginForm />
     </div>
   );
