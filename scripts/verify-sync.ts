@@ -385,6 +385,7 @@ async function checkNormalization(): Promise<void> {
       rateLimitPausesMs: 0,
       ladderError: null,
       scoringError: null,
+      alertsError: null,
       failures: [],
     };
 
@@ -426,6 +427,15 @@ async function checkNormalization(): Promise<void> {
       buena.finishedAt,
       "fallar la ladder tampoco lo mueve",
     );
+    // `alertsError` está en el rastro pero **no** cuenta para "salió bien": el
+    // marcador responde a «¿desde cuándo está roto el sincronizador?», y el motor
+    // de alertas no trae ni una partida. Si contara, un fallo del informe daría
+    // "el torneo lleva horas roto" sin que hubiera parado nada.
+    assert.equal(
+      salida({ ...buena, alertsError: "no se ha podido evaluar" }, { ...buena, lastSuccessAt: buena.finishedAt }),
+      buena.finishedAt,
+      "fallar el motor de alertas tampoco lo mueve",
+    );
   });
 
   await check("una pasada vieja se detecta como vieja y una ausente no", () => {
@@ -450,6 +460,7 @@ async function checkNormalization(): Promise<void> {
       rateLimitPausesMs: 0,
       ladderError: null,
       scoringError: null,
+      alertsError: null,
       failures: [],
       lastSuccessAt: finishedAt,
     });

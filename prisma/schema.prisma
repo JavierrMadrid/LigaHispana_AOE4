@@ -18,7 +18,7 @@ generator client {
   // del generator distinto para Node: seria duplicar el cliente, y con el
   // `src/lib` compartido los dos entran en el bundle del Worker.
   // Tras tocar esto hay que regenerar: `npx prisma generate`.
-  runtime = "workerd"
+  runtime  = "workerd"
 }
 
 datasource db {
@@ -47,6 +47,40 @@ enum AdminActionType {
   PLAYER_REMOVED
   MATCH_POINTS_REVERTED
   MATCH_POINTS_RESTORED
+}
+
+/// Qué comportamiento anómalo de un participante ha detectado el motor.
+///
+/// Deliberadamente corto y **fijo en el código**: son las condiciones que el
+/// cliente hoaxó (partidas cortas, rival o compañero repetido, brecha de elo
+/// con el equipo y equipo muy por debajo de la división del jugador). Lo que sí
+/// es configurable son los umbrales, que viven en `Setting["alerts.ruleset"]`:
+/// añadir un comportamiento nuevo exige un cambio de esquema, y añadir un umbral
+/// no. Cuando haga falta un comportamiento nuevo, se añade el valor al enum y la
+/// frase en `src/lib/alerts/rules.ts`; el `switch` de ese módulo es exhaustivo
+/// para que un valor sin frase no pueda salir a la base.
+enum AlertRule {
+  SHORT_MATCH_STREAK
+  SHORT_MATCH_TOTAL
+  REPEATED_OPPONENT_STREAK
+  REPEATED_OPPONENT_TOTAL
+  REPEATED_TEAMMATE_STREAK
+  REPEATED_TEAMMATE_TOTAL
+  TEAMMATE_ELO_GAP
+  LOW_DIVISION_TEAM_GAME
+}
+
+/// Cuándo se ha detectado la alerta.
+///
+/// Los tres casos no se pueden reducir a dos. Una racha normalmente se avisa
+/// **cuando se rompe** (llega una partida sin el patrón), porque es el momento en
+/// que se sabe cuánto duró; pero si el torneo se cierra con la racha todavía
+/// abierta, el patrón ya no se va a romper nunca y sin este valor esa racha no se
+/// avisaría jamás. Los acumulados no son rachas: no tienen ni principio ni fin.
+enum AlertKind {
+  STREAK_CLOSED
+  STREAK_AT_TOURNAMENT_END
+  TOTAL_REACHED
 }
 
 model Player {
@@ -78,37 +112,39 @@ model Player {
   // `rating` de la ladder. Null = el jugador no tiene partidas clasificatorias
   // en la ladder (o todavía no se ha sincronizado): sigue siendo una fila
   // válida del torneo, solo que sin elo ni división.
-  elo              Int?
+  elo             Int?
   // `rank_level` literal de AoE4World ("gold_2"), no la división resuelta: la
   // tabla puede querer pintar el tier y la división se deriva en el DAL.
-  rankLevel        String?
+  rankLevel       String?
   // Racha **firmada**: positiva = victorias seguidas, negativa = derrotas
   // seguidas, null = sin ladder. No guardarla en valor absoluto: el signo es
   // la información.
-  streak           Int?
+  streak          Int?
   // "En directo en Twitch" leído de `twitch_is_live` del mismo endpoint que el
   // elo, así F5 no necesita la API de Helix para el indicador de la clasificación.
-  twitchIsLive     Boolean     @default(false)
+  twitchIsLive    Boolean   @default(false)
   // Respaldo del canal: si el jugador no tiene `twitchChannel` registrado, la
   // tabla enlaza el que declara en AoE4World.
-  twitchUrl        String?
+  twitchUrl       String?
   // `avatars.full`; si es null la interfaz dibuja un monograma.
-  avatarUrl        String?
+  avatarUrl       String?
   // Cuándo se miró la ladder por última vez. No se toca si el jugador no
   // aparece en la respuesta, para poder distinguir "sin ladder" de "sin sync".
-  ladderUpdatedAt  DateTime?
+  ladderUpdatedAt DateTime?
 
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
-  matches          Match[]
-  scores           PlayerScore[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  matches         Match[]
+  scores          PlayerScore[]
+  objectiveEvents ObjectiveEvent[]
+  alerts          Alert[]
 }
 
 model Match {
-  id                String      @id @default(cuid())
+  id                String       @id @default(cuid())
   gameId            String
   playerId          String
-  player            Player      @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  player            Player       @relation(fields: [playerId], references: [id], onDelete: Cascade)
   opponentProfileId Int?
   opponentName      String?
   civ               String?
@@ -116,14 +152,14 @@ model Match {
   map               String?
   // Lo que dice la API (o el `kind` si la API no manda `leaderboard`). No se
   // toca: es el registro literal de lo que publicó AoE4World.
-  leaderboard       String      @default("rm_solo")
+  leaderboard       String       @default("rm_solo")
   // Familia de ladder resuelta (`rm_2v2` -> `rm_team`). Es una columna aparte y
   // no un enum porque la lista de qué familias puntúa la da el ruleset, no el
   // esquema: así, añadir un modo a las reglas no obliga a reescribir datos.
   mode              String?
   // La API marca si la civilización de este jugador fue aleatoria. Sin columna
   // el motor tendría que parsear `rawJson` en cada recálculo para poder filtrar.
-  civRandomized     Boolean     @default(false)
+  civRandomized     Boolean      @default(false)
   // Null mientras la partida sigue en curso: el resultado todavía no existe.
   // El motor solo debe puntuar partidas con `result` y `finishedAt`.
   result            MatchResult?
@@ -134,7 +170,7 @@ model Match {
   // `DEFAULT_RULESET.pointsPerWin` en cada victoria clasificatoria resuelta y 0 en
   // el resto. El motor es el único que lo escribe, y solo en las filas cuyo valor
   // cambia (ver `recomputeScores` en `src/lib/scoring.ts`).
-  points            Int         @default(0)
+  points            Int          @default(0)
   // Cuándo se dejó de contar esta partida para el torneo. `null` es el estado
   // normal: la partida puntúa.
   //
@@ -151,7 +187,7 @@ model Match {
   // victorias ni objetivos.
   revertedAt        DateTime?
   rawJson           Json
-  createdAt         DateTime    @default(now())
+  createdAt         DateTime     @default(now())
 
   // La unicidad es por jugador, no global: en un torneo individual dos
   // participantes pueden jugar la misma partida y cada uno necesita su fila
@@ -174,20 +210,20 @@ model Match {
 model PlayerScore {
   playerId       String
   ruleSetVersion Int
-  player         Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  player         Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   // Puesto con el desempate ya aplicado. Se guarda porque el desempate acaba en
   // datos que no están en la base de datos (el rating viene de la API), así que
   // el orden final no se puede resolver en SQL.
-  rank           Int
-  total          Int      @default(0)
-  wins           Int      @default(0)
-  matches        Int      @default(0)
+  rank    Int
+  total   Int @default(0)
+  wins    Int @default(0)
+  matches Int @default(0)
 
   // Desglose por modo de la regla que produjo esta fila. Es JSON y no columnas
   // porque el número de categorías cambia con cada versión de las reglas.
-  breakdown      Json
-  computedAt     DateTime @default(now())
+  breakdown  Json
+  computedAt DateTime @default(now())
 
   // Clave compuesta: una fila por jugador y versión. Indexa también la FK a
   // Player (columna más a la izquierda), que es lo que hace barato el borrado en
@@ -271,4 +307,83 @@ model AdminAction {
   // está en el orden que necesita la consulta.
   @@index([createdAt])
   @@index([type, createdAt])
+}
+
+/// Un comportamiento anómalo de un participante, detectado sobre las partidas
+/// clasificatorias que ya están guardadas.
+///
+/// Es un registro **append-only**, igual que `AdminAction`, y por el mismo
+/// motivo: nadie edita filas y nada reescribe una alerta ya escrita. La
+/// corrección no es borrar la alerta que salió mal, es que la condición que la
+/// produjo deje de cumplirse (una partida revertida, una ventana movida, un
+/// umbral retocado) y el informe dé cuenta del estado en cada momento.
+///
+/// ## Por qué `dedupeKey` y no un índice único compuesto
+///
+/// El motor es **idempotente** y se ejecuta muchas veces sobre los mismos datos
+/// (cada pasada del sincronizador, el cierre de torneo, `npm run alerts:check`),
+/// así que tiene que poder insertar "solo lo nuevo" sin leer antes lo que ya hay:
+/// eso es un `createMany({ skipDuplicates: true })` sobre un único índice único.
+/// La clave se compone en código porque en Postgres los `NULL` de un índice
+/// único **no colisionan** (dos filas con `subjectProfileId = NULL` pasarían
+/// ambas), y el sujeto es opcional: las reglas sin sujeto (partidas cortas,
+/// brecha de elo, división baja) lo tienen a `null`. Un índice único compuesto
+/// con columnas nullable no sujetaría lo que parece sujetar, así que la clave es
+/// una columna de texto no nula que se construye siempre con los mismos
+/// ingredientes y cuyo contenido es determinista.
+///
+/// Lo que identifica una alerta es (regla, tipo, jugador, sujeto, y el remate:
+/// la partida que rompió la racha o el número que se ha cruzado). Por eso el
+/// `kind` entra en la clave: una racha que se rompe y una que solo la cerró el
+/// fin del torneo son alertas distintas del mismo tramo, y sin él colisionarían.
+///
+/// `summary` está **ya redactado en español** en el momento de escribir la fila
+/// (`src/lib/alerts/rules.ts`), igual que en `AdminAction`: el informe lo pinta
+/// tal cual y no monta la frase en el cliente, donde un número o un nombre con
+/// comillas acabarían dando dos textos distintos. `details` es lo que hay detrás,
+/// para el que tenga que investigar, y de ahí no se lee nada para el resumen.
+model Alert {
+  id   String    @id @default(cuid())
+  rule AlertRule
+  kind AlertKind
+
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  // A quién se refiere la alerta, cuando tiene alguien: el `profileId` del rival
+  // (R2) o del compañero (R3). Son jugadores de la liga o no, y por eso es un
+  // `profileId` de AoE4World y no una FK a `Player`. `null` en las reglas sin
+  // sujeto.
+  subjectProfileId Int?
+  // Nombre del sujeto **en el momento de escribir la alerta**: es el único
+  // registro que queda de a quién señalaba, y un rival o un compañero externo a
+  // la liga no va a aparecer en ningún `join` del panel.
+  subjectName      String?
+
+  // Magnitud del hallazgo: partidas de la racha para los avisos de racha, y
+  // partidas acumuladas para los de total. En un total es siempre el múltiplo o
+  // el umbral que se ha cruzado, así que `count == threshold`.
+  count     Int
+  // Umbral que dispara el aviso, tomado del ruleset activo. Se guarda para que
+  // el informe pueda decir con qué criterio se avisó aunque las reglas cambien
+  // después.
+  threshold Int
+
+  // Partida que **rompió** la racha (la primera clasificatoria sin el patrón) o
+  // cruzó el umbral; en el cierre de torneo, la última de la racha, que es la
+  // única que se puede señalar porque no hay ninguna que la rompiera.
+  // `null` solo si algún día una regla dispara sin partida que señalar.
+  anchorGameId String?
+
+  dedupeKey String @unique
+  summary   String
+  details   Json
+
+  createdAt DateTime @default(now())
+
+  // El primero sostiene "lo más reciente primero" del panel, que es la consulta
+  // de lectura. El segundo sirve para el detalle de un jugador sin perder ese
+  // orden, y para contar cuántas alertas de cada regla ha tenido.
+  @@index([createdAt])
+  @@index([playerId, rule])
 }

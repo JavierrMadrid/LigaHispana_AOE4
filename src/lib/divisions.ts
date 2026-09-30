@@ -59,3 +59,58 @@ export function divisionFromRankLevel(rankLevel: string | null): DivisionId | nu
 
   return null;
 }
+
+/**
+ * Las 18 subdivisiones, **de la más fuerte a la más débil**.
+ *
+ * El orden real de AoE4World va del 3 al 1 dentro de cada división y de
+ * conquistador a bronce entre divisiones, y es el que hace falta para contar
+ * "escalones": desde `gold_3`, tres escalones abajo es `silver_3` o inferior;
+ * desde `gold_1`, tres escalones abajo es `silver_1` o inferior (los dos
+ * ejemplos están verificados con el cliente).
+ *
+ * Se escribe **entero y a mano**, y no se deduce de `DIVISIONS`, porque el paso
+ * interno de cada división (3 → 2 → 1) es del `rank_level` de AoE4World y no
+ * está en ningún otro sitio del proyecto: `DIVISIONS` solo sabe los seis
+ * prefijos. Derivar el orden de una lista de prefijos sería inventar el dato.
+ *
+ * Comparar Escalones entre ladders es legítimo porque las subdivisiones son
+ * globales: el motor de alertas compara el `rank_level` 1v1 de un jugador con
+ * el que corresponde a la media de elo de una partida de equipos, y lo único
+ * que cambia entre ladders es **dónde cae el corte de rating** de cada
+ * subdivisión, que es lo que guarda `Setting["alerts.divisionCutoffs"]`.
+ */
+export const SUBDIVISION_RANK_LEVELS = [
+  "conqueror_3",
+  "conqueror_2",
+  "conqueror_1",
+  "diamond_3",
+  "diamond_2",
+  "diamond_1",
+  "platinum_3",
+  "platinum_2",
+  "platinum_1",
+  "gold_3",
+  "gold_2",
+  "gold_1",
+  "silver_3",
+  "silver_2",
+  "silver_1",
+  "bronze_3",
+  "bronze_2",
+  "bronze_1",
+] as const;
+
+export type SubdivisionRankLevel = (typeof SUBDIVISION_RANK_LEVELS)[number];
+
+/** Posición de una subdivisión en el orden fuerte → débil, o `null` si no se reconoce. */
+export function subdivisionIndex(rankLevel: string | null): number | null {
+  if (rankLevel === null) {
+    return null;
+  }
+
+  const normalized = rankLevel.trim().toLowerCase();
+  const found = (SUBDIVISION_RANK_LEVELS as readonly string[]).indexOf(normalized);
+
+  return found === -1 ? null : found;
+}

@@ -81,8 +81,20 @@ type GrantRow = { granted: boolean };
  * `prisma db push` no la añade sola, y sin ella la tabla nueva nace con los
  * permisos por defecto de Supabase en `public`, es decir, **legible con la clave
  * publicable** a través de la Data API. Es el motivo de que el script exista.
+ *
+ * Se ha comprobado que las dos últimas (`Alert` y `ObjectiveEvent`) nacieron
+ * exactamente así: con RLS desactivada y `SELECT` para `anon` y `authenticated`.
  */
-const TABLES = ["Player", "Match", "PlayerScore", "Setting", "RateLimitCounter", "AdminAction"] as const;
+const TABLES = [
+  "Player",
+  "Match",
+  "PlayerScore",
+  "Setting",
+  "RateLimitCounter",
+  "AdminAction",
+  "Alert",
+  "ObjectiveEvent",
+] as const;
 
 const ROLES_CLIENTE = "anon, authenticated";
 

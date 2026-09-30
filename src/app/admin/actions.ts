@@ -1,13 +1,17 @@
 "use server";
 
 import type { User } from "@supabase/supabase-js";
+import type { SyncSummary } from "@/lib/aoe4world/sync";
+import type { ManualSyncLock } from "@/lib/manual-sync";
 import { revalidatePath } from "next/cache";
 import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
 import { puntos, recordAdminAction } from "@/lib/admin-actions";
+import { reevaluatePlayerAlerts } from "@/lib/alerts/evaluate";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { logDatabaseFailure } from "@/lib/db-errors";
+import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
 import { parseName, parseProfileId, parseTwitchChannel } from "@/lib/player-input";
 import { countsAsRanked } from "@/lib/ranked-match";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
@@ -479,6 +483,8 @@ type MatchForScoring = {
   gameId: string;
   points: number;
   revertedAt: Date | null;
+  /** `Player.id` de la fila afectada: las alertas se reevalúan por id, no por `profileId`. */
+  playerId: string;
   /** Lo que `countsAsRanked()` necesita para decidir si la partida cuenta. */
   mode: string | null;
   result: MatchResult | null;
@@ -592,6 +598,7 @@ async function setMatchReverted(
         gameId: true,
         points: true,
         revertedAt: true,
+        playerId: true,
         mode: true,
         result: true,
         startedAt: true,
@@ -608,6 +615,7 @@ async function setMatchReverted(
             gameId: row.gameId,
             points: row.points,
             revertedAt: row.revertedAt,
+            playerId: row.playerId,
             mode: row.mode,
             result: row.result,
             startedAt: row.startedAt,
@@ -719,6 +727,15 @@ async function setMatchReverted(
         : "No se ha podido recalcular la clasificación ni deshacer el cambio: la partida ha quedado marcada y hay que revisarla a mano. El motivo está en el log del servidor.",
     };
   }
+
+  // La partida ya no cuenta (o vuelve a contar) y eso cambia el conjunto de
+  // clasificatorias del jugador, así que sus rachas y sus acumulados también
+  // cambian. Va **después** del recálculo y fuera de su compensación a propósito:
+  // las alertas son un informe derivado y append-only, y un fallo suyo no deja
+  // nada a medias —lo que no habría pasado si se evaluaran antes de confirmar el
+  // cambio—. Si falla, la siguiente pasada del sincronizador lo arregla, y lo
+  // dice `reevaluatePlayerAlerts` en el log.
+  await reevaluatePlayerAlerts(match.playerId);
 
   revalidatePath("/admin");
 

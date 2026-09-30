@@ -213,6 +213,16 @@ export type SyncRunTrace = {
   ladderError: string | null;
   /** Por qué no se pudo recalcular la clasificación, si no se pudo. */
   scoringError: string | null;
+  /**
+   * Por qué no se pudieron evaluar las alertas de comportamiento, si no se pudo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`: las alertas son
+   * información sobre un comportamiento a vigilar, no salud del sincronizador. Que
+   * el motor de alertas falle no significa que las partidas no se estén trayendo,
+   * y un rastro que mezclara las dos cosas daría "el torneo lleva roto desde las
+   * 10:00" por un fallo que no ha parado nada.
+   */
+  alertsError: string | null;
   /** Jugadores que no se pudieron sincronizar, con su motivo. */
   failures: SyncRunFailure[];
   /**
@@ -294,6 +304,7 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     rateLimitPausesMs: readCount(value["rateLimitPausesMs"]),
     ladderError: readText(value["ladderError"]),
     scoringError: readText(value["scoringError"]),
+    alertsError: readText(value["alertsError"]),
     failures: readFailures(value["failures"]),
     lastSuccessAt: readText(value["lastSuccessAt"]),
   };
@@ -321,16 +332,20 @@ export async function writeSyncRunTrace(
   trace: Omit<SyncRunTrace, "lastSuccessAt">,
   previous: SyncRunTrace | null = null,
 ): Promise<void> {
-  const salióBien =
+  const salioBien =
     trace.playersFailed === 0 &&
     trace.playersCancelled === 0 &&
     trace.ladderError === null &&
     trace.scoringError === null;
+  // `alertsError` no se mira aquí a propósito: el marcador de "cuándo funcionó por
+  // última vez" responde a «¿desde cuándo está roto el sincronizador?», y un fallo
+  // del motor de alertas no ha parado ni una partida. Meterlo haría que el panel
+  // dijera que el torneo lleva horas roto cuando lo que se ha caído es un informe.
 
   const value = {
     ...trace,
     failures: trace.failures.slice(0, SYNC_FAILURES_LIMIT),
-    lastSuccessAt: salióBien ? trace.finishedAt : (previous?.lastSuccessAt ?? null),
+    lastSuccessAt: salioBien ? trace.finishedAt : (previous?.lastSuccessAt ?? null),
   } as Prisma.InputJsonObject;
 
   await db.setting.upsert({

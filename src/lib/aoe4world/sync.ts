@@ -1,5 +1,6 @@
 import "server-only";
 
+import { evaluateAlerts, type EvaluateAlertsResult } from "@/lib/alerts/evaluate";
 import { db } from "@/lib/db";
 import {
   mergeAbandonedAudit,
@@ -30,9 +31,11 @@ import type { Aoe4WorldGame } from "./types";
  * ladder (`ladder.ts`): elo, división, racha y directo de Twitch de todos los
  * aprobados en una sola llamada.
  *
- * Al final se recalcula la clasificación. Es lo que cumple el requisito de
- * "siempre actualizada" sin que nadie tenga que recargar: cada pasada del worker
- * deja la tabla de puntos al día.
+ * Al final se recalcula la clasificación y, si algo ha cambiado para alguien, se
+ * evaluan las alertas de comportamiento **de ese jugador y solo de ese**. Es lo
+ * que cumple el requisito de "siempre actualizada" sin que nadie tenga que
+ * recargar: cada pasada del worker deja la tabla de puntos al día y el historial
+ * de alertas al día.
  */
 
 /**
@@ -115,6 +118,14 @@ export type SyncSummary = {
   scoring: RecomputeScoresResult | null;
   /** Por qué no se pudo recalcular la clasificación, si no se pudo. */
   scoringError: string | null;
+  /**
+   * Alertas de comportamiento de **los jugadores tocados** en esta pasada, más
+   * la evaluación completa del cierre de torneo si esta pasada ha sido la que lo
+   * detectó. `null` si no se pudo evaluar; el motivo va en `alertsError`.
+   */
+  alerts: EvaluateAlertsResult | null;
+  /** Por qué no se pudieron evaluar las alertas, si no se pudieron. */
+  alertsError: string | null;
   players: SyncPlayerResult[];
 };
 
@@ -627,6 +638,46 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido recalcular la clasificación: ${scoringError}`);
   }
 
+  // Las alertas van **después** del recálculo y solo para quien ha cambiado, porque
+  // una alerta de comportamiento solo puede moverse si el conjunto de
+  // clasificatorias del jugador ha cambiado: y eso es exactamente lo que cuenta
+  // cualquiera de los cuatro contadores. En una pasada sin novedades (lo normal,
+  // 288 veces al día) no se evalúa a nadie y no se lee ni una fila de `Match`.
+  const tocados = settled
+    .filter(
+      (result) =>
+        result.matchesInserted > 0 ||
+        result.matchesUpdated > 0 ||
+        result.matchesResolvedByRefetch > 0 ||
+        result.matchesAbandoned > 0,
+    )
+    .map((result) => result.profileId);
+
+  let alerts: EvaluateAlertsResult | null = null;
+  let alertsError: string | null = null;
+
+  try {
+    // `evaluateAlerts` también hace, por su cuenta, la evaluación completa del
+    // cierre de torneo si la ventana ya terminó y no estaba hecha. Por eso se
+    // llama siempre, también con `tocados` vacío: el cierre no depende de que
+    // alguien haya jugado nada en esta pasada.
+    alerts = await evaluateAlerts(
+      tocados.length === 0 ? {} : { profileIds: tocados },
+    );
+
+    if (alerts.alertsCreated > 0 || alerts.tournamentClose) {
+      console.info(
+        `[sync] Alertas: ${alerts.alertsCreated} nuevas de ${alerts.alertsTriggered} disparadas, ` +
+          `evaluados ${alerts.playersEvaluated} jugadores, ${alerts.openStreaks.length} rachas abiertas` +
+          (alerts.tournamentClose ? " (evaluación completa de cierre de torneo)" : "") +
+          ".",
+      );
+    }
+  } catch (error) {
+    alertsError = toErrorMessage(error);
+    console.error(`[sync] No se han podido evaluar las alertas: ${alertsError}`);
+  }
+
   const finishedAtMs = Date.now();
 
   const summary: SyncSummary = {
@@ -650,6 +701,8 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     ladder,
     scoring,
     scoringError,
+    alerts,
+    alertsError,
     players: settled,
   };
 
@@ -699,6 +752,7 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       rateLimitPausesMs: summary.rateLimitPausesMs,
       ladderError: summary.ladder.error,
       scoringError: summary.scoringError,
+      alertsError: summary.alertsError,
       failures: summary.players
         .filter((result) => result.status !== "ok")
         .map((result) => ({

@@ -1,13 +1,16 @@
 import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
-import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
+import { AdminActionType, AlertKind, AlertRule, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
+import { ALERT_RULE_LABELS, readAlertsRuleset, type AlertsThresholds } from "@/lib/alerts";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { describeTeamSize, formatRelativeTime, teamSizesFromRawJson } from "@/lib/format";
 import { isRecord } from "@/lib/json";
-import { classificatoryWhere, readInstant } from "@/lib/ranked-match";
-import { RULESET_VERSION, readRuleset } from "@/lib/scoring";
+import { resolveObjective } from "@/lib/objective-events";
+import type { ObjectiveGroup, ObjectiveMetric } from "@/lib/objectives";
+import { classificatoryWhere, readInstant, type ScoringWindow } from "@/lib/ranked-match";
+import { RULESET_VERSION, readRuleset, type ScoringRuleset } from "@/lib/scoring";
 import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/settings";
 
 /**
@@ -27,17 +30,22 @@ import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/set
  * conoce el proyecto: un `degraded` se pinta como "no se ha podido leer" y no como
  * "no hay participantes", que es una afirmación falsa.
  *
- * ## Lo que aquí no está
+ * ## Lo que hay de alertas
  *
- * La pestaña de alertas es un *placeholder* y este módulo no tiene ninguna lectura
- * que la sustente. Se reserva para **comportamientos anómalos de los
- * participantes**, y sigue sin hacerse porque todavía no se ha definido qué
- * condiciones disparan una alerta ni qué cuenta como anómalo: inventar los avisos
- * enseñaría un estado del torneo que no existe. Cuando se definan, se escribe su
- * consulta aquí, con el mismo contrato y las mismas validaciones.
+ * La pestaña de alertas ya no es un *placeholder*: `getAdminAlerts()` publica las
+ * alertas disparadas, de la más reciente a la más antigua, y `getAdminAlertRules()`
+ * publica los **umbrales vivos** del ruleset (`Setting["alerts.ruleset"]`) junto con la
+ * ventana del torneo. Los umbrales se leen del ruleset efectivo y no de una constante
+ * del código porque la organización puede retocarlos sin desplegar: un texto de reglas
+ * escrito a mano en la interfaz acabaría mintiendo en cuanto eso pasara, que es el mismo
+ * pendiente que tienen `/reglas` y `/objetivos` con los números del ruleset de puntos.
  *
- * Lo que sí hay es `getSyncHealth()`, que es salud del sistema y no una alerta de
- * jugador, y por eso no va en esa pestaña sino en un aviso de `/admin`.
+ * El **informe descargable** no vive aquí: es un fichero entero que se genera con la
+ * comprobación completa del motor por delante, y eso es `src/lib/alerts/report.ts`, que
+ * además no degrada a medias.
+ *
+ * Lo que sí es salud del sistema y no una alerta de jugador sigue fuera de la pestaña:
+ * el estado del sincronizador, que vive en `getSyncHealth()` y en el aviso de `/admin`.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -718,5 +726,181 @@ export async function getAdminActions(
         })),
       };
     }, page, pageSize);
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Alertas de comportamiento                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Una alerta disparada, tal y como la pinta la pestaña de alertas.
+ *
+ * ## Por qué `rule` y `ruleLabel` viajan los dos
+ *
+ * `rule` es el identificador estable, el que se puede filtrar o contrastar con la tabla;
+ * `ruleLabel` es su nombre en español y sale de `ALERT_RULE_LABELS` (el dominio de
+ * alertas). Publicar las dos cosas evita que cada sitio que pinte una fila decida cómo se
+ * llama la regla: el informe descargable y el panel leerían la misma alerta con dos
+ * nombres distintos en cuanto uno de los dos se tocara.
+ *
+ * ## Lo que no viaja
+ *
+ * Ni `threshold` ni `anchorGameId` ni `details`: esta fila es para leer de un vistazo, y
+ * lo que hay detrás está en el informe descargable y en `Alert`. El `summary` sí viaja
+ * entero, redactado por el motor al escribir la fila, y se pinta tal cual —montar la
+ * frase en el componente daría dos textos para el mismo hallazgo—.
+ */
+export type AdminAlertRow = {
+  /** `Alert.id`. */
+  id: string;
+  /** Cuándo se detectó: es también por lo que se ordena la lista. */
+  createdAt: Date;
+  /** `Alert.rule`: el identificador estable de la regla. */
+  rule: AlertRule;
+  /** Cómo se llama esa regla en español (`ALERT_RULE_LABELS`). */
+  ruleLabel: string;
+  /** `Alert.kind`: si la racha se rompió, la cerró el torneo o se cruzó un acumulado. */
+  kind: AlertKind;
+  /** Nombre de display del jugador, del `join` con `Player` (nunca del texto de la alerta). */
+  playerName: string;
+  playerProfileId: number;
+  /** El rival o el compañero al que se refiere, o `null` en las reglas sin sujeto. */
+  subjectName: string | null;
+  subjectProfileId: number | null;
+  /** Magnitud del hallazgo: partidas de la racha o del acumulado. */
+  count: number;
+  /** La frase en español, tal cual se pinta. La redacta `alertSummary()`. */
+  summary: string;
+};
+
+/**
+ * Lo que se lee de cada fila de `Alert`.
+ *
+ * El nombre del jugador no está en la alerta (a propósito: un nombre guardado se
+ * quedaría congelado el día que alguien se renombre), así que sale del `join`.
+ */
+const ALERT_SELECT = {
+  id: true,
+  createdAt: true,
+  rule: true,
+  kind: true,
+  subjectName: true,
+  subjectProfileId: true,
+  count: true,
+  summary: true,
+  player: { select: { name: true, profileId: true } },
+} satisfies Prisma.AlertSelect;
+
+/**
+ * Alertas disparadas, de la más reciente a la más antigua y paginadas.
+ *
+ * ## Por qué no hay filtros
+ *
+ * Una tabla de avisos se lee, no se consulta: el filtro útil (por jugador, por regla) es
+ * el encargo de la interfaz sobre esta página, igual que el buscador de participantes va
+ * en cliente. Lo que sí está resuelto en el servidor es la paginación, con el mismo
+ * `DEFAULT_PAGE_SIZE` y el mismo tope que el resto de pestañas, porque son miles de filas
+ * en un torneo largo y mandarlas todas dentro del *payload* de RSC no es una opción.
+ *
+ * ## El orden es total a propósito
+ *
+ * `createdAt` y luego `id`: dos alertas del mismo milisegundo tienen que tener un orden
+ * estable, o una página podría repetir o perder filas de la anterior. Es el mismo
+ * desempate que usa el historial de acciones, y el índice `@@index([createdAt])` sostiene
+ * la consulta.
+ *
+ * `degraded` significa lo mismo que en el resto del módulo: **no se ha podido leer**, no
+ * "no hay alertas". Un corte de la base dejaría la pestaña vacía y parecería que el
+ * torneo está limpio, que es la afirmación más falsa que puede hacer esta pantalla.
+ */
+export async function getAdminAlerts(
+  query: AdminPageQuery = {},
+): Promise<PublicRead<AdminPage<AdminAlertRow>>> {
+  return readFromDatabase("admin/getAdminAlerts", async () => {
+    const page = readBoundedInt(query.page, { min: 1, max: 100_000, fallback: 1 });
+    const pageSize = readBoundedInt(query.pageSize, {
+      min: 1,
+      max: MAX_PAGE_SIZE,
+      fallback: DEFAULT_PAGE_SIZE,
+    });
+
+    return adminPage<AdminAlertRow>(async (wanted) => {
+      const [rows, total] = await Promise.all([
+        db.alert.findMany({
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          skip: (wanted - 1) * pageSize,
+          take: pageSize,
+          select: ALERT_SELECT,
+        }),
+        db.alert.count(),
+      ]);
+
+      return {
+        total,
+        rows: rows.map((row) => ({
+          id: row.id,
+          createdAt: row.createdAt,
+          rule: row.rule,
+          ruleLabel: ALERT_RULE_LABELS[row.rule],
+          kind: row.kind,
+          playerName: row.player.name,
+          playerProfileId: row.player.profileId,
+          subjectName: row.subjectName,
+          subjectProfileId: row.subjectProfileId,
+          count: row.count,
+          summary: row.summary,
+        })),
+      };
+    }, page, pageSize);
+  });
+}
+
+/**
+ * Los **umbrales vivos** de las alertas de comportamiento, más la ventana del torneo.
+ *
+ * Existe para que el copy de las reglas no pueda mentir. Los umbrales están en
+ * `Setting["alerts.ruleset"]` y se cambian sin desplegar (es lo mismo que los puntos por
+ * victoria del motor de puntuación), así que un texto que dijera "tres partidas seguidas"
+ * escrito en el componente sería falso en cuanto la organización retocara el número.
+ * Publicando los umbrales efectivos, quien pinta decide el texto y el número salen de la
+ * misma fuente.
+ *
+ * ## De dónde sale cada cosa
+ *
+ * - `version` y `thresholds` son del ruleset de alertas, leído con `readAlertsRuleset()`,
+ *   que **no lanza**: un documento retocado a mano que no se entiende se descarta con un
+ *   aviso y se usan los valores por defecto. Si no se ha publicado nunca, son los
+ *   valores por defecto del código, que es lo que el motor estaría evaluando.
+ * - `window` es del ruleset **de puntos**, y no del de alertas a propósito: las alertas no
+ *   duplican la ventana (ver `src/lib/alerts/rules.ts`) para no tener dos verdades sobre
+ *   qué se está midiendo. Es la misma ventana con la que `rankedMatchWhere()` filtra las
+ *   clasificatorias que evalúa el motor.
+ */
+export type AdminAlertRules = {
+  /** `AlertsRuleset.version`: la versión del documento de umbrales que se está usando. */
+  version: number;
+  /** Los umbrales efectivos, ya validados contra `DEFAULT_ALERTS_RULESET`. */
+  thresholds: AlertsThresholds;
+  /** Ventana del torneo sobre `Match.startedAt`, `[from, to)`; `to: null` = sin fin. */
+  window: ScoringWindow;
+};
+
+/**
+ * Los umbrales que están vigentes ahora, y la ventana que se está midiendo.
+ *
+ * Sin paginación ni `count`: son un documento de `Setting` y una ventana, no filas.
+ */
+export async function getAdminAlertRules(): Promise<PublicRead<AdminAlertRules>> {
+  return readFromDatabase("admin/getAdminAlertRules", async () => {
+    // Las dos lecturas son de `Setting` y no dependen la una de la otra, así que van en
+    // paralelo: los umbrales de alertas y la ventana del ruleset de puntos.
+    const [alerts, scoring] = await Promise.all([readAlertsRuleset(), readRuleset()]);
+
+    return {
+      version: alerts.version,
+      thresholds: alerts.thresholds,
+      window: scoring.window,
+    };
   });
 }
