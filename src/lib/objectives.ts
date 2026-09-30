@@ -288,6 +288,41 @@ export type ObjectivesComputation = {
   pointsByPlayer: Map<string, ObjectiveAward>;
   /** Cuántos objetivos tienen poseedor hoy. */
   holders: number;
+  /**
+   * Los mismos objetivos con poseedor, pero con lo que **no** viaja en el contrato
+   * público: el `Player.id` del poseedor (el público usa `profileId`) y el instante
+   * de la hazaña.
+   *
+   * Es lo que consume el registro de hitos (`ObjectiveEvent`, escrito por
+   * `reconcileObjectiveEvents()` en `scoring.ts`), y está aquí y no en
+   * `ObjectiveOption` a propósito: `/objetivos` no tiene por qué enterarse de que
+   * existe una tabla de hitos, y ampliar el contrato público obligaría a
+   * `/objetivos` y a la clasificación a distinguir dos cosas que ahora son la misma.
+   */
+  awarded: ObjectiveAwarded[];
+};
+
+/**
+ * Un objetivo con poseedor, visto desde el motor.
+ *
+ * `raceAt` es lo que separa las dos formas de resolver un objetivo (§6 del
+ * documento): en el grupo `civilizacion` no es `null`, porque son carreras y su
+ * poseedor se decide por el instante en que las cerró (`CivRecord.completedAt` en
+ * `masterizar-*`, `PlayerAggregate.allCivsAt` en `masterizarlos-a-todos`). En los
+ * otros 14 es `null`: se resuelven en caliente y su poseedor puede cambiar en el
+ * siguiente recálculo, así que no hay un instante de la hazaña que registrar.
+ *
+ * Va en **milisegundos epoch** porque es el mismo número que viaja en
+ * `PlayerAggregate` y el que usa el desempate 3 (§5): no hace falta convertirlo
+ * dos veces, y comparar dos instantes sin discutir con la zona de la sesión.
+ */
+export type ObjectiveAwarded = {
+  /** Id estable del objetivo (`loco-por-ganar`, `masterizar-japanese`…). */
+  id: string;
+  /** `Player.id` de quien lo posee. */
+  playerId: string;
+  /** Instante en que se cerró la carrera, o `null` si el objetivo no es una carrera. */
+  raceAt: number | null;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -984,6 +1019,7 @@ export function computeObjectives(
 ): ObjectivesComputation {
   const options: ObjectiveOption[] = [];
   const pointsByPlayer = new Map<string, ObjectiveAward>();
+  const awarded: ObjectiveAwarded[] = [];
   let holders = 0;
 
   for (const definition of OBJECTIVE_DEFINITIONS) {
@@ -998,6 +1034,11 @@ export function computeObjectives(
       award.earned.push(definition.id);
       pointsByPlayer.set(holder.player.playerId, award);
       holders += 1;
+      awarded.push({
+        id: definition.id,
+        playerId: holder.player.playerId,
+        raceAt: holder.raceAt,
+      });
     }
 
     options.push({
@@ -1014,5 +1055,5 @@ export function computeObjectives(
     });
   }
 
-  return { options, pointsByPlayer, holders };
+  return { options, pointsByPlayer, holders, awarded };
 }

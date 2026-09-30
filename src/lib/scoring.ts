@@ -5,6 +5,7 @@ import { MatchResult, PlayerStatus } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { isRecord } from "@/lib/json";
+import { reconcileObjectiveEvents } from "@/lib/objective-events";
 import {
   OBJECTIVE_POINTS,
   computeObjectives,
@@ -554,6 +555,20 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
 
       const objectivePlayers = await loadObjectivePlayers(tx, ruleset);
       const objectives = computeObjectives(objectivePlayers, ruleset);
+
+      // Registro de hitos, en esta misma transacción y a continuación del cómputo:
+      // el feed del historial de `/admin/historial` mezcla partidas y objetivos, y
+      // un objetivo sin evento se contaría como un objetivo que nadie cumplió.
+      //
+      // Va aquí y no al final, y no en un segundo paso, por dos motivos que son los
+      // mismos que los del resto del motor: dentro de la transacción, con el cerrojo
+      // ya tomado, o el registro y la clasificación describen lo mismo o no cambia
+      // ninguno; y en **todos** los caminos que recalculan —el worker, `npm run
+      // score`, revertir o restaurar los puntos de una partida, aprobar o dar de
+      // alta a un jugador— sin tener que acordarse de un segundo paso. El
+      // `reconcileObjectiveEvents` es idempotente y solo escribe lo que difiere de
+      // lo que ya había.
+      await reconcileObjectiveEvents(tx, ruleset, objectives.awarded);
 
       // Mismo filtro que el `UPDATE` de arriba y que la carga de objetivos (y por
       // tanto también `revertedAt is null`), y con el estado del jugador, que aquí

@@ -71,9 +71,14 @@ const LADDER_SIZE = /^rm_(\d)v(\d)$/i;
  * información más precisa para quien está viendo la partida. Si llega un modo
  * que no conocemos se devuelve tal cual, en vez de esconderlo: mejor un código
  * raro que un dato que no cuadra.
+ *
+ * `leaderboard` admite `null` porque hay filas que no son de una partida: en el
+ * historial del panel, una fila de **objetivo cumplido** no tiene ladder. Sin
+ * `leaderboard` y sin `mode` no hay nada que describir, y se devuelve el propio
+ * `mode` (o una cadena vacía si tampoco lo hay) en lugar de inventar un formato.
  */
-export function describeMode(mode: string | null, leaderboard: string): string {
-  const size = leaderboard.match(LADDER_SIZE);
+export function describeMode(mode: string | null, leaderboard: string | null): string {
+  const size = leaderboard?.match(LADDER_SIZE) ?? null;
 
   if (size !== null) {
     const [, left, right] = size;
@@ -88,7 +93,7 @@ export function describeMode(mode: string | null, leaderboard: string): string {
     return "1vs1";
   }
 
-  return leaderboard;
+  return leaderboard ?? mode ?? "";
 }
 
 /**

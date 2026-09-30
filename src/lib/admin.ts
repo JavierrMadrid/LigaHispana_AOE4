@@ -362,31 +362,92 @@ function syncHeadline(trace: SyncRunTrace | null, stale: boolean): string {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Historial de partidas                                                        */
+/* Historial de partidas y objetivos                                            */
 /* -------------------------------------------------------------------------- */
 
 /** Filtros del historial de partidas, tal como llegan de la URL. */
 export type AdminMatchHistoryQuery = AdminPageQuery & {
   /** `Player.id` (no `profileId`): el mismo id que usan los formularios de admin. */
   playerId?: AdminQueryParam;
-  /** Límite inferior **inclusivo** sobre `startedAt`. */
+  /** Límite inferior **inclusivo** de fechas; en las partidas, sobre `startedAt`. */
   from?: AdminQueryParam;
-  /** Límite superior **exclusivo** sobre `startedAt`. */
+  /** Límite superior **exclusivo** de fechas; en las partidas, sobre `startedAt`. */
   to?: AdminQueryParam;
   /** `WIN` o `LOSS`; cualquier otra cosa se trata como ausencia de filtro. */
   resultado?: AdminQueryParam;
 };
 
-/** Una partida del historial, con el jugador de la liga ya resuelto. */
-export type AdminMatchHistoryRow = {
-  /** `Match.id`: es lo que viajan los formularios de revert y restore. */
+/**
+ * El objetivo cumplido de una fila del historial, ya resuelto.
+ *
+ * Etiqueta, grupo y métrica salen del **catálogo** (`OBJECTIVE_DEFINITIONS`) y los
+ * puntos del **ruleset activo**, con el mismo criterio que `objectiveLookup()` en
+ * `src/lib/public.ts` (`ruleset.objectives[id] ?? definition.points`). La tabla
+ * `ObjectiveEvent` no los guarda, y a propósito: una copia se quedaría vieja en
+ * cuanto se retocara un punto en `Setting`. Es la fila de la interfaz la que tiene
+ * todo resuelto, para que pintar un hito no obligue a mirar el catálogo.
+ */
+export type AdminObjectiveEvent = {
+  /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`masterizar-japanese`…). */
   id: string;
-  gameId: string;
-  /** Cuándo empezó la partida: la columna por la que se ordena y por la que se filtra. */
+  /** Rótulo público del objetivo (`ObjectiveDefinition.label`). */
+  label: string;
+  /** Grupo del objetivo (`actividad`, `racha`, `division`, `formato`, `civilizacion`). */
+  group: ObjectiveGroup;
+  /**
+   * Métrica que lo decide (`partidas`, `winrate`, `racha`, `victorias`).
+   *
+   * Viaja con `id` y `group` porque `ObjectiveIcon` —el mismo icono que usan
+   * `/objetivos` y la clasificación— elige el glifo con los tres. Con esto la fila
+   * se puede pintar sin mirar el catálogo.
+   */
+  metric: ObjectiveMetric;
+  /** Puntos que otorga poseerlo con las reglas vigentes. Es el mismo número que `points` de la fila. */
+  points: number;
+};
+
+/**
+ * Una fila del historial de `/admin/historial`: **una partida o un objetivo cumplido**.
+ *
+ * ## Cómo se distinguen
+ *
+ * Por `objective`: `null` = fila de partida, no `null` = se cumplió un objetivo. No
+ * hay un `kind` aparte a propósito: un segundo discriminante que nadie mantiene en
+ * sincronía con el primero es una forma de que las dos clases de fila se contradigan.
+ *
+ * Los campos de partida (`gameId`, `opponentName`, `result`, `teamSize`, `mode`,
+ * `leaderboard`, `map`, `revertedAt`) son `null` en una fila de objetivo porque no
+ * existen ahí, no porque falten datos. Y al revés: una fila de objetivo **no lleva
+ * acciones** (revertir o restaurar son de `Match`), así que la interfaz solo tiene
+ * que comprobar `objective === null` para saber si puede ofrecer alguna.
+ */
+export type AdminMatchHistoryRow = {
+  /**
+   * `Match.id` en una fila de partida —es lo que viajan los formularios de revert y
+   * restore— y `ObjectiveEvent.objectiveId` en una fila de objetivo, que también es
+   * única. En los dos casos sirve como clave de la fila.
+   */
+  id: string;
+  /**
+   * La fecha de la fila, y por lo que se ordena y por lo que se filtra:
+   * `Match.startedAt` en una partida y `ObjectiveEvent.achievedAt` en un objetivo
+   * cumplido. En un objetivo es el instante de la hazaña en las carreras de
+   * civilización y el **fin del torneo** en los que se resuelven en caliente (que no
+   * se registran hasta que el torneo ha terminado).
+   */
   startedAt: Date;
   playerId: string;
   playerName: string;
   playerProfileId: number;
+  /** Puntos que aporta la fila con el ruleset activo: los de la partida o los del objetivo. */
+  points: number;
+  /** El objetivo cumplido, o `null` si la fila es una partida. Ver el tipo. */
+  objective: AdminObjectiveEvent | null;
+
+  /* ------------------------------- Solo partidas ------------------------------ */
+
+  /** `gameId` de AoE4World; `null` en una fila de objetivo. */
+  gameId: string | null;
   opponentName: string | null;
   opponentProfileId: number | null;
   result: MatchResult | null;
@@ -395,16 +456,15 @@ export type AdminMatchHistoryRow = {
    *
    * No se puede sacar de `mode`/`leaderboard`: un ranked por equipos llega con
    * `leaderboard: "rm_team"`, que no dice cuántos juegan. `null` cuando el payload no
-   * lo permite, y entonces la interfaz cae en `describeMode`.
+   * lo permite (y también en una fila de objetivo), y entonces la interfaz cae en
+   * `describeMode`.
    */
   teamSize: string | null;
-  /** Puntos que aporta con el ruleset activo; `0` en una partida no ganada. */
-  points: number;
   mode: string | null;
   /** Literal de AoE4World (`rm_solo`, `rm_2v2`…); el copy puede necesitarlo. */
-  leaderboard: string;
+  leaderboard: string | null;
   map: string | null;
-  /** Instante del revert, o `null` si la partida cuenta. */
+  /** Instante del revert, o `null` si la partida cuenta (o si la fila no es de partida). */
   revertedAt: Date | null;
 };
 
@@ -476,16 +536,21 @@ function readDateBound(value: AdminQueryParam, bound: "from" | "to"): Date | nul
 }
 
 /**
- * Rango sobre `startedAt`, ya validado.
+ * Rango de fechas del filtro, ya validado y listo para una columna `DateTime`.
  *
  * Es un tipo propio y no el `DateTimeFilter` de Prisma a propósito: lo que sale de
- * aquí son dos comparadores opcionales, y el filtro de la tabla los mete dentro de
- * `startedAt` junto con los que ya trae `classificatoryWhere`.
+ * aquí son dos comparadores opcionales, y el filtro los mete dentro de la columna
+ * concreta (`Match.startedAt` o `ObjectiveEvent.achievedAt`) junto con lo que ya
+ * trae `classificatoryWhere`.
+ *
+ * Los dos límites son los **mismos** para las dos clases de fila: el filtro de la
+ * pantalla es un rango de fechas, no "fechas de partidas". Por eso se resuelve una
+ * vez y se reparte.
  */
-type StartedAtRange = { gte?: Date; lt?: Date };
+type DateRange = { gte?: Date; lt?: Date };
 
-/** El filtro de fechas del historial, ya validado y listo para `startedAt`. */
-function startedAtWhere(query: AdminMatchHistoryQuery): StartedAtRange {
+/** El filtro de fechas del historial, ya validado. */
+function dateRangeWhere(query: AdminMatchHistoryQuery): DateRange {
   const from = readDateBound(query.from, "from");
   const to = readDateBound(query.to, "to");
 
@@ -513,8 +578,162 @@ function readResultFilter(value: AdminQueryParam): MatchResult | null {
 }
 
 /**
- * Historial de partidas clasificatorias, paginado en servidor y de la más reciente a
- * la más antigua.
+ * Campos de `ObjectiveEvent` que se leen. `objectiveId` es la clave única de la fila
+ * y a la vez el id del objetivo en el catálogo.
+ */
+const OBJECTIVE_EVENT_SELECT = {
+  objectiveId: true,
+  achievedAt: true,
+  playerId: true,
+  player: { select: { name: true, profileId: true } },
+} satisfies Prisma.ObjectiveEventSelect;
+
+/**
+ * Orden total del feed mezclado, del más reciente al más antiguo. Tres criterios:
+ *
+ * 1. **Fecha descendente**: `Match.startedAt` o `ObjectiveEvent.achievedAt`.
+ * 2. **La partida antes que el objetivo** si comparten instante. Ese es el criterio
+ *    que hace el orden **total**, que es lo que necesita la paginación (sin él, dos
+ *    filas del mismo instante podrían salir en cualquier orden entre sí y una página
+ *    podría repetir o perder filas de la anterior), y además es el que mejor se lee:
+ *    casi siempre la partida es la fila que explica el hito, así que va delante. Como
+ *    el criterio 3 no cambia, **el orden entre partidas es el de siempre**.
+ * 3. **La clave propia de cada clase**, descendente: `Match.id` para las partidas y
+ *    `ObjectiveEvent.objectiveId` para los objetivos. Ambas son únicas, así que con
+ *    los tres criterios no quedan dos filas empatadas, y las dos consultas que
+ *    alimentan el merge ya traen sus filas en este mismo orden.
+ */
+function compareHistoryRows(a: AdminMatchHistoryRow, b: AdminMatchHistoryRow): number {
+  const porFecha = b.startedAt.getTime() - a.startedAt.getTime();
+
+  if (porFecha !== 0) {
+    return porFecha;
+  }
+
+  const aEsPartida = a.objective === null;
+
+  if (aEsPartida !== (b.objective === null)) {
+    return aEsPartida ? -1 : 1;
+  }
+
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
+/** Una fila de `Match`, con los datos de partida resueltos y los de objetivo a `null`. */
+function partidaEnFila(
+  row: {
+    id: string;
+    gameId: string;
+    startedAt: Date;
+    playerId: string;
+    opponentName: string | null;
+    opponentProfileId: number | null;
+    result: MatchResult | null;
+    points: number;
+    mode: string | null;
+    leaderboard: string;
+    map: string | null;
+    revertedAt: Date | null;
+    rawJson: unknown;
+    player: { name: string; profileId: number };
+  },
+): AdminMatchHistoryRow {
+  return {
+    id: row.id,
+    startedAt: row.startedAt,
+    playerId: row.playerId,
+    playerName: row.player.name,
+    playerProfileId: row.player.profileId,
+    points: row.points,
+    objective: null,
+    gameId: row.gameId,
+    opponentName: row.opponentName,
+    opponentProfileId: row.opponentProfileId,
+    result: row.result,
+    // El tamaño se resuelve aquí y no en la interfaz: `rawJson` es el payload
+    // literal de la API y no debe salir del DAL.
+    teamSize: describeTeamSize(teamSizesFromRawJson(row.rawJson)),
+    mode: row.mode,
+    leaderboard: row.leaderboard,
+    map: row.map,
+    revertedAt: row.revertedAt,
+  };
+}
+
+/**
+ * Los objetivos cumplidos que pasan el filtro, ya en filas del historial.
+ *
+ * Se piden **todos** (no una página): son como mucho 38 filas en toda la vida del
+ * torneo, y hace falta el recuento para saber cuántas hay que colar antes de la
+ * primera partida de la página.
+ *
+ * Una fila cuyo `objectiveId` no está en el catálogo se descarta con un aviso en el
+ * log en vez de publicarse a medias: solo puede existir si alguien insertó la fila a
+ * mano (el motor borra las que no corresponden en cada recálculo), y una fila de hito
+ * sin etiqueta ni puntos no dice nada.
+ */
+async function eventosDeObjetivo(
+  where: Prisma.ObjectiveEventWhereInput,
+  ruleset: ScoringRuleset,
+): Promise<AdminMatchHistoryRow[]> {
+  const filas = await db.objectiveEvent.findMany({
+    where,
+    orderBy: [{ achievedAt: "desc" }, { objectiveId: "desc" }],
+    select: OBJECTIVE_EVENT_SELECT,
+  });
+
+  const rows: AdminMatchHistoryRow[] = [];
+
+  for (const fila of filas) {
+    const objetivo = resolveObjective(fila.objectiveId, ruleset);
+
+    if (objetivo === null) {
+      console.warn(
+        `[admin] Objetivo "${fila.objectiveId}": no está en el catálogo, su evento no se muestra.`,
+      );
+      continue;
+    }
+
+    rows.push({
+      id: objetivo.id,
+      // La fecha del feed. En las carreras de civilización es el instante de la
+      // hazaña y en los objetivos "en caliente" el fin del torneo.
+      startedAt: fila.achievedAt,
+      playerId: fila.playerId,
+      playerName: fila.player.name,
+      playerProfileId: fila.player.profileId,
+      points: objetivo.points,
+      objective: {
+        id: objetivo.id,
+        label: objetivo.label,
+        group: objetivo.group,
+        metric: objetivo.metric,
+        points: objetivo.points,
+      },
+      // Un objetivo no tiene rival, formato, mapa ni resultado: `null` es "no
+      // aplica", no "faltan datos".
+      gameId: null,
+      opponentName: null,
+      opponentProfileId: null,
+      result: null,
+      teamSize: null,
+      mode: null,
+      leaderboard: null,
+      map: null,
+      // Y no tiene acción: revertir o restaurar son de `Match`, no hay nada que
+      // deshacer en un hito.
+      revertedAt: null,
+    });
+  }
+
+  return rows;
+}
+
+/**
+ * Historial del torneo: **partidas clasificatorias y objetivos cumplidos**, mezclados
+ * en un solo feed, paginados en servidor y de lo más reciente a lo más antiguo.
+ *
+ * ## Las partidas
  *
  * **Solo clasificatorias, y con las revertidas dentro marcadas.** El filtro sale de
  * `classificatoryWhere()` —la misma regla del motor *sin* la condición de revertida—
@@ -526,14 +745,33 @@ function readResultFilter(value: AdminQueryParam): MatchResult | null {
  * **Se pagina en servidor** porque el histórico de un torneo son decenas de miles de
  * filas, y mandarlas todas al navegador en el *payload* de RSC no es una opción.
  *
- * **El orden lleva `id` de desempate** porque dos partidas pueden empezar en el mismo
- * milisegundo (el worker importa por páginas) y, sin un segundo criterio, el orden
- * dentro de esas dos filas no es estable: la página 2 repetiría o perdería filas de
- * la 1 al paginar.
+ * ## Los objetivos
  *
- * El filtro de clasificatorias sale del ruleset activo (`readRuleset`), como el
- * motor: si la organización cambia la ventana o las familias sin desplegar, el
- * historial cambia con ella.
+ * Los eventos de `ObjectiveEvent`: un objetivo cumplido por jugador, como mucho uno
+ * por objetivo del catálogo (38 en total), escritos por el motor de puntuación. Se
+ * filtran con el **mismo jugador y las mismas fechas** (sobre `achievedAt`, con los
+ * mismos límites), y **no salen si hay filtro de resultado**: un objetivo no es ni
+ * una victoria ni una derrota, y quien escribe `?resultado=WIN` está buscando las
+ * victorias de alguien, no sus hitos.
+ *
+ * ## El merge, y por qué sale barato
+ *
+ * Los eventos son ≤ 38, así que se piden enteros (y por el mismo motivo no se pueden
+ * pedir en paralelo con las partidas: el hueco de partidas depende de cuántos son).
+ * Acotando solo las partidas, con `S` el desplazamiento de la página **en el feed
+ * mezclado** y `E` los eventos que pasan el filtro:
+ *
+ * - La partida que cae en la posición `S` del feed está, en el peor caso, en la
+ *   posición `S - E` de la lista de partidas (si los `E` eventos van todos antes), y
+ *   la de la posición `S + pageSize - 1` no puede pasar de esa misma posición. O sea
+ *   que basta con traer las partidas desde `max(0, S - E)` y hasta `S + pageSize`.
+ * - Mergeados esos datos con todos los eventos, la posición `S` del feed es el
+ *   índice `S - max(0, S - E)` de la lista combinada, y de ahí se recorta la página.
+ *
+ * ## El filtro de clasificatorias sale del ruleset activo
+ *
+ * Igual que el motor: si la organización cambia la ventana o las familias sin
+ * desplegar, el historial cambia con ella.
  */
 export async function getAdminMatchHistory(
   query: AdminMatchHistoryQuery = {},
@@ -548,68 +786,83 @@ export async function getAdminMatchHistory(
 
     const ruleset = await readRuleset();
     const playerId = readSingleParam(query.playerId);
-    const rango = startedAtWhere(query);
+    const rango = dateRangeWhere(query);
     const resultado = readResultFilter(query.resultado);
     const filtrandoFechas = rango.gte !== undefined || rango.lt !== undefined;
+    const filtrandoJugador = playerId !== null && PLAYER_ID_PATTERN.test(playerId);
 
     // Los filtros se suman, no se eligen: `where` es una conjunción, así que jugador
     // + fechas + resultado se combinan solos. No hace falta ninguna lógica de "si hay
     // dos, el segundo gana", que es justo donde estos filtros se suelen equivocar.
     const where: Prisma.MatchWhereInput = {
       ...classificatoryWhere(ruleset.modes, ruleset.window),
-      ...(playerId !== null && PLAYER_ID_PATTERN.test(playerId) ? { playerId } : {}),
+      ...(filtrandoJugador ? { playerId } : {}),
       ...(filtrandoFechas ? { startedAt: rango } : {}),
       ...(resultado === null ? {} : { result: resultado }),
     };
 
+    // Los mismos filtros para los hitos, sobre su columna de fecha. Sin el de
+    // resultado, por lo que dice el docblock de la función.
+    const eventosWhere: Prisma.ObjectiveEventWhereInput = {
+      ...(filtrandoJugador ? { playerId } : {}),
+      ...(filtrandoFechas ? { achievedAt: rango } : {}),
+    };
+
     return adminPage<AdminMatchHistoryRow>(async (wanted) => {
-      const [rows, total] = await Promise.all([
-        db.match.findMany({
-          where,
-          orderBy: [{ startedAt: "desc" }, { id: "desc" }],
-          skip: (wanted - 1) * pageSize,
-          take: pageSize,
-          select: {
-            id: true,
-            gameId: true,
-            startedAt: true,
-            playerId: true,
-            opponentName: true,
-            opponentProfileId: true,
-            result: true,
-            points: true,
-            mode: true,
-            leaderboard: true,
-            map: true,
-            revertedAt: true,
-            rawJson: true,
-            player: { select: { name: true, profileId: true } },
-          },
-        }),
+      const skip = (wanted - 1) * pageSize;
+
+      // Los eventos salen enteros y antes que las partidas, porque el hueco de
+      // partidas depende de cuántos sean. El `count` de partidas no depende de eso, así
+      // que sí se pide en paralelo con ellos.
+      const [eventos, totalPartidas] = await Promise.all([
+        resultado === null ? eventosDeObjetivo(eventosWhere, ruleset) : [],
         db.match.count({ where }),
       ]);
 
+      // El hueco acotado del docblock, y no `pageSize` a secas: una página puede
+      // tener eventos delante y, si solo se trajeran `pageSize` partidas, saldrían
+      // menos filas de las que la página pide.
+      const eventosAntes = eventos.length;
+      const skipPartidas = Math.max(0, skip - eventosAntes);
+      const takePartidas = skip + pageSize - skipPartidas;
+
+      const partidas = await db.match.findMany({
+        where,
+        orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+        skip: skipPartidas,
+        take: takePartidas,
+        select: {
+          id: true,
+          gameId: true,
+          startedAt: true,
+          playerId: true,
+          opponentName: true,
+          opponentProfileId: true,
+          result: true,
+          points: true,
+          mode: true,
+          leaderboard: true,
+          map: true,
+          revertedAt: true,
+          rawJson: true,
+          player: { select: { name: true, profileId: true } },
+        },
+      });
+
+      const combined = [...partidas.map(partidaEnFila), ...eventos].sort(
+        compareHistoryRows,
+      );
+
+      // Índice de `combined` que corresponde a la posición `skip` del feed: la lista
+      // combinada empieza en la partida número `skipPartidas`, así que lo que se ha
+      // dejado atrás son `skipPartidas` filas. Con `skip >= eventosAntes` son
+      // justamente las partidas saltadas; con `skip < eventosAntes` no se ha saltado
+      // ninguna, y el índice es `skip` directamente.
+      const desde = skip - skipPartidas;
+
       return {
-        total,
-        rows: rows.map((row) => ({
-          id: row.id,
-          gameId: row.gameId,
-          startedAt: row.startedAt,
-          playerId: row.playerId,
-          playerName: row.player.name,
-          playerProfileId: row.player.profileId,
-          opponentName: row.opponentName,
-          opponentProfileId: row.opponentProfileId,
-          result: row.result,
-          // El tamaño se resuelve aquí y no en la interfaz: `rawJson` es el payload
-          // literal de la API y no debe salir del DAL.
-          teamSize: describeTeamSize(teamSizesFromRawJson(row.rawJson)),
-          points: row.points,
-          mode: row.mode,
-          leaderboard: row.leaderboard,
-          map: row.map,
-          revertedAt: row.revertedAt,
-        })),
+        total: totalPartidas + eventosAntes,
+        rows: combined.slice(desde, desde + pageSize),
       };
     }, page, pageSize);
   });

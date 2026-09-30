@@ -3,14 +3,17 @@ import { revertMatchPoints, restoreMatchPoints } from "@/app/admin/actions";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
+import { ObjectiveIcon } from "@/components/objective-icon";
 import { PageSizeSelect } from "@/components/page-size-select";
 import {
   getAdminMatchHistory,
   getAdminParticipants,
   type AdminMatchHistoryRow,
+  type AdminObjectiveEvent,
 } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
 import { describeMode, formatAbsoluteTime } from "@/lib/format";
+import { OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
 import { MatchHistoryFilters } from "./match-history-filters";
 import { Pagination } from "../pagination";
 
@@ -40,6 +43,17 @@ const RESULT_STYLES = {
 } as const;
 
 /**
+ * La marca de una fila de objetivo cumplido, en la misma columna.
+ *
+ * Un hito no es ni una victoria ni una derrota, pero desde fuera es lo que la
+ * fila viene a contar, así que ocupa el mismo sitio y con el **oro de los
+ * objetivos**: el mismo con el que el sitio viste las tarjetas de `/objetivos` y
+ * el detalle desplegado en la clasificación. Así el panel se lee con el código
+ * del resto de la web en vez de con una taxonomía propia.
+ */
+const OBJECTIVE_STYLE = "border-accent/40 text-accent";
+
+/**
  * La etiqueta del formato de la partida, en un solo sitio.
  *
  * La usan la frase y la línea secundaria, y tienen que decir lo mismo: si la frase
@@ -49,6 +63,17 @@ const RESULT_STYLES = {
  */
 function formatLabel(row: AdminMatchHistoryRow): string {
   return row.teamSize ?? describeMode(row.mode, row.leaderboard);
+}
+
+/**
+ * La frase de una fila de objetivo cumplido.
+ *
+ * El verbo va en pasado y sin gritar: el hito ya ocurrió en la fecha de la fila, no
+ * es una celebración. No repite los puntos ni el grupo porque los pinta la línea
+ * secundaria, y decirlos dos veces en la misma celda sobraría.
+ */
+function describeObjective(playerName: string, objective: AdminObjectiveEvent): string {
+  return `${playerName} cumplió «${objective.label}»`;
 }
 
 /**
@@ -72,8 +97,16 @@ function formatLabel(row: AdminMatchHistoryRow): string {
  * cero, así que afirmar "sin puntos" confundiría el estado actual con lo que valía. La
  * marca de revertida, en la misma columna, es la que aclara que esos puntos se
  * quitaron a mano.
+ *
+ * Un **objetivo cumplido** no tiene resultado de partida, así que se delega antes
+ * de llegar a las ramas de `result`: sin esa salida temprana, `result === null`
+ * haría que un hito se describiera como "una partida sin resultado resuelto".
  */
 function describeResult(row: AdminMatchHistoryRow): string {
+  if (row.objective !== null) {
+    return describeObjective(row.playerName, row.objective);
+  }
+
   const reverted = row.revertedAt !== null;
 
   if (row.result === null) {
@@ -141,14 +174,20 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
     query.to !== undefined ||
     query.resultado !== undefined;
 
+  // El filtro de resultado solo excluye los objetivos si es un valor real: el DAL
+  // trata cualquier otra cosa como si no filtrara, y el mensaje de la tabla no puede
+  // decir que se dejaron fuera los hitos cuando no se dejó fuera nada.
+  const resultFilter = query.resultado === "WIN" || query.resultado === "LOSS";
+
   return (
     <div className="flex flex-col gap-6">
       <section>
         <h1 className="text-2xl font-semibold">Historial de partidas</h1>
         <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Solo partidas clasificatorias, de la más reciente a la más antigua.
-          Revertir los puntos no borra la partida: la marca como no puntuable y se
-          puede restaurar cuando haga falta.
+          Partidas clasificatorias y objetivos cumplidos, de lo más reciente a lo
+          más antiguo; los objetivos que se resuelven en caliente se apuntan cuando
+          termina el torneo. Revertir los puntos de una partida no la borra: la
+          marca como no puntuable y se puede restaurar.
         </p>
       </section>
 
@@ -166,13 +205,17 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
               <EmptyState
                 title={
                   hasFilters
-                    ? "Ninguna partida coincide con los filtros"
-                    : "Todavía no hay partidas clasificatorias"
+                    ? resultFilter
+                      ? "Ninguna partida coincide con los filtros"
+                      : "Ni partidas ni objetivos coinciden con los filtros"
+                    : "Todavía no hay partidas ni objetivos cumplidos"
                 }
                 body={
                   hasFilters
-                    ? "Prueba con otro jugador o amplía el rango de fechas. El filtro de fechas incluye el día final completo."
-                    : "Aquí aparecerán las partidas que cuentan para la clasificación en cuanto el sincronizador las importe."
+                    ? resultFilter
+                      ? "Prueba con otro jugador o amplía el rango de fechas. El filtro de fechas incluye el día final completo."
+                      : "Prueba con otro jugador o amplía el rango de fechas. Los objetivos se filtran por la fecha en que se cumplieron y el día final entra completo."
+                    : "Aquí aparecerán las partidas que cuentan para la clasificación y los objetivos cumplidos, de lo más reciente a lo más antiguo."
                 }
               />
             ) : (
@@ -180,10 +223,10 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                 <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
                   <table className="w-full text-left text-sm">
                     <caption className="sr-only">
-                      Partidas clasificatorias: fecha, resultado, descripción con los
-                      puntos que aporta y la acción de revertir o restaurar sus puntos.
-                      Por debajo de la pantalla mediana la fecha se lee dentro de la
-                      descripción.
+                      Partidas clasificatorias y objetivos cumplidos: fecha, resultado o
+                      marca de objetivo, descripción con los puntos que aporta y, en las
+                      partidas, la acción de revertir o restaurar sus puntos. Por debajo
+                      de la pantalla mediana la fecha se lee dentro de la descripción.
                     </caption>
                     <thead className="bg-surface text-muted">
                       <tr>
@@ -204,9 +247,20 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                     <tbody className="divide-y divide-line">
                       {history.data.rows.map((row) => {
                         const reverted = row.revertedAt !== null;
+                        // Tres clases de fila, tres fondos: la partida normal va
+                        // limpia, la revertida se apaga en gris y el objetivo se
+                        // tiñe del oro de la liga. El chip y el icono confirman lo
+                        // que el fondo ya insinúa, para que el color no sea la
+                        // única señal.
+                        const rowClassName =
+                          row.objective !== null
+                            ? "bg-accent/[0.06]"
+                            : reverted
+                              ? "bg-surface/40"
+                              : undefined;
 
                         return (
-                          <tr key={row.id} className={reverted ? "bg-surface/40" : undefined}>
+                          <tr key={row.id} className={rowClassName}>
                             <td className="hidden whitespace-nowrap px-4 py-3 align-top text-muted md:table-cell">
                               <time
                                 dateTime={row.startedAt.toISOString()}
@@ -218,7 +272,13 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                             </td>
 
                             <td className="px-4 py-3 align-top">
-                              {row.result === null ? (
+                              {row.objective !== null ? (
+                                <span
+                                  className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${OBJECTIVE_STYLE}`}
+                                >
+                                  Objetivo
+                                </span>
+                              ) : row.result === null ? (
                                 <span className="text-xs text-muted">—</span>
                               ) : (
                                 <span
@@ -243,28 +303,54 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                                   {formatAbsoluteTime(row.startedAt)}
                                 </time>
                               </p>
-                              <p
-                                title={`Partida ${row.gameId}`}
-                                className={reverted ? "text-muted" : "text-foreground"}
-                              >
-                                {describeResult(row)}
-                              </p>
-                              <p className="mt-0.5 text-xs text-muted">
-                                {formatLabel(row)}
-                                {row.map !== null ? ` · ${row.map}` : ""}
-                              </p>
-                              {reverted && row.revertedAt !== null ? (
-                                <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-                                  <span className="inline-block rounded-full border border-line-strong px-2 py-0.5 font-medium">
-                                    Puntos revertidos
-                                  </span>
-                                  <span>el {formatAbsoluteTime(row.revertedAt)}</span>
-                                </p>
-                              ) : null}
+                              {row.objective !== null ? (
+                                <>
+                                  <p className="flex items-start gap-2">
+                                    <ObjectiveIcon
+                                      option={row.objective}
+                                      className="mt-0.5 size-5 shrink-0"
+                                    />
+                                    <span className="text-foreground">
+                                      {describeResult(row)}
+                                    </span>
+                                  </p>
+                                  <p className="mt-0.5 text-xs text-muted">
+                                    {OBJECTIVE_GROUP_LABELS[row.objective.group]} ·{" "}
+                                    <span className="font-medium tabular-nums text-accent">
+                                      +{puntos(row.points)}
+                                    </span>
+                                  </p>
+                                </>
+                              ) : (
+                                <>
+                                  <p
+                                    title={`Partida ${row.gameId}`}
+                                    className={reverted ? "text-muted" : "text-foreground"}
+                                  >
+                                    {describeResult(row)}
+                                  </p>
+                                  <p className="mt-0.5 text-xs text-muted">
+                                    {formatLabel(row)}
+                                    {row.map !== null ? ` · ${row.map}` : ""}
+                                  </p>
+                                  {reverted && row.revertedAt !== null ? (
+                                    <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                                      <span className="inline-block rounded-full border border-line-strong px-2 py-0.5 font-medium">
+                                        Puntos revertidos
+                                      </span>
+                                      <span>el {formatAbsoluteTime(row.revertedAt)}</span>
+                                    </p>
+                                  ) : null}
+                                </>
+                              )}
                             </td>
 
                             <td className="px-4 py-3 text-right align-top">
-                              {reverted ? (
+                              {row.objective !== null ? (
+                                // Un hito no tiene nada que revertir ni restaurar:
+                                // esas acciones son de `Match`.
+                                <span className="text-xs text-muted">—</span>
+                              ) : reverted ? (
                                 <ConfirmAction
                                   action={restoreMatchPoints}
                                   fields={{ matchId: row.id }}
