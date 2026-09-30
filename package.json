@@ -12,6 +12,7 @@
     "db:push": "prisma db push",
     "db:security": "tsx --conditions=react-server scripts/db-security.ts",
     "db:cron": "tsx --conditions=react-server scripts/db-cron.ts",
+    "db:window": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/db-window.ts",
     "studio": "prisma studio",
     "sync": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/sync.ts",
     "score": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/score.ts",
@@ -23,7 +24,7 @@
     "simulate:clean": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/simulate-tournament.ts --clean",
     "brand:assets": "tsx scripts/build-brand-assets.ts",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy --keep-vars",
+    "deploy": "opennextjs-cloudflare build && node ./scripts/deploy-worker.mjs",
     "postinstall": "prisma generate"
   },
   "dependencies": {

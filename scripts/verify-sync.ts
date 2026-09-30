@@ -322,6 +322,42 @@ async function checkNormalization(): Promise<void> {
     );
   });
 
+  await check("revertir y devolver usan el mismo criterio: que la partida cuente", () => {
+    // Réplica de la guarda de `setMatchReverted()`. El criterio es el mismo en los
+    // dos sentidos, y tiene que seguir siéndolo: invertido al restaurar, ninguna
+    // partida clasificatoria se podía devolver. La guarda se pregunta siempre con
+    // `revertedAt: null`, que es lo que la deja decidir por las otras tres
+    // condiciones.
+    const clasificatoria = {
+      mode: "rm_team",
+      result: "WIN" as const,
+      startedAt: new Date("2026-09-29T23:55:24.000Z"),
+      finishedAt: NOW,
+      revertedAt: null,
+    };
+    const ventana = DEFAULT_RULESET.window;
+    // El parámetro se toma del de `countsAsRanked` y no del literal de `clasificatoria`:
+    // si se declarara con el tipo de este, `result: null` no entraría.
+    const cuenta = (m: Parameters<typeof countsAsRanked>[0]) => countsAsRanked(m, ventana);
+
+    assert.equal(cuenta(clasificatoria), true, "una partida clasificatoria cuenta");
+    assert.equal(
+      cuenta({ ...clasificatoria, mode: "qm_2v2" }),
+      false,
+      "una custom no cuenta, y por eso no hay nada que revertir ni que devolver",
+    );
+    assert.equal(
+      cuenta({ ...clasificatoria, result: null }),
+      false,
+      "sin resolver no cuenta en ningún sentido",
+    );
+    assert.equal(
+      countsAsRanked({ ...clasificatoria, revertedAt: NOW }, ventana),
+      false,
+      "marcada no cuenta, que es justo lo que deshace el restore",
+    );
+  });
+
   await check("la ventana de fechas se aplica por la fecha de inicio de la partida", () => {
     const { from, to } = DEFAULT_RULESET.window;
     const ventana = DEFAULT_RULESET.window;

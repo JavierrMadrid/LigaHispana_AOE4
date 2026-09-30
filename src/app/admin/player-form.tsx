@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { createPlayer, type PlayerFormState } from "./actions";
 
-const initialState: PlayerFormState = { error: null };
+const initialState: PlayerFormState = { error: null, message: null };
 
 /**
  * Alta de jugador desde el panel.
@@ -11,6 +11,11 @@ const initialState: PlayerFormState = { error: null };
  * Conserva el comportamiento y el copy de siempre: mismos cuatro campos, misma
  * validación en servidor y un único mensaje de error que sustituye al formulario
  * sin decir nada del fallo real, que se queda en el log.
+ *
+ * El botón dice lo que está pasando de verdad, que ya no es solo guardar: si el
+ * jugador queda aprobado, la acción le trae las partidas de AoE4World y recalcula
+ * la clasificación. Son varios segundos contra una API externa, y un "Guardando…"
+ * sin más invites a pensar que se ha colgado.
  */
 export function PlayerForm() {
   const [state, formAction, pending] = useActionState(createPlayer, initialState);
@@ -74,13 +79,24 @@ export function PlayerForm() {
         </p>
       ) : null}
 
+      {/*
+        `status` en vez de `alert`: el alta sí se hizo, así que esto informa y no
+        avisa de un fallo. Va en `text-muted` y no en el dorado porque el oro es
+        para liga y estructura, no para estados.
+      */}
+      {state.message !== null ? (
+        <p role="status" className="text-sm text-muted sm:col-span-2">
+          {state.message}
+        </p>
+      ) : null}
+
       <div className="sm:col-span-2">
         <button
           type="submit"
           disabled={pending}
           className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {pending ? "Guardando…" : "Añadir jugador"}
+          {pending ? "Guardando y trayendo sus partidas…" : "Añadir jugador"}
         </button>
       </div>
     </form>

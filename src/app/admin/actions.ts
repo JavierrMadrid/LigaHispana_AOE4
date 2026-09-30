@@ -4,6 +4,7 @@ import type { User } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
 import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
 import { puntos, recordAdminAction } from "@/lib/admin-actions";
+import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { logDatabaseFailure } from "@/lib/db-errors";
@@ -56,11 +57,105 @@ export type AdminActionResult = {
 /** Estado del formulario de alta, que solo distingue "hay error" de "no hay error". */
 export type PlayerFormState = {
   error: string | null;
+  /**
+   * Lo que pasó **después** del alta, cuando el alta sí se hizo.
+   *
+   * No es un error: el jugador está dado de alta sí o sí. Es para que el panel
+   * diga si ya sale en la clasificación, y sobre todo para el caso que más
+   * confunde: un jugador aprobado **sin ninguna partida clasificatoria** no tiene
+   * fila en `PlayerScore` y por tanto no aparece (P-02 del modelo de datos). Sin
+   * este aviso, el `—` de la columna de puntos parece un fallo.
+   */
+  message: string | null;
 };
 
 /* -------------------------------------------------------------------------- */
 /* Utilidades                                                                  */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Trae las partidas de un jugador recién aprobado y lo deja ranked al momento.
+ *
+ * Sin esto, dar de alta a alguien no lo mete en la clasificación: la web lee
+ * `PlayerScore`, y esa tabla solo la rellena el sincronizador, que pasa cada 5
+ * minutos. Un jugador recién añadido se quedaba hasta la siguiente pasada sin
+ * aparecer, y con el sincronizador caído **no aparecía nunca**: el `—` de la
+ * columna de puntos no distingue "todavía no le ha tocado" de "no le va a tocar".
+ *
+ * Recalcular **solo** no arregla nada, y es la parte que no es obvia: sin partidas
+ * importadas el `groupBy` de `recomputeScores()` no ve al jugador, así que no le
+ * crea fila. Hay que traer primero sus partidas de AoE4World, y el recálculo va
+ * dentro de la misma pasada (`syncApprovedPlayers` lo llama al final).
+ *
+ * La pasada es solo de este jugador (`profileIds`), no de todo el torneo.
+ *
+ * Devuelve `""` cuando todo fue bien y un aviso cuando no. **Nunca lanza**: el
+ * alta ya está escrita y desheacerla dejaría al jugador sin alta por un problema
+ * puntual de la API externa, que es peor que un alta que tarda unos minutos más
+ * en verse. Es el mismo criterio que `avisoDeRecalculo()` en el borrado.
+ */
+async function llevarAClasificacion(
+  scope: string,
+  player: { id: string; profileId: number; name: string },
+): Promise<string> {
+  const altaHecha = `Se ha dado de alta a ${player.name}.`;
+
+  try {
+    const summary = await syncApprovedPlayers({ profileIds: [player.profileId] });
+    const jugados = summary.players[0];
+
+    if (summary.scoringError !== null) {
+      return frase(
+        altaHecha,
+        `No se ha podido recalcular la clasificación (${summary.scoringError}).`,
+        "Aparecerá en cuanto el sincronizador lo consiga.",
+      );
+    }
+
+    // `!== "ok"` y no `=== "failed"`: una pasada cancelada por plazo
+    // (`status: "cancelled"`) tampoco ha traído nada, y si no se distingue
+    // acabaría diciendo "no tiene partidas clasificatorias", que es mentira.
+    if (jugados === undefined || jugados.status !== "ok") {
+      return frase(
+        altaHecha,
+        `No se han podido traer sus partidas de AoE4World: ${
+          jugados?.error ?? "la pasada se quedó sin tiempo."
+        }`,
+        "Aparecerá en cuanto el sincronizador lo consiga.",
+      );
+    }
+
+    // La condición de aparecer en la clasificación es exactamente tener fila en
+    // `PlayerScore`, así que se pregunta a esa tabla y no se reimplementa la regla.
+    const fila = await db.playerScore.findFirst({
+      where: { playerId: player.id },
+      select: { rank: true, total: true },
+    });
+
+    if (fila === null) {
+      return frase(
+        altaHecha,
+        "Todavía no tiene ninguna partida clasificatoria, así que aún no sale en la clasificación.",
+        "En cuanto cierre su primera aparecería con su puesto y sus puntos.",
+      );
+    }
+
+    return frase(
+      altaHecha,
+      `Ya está en la clasificación: puesto ${fila.rank} con ${fila.total} ${
+        fila.total === 1 ? "punto" : "puntos"
+      }.`,
+    );
+  } catch (error) {
+    logDatabaseFailure(`${scope}/sync`, error);
+
+    return frase(
+      altaHecha,
+      "No se han podido traer sus partidas.",
+      "Aparecerá en la clasificación en cuanto el sincronizador lo consiga.",
+    );
+  }
+}
 
 /**
  * Campo de texto de un formulario, ya recortado.
@@ -110,6 +205,12 @@ function actorEmail(user: User): string {
  * mismo mensaje de fallo, mismos campos) y añade el registro de la acción, que se
  * escribe **en la misma transacción** que el alta: o hay jugador y rastro, o no hay
  * ninguno de los dos.
+ *
+ * Si el jugador queda **aprobado**, después del alta se le traen sus partidas y se
+ * recalcula la clasificación, para que salga en la tabla en cuanto se pulse el
+ * botón y no en la siguiente pasada del sincronizador. Va fuera de la transacción
+ * a propósito: traer las partidas es una llamada a AoE4World de varios segundos, y
+ * meterla dentro dejaría la fila bloqueada todo ese rato.
  */
 export async function createPlayer(
   _prevState: PlayerFormState,
@@ -125,21 +226,26 @@ export async function createPlayer(
     statusRaw === "PENDING" || statusRaw === "REJECTED" ? statusRaw : "APPROVED";
 
   if (!profileId) {
-    return { error: "El profile ID de AoE4World debe ser un número." };
+    return { error: "El profile ID de AoE4World debe ser un número.", message: null };
   }
 
   if (!name) {
-    return { error: "El nombre es obligatorio (máx. 64 caracteres)." };
+    return { error: "El nombre es obligatorio (máx. 64 caracteres).", message: null };
   }
 
   // El `try` cubre **solo** la base de datos. Un fallo de validación tiene que
   // seguir siendo un error de aplicación, y por eso el bloque va aquí y no
   // alrededor de la acción entera.
+  let nuevo: { id: string; profileId: number; name: string } | null = null;
+
   try {
     const existing = await db.player.findUnique({ where: { profileId } });
 
     if (existing) {
-      return { error: `El perfil ${profileId} ya está registrado (${existing.name}).` };
+      return {
+        error: `El perfil ${profileId} ya está registrado (${existing.name}).`,
+        message: null,
+      };
     }
 
     await db.$transaction(async (tx) => {
@@ -147,6 +253,8 @@ export async function createPlayer(
         data: { profileId, name, twitchChannel, status: status as PlayerStatus },
         select: { id: true },
       });
+
+      nuevo = { id: created.id, profileId, name };
 
       await recordAdminAction(tx, {
         type: AdminActionType.PLAYER_CREATED,
@@ -160,12 +268,31 @@ export async function createPlayer(
   } catch (error) {
     logDatabaseFailure("admin/createPlayer", error);
 
-    return { error: SAVE_FAILED_MESSAGE };
+    return { error: SAVE_FAILED_MESSAGE, message: null };
   }
 
   revalidatePath("/admin");
 
-  return { error: null };
+  // Solo si queda aprobado: un pendiente o un rechazado no debe traer partidas ni
+  // recalcular, porque `recomputeScores()` los deja fuera de la clasificación igual.
+  if (status !== PlayerStatus.APPROVED || nuevo === null) {
+    return {
+      error: null,
+      message:
+        status === PlayerStatus.PENDING
+          ? `Se ha dado de alta a ${name} como pendiente. Al aprobarlo se traerán sus partidas y aparecerá en la clasificación.`
+          : null,
+    };
+  }
+
+  const message = await llevarAClasificacion("admin/createPlayer", nuevo);
+
+  // Otra vez, y no por descuido: el panel saca los puntos de `PlayerScore`, y esa
+  // tabla no cambia hasta que la pasada de arriba ha recalculado. Revalidar solo
+  // antes dejaría la fila con `—` aunque el jugador ya esté en la clasificación.
+  revalidatePath("/admin");
+
+  return { error: null, message };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -177,9 +304,15 @@ export async function createPlayer(
  *
  * Estas dos **no** registran acción en `AdminAction` y por eso mantienen la firma
  * simple de un solo `FormData`: son botones que cambian una fila que solo mira el
- * panel, sin efecto en la clasificación ni en lo que ve el público. Cuando la
- * pestaña de acciones quiera mostrarlas hay que añadir su tipo al enum, su frase en
- * `admin-actions.ts` y pasar estas dos a `AdminActionResult`.
+ * panel. Cuando la pestaña de acciones quiera mostrarlas hay que añadir su tipo al
+ * enum, su frase en `admin-actions.ts` y pasar estas dos a `AdminActionResult`.
+ *
+ * Aprobar **sí** tiene efecto en lo que ve el público, y por eso es la única de las
+ * dos que hace trabajo de más: al pasar a `APPROVED` el jugador entra en el
+ * sincronizador, así que se le traen sus partidas y se recalcula la clasificación.
+ * Sin eso, aprobar una solicitud de `/participar` lo dejaría invisible hasta la
+ * siguiente pasada. No hay estado de vuelta que informar —el botón no lleva
+ * diálogo— así que un fallo solo se registra, y el alta ya está escrita.
  */
 async function setPlayerStatus(playerId: string, status: PlayerStatus) {
   await requireAdmin();
@@ -188,8 +321,16 @@ async function setPlayerStatus(playerId: string, status: PlayerStatus) {
     return;
   }
 
+  let jugador: { id: string; profileId: number; name: string } | null = null;
+
   try {
-    await db.player.update({ where: { id: playerId }, data: { status } });
+    const row = await db.player.update({
+      where: { id: playerId },
+      data: { status },
+      select: { id: true, profileId: true, name: true },
+    });
+
+    jugador = row;
   } catch (error) {
     // Sin estado de vuelta, un fallo aquí solo puede registrarse: la acción termina
     // sin cambiar nada y no hay superficie en la que informar a quien la pulsó.
@@ -198,6 +339,16 @@ async function setPlayerStatus(playerId: string, status: PlayerStatus) {
     return;
   }
 
+  if (status === PlayerStatus.APPROVED && jugador !== null) {
+    const aviso = await llevarAClasificacion("admin/approvePlayer", jugador);
+
+    if (aviso !== "") {
+      console.warn(`[admin/approvePlayer] ${aviso}`);
+    }
+  }
+
+  // Al final, no antes: aprobar también recalcula, y los puntos del panel salen de
+  // la tabla que esa pasada acaba de reescribir.
   revalidatePath("/admin");
 }
 
@@ -486,17 +637,25 @@ async function setMatchReverted(
   // solo estrecha un `let` si no puede haber sido reasignado entre medias.
   const match = encontrada;
 
-  // La misma pregunta que se hace el motor, con la misma función: **una partida que
-  // no cuenta no se puede revertir, y una que no contaría no se puede restaurar**.
-  // Sin esto, un `FormData` hecho a mano podría dejar marcada para siempre una partida
-  // que nunca llegó a puntuar, y el admin vería "revertida" en el histórico de algo que
-  // en realidad nunca contó. Para el `restore` se pregunta con `revertedAt: null`, que
-  // es lo que deja la decisión en las otras tres condiciones de la regla.
+  /**
+   * La misma pregunta que se hace el motor, con la misma función, y **la misma
+   * respuesta en los dos sentidos**: solo tiene sentido tocar una partida que cuenta.
+   * Al revertir, porque es lo que se le quita; al restaurar, porque es lo que vuelve.
+   * Se pregunta siempre con `revertedAt: null`, que es lo que deja la decisión en las
+   * otras tres condiciones de la regla.
+   *
+   * Sin esta guarda, un `FormData` hecho a mano podría dejar marcada para siempre una
+   * partida que nunca llegó a puntuar, y el admin vería "revertida" en el histórico de
+   * algo que en realidad nunca contó.
+   *
+   * Que el criterio sea el mismo en ambos sentidos es deliberado. Con la guarda
+   * invertida al restaurar, ninguna partida clasificatoria se podía devolver: se
+   * exigía que no contara. El revert quedaba sin vuelta desde el panel.
+   */
   const ruleset = await readRuleset();
   const contariaSinMarca = countsAsRanked({ ...match, revertedAt: null }, ruleset.window);
-  const elCambioSirve = revert ? contariaSinMarca : !contariaSinMarca;
 
-  if (!elCambioSirve) {
+  if (!contariaSinMarca) {
     return {
       status: "error",
       message: revert

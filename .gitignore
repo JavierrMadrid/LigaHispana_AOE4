@@ -40,6 +40,12 @@ yarn-error.log*
 .env*
 !.env.example
 
+# secretos de wrangler: lleva la contraseña de la base de datos en la cadena local
+# que Hyperdrive necesita para emular el binding en `wrangler deploy`. No casa con
+# `.env*` de arriba, asi que sin esta linea se subiria al repositorio.
+.dev.vars
+.dev.vars.*
+
 # vercel
 .vercel
 

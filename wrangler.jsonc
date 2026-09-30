@@ -55,37 +55,42 @@
   // no esta, cae a `DATABASE_URL`, que es lo que usan `next dev` y los scripts de
   // `scripts/`. Ver README.md, "La base de datos en el Worker".
   //
-  // La configuracion de Hyperdrive ya esta creada (el `id` de abajo), pero el
-  // bloque va comentado porque activarlo exige un paso mas que no se puede
-  // saltar, y descubrirlo rompiendo el deploy es peor que dejarlo escrito:
+  // La configuracion de Hyperdrive esta creada y el binding **activo** (septiembre
+  // de 2026). Antes el bloque iba comentado y el Worker resolvia la base por el
+  // `DATABASE_URL` del panel, que apunta al *Session pooler* de Supabase: ahi se le
+  // cortaban las conexiones y el worker de sync se caia con
+  // "Connection terminated unexpectedly" / "db/pool: Network connection lost", sin
+  // que nada lo reflejara (ver README.md, "La base de datos en el Worker").
   //
-  // `opennextjs-cloudflare deploy` llama a `getPlatformProxy()` de wrangler para
-  // leer el entorno, y esa emulacion **exige una cadena de conexion local** para
-  // cualquier binding de Hyperdrive. Sin ella el deploy muere con "you should use
-  // a local Postgres connection string to emulate Hyperdrive functionality". Y no
-  // hay forma de esquivarlo por otro lado: `wrangler deploy` delega en OpenNext
-  // (salvo que la variable `OPEN_NEXT_DEPLOY` este puesta), asi que **todo** el
-  // camino de deploy pasa por esa emulacion.
+  // El paso que no se puede saltar es la emulacion: `opennextjs-cloudflare deploy`
+  // llama a `getPlatformProxy()` de wrangler para leer el entorno, y esa emulacion
+  // **exige una cadena de conexion local** para cualquier binding de Hyperdrive.
+  // Sin ella el deploy muere con "you should use a local Postgres connection string
+  // to emulate Hyperdrive functionality". Y no hay forma de esquivarlo por otro
+  // lado: `wrangler deploy` delega en OpenNext (salvo que la variable
+  // `OPEN_NEXT_DEPLOY` este puesta), asi que **todo** el camino de deploy pasa por
+  // esa emulacion.
   //
-  // Para activarlo, por tanto, hacen falta las dos cosas:
-  //   1. `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` con una
-  //      cadena valida, en dos sitios: `.dev.vars` (local, no se versiona) y
-  //      *Build variables and secrets* del Worker en Cloudflare (para el deploy
-  //      automatico; sin ella, el build falla en cuanto encuentre el binding). En
-  //      local sirve la del Session pooler del `.env`: el deploy no la usa para
-  //      conectar, solo la emulacion local de wrangler mira que exista.
-  //   2. Descomentar este bloque.
+  // La cadena va en `.dev.vars` (no se versiona: lleva la contrasena) y ahi esta la
+  // del Session pooler del `.env`: el deploy no la usa para conectar, solo la
+  // emulacion local de wrangler mira que exista. Ojo, que **`.dev.vars` por si solo
+  // no basta**: el `applyHyperdriveEnvVars` de wrangler lee esa variable
+  // exclusivamente de `process.env`, sin mirar ningun fichero, asi que tiene que
+  // estar exportada en el entorno. De eso se encarga `scripts/deploy-worker.mjs`, que
+  // `npm run deploy` ejecuta (ver ahi el por que). Si algun dia el despliegue pasa a
+  // ser automatico (Workers Builds), la misma variable hay que ponerla en *Build
+  // variables and secrets* del Worker, o el build falla al ver el binding.
   //
   // La cadena que se le da a Hyperdrive en el panel es la DIRECTA
   // (`db.<ref>.supabase.co`, puerto 5432, sin `?sslmode=require`: el TLS lo
-  // termina Hyperdrive), al reves que el `.env` local, que usa el Session pooler
-  // porque la directa es solo IPv6.
-  // "hyperdrive": [
-  //   {
-  //     "binding": "HYPERDRIVE",
-  //     "id": "04fab935a8f34fce814ccebfc4301042"
-  //   }
-  // ],
+  // termina Hyperdrive), al reves que la del `.env` local, que usa el Session pooler
+  // porque la directa es solo IPv6. El *pooling* lo pone Hyperdrive, no el pooler.
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "04fab935a8f34fce814ccebfc4301042"
+    }
+  ],
   // Workers Logs (observabilidad), en este archivo por el mismo motivo que el
   // comentario de arriba: `wrangler deploy` reconstruye el Worker solo con lo
   // que trae este archivo, asi que si el bloque `observability` no esta aqui,
