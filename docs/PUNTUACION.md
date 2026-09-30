@@ -17,6 +17,12 @@ victoria, versión de reglas 1) está en §9.
   una partida en curso nunca puntúa, ni a favor ni en contra.
 - `Match.startedAt` dentro de la **ventana del torneo**: `>= window.from` y
   `< window.to` (§8). La ventana vive en el ruleset y se cambia sin desplegar.
+- `Match.revertedAt` **sin** informar. Es la marca que pone el panel de admin para
+  que una partida deje de puntuar sin borrarla: la fila se queda en el histórico,
+  marcada, y el worker de sync no la toca (la reimportaría en unos minutos si se
+  borrara). Quitar la marca —deshacer el revert— la devuelve al torneo, y por eso
+  es reversible. Una partida revertida no cuenta ni para las victorias ni para
+  ningún objetivo.
 - El jugador está `APPROVED`.
 
 No se distingue entre ladder ranked y quick match: lo que la API marca como
@@ -50,7 +56,10 @@ permite fijar el fin del torneo más tarde sin tocar código. Los dos valores so
 `wins`) y **las partidas que cuentan para los objetivos**: no hay forma de ganar
 un objetivo con partidas que no puntúan. Vive en `src/lib/ranked-match.ts`, que
 la aplica en sus tres formas (`countsAsRanked()` fila a fila, `rankedMatchWhere()`
-como filtro de Prisma y `rankedMatchSql()` como predicado SQL). El worker sigue
+como filtro de Prisma y `rankedMatchSql()` como predicado SQL). La única función
+que devuelve esas condiciones **sin** la marca de revertida es
+`classificatoryWhere()`, y la usa solo el historial de partidas del panel, que
+tiene que enseñar las revertidas en vez de esconderlas. El worker sigue
 guardando **todo** el histórico: la ventana se aplica al puntuar, no al importar.
 
 ## 2. Puntos por partida

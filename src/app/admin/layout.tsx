@@ -1,4 +1,6 @@
+import Image from "next/image";
 import Link from "next/link";
+import { AdminTabs } from "@/app/admin/admin-tabs";
 import { requireAdmin } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
 
@@ -11,23 +13,23 @@ export default async function AdminLayout({
     <div className="flex min-h-full flex-col">
       <header className="thread-bottom relative border-b border-line bg-surface">
         <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-4 px-4 py-3">
-          <span className="font-display text-base font-semibold text-foreground">
-            Liga Hispana · Admin
-          </span>
-          <nav className="flex items-center gap-4 text-sm">
-            <Link
-              href="/admin"
-              className="-my-2 py-2 text-muted transition-colors hover:text-foreground"
-            >
-              Resumen
-            </Link>
-            <Link
-              href="/admin/jugadores"
-              className="-my-2 py-2 text-muted transition-colors hover:text-foreground"
-            >
-              Jugadores
-            </Link>
-          </nav>
+          <Link
+            href="/admin"
+            className="inline-flex min-w-0 items-center gap-2.5 transition-colors hover:text-accent"
+          >
+            {/* El emblema es decorativo: el nombre accesible del enlace lo da el
+                wordmark, que ya está a la vista. */}
+            <Image
+              src="/imagenes/marca/emblema-256.png"
+              alt=""
+              width={40}
+              height={40}
+              className="size-8 shrink-0"
+            />
+            <span className="truncate font-display text-base font-semibold">
+              Liga Hispana · Admin
+            </span>
+          </Link>
           {/* El correo puede ser largo y no tiene por qué partirse: en móvil se
               recorta y se lee entero en el `title`, en vez de empujar la barra. */}
           <div className="ml-auto flex min-w-0 items-center gap-3 text-sm text-muted">
@@ -43,6 +45,13 @@ export default async function AdminLayout({
               </button>
             </form>
           </div>
+        </div>
+
+        {/* Las cuatro pestañas van en su propia fila: con los nombres completos no
+            caben junto a la marca y el cierre de sesión. En móvil se desplazan en
+            horizontal en lugar de partirse. */}
+        <div className="mx-auto w-full max-w-5xl px-4">
+          <AdminTabs />
         </div>
       </header>
 

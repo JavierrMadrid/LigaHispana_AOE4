@@ -31,6 +31,19 @@ enum MatchResult {
   LOSS
 }
 
+/// Qué hizo una persona administradora del panel.
+///
+/// Deliberadamente corto: son las acciones que **cambian datos que alguien más ve**
+/// (un jugador entra o sale, una partida deja de puntuar o vuelve a puntuar). Lo
+/// que no cambia nada —aprobar o rechazar una solicitud— todavía no se registra;
+/// cuando haga falta, se añade el tipo y la fila, no se ensancha el enum a mano.
+enum AdminActionType {
+  PLAYER_CREATED
+  PLAYER_REMOVED
+  MATCH_POINTS_REVERTED
+  MATCH_POINTS_RESTORED
+}
+
 model Player {
   id            String       @id @default(cuid())
   profileId     Int          @unique
@@ -117,6 +130,21 @@ model Match {
   // el resto. El motor es el único que lo escribe, y solo en las filas cuyo valor
   // cambia (ver `recomputeScores` en `src/lib/scoring.ts`).
   points            Int         @default(0)
+  // Cuándo se dejó de contar esta partida para el torneo. `null` es el estado
+  // normal: la partida puntúa.
+  //
+  // **Por qué es una marca y no un borrado.** El worker de sync vuelve a pedir el
+  // histórico del jugador a AoE4World cada pocos minutos, así que una partida
+  // borrada reaparece en su siguiente pasada (con sus puntos, si el motor ya no
+  // está en medio). Y el panel tiene que poder **deshacer** el cambio: una marca
+  // se quita con un `update` y la partida vuelve a puntuar sin que nadie tenga que
+  // volver a importarla. Por eso la fila sigue en el histórico, marcada.
+  //
+  // La regla la lee `src/lib/ranked-match.ts`, en sus tres traducciones a SQL: los
+  // puntos por partida, el agregado de la clasificación y los objetivos excluyen
+  // todo lo que tenga `revertedAt`, así que una partida revertida no da ni
+  // victorias ni objetivos.
+  revertedAt        DateTime?
   rawJson           Json
   createdAt         DateTime    @default(now())
 
@@ -193,4 +221,49 @@ model RateLimitCounter {
   count       Int      @default(0)
   windowStart DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+/// Una acción del panel de administración, para poder pintar su historial.
+///
+/// Es un registro **append-only**: nadie edita filas y lo único que se borra es la
+/// que una compensación acaba de escribir, para que el rastro no describa un cambio
+/// que se ha deshecho. No guarda una foto del estado de la web, sino quién hizo qué
+/// y sobre qué fila, que es lo que hace falta cuando alguien pregunta por qué el
+/// torneo puntúa como puntúa.
+///
+/// `summary` está **ya redactado en español** en el momento de escribir la fila
+/// (`src/lib/admin-actions.ts`): la pestaña de acciones lo pinta tal cual y no monta
+/// la frase en el cliente, donde un nombre con comillas o un número en cualquiera
+/// de los dos sitios acabarían dando textos distintos. Los datos estructurados que
+/// hay detrás van en `details`, y de ahí no se lee nada para pintar el historial: es
+/// para el que tenga que investigar.
+model AdminAction {
+  id   String          @id @default(cuid())
+  type AdminActionType
+
+  // Quién lo hizo. Es el correo del usuario de Supabase Auth que pasó
+  // `requireAdmin()`: el dato ya está en la sesión, así que no hace falta una
+  // tabla de admins para saber quién fue.
+  actorEmail String
+
+  // Una línea en español, ya formateada. Ver `adminActionSummary()`.
+  summary String
+
+  // `Player.id` o `Match.id` de la fila afectada, según el `type`. Es texto y no
+  // una FK a propósito: la misma columna vale para las dos tablas y no obliga a
+  // decidir la regla de borrado de una acción cuando se borre su jugador.
+  targetId String?
+
+  // Datos estructurados de la acción (`profileId`, `gameId`, puntos antes y
+  // después…). Nullable porque no todos los tipos tienen los mismos.
+  details Json?
+
+  createdAt DateTime @default(now())
+
+  // El primero sostiene la paginación del historial, que siempre es "lo más
+  // reciente primero". El segundo sirve para filtrar por tipo sin perder el
+  // orden: con `type` a la izquierda y `createdAt` a la derecha, el índice ya
+  // está en el orden que necesita la consulta.
+  @@index([createdAt])
+  @@index([type, createdAt])
 }

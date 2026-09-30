@@ -2,7 +2,7 @@
 
 Seguimiento de la Liga Hispana de Age of Empires IV. Torneo **individual** con clasificación calculada a partir de las partidas de los participantes, obtenidas de la API de [AoE4World](https://aoe4world.com/api).
 
-> **Regla de puntos**: puntúa **cualquier partida clasificatoria**, no solo la ladder *ranked* 1v1 (`rm_solo`). Por eso `Match` guarda `leaderboard` y `rawJson`: el motor de F3 filtra y puede recalcular sin volver a pedir todo el histórico a la API. `rm_solo` es el valor por defecto porque hoy es el caso mayoritario, no porque sea el único válido.
+> **Regla de puntos**: puntúa **cualquier partida clasificatoria**, no solo la ladder *ranked* 1v1 (`rm_solo`). Por eso `Match` guarda `leaderboard` y `rawJson`: el motor de F3 filtra y puede recalcular sin volver a pedir todo el histórico a la API. `rm_solo` es el valor por defecto porque hoy es el caso mayoritario, no porque sea el único válido. Desde F8 hay una **cuarta** condición: una partida marcada con `Match.revertedAt` por el panel de admin deja de puntuar, pero sigue en el histórico y se puede restaurar.
 
 ## Referencia funcional: ordreduwololo.fr
 
@@ -47,7 +47,8 @@ De ella se derivan los requisitos que ya estructuran las fases: clasificación s
 - [x] DAL de auth: `requireAdmin()` en `src/lib/auth.ts` (verificación segura con `auth.getUser()`)
 - [x] `/login` con Server Action (`useActionState`) y logout
 - [x] `/admin`: resumen con contadores y aviso de pendientes
-- [x] `/admin/jugadores`: alta por `profileId`, aprobar/rechazar/eliminar
+- [x] `/admin/jugadores`: alta por `profileId`, aprobar/rechazar/eliminar — **superado por F8**,
+      que lo reorganicó en cuatro pestañas y movió las acciones a `/app/admin/actions.ts`
 - [x] Ampliar el modelo de datos (objetivos, snapshot de clasificación) — se hace en F3
 
 Decisión: todo usuario autenticado es admin → **registros públicos de Supabase desactivados**; las cuentas se crean a mano.
@@ -192,9 +193,11 @@ Player     (id, profileId unico, name, aoe4WorldName?, twitchChannel?, contactEm
 Match      (id, [playerId, gameId] unico, playerId FK, opponentProfileId?, opponentName?,
             civ?, opponentCiv?, civRandomized, map?, leaderboard="rm_solo", mode?,
             result?: WIN|LOSS (null = sin resolver),
-            startedAt, finishedAt?, durationSeconds?, points, rawJson, createdAt)
+            startedAt, finishedAt?, durationSeconds?, points, revertedAt?, rawJson, createdAt)
 PlayerScore(playerId, ruleSetVersion) pk, rank, total, wins, matches, breakdown JSON, computedAt
 Setting    (key PK, value JSON, updatedAt)
+AdminAction(id, type: PLAYER_CREATED|PLAYER_REMOVED|MATCH_POINTS_REVERTED|MATCH_POINTS_RESTORED,
+            actorEmail, summary, targetId?, details JSON, createdAt)
 ```
 
 Notas:
@@ -203,6 +206,8 @@ Notas:
 - Se guardan **todas** las partidas del jugador, no solo las clasificatorias: el filtro por `mode` y por fecha lo hace el motor. Así también salen las "partidas en directo" (F4) del mismo histórico.
 - `leaderboard` es una `String` (no enum) precisamente para no tener que migrar cada vez que aparece un modo de juego nuevo en la API. `mode` es la **familia de ladder resuelta** (`rm_1v1` -> `rm_solo`, `rm_2v2`/`rm_3v3`/`rm_4v4` -> `rm_team`) y es por la que filtra el motor; `leaderboard` no se toca, porque es el registro literal de lo que dijo la API.
 - `result` admite `null`: significa que la partida aún no está resuelta por la API. El motor no puntúa esas filas.
+- `revertedAt` es la cuarta condición de "cuenta como clasificatoria" (F8): es la marca que pone el panel para que una partida deje de puntuar, y la regla la lee `src/lib/ranked-match.ts` en sus tres traducciones, así que no da ni victorias ni objetivos. **El worker no la toca**, y por eso la marca sobrevive a la reimportación.
+- `AdminAction` es el historial **append-only** de lo que hace la organización (F8). `summary` se redacta en español en el momento de escribir la fila (`src/lib/admin-actions.ts`) y la interfaz lo pinta tal cual, para que el rastro y la pantalla no puedan divergir. Aprobar o rechazar una solicitud **no** se registra: no cambia nada de lo que ve el público.
 - `PlayerScore` es el agregado **versionado** que lee la web. El modelo completo está en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md): la parte que no depende de las reglas ya está aplicada y la que depende (ruleset Wololo, snapshots, categorías) está diferida.
 - `Setting` no es solo configuración: también es la memoria del worker (`aoe4world.sync.player.<profileId>`) y el rastro del motor (`scoring.lastRun`). La simulación con jugadores reales añade `simulation.roster`, el **manifiesto de a quién dio de alta y con qué identidad**: es lo único que permite deshacerla sin borrar participantes de verdad.
 
@@ -453,6 +458,69 @@ Pendiente de F4:
       tabla de modos cabe sin desplazar; la cabecera pública blinda el `min-w-0` de la nav y ajusta
       el CTA a 320 px; refuerzo de tamaño táctil en pills, botones y enlaces. Sin cambios de
       identidad, tokens ni copy.
+
+### F8 — Panel de administración en 4 pestañas ✅
+
+El panel dejó de ser "Resumen + Jugadores" y pasó a tener **cuatro pestañas**: Participantes
+(`/admin`), Historial de partidas (`/admin/historial`), Alertas (`/admin/alertas`) e Historial
+de acciones (`/admin/acciones`). `/admin/jugadores` redirecta a `/admin` para no romper
+enlaces antiguos. El resumen con los contadores **se integra dentro de Participantes** y la
+cola de aprobación `PENDING` se queda en esa misma pestaña, con un bloque que solo aparece
+cuando hay pendientes.
+
+- [x] **Revertir los puntos de una partida no la borra**: `Match.revertedAt` la marca como no
+  puntuable y el motor la excluye de los puntos, del agregado y de los objetivos. Es
+  **reversible** con `restoreMatchPoints`, y sobrevive al worker de sync porque ni
+  `applyMatchUpdate` ni el `createMany` del sync tocan ese campo (una partida borrada
+  reaparecería en la siguiente pasada, en ~5 min).
+- [x] **La condición vive en `src/lib/ranked-match.ts`**, el módulo que ya era la fuente única
+  de "qué cuenta como clasificatoria", y está en sus tres traducciones más
+  `countsAsRanked()`. `verify:sync` la contrasta contra la base.
+- [x] **El fallo del recálculo se compensa, no se propaga**: `recomputeScores()` es atómico, así
+  que si falla lo único que queda fuera de su transacción es la marca; la compensación vuelve a
+  poner `revertedAt` como estaba y borra su fila de `AdminAction`, en una sola transacción. La
+  alternativa dejaría un estado que nadie puede ver (el panel diciendo "revertidos 10 puntos"
+  con una clasificación que sigue contando 10). En un borrado de jugador, en cambio, **no** se
+  compensa: no se puede deshacer y no queda nada incoherente, así que es un éxito con aviso.
+- [x] **Historial de partidas**: solo clasificatorias, paginadas en servidor (25 por página,
+  tope 100), de la más reciente a la más antigua, con filtros por jugador y por rango de
+  fechas **en la URL** (el estado es compartible y la recarga no lo pierde). Columnas Fecha |
+  Descripción ("X ganó a Y: +N puntos") | acción. Las revertidas se listan **marcadas** y
+  ofrecen **Restaurar**; el botón de revertir solo aparece donde hay puntos que quitar. El
+  filtro de clasificatorias sale del ruleset activo, como el motor.
+- [x] **Historial de acciones** (`AdminAction`): altas, bajas y cambios de puntos, con la
+  quien los hizo y cuándo. Se registra en la **misma transacción** que el cambio, así que o hay
+  las dos cosas o no hay ninguna.
+- [x] **Todas las acciones destructivas piden confirmación**: `deletePlayer` (que antes borraba
+  de un clic), `revertMatchPoints` y `restoreMatchPoints`. Diálogo propio sobre el `<dialog>`
+  nativo (no hay librería de primitivas en el proyecto): foco al abrir y devuelto al cerrar,
+  `Esc` bloqueado mientras hay una acción en curso, scroll de fondo bloqueado, y el **error se
+  queda dentro del diálogo** sin cerrarlo para que se pueda reintentar. Los botones que no
+  pueden fallar en silencio usan `useFormStatus` (`PendingButton`).
+- [x] **Alertas queda como placeholder honesto**: no hay DAL que la sustente y fabricar uno
+  sería mostrar un dato que no existe.
+
+Decisiones que condicionan lo que viene:
+
+- **Las Server Actions de admin viven en `src/app/admin/actions.ts`** y todas empiezan por
+  `requireAdmin()`. El `matcher` del Proxy cubre `/admin/:path*` y **excluir una ruta del
+  `matcher` excluye también sus Server Functions**, así que una acción fuera de `/admin`
+  ni siquiera llegaría a comprobar nada.
+- **`classificatoryWhere()`** se exporta en `ranked-match.ts` aparte de `rankedMatchWhere()`: es
+  la misma regla **sin** la marca de revertida, y existe para un solo consumidor (el historial,
+  que tiene que enseñar las revertidas). No es un `options: { includeReverted }` porque una
+  bandera que alguien pueda olvidar es peor que una función cuyo nombre dice lo que hace.
+- Los puntos del listado de participantes salen de `PlayerScore` y no de un agregado sobre
+  `Match`: es el mismo número que ve el público, sale en una consulta y respeta un ruleset
+  retocado sin desplegar. Un jugador sin fila sale con `null` y no con `0`, porque `0` quiere
+  decir "está en la clasificación y no tiene nada".
+
+**Requisito operativo, ya hecho**: el schema trae la tabla `AdminAction` y la columna
+`Match.revertedAt`, y ambos están aplicados en producción: `npm run db:push` seguido de
+`npm run db:security`, que dejó la tabla nueva con RLS activada, cero políticas y sin permisos
+para `anon` ni `authenticated` (comprobado por el propio script). El paso hace falta cada vez
+que se añada una tabla al schema, porque una tabla nueva nace con los permisos por defecto de
+Supabase en `public` y sería legible con la clave publicable por la Data API.
 
 ## Requisitos del cliente (frozen)
 

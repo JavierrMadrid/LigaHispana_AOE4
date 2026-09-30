@@ -15,7 +15,7 @@ la base de datos (que define **dónde vive cada dato**).
 |---|---|
 | Estado | **Parcialmente aplicado.** Ver "Adaptación al MVP" (§0 bis) para el desglose exacto de qué sí y qué no. |
 | Depende de | `docs/PUNTUACION.md` (§9 lista los once requisitos que este documento tiene que cubrir) y `docs/PLAN.md` (reglas heredadas de F2). |
-| Punto de partida | `prisma/schema.prisma` a fecha de hoy: `Player`, `Match`, `Setting`, más `PlayerScore` y `RateLimitCounter`. |
+| Punto de partida | `prisma/schema.prisma` a fecha de hoy: `Player`, `Match`, `Setting`, más `PlayerScore`, `RateLimitCounter` y `AdminAction`. |
 | Cubre | Los once requisitos de `PUNTUACION.md` §9. El cruce está en §3 y en §5. |
 | No cubre | El motor de cálculo (F3, código), la interfaz (F4), el panel de admin ni la seguridad del formulario público (`RateLimitCounter`, §1.5). |
 
@@ -89,6 +89,8 @@ mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` ex
 | `Match.points` con valor real | `src/lib/scoring.ts` | **Cambio de fondo respecto a §3.1.4**: allí la columna se quedaba a 0 porque ninguna regla repartía puntos por partida. Aquí sí: vale `ruleset.pointsPerWin` en cada victoria clasificatoria resuelta **y dentro de la ventana**, y 0 en el resto. Es justamente la "regla de puntos por partida" que §3.1.4 anticipaba, y por eso la columna ya existía y no hubo que crearla. |
 | Ventana de fechas del torneo | `src/lib/ranked-match.ts` (definición) y `src/lib/scoring.ts` (ruleset) | `Setting["scoring.ruleset"].window` = `{ from, to }`, instantes ISO-8601 UTC con zona explícita, `[from, to)` sobre `Match.startedAt`, con `to: null` como ventana abierta. **Aplicada**: una partida fuera de la ventana deja `Match.points = 0` y no entra ni en el agregado ni en los objetivos. El filtro vive en un solo módulo y lo consumen las tres consultas del motor. **Sin columnas ni índices nuevos**: el índice `(mode, startedAt)` de §3.1.3 ya lo cubría. |
 | `scoring.lastRun` en `Setting` | `writeScoringLastRun()` en `src/lib/settings.ts` | Rastro de la última pasada (§3.4). Lo escribe el motor **dentro** de su transacción, así que se confirma junto con la clasificación. |
+| `Match.revertedAt` (columna nueva) | `prisma/schema.prisma`, `src/lib/ranked-match.ts` | Marca de "esta partida no puntúa", nullable (`null` = cuenta). **No es un borrado**: el worker de sync volvería a importarla en su siguiente pasada, y el panel tiene que poder deshacer el cambio. Aplica a las tres traducciones de la regla (`countsAsRanked`, `rankedMatchWhere`, `rankedMatchSql`), así que una partida revertida no da ni victorias ni objetivos. El historial del panel la **lista** marcada, con `classificatoryWhere()`. |
+| `AdminAction` (tabla nueva) | `prisma/schema.prisma`, `src/lib/admin-actions.ts` | Rastro de lo que hace una persona administradora. **Ajena a las reglas de puntuación**, como `RateLimitCounter`: se escribe en la misma transacción que el cambio que registra. Aditiva, sin RLS propia más allá de la postura de §7 (`TABLES` en `scripts/db-security.ts`). |
 | *Backfill* de `mode` y `civRandomized` | `npm run backfill:model` (`scripts/backfill-model.ts`) | Los SQL 3a y 3b de §8.1, idempotentes, más sus comprobaciones. |
 
 **Formato exacto de `PlayerScore.breakdown` en el MVP.** Es un objeto con tres campos, y las
@@ -764,13 +766,17 @@ Cada consulta con el índice que la sostiene. Un índice que no aparece aquí, n
 | 15 | `/admin` historial | `ScoreSnapshot order by asOf desc` | `@@index([asOf(sort: Desc)])` | Pocas filas. |
 | 16 | Inscripción, límite de frecuencia | `insert ... on conflict ("key") do update ... returning count` sobre `RateLimitCounter` | pk | Una fila por IP hasheada (o el cubo `global`). El `ON CONFLICT` bloquea la fila, que es lo que serializa dos envíos simultáneos (§1.5). |
 | 17 | Inscripción, purga de contadores | `delete from "RateLimitCounter" where "windowStart" < $antiguedad` | **Ninguno, a propósito** | Una vez por minuto como mucho, desde el propio contador, y la tabla es de una fila por IP vista. Un recorrido secuencial sale más barato que un índice que casi no se usaría (§1.5). |
+| 18 | `/admin` historial de partidas | `Match where <clasificatorias> [and playerId = X] [and startedAt en rango] order by startedAt desc, id desc take/skip` | `@@index([mode, startedAt])`, `@@index([playerId, startedAt])` | Es la consulta 9 **más las revertidas**: el panel las tiene que listar marcadas, así que usa `classificatoryWhere()` (la regla sin `revertedAt is null`). El `id` de desempate es lo que hace estable la paginación. |
+| 19 | `/admin` historial de acciones | `AdminAction order by createdAt desc, id desc take/skip` | `@@index([createdAt])` | Pocas filas (crece con las acciones del panel, no con las del torneo), así que la paginación es barata. El índice `(type, createdAt)` del schema sirve para el día que se filtre por tipo. |
 
 Las consultas 9 a 12 son las que corren en cada pasada del worker. Con el volumen de un torneo
 (30 jugadores, 30.000 a 50.000 partidas) son milisegundos: no es un problema de rendimiento, es un
 problema de **correctitud** (que el filtro se aplique en SQL y no se pierda nada por un `join`
-mal hecho). Las cuatro llevan hoy la ventana de fechas; y el filtro no está escrito cuatro veces:
-`src/lib/ranked-match.ts` lo construye una vez y lo reparte como filtro de Prisma
-(`rankedMatchWhere`) y como predicado SQL (`rankedMatchSql`).
+mal hecho). Las cuatro llevan hoy la ventana de fechas y la marca de revertida; y el filtro no está
+escrito cuatro veces: `src/lib/ranked-match.ts` lo construye una vez y lo reparte como filtro de
+Prisma (`rankedMatchWhere`), como predicado SQL (`rankedMatchSql`) y fila a fila
+(`countsAsRanked`). `classificatoryWhere()` es la misma regla sin la marca de revertida, y solo la
+consume el listado del panel (§5, fila 18).
 
 ## 7. RLS y privilegios
 
@@ -779,13 +785,14 @@ datos con una clave de cliente.** Todo el acceso pasa por el DAL del servidor co
 Así que las tablas no tienen por qué ser legibles para nadie más.
 
 > **Estado: APLICADO, no diferido.** Vive en `scripts/db-security.ts` y se ejecuta con
-> `npm run db:security`. Los cuatro pasos de la tabla se hicieron sobre las cinco tablas que
-> existen (`Player`, `Match`, `PlayerScore`, `Setting` y `RateLimitCounter`); `ScoreSnapshot` no
-> se creará hasta que las reglas cierren lo que le falta, y cuando se cree hay que volver a pasar
-> el script. La lista de `TABLES` en el script es **explícita**: al añadir una tabla al schema hay
-> que añadirla ahí, porque una tabla nueva nace con los permisos por defecto de Supabase y, sin
-> el paso 3, sería legible con la clave publicable a través de la Data API. Pasada esa con
-> `RateLimitCounter` (F6), el `--check` la cazó con `clientes=anon, authenticated`.
+> `npm run db:security`. Los cuatro pasos de la tabla se hicieron sobre las seis tablas que
+> existen (`Player`, `Match`, `PlayerScore`, `Setting`, `RateLimitCounter` y `AdminAction`);
+> `ScoreSnapshot` no se creará hasta que las reglas cierren lo que le falta, y cuando se cree
+> hay que volver a pasar el script. La lista de `TABLES` en el script es **explícita**: al
+> añadir una tabla al schema hay que añadirla ahí, porque una tabla nueva nace con los
+> permisos por defecto de Supabase y, sin el paso 3, sería legible con la clave publicable a
+> través de la Data API. Pasada esa con `RateLimitCounter` (F6), el `--check` la cazó con
+> `clientes=anon, authenticated`.
 
 | Paso | Qué | Por qué |
 |---|---|---|
@@ -801,6 +808,7 @@ alter table public."Match"             enable row level security;
 alter table public."PlayerScore"       enable row level security;
 alter table public."Setting"           enable row level security;
 alter table public."RateLimitCounter"  enable row level security;
+alter table public."AdminAction"       enable row level security;
 
 -- Refuerzo: que los roles de cliente no puedan ni intentar leer. Sobre las
 -- secuencias no hace falta hoy (public no tiene ninguna), pero se revoca igual:
@@ -813,6 +821,7 @@ revoke all on table public."Match"            from anon, authenticated;
 revoke all on table public."PlayerScore"      from anon, authenticated;
 revoke all on table public."Setting"          from anon, authenticated;
 revoke all on table public."RateLimitCounter" from anon, authenticated;
+revoke all on table public."AdminAction"      from anon, authenticated;
 ```
 
 ### 7 bis. Por qué está en un script y no en el schema

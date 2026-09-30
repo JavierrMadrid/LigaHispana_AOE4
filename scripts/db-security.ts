@@ -82,7 +82,7 @@ type GrantRow = { granted: boolean };
  * permisos por defecto de Supabase en `public`, es decir, **legible con la clave
  * publicable** a través de la Data API. Es el motivo de que el script exista.
  */
-const TABLES = ["Player", "Match", "PlayerScore", "Setting", "RateLimitCounter"] as const;
+const TABLES = ["Player", "Match", "PlayerScore", "Setting", "RateLimitCounter", "AdminAction"] as const;
 
 const ROLES_CLIENTE = "anon, authenticated";
 

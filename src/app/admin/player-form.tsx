@@ -5,6 +5,13 @@ import { createPlayer, type PlayerFormState } from "./actions";
 
 const initialState: PlayerFormState = { error: null };
 
+/**
+ * Alta de jugador desde el panel.
+ *
+ * Conserva el comportamiento y el copy de siempre: mismos cuatro campos, misma
+ * validación en servidor y un único mensaje de error que sustituye al formulario
+ * sin decir nada del fallo real, que se queda en el log.
+ */
 export function PlayerForm() {
   const [state, formAction, pending] = useActionState(createPlayer, initialState);
 
@@ -20,6 +27,7 @@ export function PlayerForm() {
           inputMode="numeric"
           required
           placeholder="1234567"
+          autoComplete="off"
           className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
         />
       </label>
@@ -30,6 +38,8 @@ export function PlayerForm() {
           name="name"
           required
           placeholder="Beastyqt"
+          maxLength={64}
+          autoComplete="off"
           className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
         />
       </label>
@@ -39,6 +49,8 @@ export function PlayerForm() {
         <input
           name="twitchChannel"
           placeholder="beastyqt"
+          maxLength={25}
+          autoComplete="off"
           className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
         />
       </label>
@@ -56,15 +68,17 @@ export function PlayerForm() {
         </select>
       </label>
 
-      {state.error ? (
-        <p className="text-sm text-red-400 sm:col-span-2">{state.error}</p>
+      {state.error !== null ? (
+        <p role="alert" className="text-sm text-loss sm:col-span-2">
+          {state.error}
+        </p>
       ) : null}
 
       <div className="sm:col-span-2">
         <button
           type="submit"
           disabled={pending}
-          className="h-10 rounded-md bg-accent px-4 text-sm font-medium text-accent-ink transition-colors hover:bg-accent-strong disabled:opacity-60"
+          className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
         >
           {pending ? "Guardando…" : "Añadir jugador"}
         </button>

@@ -285,6 +285,7 @@ async function checkNormalization(): Promise<void> {
       result: "WIN" as const,
       startedAt: new Date("2026-09-20T18:00:00.000Z"),
       finishedAt: NOW,
+      revertedAt: null,
     };
     const ventana = DEFAULT_RULESET.window;
 
@@ -307,6 +308,11 @@ async function checkNormalization(): Promise<void> {
       true,
       "una derrota cuenta como partida, aunque no dé puntos",
     );
+    assert.equal(
+      countsAsRanked({ ...base, revertedAt: NOW }, ventana),
+      false,
+      "una partida revertida no cuenta, ni a favor ni en contra",
+    );
   });
 
   await check("la ventana de fechas se aplica por la fecha de inicio de la partida", () => {
@@ -317,6 +323,7 @@ async function checkNormalization(): Promise<void> {
       result: "WIN" as const,
       startedAt: new Date(startedAt),
       finishedAt: NOW,
+      revertedAt: null,
     });
     const milisegundoAntes = (instante: string) =>
       new Date(Date.parse(instante) - 1).toISOString();
@@ -701,7 +708,13 @@ async function runWindowChecks(
       for (const caso of casos) {
         assert.equal(
           countsAsRanked(
-            { mode: "rm_solo", result: "WIN", startedAt: new Date(caso.at), finishedAt: new Date() },
+            {
+              mode: "rm_solo",
+              result: "WIN",
+              startedAt: new Date(caso.at),
+              finishedAt: new Date(),
+              revertedAt: null,
+            },
             ventana,
           ),
           caso.dentro,
@@ -1293,7 +1306,14 @@ async function runDatabaseChecks(): Promise<void> {
       const ventana = (await readRuleset()).window;
       const filas = await db.match.findMany({
         where: { playerId: player.id },
-        select: { mode: true, result: true, startedAt: true, finishedAt: true, points: true },
+        select: {
+          mode: true,
+          result: true,
+          startedAt: true,
+          finishedAt: true,
+          revertedAt: true,
+          points: true,
+        },
       });
       const enJs = filas.filter((fila) => countsAsRanked(fila, ventana));
 

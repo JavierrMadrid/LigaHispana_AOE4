@@ -21,13 +21,26 @@ import { isRecord } from "@/lib/json";
  * sin que uno tenga que importar al otro. Aquí no se importa nada del motor, y los
  * tres caminos (y `verify:sync`) consumen estas funciones.
  *
+ * ## Las cuatro condiciones
+ *
+ * 1. La familia de ladder viene en el ruleset (`rm_solo` / `rm_team` por defecto).
+ * 2. La partida está **resuelta** (`result` y `finishedAt` informados): una
+ *    partida en curso nunca puntúa, ni en positivo ni en negativo.
+ * 3. `startedAt` cae en la **ventana** del torneo (`[from, to)`).
+ * 4. La partida **no está revertida** (`Match.revertedAt IS NULL`), que es la
+ *    marca que pone el panel de admin para que una partida deje de puntuar.
+ *
  * La **ventana de fechas** no está replicada: sus límites y su semántica (`>= from`
  * y `< to`, sobre `Match.startedAt`) salen siempre de `windowBounds()`, que es lo
  * que usan `countsWithinWindow()`, `windowWhere()` y `windowMatchSql()`. Lo único
- * que se repite es la lista de condiciones (familia de ladder del ruleset, partida
- * resuelta, dentro de la ventana), y las tres traducciones la tienen escrita en su
- * sitio: si alguna vez se toca una, hay que tocar las otras dos. `verify:sync` lo
- * contrasta contra datos de verdad.
+ * que se repite es la lista de condiciones, y las tres traducciones la tienen
+ * escrita en su sitio: **si alguna vez se toca una, hay que tocar las otras dos**.
+ * `verify:sync` lo contrasta contra datos de verdad.
+ *
+ * La cuarta condición tiene una excepción, y es deliberada: el historial de
+ * partidas del panel tiene que **enseñar** las revertidas, y para eso usa
+ * `classificatoryWhere()`, que es la misma regla sin la marca. Esa es la única
+ * función de este módulo que devuelve las condiciones sin `revertedAt`.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -127,10 +140,15 @@ export function countsWithinWindow(startedAt: Date, window: ScoringWindow): bool
  * hora **local**, así que un `Setting` escrito a mano acabaría aplicando un offset
  * distinto según desde dónde se mire. Con el patrón de abajo solo entra lo que no
  * admite interpretación: un instante, con su zona.
+ *
+ * Se exporta para que el DAL de admin lea los filtros de fecha de la URL con
+ * **el mismo criterio** que el ruleset: un parámetro de la query es entrada no
+ * confiable, y no puede traerse un instante con una zona distinta según desde qué
+ * sitio se mire.
  */
 const INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
 
-function readInstant(value: unknown): Date | null {
+export function readInstant(value: unknown): Date | null {
   if (typeof value !== "string" || !INSTANT_PATTERN.test(value)) {
     return null;
   }
@@ -269,14 +287,24 @@ function utcTimestamp(value: Date): string {
 }
 
 /**
- * El filtro completo de partida clasificatoria, como `where` de Prisma.
+ * Las condiciones de partida clasificatoria **sin** la marca de revertida.
+ *
+ * Es el filtro de `rankedMatchWhere()` menos una condición, y existe para un solo
+ * consumidor: el historial de partidas del panel de admin, que tiene que **listar**
+ * las revertidas (marcándolas, para que se vea que no puntúan) en vez de esconderlas.
+ * Que el listado historialice en vez de borrar es una decisión de producto: sin la
+ * fila no habría nada que deshacer, y el worker de sync la volvería a importar
+ * igual.
+ *
+ * Por eso no es un `options: { includeReverted }`: una bandera que alguien pueda
+ * olvidar es peor que una función con un nombre que dice lo que hace. Aquí el
+ * "olvido" no puede existir, porque lo único que se puede pedir con esta función
+ * es la regla sin la marca.
  *
  * No incluye el estado del jugador: eso lo pone quien consulta, porque la carga de
  * objetivos filtra por el `join` con `Player` y el agregado por un `player.status`.
- * Lo que sí incluye es todo lo que hace que una partida **cuente**: familia de
- * ladder del ruleset, partida resuelta y dentro de la ventana.
  */
-export function rankedMatchWhere(
+export function classificatoryWhere(
   modes: readonly string[],
   window: ScoringWindow,
 ): Prisma.MatchWhereInput {
@@ -289,14 +317,32 @@ export function rankedMatchWhere(
 }
 
 /**
+ * El filtro completo de partida clasificatoria, como `where` de Prisma.
+ *
+ * Es `classificatoryWhere()` más la marca de revertida: una partida con
+ * `revertedAt` informado **no** es clasificatoria para el motor, por mucho que lo
+ * fuera antes de que el admin la marcara.
+ */
+export function rankedMatchWhere(
+  modes: readonly string[],
+  window: ScoringWindow,
+): Prisma.MatchWhereInput {
+  return {
+    ...classificatoryWhere(modes, window),
+    revertedAt: null,
+  };
+}
+
+/**
  * El filtro completo de partida clasificatoria, como predicado SQL.
  *
  * `matchTable` es la referencia a la fila de `Match` en la consulta, como fragmento
  * `Prisma.Sql` y no como texto: así no hay ninguna cadena que se interpole sin
  * escapar.
  *
- * Contraparte exacta de `rankedMatchWhere()`; si se añade una condición, tiene que
- * ir en las dos (y en `countsAsRanked()`).
+ * Contraparte exacta de `rankedMatchWhere()` (familia del ruleset, partida resuelta,
+ * dentro de la ventana y **no revertida**); si se añade una condición, tiene que ir
+ * en las dos (y en `countsAsRanked()`).
  */
 export function rankedMatchSql(
   matchTable: Prisma.Sql,
@@ -305,7 +351,7 @@ export function rankedMatchSql(
 ): Prisma.Sql {
   const modeList = Prisma.join(modes.map((mode) => Prisma.sql`${mode}`));
 
-  return Prisma.sql`${matchTable}."mode" in (${modeList}) and ${matchTable}."result" is not null and ${matchTable}."finishedAt" is not null and ${windowMatchSql(matchTable, window)}`;
+  return Prisma.sql`${matchTable}."mode" in (${modeList}) and ${matchTable}."result" is not null and ${matchTable}."finishedAt" is not null and ${matchTable}."revertedAt" is null and ${windowMatchSql(matchTable, window)}`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -315,8 +361,9 @@ export function rankedMatchSql(
 /**
  * ¿Cuenta esta partida?
  *
- * Solo si está **resuelta**, es de una familia rankeada y **empezó dentro de la
- * ventana** del torneo. Las tres condiciones son necesarias:
+ * Solo si está **resuelta**, es de una familia rankeada, **empezó dentro de la
+ * ventana** del torneo y **no está revertida**. Las cuatro condiciones son
+ * necesarias:
  *
  * - El modo tiene que ser de una familia rankeada: una custom, un `ew_*` o un
  *   `ffa_*` sirven para practicar, no puntúan.
@@ -326,6 +373,9 @@ export function rankedMatchSql(
  * - La ventana va sobre `startedAt` y no sobre `finishedAt` porque lo que
  *   decide es **cuándo se jugó**, no cuándo se publicó el resultado: una partida
  *   empezada el último día del torneo puede terminar después y sigue contando.
+ * - `revertedAt !== null` significa que el panel de admin la ha marcado: la fila
+ *   sigue ahí (por eso el worker la puede reimportar y por eso se puede
+ *   deshacer), pero para el torneo no cuenta ni a favor ni en contra.
  *
  * Es la traducción en memoria de `rankedMatchWhere()` / `rankedMatchSql()`; los
  * tres leen las mismas condiciones y `verify:sync` los contrasta contra la base
@@ -337,10 +387,17 @@ export function countsAsRanked(
     result: MatchResult | null;
     startedAt: Date;
     finishedAt: Date | null;
+    /** Instante del revert, o `null` si la partida cuenta. */
+    revertedAt: Date | null;
   },
   window: ScoringWindow,
 ): boolean {
-  if (match.finishedAt === null || match.result === null || !isRankedMode(match.mode)) {
+  if (
+    match.finishedAt === null ||
+    match.result === null ||
+    match.revertedAt !== null ||
+    !isRankedMode(match.mode)
+  ) {
     return false;
   }
 

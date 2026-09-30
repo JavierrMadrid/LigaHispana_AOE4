@@ -32,8 +32,8 @@ import { writeScoringLastRun } from "@/lib/settings";
  * `src/lib/ranked-match.ts`, que es donde se puede definir sin que `scoring.ts` y
  * `objectives.ts` se importen mutuamente. De ahí vienen los dos filtros que usan
  * las consultas de abajo (`rankedMatchWhere` para el agregado y `rankedMatchSql`
- * para el SQL crudo), así que el modo, el resultado y la ventana se filtran
- * igual en todas partes.
+ * para el SQL crudo), así que el modo, el resultado, la ventana y la marca de
+ * revertida se filtran igual en todas partes.
  *
  * Cosas que no cambian entre versiones de las reglas y ya estaban resueltas:
  *
@@ -529,9 +529,10 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       //
       // El predicado del `case` es el de `rankedMatchSql()`, o sea **el mismo** que
       // usa el agregado y la carga de objetivos: familia del ruleset, partida
-      // resuelta y `startedAt` dentro de `[window.from, window.to)`. Una partida
-      // fuera de la ventana acaba con `points = 0` sin más que por no pasar el
-      // filtro.
+      // resuelta, `startedAt` dentro de `[window.from, window.to)` y no revertida.
+      // Una partida fuera de la ventana —o revertida— acaba con `points = 0` sin más
+      // que por no pasar el filtro, y por eso deshacer un revert devuelve los
+      // puntos sin tener que tocar esta fila a mano.
       const clasificatoria = rankedMatchSql(Prisma.sql`m`, ruleset.modes, ruleset.window);
 
       const updated = await tx.$executeRaw`
@@ -554,10 +555,10 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       const objectivePlayers = await loadObjectivePlayers(tx, ruleset);
       const objectives = computeObjectives(objectivePlayers, ruleset);
 
-      // Mismo filtro que el `UPDATE` de arriba y que la carga de objetivos, y con
-      // el estado del jugador, que aquí sí se puede filtrar sin `join`. Es
-      // `mode = any(...)` y `startedAt` en rango, así que lo cubre el índice
-      // `@@index([mode, startedAt])`.
+      // Mismo filtro que el `UPDATE` de arriba y que la carga de objetivos (y por
+      // tanto también `revertedAt is null`), y con el estado del jugador, que aquí
+      // sí se puede filtrar sin `join`. Es `mode = any(...)` y `startedAt` en rango,
+      // así que lo cubre el índice `@@index([mode, startedAt])`.
       const aggregated = await tx.match.groupBy({
         by: ["playerId", "mode", "result"],
         where: {

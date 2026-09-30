@@ -184,7 +184,10 @@ function emptyPlayerResult(
 
 /**
  * Refresca una fila ya guardada. `points` no se toca a propósito: lo calcula el
- * motor de F3 y aquí no hay nada que decidir.
+ * motor de F3 y aquí no hay nada que decidir. `revertedAt` tampoco, y por el
+ * mismo motivo con más fuerza: la marca que pone el panel de admin para que una
+ * partida deje de puntuar tiene que sobrevivir a la reimportación, o el revert
+ * duraría hasta cinco minutos.
  */
 async function applyMatchUpdate(playerId: string, match: NormalizedMatch): Promise<void> {
   await db.match.update({

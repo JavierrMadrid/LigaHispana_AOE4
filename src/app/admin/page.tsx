@@ -1,7 +1,25 @@
-import Link from "next/link";
-import { db } from "@/lib/db";
+import type { Metadata } from "next";
+import { approvePlayer, rejectPlayer } from "@/app/admin/actions";
+import { ParticipantsBrowser } from "@/app/admin/participants-browser";
+import { PlayerForm } from "@/app/admin/player-form";
+import { EmptyState } from "@/components/empty-state";
+import { PendingButton } from "@/components/pending-button";
+import { getAdminParticipants } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
+import { db } from "@/lib/db";
 
+export const metadata: Metadata = {
+  title: { absolute: "Participantes · Admin" },
+};
+
+/**
+ * Pestaña de participantes: resumen, cola de aprobación, alta y listado.
+ *
+ * Los cuatro contadores salen de consultas directas a la base y no del DAL
+ * porque son agregados que `getAdminParticipants()` no publica (el total de
+ * partidas del torneo no se deduce de ninguna fila). El listado, en cambio, sí
+ * pasa por el DAL.
+ */
 export default async function AdminPage() {
   await requireAdmin();
 
@@ -13,51 +31,119 @@ export default async function AdminPage() {
       db.match.count(),
     ]);
 
+  const participantsRead = await getAdminParticipants();
+  const participants = participantsRead.status === "ok" ? participantsRead.data : [];
+  const pending = participants.filter((player) => player.status === "PENDING");
+
+  // El resumen se lee como una línea de registro ("Jugadores 24 · Aprobados 18
+  // …"), no como cuatro tarjetas iguales con el número en grande: la única cifra
+  // que se destaca es la de pendientes, que es la que pide una acción.
   const stats = [
-    { label: "Jugadores", value: totalPlayers },
-    { label: "Aprobados", value: approvedPlayers },
-    { label: "Pendientes", value: pendingPlayers },
-    { label: "Partidas", value: totalMatches },
+    { label: "Jugadores", value: totalPlayers, highlight: false },
+    { label: "Aprobados", value: approvedPlayers, highlight: false },
+    { label: "Pendientes", value: pendingPlayers, highlight: pendingPlayers > 0 },
+    { label: "Partidas", value: totalMatches, highlight: false },
   ];
 
   return (
     <div className="flex flex-col gap-8">
       <section>
-        <h1 className="text-2xl font-semibold">Resumen</h1>
-        <p className="mt-1 text-sm text-muted">
-          Estado de la Liga Hispana de Age of Empires IV.
+        <h1 className="text-2xl font-semibold">Participantes</h1>
+        <p className="mt-1 max-w-[70ch] text-sm text-muted">
+          Alta y aprobación de los jugadores del torneo. Solo los aprobados entran
+          en la clasificación pública.
         </p>
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <div
-            key={stat.label}
-            className="rounded-lg border border-line bg-surface p-4"
-          >
-            <p className="text-sm text-muted">{stat.label}</p>
-            <p className="mt-1 text-3xl font-semibold tabular-nums">
-              {stat.value}
-            </p>
-          </div>
-        ))}
+      <section
+        aria-label="Resumen del torneo"
+        className="thread-top relative overflow-hidden rounded-lg border border-line bg-surface px-5 py-4"
+      >
+        <dl className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+          {stats.map((stat, index) => (
+            <div
+              key={stat.label}
+              className={`flex items-baseline gap-2 ${
+                index > 0 ? "sm:border-l sm:border-line sm:pl-6" : ""
+              }`}
+            >
+              <dt className="text-sm text-muted">{stat.label}</dt>
+              <dd
+                className={`text-base font-semibold tabular-nums ${
+                  stat.highlight ? "text-accent" : "text-foreground"
+                }`}
+              >
+                {stat.value.toLocaleString("es-ES")}
+              </dd>
+            </div>
+          ))}
+        </dl>
       </section>
 
       {pendingPlayers > 0 ? (
-        <section className="rounded-lg border border-accent/40 bg-accent/5 p-4">
-          <p className="text-sm">
-            Hay <strong>{pendingPlayers}</strong>{" "}
-            {pendingPlayers === 1 ? "registro pendiente" : "registros pendientes"}{" "}
-            de aprobación.
+        <section
+          id="solicitudes-pendientes"
+          className="rounded-lg border border-accent/40 bg-accent/5 p-4"
+        >
+          <h2 className="font-display text-lg font-semibold text-accent">
+            {pendingPlayers === 1 ? "1 solicitud pendiente" : `${pendingPlayers} solicitudes pendientes`}
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            Aprueba o rechaza para que la clasificación refleje el estado real.
           </p>
-          <Link
-            href="/admin/jugadores"
-            className="mt-3 inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-medium text-accent-ink transition-colors hover:bg-accent-strong"
-          >
-            Revisar registros
-          </Link>
+
+          <ul className="mt-4 flex flex-col gap-2">
+            {pending.map((player) => (
+              <li
+                key={player.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="break-words font-medium text-foreground">{player.name}</p>
+                  <p className="mt-0.5 break-all text-xs text-muted">
+                    AoE4World {player.profileId}
+                    {player.contactEmail !== null ? ` · ${player.contactEmail}` : ""}
+                    {player.twitchChannel !== null ? ` · Twitch ${player.twitchChannel}` : ""}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <form action={approvePlayer}>
+                    <input type="hidden" name="playerId" value={player.id} />
+                    <PendingButton className="h-10 rounded-md border border-win/40 px-3 text-xs text-win transition-colors hover:bg-win/10 disabled:cursor-not-allowed disabled:opacity-50">
+                      Aprobar
+                    </PendingButton>
+                  </form>
+                  <form action={rejectPlayer}>
+                    <input type="hidden" name="playerId" value={player.id} />
+                    <PendingButton className="h-10 rounded-md border border-line-strong px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50">
+                      Rechazar
+                    </PendingButton>
+                  </form>
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
+
+      <section>
+        <h2 className="mb-3 text-lg font-medium">Añadir jugador</h2>
+        <PlayerForm />
+      </section>
+
+      <section>
+        <h2 className="mb-3 text-lg font-medium">Todos los jugadores</h2>
+
+        {participantsRead.status === "degraded" ? (
+          <EmptyState
+            title="No se ha podido leer la lista de jugadores"
+            body="La base de datos no ha respondido. El alta sigue disponible; vuelve a intentarlo en unos minutos para ver el listado."
+          />
+        ) : (
+          <ParticipantsBrowser participants={participants} />
+        )}
+      </section>
     </div>
   );
 }
