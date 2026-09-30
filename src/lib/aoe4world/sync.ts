@@ -1,7 +1,14 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { mergeAbandonedAudit, readPlayerSyncState, writePlayerSyncState } from "@/lib/settings";
+import {
+  mergeAbandonedAudit,
+  readPlayerSyncState,
+  readSyncRunTrace,
+  writePlayerSyncState,
+  writeSyncRunTrace,
+  type SyncRunTrace,
+} from "@/lib/settings";
 import { recomputeScores, type RecomputeScoresResult } from "@/lib/scoring";
 import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
@@ -622,7 +629,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
 
   const finishedAtMs = Date.now();
 
-  return {
+  const summary: SyncSummary = {
     startedAt: new Date(startedAtMs).toISOString(),
     finishedAt: new Date(finishedAtMs).toISOString(),
     durationMs: finishedAtMs - startedAtMs,
@@ -645,4 +652,68 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     scoringError,
     players: settled,
   };
+
+  await recordRunTrace(summary);
+
+  return summary;
+}
+
+/**
+ * Deja constancia de la pasada en `Setting` para que un fallo se pueda ver.
+ *
+ * Sin esto, un jugador que no se pudo sincronizar solo aparecía en los logs del
+ * Worker: el cron dispara por HTTP y tira la respuesta, así que nadie se enteraba y
+ * la web seguía sirviendo la clasificación vieja con toda naturalidad. Es
+ * exactamente lo que pasó en septiembre de 2026, con el torneo congelado dos horas
+ * sin que nada lo dijera.
+ *
+ * Se lee el rastro anterior **antes** de escribir, porque `writeSyncRunTrace()`
+ * arrastra de ahí el `lastSuccessAt`: si esta pasada sale mal, el marcador de
+ * "cuándo funcionó por última vez" tiene que quedarse en la anterior buena, no
+ * avanzar a una pasada rota.
+ *
+ * No propaga: guardar el diagnóstico no puede ser motivo para que el torneo deje
+ * de sincronizarse.
+ */
+async function recordRunTrace(summary: SyncSummary): Promise<void> {
+  try {
+    const previous = await readSyncRunTrace();
+
+    const trace: Omit<SyncRunTrace, "lastSuccessAt"> = {
+      startedAt: summary.startedAt,
+      finishedAt: summary.finishedAt,
+      durationMs: summary.durationMs,
+      playersTotal: summary.playersTotal,
+      playersOk: summary.playersOk,
+      playersFailed: summary.playersFailed,
+      playersCancelled: summary.playersCancelled,
+      newMatches: summary.newMatches,
+      updatedMatches: summary.updatedMatches,
+      resolvedByRefetch: summary.resolvedByRefetch,
+      abandonedMatches: summary.abandonedMatches,
+      skippedGames: summary.skippedGames,
+      liveMatches: summary.liveMatches,
+      apiRequests: summary.apiRequests,
+      apiRetries: summary.apiRetries,
+      rateLimitResponses: summary.rateLimitResponses,
+      rateLimitPausesMs: summary.rateLimitPausesMs,
+      ladderError: summary.ladder.error,
+      scoringError: summary.scoringError,
+      failures: summary.players
+        .filter((result) => result.status !== "ok")
+        .map((result) => ({
+          profileId: result.profileId,
+          name: result.name,
+          status: result.status,
+          error: result.error ?? "Sin motivo informado.",
+        })),
+    };
+
+    await writeSyncRunTrace(trace, previous);
+  } catch (error) {
+    console.error(
+      "[sync] No se ha podido guardar el rastro de la pasada:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }

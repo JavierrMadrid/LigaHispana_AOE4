@@ -20,6 +20,7 @@ import {
 } from "@/lib/scoring";
 import type { Aoe4WorldClient } from "@/lib/aoe4world/client";
 import type { Aoe4WorldGame, Aoe4WorldGamesPage, Aoe4WorldLadderPage } from "@/lib/aoe4world/types";
+import { isSyncTraceStale, type SyncRunTrace } from "@/lib/settings";
 
 /**
  * Verificación de la normalización y del guardado, sin llamar a la API real.
@@ -355,6 +356,114 @@ async function checkNormalization(): Promise<void> {
       countsAsRanked({ ...clasificatoria, revertedAt: NOW }, ventana),
       false,
       "marcada no cuenta, que es justo lo que deshace el restore",
+    );
+  });
+
+  await check("el rastro de la pasada conserva el ultimo acierto", () => {
+    // Réplica de `writeSyncRunTrace()`. Lo que importa no es el volcado de números
+    // sino el `lastSuccessAt`: una racha de pasadas rotas tiene que seguir
+    // enseñando cuándo funcionó por última vez, que es el número que contesta
+    // «¿desde cuándo está roto?». Si avanzara con cada pasada fallida, el rastro
+    // diría que todo va bien mientras nada va bien.
+    const buena: Omit<SyncRunTrace, "lastSuccessAt"> = {
+      startedAt: "2026-09-30T10:00:00.000Z",
+      finishedAt: "2026-09-30T10:00:09.000Z",
+      durationMs: 9000,
+      playersTotal: 9,
+      playersOk: 9,
+      playersFailed: 0,
+      playersCancelled: 0,
+      newMatches: 495,
+      updatedMatches: 0,
+      resolvedByRefetch: 0,
+      abandonedMatches: 0,
+      skippedGames: 1,
+      liveMatches: 0,
+      apiRequests: 48,
+      apiRetries: 0,
+      rateLimitResponses: 0,
+      rateLimitPausesMs: 0,
+      ladderError: null,
+      scoringError: null,
+      failures: [],
+    };
+
+    const salida = (
+      sobre: Omit<SyncRunTrace, "lastSuccessAt">,
+      anterior: SyncRunTrace | null,
+    ): string | null => {
+      const bien =
+        sobre.playersFailed === 0 &&
+        sobre.playersCancelled === 0 &&
+        sobre.ladderError === null &&
+        sobre.scoringError === null;
+
+      return bien ? sobre.finishedAt : (anterior?.lastSuccessAt ?? null);
+    };
+
+    assert.equal(
+      salida(buena, null),
+      buena.finishedAt,
+      "una pasada entera mueve el marcador",
+    );
+    assert.equal(
+      salida({ ...buena, playersFailed: 1 }, { ...buena, lastSuccessAt: buena.finishedAt }),
+      buena.finishedAt,
+      "una pasada con un jugador fallido conserva el marcador anterior",
+    );
+    assert.equal(
+      salida({ ...buena, playersFailed: 1 }, null),
+      null,
+      "sin rastro anterior, una pasada rota no inventa un marcador",
+    );
+    assert.equal(
+      salida({ ...buena, scoringError: "se cayó la base" }, { ...buena, lastSuccessAt: buena.finishedAt }),
+      buena.finishedAt,
+      "fallar el recálculo tampoco mueve el marcador",
+    );
+    assert.equal(
+      salida({ ...buena, ladderError: "429" }, { ...buena, lastSuccessAt: buena.finishedAt }),
+      buena.finishedAt,
+      "fallar la ladder tampoco lo mueve",
+    );
+  });
+
+  await check("una pasada vieja se detecta como vieja y una ausente no", () => {
+    const ahora = new Date("2026-09-30T12:00:00.000Z");
+    const pasada = (finishedAt: string): SyncRunTrace => ({
+      startedAt: finishedAt,
+      finishedAt,
+      durationMs: 1000,
+      playersTotal: 1,
+      playersOk: 1,
+      playersFailed: 0,
+      playersCancelled: 0,
+      newMatches: 0,
+      updatedMatches: 0,
+      resolvedByRefetch: 0,
+      abandonedMatches: 0,
+      skippedGames: 0,
+      liveMatches: 0,
+      apiRequests: 1,
+      apiRetries: 0,
+      rateLimitResponses: 0,
+      rateLimitPausesMs: 0,
+      ladderError: null,
+      scoringError: null,
+      failures: [],
+      lastSuccessAt: finishedAt,
+    });
+
+    assert.equal(isSyncTraceStale(null, ahora), false, "sin rastro no se dice que está viejo");
+    assert.equal(
+      isSyncTraceStale(pasada("2026-09-30T11:55:00.000Z"), ahora),
+      false,
+      `hace 5 minutos está al día`,
+    );
+    assert.equal(
+      isSyncTraceStale(pasada("2026-09-30T11:00:00.000Z"), ahora),
+      true,
+      `hace una hora ya no está al día`,
     );
   });
 

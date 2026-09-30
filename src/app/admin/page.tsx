@@ -4,7 +4,7 @@ import { ParticipantsBrowser } from "@/app/admin/participants-browser";
 import { PlayerForm } from "@/app/admin/player-form";
 import { EmptyState } from "@/components/empty-state";
 import { PendingButton } from "@/components/pending-button";
-import { getAdminParticipants } from "@/lib/admin";
+import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 
@@ -23,12 +23,13 @@ export const metadata: Metadata = {
 export default async function AdminPage() {
   await requireAdmin();
 
-  const [totalPlayers, approvedPlayers, pendingPlayers, totalMatches] =
+  const [totalPlayers, approvedPlayers, pendingPlayers, totalMatches, syncHealth] =
     await Promise.all([
       db.player.count(),
       db.player.count({ where: { status: "APPROVED" } }),
       db.player.count({ where: { status: "PENDING" } }),
       db.match.count(),
+      getSyncHealth(),
     ]);
 
   const participantsRead = await getAdminParticipants();
@@ -45,6 +46,13 @@ export default async function AdminPage() {
     { label: "Partidas", value: totalMatches, highlight: false },
   ];
 
+  // El aviso va aquí porque esta es la pestaña donde se trabaja: si el
+  // sincronizador está roto, lo que importa es enterarse al entrar y no tener que
+  // acordarse de mirar otra pantalla. Los motivos van en línea y no en un enlace,
+  // porque no hay ninguna otra pantalla que los muestre: `/admin/alertas` está
+  // reservada para anomalías de participantes y sigue sin hacerse. Sin el motivo
+  // literal de la API el aviso no serviría de nada, ya que no dice si hay que
+  // corregir un `profileId` o solo esperar a que AoE4World pare de limitar.
   return (
     <div className="flex flex-col gap-8">
       <section>
@@ -54,6 +62,27 @@ export default async function AdminPage() {
           en la clasificación pública.
         </p>
       </section>
+
+      {syncHealth.status === "ok" && (syncHealth.data.degraded || syncHealth.data.stale) ? (
+        <section
+          aria-label="Estado del sincronizador"
+          className="rounded-lg border border-loss/40 bg-surface px-4 py-3 text-sm"
+        >
+          <p role="status" className="text-loss">
+            {syncHealth.data.headline}
+          </p>
+          {syncHealth.data.lastRun?.failures.length ? (
+            <ul className="mt-2 flex flex-col gap-1 text-muted">
+              {syncHealth.data.lastRun.failures.map((fallo) => (
+                <li key={fallo.profileId}>
+                  <span className="text-foreground">{fallo.name}</span> ({fallo.profileId}):{" "}
+                  {fallo.error}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
       <section
         aria-label="Resumen del torneo"

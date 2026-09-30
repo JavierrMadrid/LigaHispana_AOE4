@@ -209,7 +209,7 @@ Notas:
 - `revertedAt` es la cuarta condición de "cuenta como clasificatoria" (F8): es la marca que pone el panel para que una partida deje de puntuar, y la regla la lee `src/lib/ranked-match.ts` en sus tres traducciones, así que no da ni victorias ni objetivos. **El worker no la toca**, y por eso la marca sobrevive a la reimportación.
 - `AdminAction` es el historial **append-only** de lo que hace la organización (F8). `summary` se redacta en español en el momento de escribir la fila (`src/lib/admin-actions.ts`) y la interfaz lo pinta tal cual, para que el rastro y la pantalla no puedan divergir. Aprobar o rechazar una solicitud **no** se registra: no cambia nada de lo que ve el público.
 - `PlayerScore` es el agregado **versionado** que lee la web. El modelo completo está en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md): la parte que no depende de las reglas ya está aplicada y la que depende (ruleset Wololo, snapshots, categorías) está diferida.
-- `Setting` no es solo configuración: también es la memoria del worker (`aoe4world.sync.player.<profileId>`) y el rastro del motor (`scoring.lastRun`). La simulación con jugadores reales añade `simulation.roster`, el **manifiesto de a quién dio de alta y con qué identidad**: es lo único que permite deshacerla sin borrar participantes de verdad.
+- `Setting` no es solo configuración: también es la memoria del worker (`aoe4world.sync.player.<profileId>`) y el rastro del motor (`scoring.lastRun`). Añade `sync.lastRun`, el rastro de la última pasada del sincronizador, que es lo que hace visible un fallo suyo: contadores, errores y los jugadores que no se pudieron sincronizar, más un `lastSuccessAt` que solo avanza en las pasadas enteras. La simulación con jugadores reales añade `simulation.roster`, el **manifiesto de a quién dio de alta y con qué identidad**: es lo único que permite deshacerla sin borrar participantes de verdad.
 
 ## Integración con AoE4World
 
@@ -502,8 +502,25 @@ cuando hay pendientes.
   `Esc` bloqueado mientras hay una acción en curso, scroll de fondo bloqueado, y el **error se
   queda dentro del diálogo** sin cerrarlo para que se pueda reintentar. Los botones que no
   pueden fallar en silencio usan `useFormStatus` (`PendingButton`).
-- [x] **Alertas queda como placeholder honesto**: no hay DAL que la sustente y fabricar uno
-  sería mostrar un dato que no existe.
+- [x] **El fallo del sincronizador ya no es invisible**: `syncApprovedPlayers()` deja el
+      rastro de cada pasada en `Setting["sync.lastRun"]` —contadores, reintentos, pausas
+      por límite de peticiones, error de ladder, error de recálculo y los jugadores que
+      no se pudieron sincronizar con su motivo literal— y `/admin` enseña un aviso con
+      ese motivo cuando el estado no es bueno. El rastro arrastra `lastSuccessAt`, que
+      **no** avanza cuando una pasada sale a medias: es lo que contesta «¿desde cuándo
+      está roto?» en una racha de fallos. Se considera vieja una pasada de más de
+      `SYNC_STALE_MINUTES` (20), que es el estado que detecta al Worker sin entrar,
+      donde no se escribe nada nuevo. Se distingue también «sin rastro», que no es lo
+      mismo que «todo bien».
+      Cierra el peor fallo que ha tenido el torneo: estuvo caído horas sin que nada lo
+      dijera, porque el cron dispara por HTTP y tira la respuesta y el error por
+      jugador solo iba a `console.error`.
+- [ ] **Alertas queda como placeholder honesto, y a propósito**: es para
+      **comportamientos anómalos de los participantes**, no para salud del sistema, y
+      todavía no está definido qué condiciones disparan una alerta ni qué cuenta como
+      anómalo. Fabricar contadores o alertas de ejemplo enseñaría un estado del torneo
+      que no existe. El estado del sincronizador, que sí es salud del sistema, vive
+      aparte: en `getSyncHealth()` y en el aviso de `/admin`.
 
 Decisiones que condicionan lo que viene:
 

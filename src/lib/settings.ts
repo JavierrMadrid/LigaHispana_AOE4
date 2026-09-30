@@ -16,6 +16,9 @@ import { isRecord } from "@/lib/json";
  *
  * Clave que introduce F3:
  * - `scoring.lastRun`: rastro de la última pasada del motor de puntuación.
+ *
+ * Clave que introduce el arreglo del sync invisible:
+ * - `sync.lastRun`: rastro de la última pasada del sincronizador, con sus fallos.
  */
 
 /** Cuántos `gameId` de partidas abandonadas se guardan como rastro. */
@@ -154,4 +157,205 @@ export async function writeScoringLastRun(
     create: { key: SCORING_LAST_RUN_KEY, value },
     update: { value },
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rastro del sincronizador                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Cuándo se espera una pasada del sincronizador para poder llamarla "al día".
+ *
+ * El cron de Supabase dispara cada 5 minutos y una pasada tarda unos segundos, así
+ * que 20 minutos es holgura de sobra para un turno lento o un par de disparos
+ * perdidos. Medir en contra también: si dos pasadas seguidas se paran a los 5
+ * minutos por un 429 de AoE4World, la última de las dos está "al día" y por eso
+ * hace falta además `lastSuccessAt`, que sí detecta esa racha.
+ */
+export const SYNC_STALE_MINUTES = 20;
+
+/** Cuántos fallos por jugador se guardan. El resto va en el conteo. */
+export const SYNC_FAILURES_LIMIT = 20;
+
+/**
+ * Rastro de la última pasada del sincronizador.
+ *
+ * Es lo que convierte un fallo silencioso en algo visible. Antes, el error de un
+ * jugador solo llegaba a `console.error` —los logs del Worker—, y como el cron
+ * dispara por HTTP y descarta la respuesta, nadie se enteraba: la web seguía
+ * sirviendo la clasificación vieja y parecía que todo iba bien. Con esta fila el
+ * panel puede decir qué pasó y cuándo fue la última vez que salió bien.
+ *
+ * Es una fila que se sobrescribe, no un histórico, igual que `scoring.lastRun`: para
+ * diagnosticar «¿está roto ahora?» basta la última pasada y suplural de fallos. Si
+ * algún día hace falta la serie, es un `ScoreSnapshot`/log de pasadas, no un
+ * `Setting` más grande.
+ */
+export type SyncRunTrace = {
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  playersTotal: number;
+  playersOk: number;
+  playersFailed: number;
+  playersCancelled: number;
+  newMatches: number;
+  updatedMatches: number;
+  resolvedByRefetch: number;
+  abandonedMatches: number;
+  skippedGames: number;
+  liveMatches: number;
+  apiRequests: number;
+  apiRetries: number;
+  rateLimitResponses: number;
+  rateLimitPausesMs: number;
+  /** Fallo del snapshot de ladder; no tumba la pasada, pero deja el elo viejo. */
+  ladderError: string | null;
+  /** Por qué no se pudo recalcular la clasificación, si no se pudo. */
+  scoringError: string | null;
+  /** Jugadores que no se pudieron sincronizar, con su motivo. */
+  failures: SyncRunFailure[];
+  /**
+   * `finishedAt` de la última pasada que salió **entera**: sin jugadores fallidos,
+   * sin ladder roto y sin error de puntuación. Se arrastra desde la anterior, así
+   * que una racha de pasadas rotas no borra el dato de cuándo things iban bien.
+   */
+  lastSuccessAt: string | null;
+};
+
+/** Un jugador que la pasada no pudo sincronizar. */
+export type SyncRunFailure = {
+  profileId: number;
+  name: string;
+  status: string;
+  error: string;
+};
+
+export const SYNC_LAST_RUN_KEY = "sync.lastRun";
+
+function readCount(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) ? Math.max(value, 0) : 0;
+}
+
+function readText(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+function readFailures(value: unknown): SyncRunFailure[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(isRecord)
+    .filter(
+      (item): item is SyncRunFailure =>
+        typeof item["profileId"] === "number" && typeof item["error"] === "string",
+    )
+    .map((item) => ({
+      profileId: item["profileId"],
+      name: typeof item["name"] === "string" ? item["name"] : `#${item["profileId"]}`,
+      status: typeof item["status"] === "string" ? item["status"] : "failed",
+      error: item["error"],
+    }))
+    .slice(0, SYNC_FAILURES_LIMIT);
+}
+
+function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const startedAt = readText(value["startedAt"]);
+  const finishedAt = readText(value["finishedAt"]);
+
+  // Sin esas dos no hay nada que decir: el rastro sirve para saber *cuándo* pasó.
+  if (startedAt === null || finishedAt === null) {
+    return null;
+  }
+
+  return {
+    startedAt,
+    finishedAt,
+    durationMs: readCount(value["durationMs"]),
+    playersTotal: readCount(value["playersTotal"]),
+    playersOk: readCount(value["playersOk"]),
+    playersFailed: readCount(value["playersFailed"]),
+    playersCancelled: readCount(value["playersCancelled"]),
+    newMatches: readCount(value["newMatches"]),
+    updatedMatches: readCount(value["updatedMatches"]),
+    resolvedByRefetch: readCount(value["resolvedByRefetch"]),
+    abandonedMatches: readCount(value["abandonedMatches"]),
+    skippedGames: readCount(value["skippedGames"]),
+    liveMatches: readCount(value["liveMatches"]),
+    apiRequests: readCount(value["apiRequests"]),
+    apiRetries: readCount(value["apiRetries"]),
+    rateLimitResponses: readCount(value["rateLimitResponses"]),
+    rateLimitPausesMs: readCount(value["rateLimitPausesMs"]),
+    ladderError: readText(value["ladderError"]),
+    scoringError: readText(value["scoringError"]),
+    failures: readFailures(value["failures"]),
+    lastSuccessAt: readText(value["lastSuccessAt"]),
+  };
+}
+
+export async function readSyncRunTrace(): Promise<SyncRunTrace | null> {
+  const setting = await db.setting.findUnique({ where: { key: SYNC_LAST_RUN_KEY } });
+
+  return setting === null ? null : readSyncRunTraceValue(setting.value);
+}
+
+/**
+ * Escribe el rastro de la pasada que acaba de terminar.
+ *
+ * **Nunca lanza.** Escribir el rastro no puede tumbar la sincronización: sería
+ * absurdo que un fallo al guardar el diagnóstico dejara el torneo sin
+ * sincronizar. Quien llama lo envuelve igualmente, pero la garantía está aquí
+ * porque este módulo es el que conoce el tipo.
+ *
+ * `previous` solo se usa para arrastrar `lastSuccessAt`: si esta pasada sale bien,
+ * el marcador se actualiza a su `finishedAt`; si sale mal, se conserva el de la
+ * última vez que salió bien, que es justo el dato que dice cuánto lleva roto.
+ */
+export async function writeSyncRunTrace(
+  trace: Omit<SyncRunTrace, "lastSuccessAt">,
+  previous: SyncRunTrace | null = null,
+): Promise<void> {
+  const salióBien =
+    trace.playersFailed === 0 &&
+    trace.playersCancelled === 0 &&
+    trace.ladderError === null &&
+    trace.scoringError === null;
+
+  const value = {
+    ...trace,
+    failures: trace.failures.slice(0, SYNC_FAILURES_LIMIT),
+    lastSuccessAt: salióBien ? trace.finishedAt : (previous?.lastSuccessAt ?? null),
+  } as Prisma.InputJsonObject;
+
+  await db.setting.upsert({
+    where: { key: SYNC_LAST_RUN_KEY },
+    create: { key: SYNC_LAST_RUN_KEY, value },
+    update: { value },
+  });
+}
+
+/**
+ * ¿La última pasada es tan vieja que ya no cuenta como «al día»?
+ *
+ * `null` cuando no hay rastro ninguno, que es un caso aparte: no es una pasada
+ * vieja, es que nunca se ha escrito una, y quien llama lo dice con sus palabras.
+ */
+export function isSyncTraceStale(trace: SyncRunTrace | null, now: Date = new Date()): boolean {
+  if (trace === null) {
+    return false;
+  }
+
+  const finished = Date.parse(trace.finishedAt);
+
+  if (Number.isNaN(finished)) {
+    return true;
+  }
+
+  return now.getTime() - finished > SYNC_STALE_MINUTES * 60_000;
 }

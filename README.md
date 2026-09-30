@@ -429,6 +429,26 @@ Cuatro decisiones que no son obvias:
 
 Comprobado contra la base de datos real (septiembre de 2026): a través del *Session pooler* de Supabase funcionan `create schema`, `create extension`, `cron.schedule(nombre, ...)` y `cron.unschedule(nombre)`, y el job se crea, se lee y se borra. El pooler no da ningún problema aquí.
 
+### Ver si el sincronizador está vivo
+
+Lo de arriba demuestra que **el cron dispara**, que no es lo mismo que el sincronizador funcione. `net.http_post` encola la petición y devuelve; no espera al Worker ni mira lo que conteste. Un Worker que no levanta, una base de datos que no responde o un `profileId` mal escrito producen el mismo `200` y el mismo "todo bien" en `cron.job_run_details`. Por eso el `200` del cron no vale como prueba, y por eso el rastro va aparte.
+
+Cada pasada deja su rastro en `Setting["sync.lastRun"]`: contadores, reintentos, pausas por límite de peticiones, el error de la ladder, el error del recálculo y **los jugadores que no se pudieron sincronizar con el motivo literal** de la API. Se escribe al final de `syncApprovedPlayers()`, así que lo hacen todas las vías por igual: el cron, el botón "Actualizar" de `/partidas`, `npm run sync` y el alta desde el panel.
+
+Ese rastro se lee con `getSyncHealth()` y se enseña como aviso en **`/admin`**, la pestaña donde se trabaja: enterarse al entrar y no acordarse de mirar otra pantalla. El aviso lleva **en línea** el motivo de cada jugador que no se pudo sincronizar, porque sin el texto literal de la API no sirve de nada: no dice si hay que corregir un `profileId` en el panel o solo esperar a que AoE4World deje de limitar.
+
+**No va en `/admin/alertas`**, y no por descuido: esa pestaña es para comportamientos anómalos de los participantes, no para salud de un proceso, y sigue siendo un placeholder porque todavía no se ha definido qué condiciones disparan una alerta. Meter el estado del sincronizador allí sería ocupar con datos de sistema el sitio donde algún día vivirán las alertas de jugador.
+
+Tres estados que se distinguen a propósito, porque confundirlos es lo que hace que un fallo parezca sano:
+
+- **Sin rastro**: no es "todo bien", es que nunca se ha escrito una pasada. La pestaña lo dice así.
+- **Pasada a medias** (`degraded`): algún jugador falló, la ladder no se refrescó o no se pudo recalcular. La web pública puede estar enseñando una clasificación vieja.
+- **Pasada vieja** (`stale`): no se escribe ninguna desde hace más de `SYNC_STALE_MINUTES` (20). Es el estado que detecta al Worker sin entrar, donde no hay nada nuevo que leer. La ventana es holgada a propósito porque el cron dispara cada 5 minutos y una pasada tarda unos segundos.
+
+El rastro arrastra además `lastSuccessAt`, que **no avanza cuando una pasada sale a medias**: es lo que contesta «¿desde cuándo está roto?» durante una racha de fallos. Sin él, un rastro siempre fresco y siempre roto diría que no pasa nada.
+
+**Lo que no hay** es histórico de pasadas. Enseñar la última y el marcador de la última buena responde a «¿está roto ahora y desde cuándo?», que es lo que hace falta para actuar; una serie pertenece a `ScoreSnapshot`, que sigue diferido.
+
 Lo único que queda por mirar en vivo es que `cron.use_background_workers` está en **`off`** en este proyecto (es lo que trae Supabase), así que cada ejecución del job **abre una conexión nueva a `cron.host`**, que es `localhost`. Debería funcionar, pero si algún día dejara de poder abrirse el job se programarían igual, no daría ningún error, y solo se vería en `cron.job_run_details`. Por eso `--check` imprime ese ajuste.
 
 ### El límite de CPU del plan Free: por qué el cron es externo

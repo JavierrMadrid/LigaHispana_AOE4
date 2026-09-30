@@ -9,10 +9,19 @@ export const metadata: Metadata = {
 /**
  * Placeholder honesto de la pestaña de alertas.
  *
- * No se pinta ningún contador ni ninguna alerta de ejemplo porque no hay nada
- * que leer: el DAL del panel (`src/lib/admin.ts`) no tiene ninguna consulta que
- * las sustente y fabricarla sería mostrar un dato que no existe. Cuando existan,
- * se escribirá su lectura con el mismo contrato que el resto.
+ * Esta pestaña es para **comportamientos anómalos de los participantes**: un
+ * jugador que no cuadra con el resto, no el estado de un proceso. Y sigue sin
+ * hacerse a propósito: todavía no está definido qué condiciones disparan una
+ * alerta, ni qué cuenta como comportamiento extraño, así que no hay nada que leer.
+ *
+ * Inventar los avisos sería peor que no tenerlos: un contador o una alerta de
+ * ejemplo enseñan un estado del torneo que no existe, y quien organize el torneo
+ * acabaría tomando decisiones sobre él.
+ *
+ * Lo que **no** va aquí es el estado del sincronizador, que sí es salud del
+ * sistema y no una alerta de jugador: ese vive en `getSyncHealth()` y se enseña
+ * como aviso en `/admin`, la pestaña donde se trabaja. Ver README.md, "Ver si el
+ * sincronizador está vivo".
  */
 export default async function AlertsPage() {
   await requireAdmin();

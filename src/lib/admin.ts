@@ -5,8 +5,10 @@ import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/e
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { isRecord } from "@/lib/json";
+import { formatRelativeTime } from "@/lib/format";
 import { classificatoryWhere, readInstant } from "@/lib/ranked-match";
 import { RULESET_VERSION, readRuleset } from "@/lib/scoring";
+import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/settings";
 
 /**
  * Capa de lectura del panel de administración.
@@ -28,8 +30,14 @@ import { RULESET_VERSION, readRuleset } from "@/lib/scoring";
  * ## Lo que aquí no está
  *
  * La pestaña de alertas es un *placeholder* y este módulo no tiene ninguna lectura
- * que la sustente. Inventarla sería fabricar un dato que no existe: cuando la haya,
- * se escribe su consulta aquí, con el mismo contrato y las mismas validaciones.
+ * que la sustente. Se reserva para **comportamientos anómalos de los
+ * participantes**, y sigue sin hacerse porque todavía no se ha definido qué
+ * condiciones disparan una alerta ni qué cuenta como anómalo: inventar los avisos
+ * enseñaría un estado del torneo que no existe. Cuando se definan, se escribe su
+ * consulta aquí, con el mismo contrato y las mismas validaciones.
+ *
+ * Lo que sí hay es `getSyncHealth()`, que es salud del sistema y no una alerta de
+ * jugador, y por eso no va en esa pestaña sino en un aviso de `/admin`.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -243,6 +251,106 @@ export async function getAdminParticipants(): Promise<PublicRead<AdminParticipan
       };
     });
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Salud del sincronizador                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** Lo que la pestaña de alertas necesita saber del sincronizador. */
+export type SyncHealth = {
+  /**
+   * Último rastro escrito, o `null` si nunca se ha escrito uno. No es lo mismo que
+   * «todo bien»: quien lo pinte tiene que decir que no hay registro, no que el
+   * sincronizador está sano.
+   */
+  lastRun: SyncRunTrace | null;
+  /** Instante de la última pasada **entera**, aunque la de ahora no lo haya sido. */
+  lastSuccessAt: string | null;
+  /**
+   * La última pasada es más vieja que `SYNC_STALE_MINUTES`. Detecta el caso que el
+   * rastro por sí solo no ve: el Worker dejó de entrar y nadie escribe nada, así que
+   * lo último que hay en la fila es viejo.
+   */
+  stale: boolean;
+  /**
+   * `true` solo si la última pasada no salió bien: algún jugador falló o se canceló,
+   * la ladder no se refrescó o no se pudo recalcular la clasificación. Es el estado
+   * en el que la web pública puede estar enseñando una clasificación vieja.
+   */
+  degraded: boolean;
+  /**
+   * Resumen de una frase para el aviso corto, ya decidedo en el servidor. Va aquí y
+   * no en el componente para que el mismo criterio no se implemente dos veces: un
+   * `—` aquí y un textoAML there acabarían discrepando.
+   */
+  headline: string;
+};
+
+/**
+ * Estado del sincronizador para la pestaña de alertas.
+ *
+ * Antes de existir esto, un fallo del sincronizador era invisible: el cron dispara
+ * por HTTP y descarta la respuesta, y el error por jugador solo iba a `console.error`.
+ * La clasificación se quedaba congelada y parecía que todo iba bien. Esta lectura
+ * es la que convierte el rastro en algo que se ve.
+ */
+export async function getSyncHealth(): Promise<PublicRead<SyncHealth>> {
+  return readFromDatabase("admin/getSyncHealth", async () => {
+    const trace = await readSyncRunTrace();
+    const stale = isSyncTraceStale(trace);
+
+    const degraded =
+      trace !== null &&
+      (trace.playersFailed > 0 ||
+        trace.playersCancelled > 0 ||
+        trace.ladderError !== null ||
+        trace.scoringError !== null);
+
+    return { lastRun: trace, lastSuccessAt: trace?.lastSuccessAt ?? null, stale, degraded, headline: syncHeadline(trace, stale) };
+  });
+}
+
+/**
+ * La frase del estado, en un solo sitio.
+ *
+ * El orden no es arbitrario: primero «nunca ha corrido» y «no ha corrido hace
+ * rato», que son los dos estados en los que no hay nada que mirar, y después si la
+ * última pasada salió bien. Un fallo de la última pasada solo se cuenta junto a una
+ * pasada que sí ocurrió, así que los dos casos van juntos.
+ */
+function syncHeadline(trace: SyncRunTrace | null, stale: boolean): string {
+  if (trace === null) {
+    return "El sincronizador todavía no ha escrito ninguna pasada.";
+  }
+
+  if (stale) {
+    return `La última pasada es de ${formatRelativeTime(new Date(trace.finishedAt))} y no se ha escrito ninguna desde entonces.`;
+  }
+
+  const fallidos = trace.playersFailed + trace.playersCancelled;
+
+  if (fallidos === 0 && trace.ladderError === null && trace.scoringError === null) {
+    return `La última pasada salió bien: ${trace.playersOk} de ${trace.playersTotal} jugadores y ${trace.newMatches} partidas nuevas.`;
+  }
+
+  const partes: string[] = [];
+
+  if (fallidos > 0) {
+    partes.push(
+      `${fallidos} de ${trace.playersTotal} jugadores no se han podido sincronizar`,
+    );
+  }
+
+  if (trace.ladderError !== null) {
+    partes.push("la ladder no se ha refrescado");
+  }
+
+  if (trace.scoringError !== null) {
+    partes.push("no se ha podido recalcular la clasificación");
+  }
+
+  return `La última pasada salió a medias: ${partes.join(", ")}.`;
 }
 
 /* -------------------------------------------------------------------------- */
