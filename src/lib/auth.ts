@@ -34,3 +34,26 @@ export async function requireAdmin() {
 
   return user;
 }
+
+/**
+ * Saca de la pantalla de login a quien ya tiene sesión, mandándolo a `/admin`.
+ *
+ * El motivo: un admin autenticado puede llegar al login por un enlace antiguo o
+ * por el "atrás" del navegador, y plantedle delante un formulario que ya no le
+ * sirve no aporta nada — el login es solo la puerta de `/admin` (todo usuario
+ * autenticado es admin y los registros públicos de Supabase están desactivados,
+ * ver `docs/PLAN.md`).
+ *
+ * Reutiliza el `getCurrentUser()` memoizado, el mismo que `requireAdmin()`, y
+ * solo actúa sobre un usuario confirmado. Un `null` puede querer decir también
+ * que la comprobación falló, y no se fuerza: como mucho se muestra el
+ * formulario, y si la sesión estaba viva de verdad, al enviarlo `login` entra
+ * directamente y al llegar a `/admin` decide `requireAdmin()`.
+ */
+export async function redirectIfAuthenticated(): Promise<void> {
+  const user = await getCurrentUser();
+
+  if (user) {
+    redirect("/admin");
+  }
+}

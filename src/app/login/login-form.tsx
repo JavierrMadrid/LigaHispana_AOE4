@@ -12,11 +12,14 @@ export function LoginForm() {
     <form action={formAction} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-muted">Email</span>
+        {/* `data-autofocus`: al abrirse como ventana, `Modal` lleva el foco aquí
+            en lugar de al aspa de cierre. En la página propia no hace nada. */}
         <input
           name="email"
           type="email"
           autoComplete="email"
           required
+          data-autofocus
           className="h-10 rounded-md border border-line bg-background px-3 text-foreground"
         />
       </label>

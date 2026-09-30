@@ -29,8 +29,13 @@ export async function login(
   redirect("/admin");
 }
 
+/**
+ * Cierra la sesión y devuelve a la web pública. El destino es `/` y no
+ * `/login`: el login es la puerta de `/admin`, así que salir del panel
+ * significa querer dejar de mirar el panel, no cambiar de formulario.
+ */
 export async function logout() {
   const supabase = await createSupabaseServerClient();
   await supabase.auth.signOut();
-  redirect("/login");
+  redirect("/");
 }

@@ -33,7 +33,8 @@
  * con las dos cosas.
  *
  * Formas: contenedores y bloques a 8px (`rounded-lg`), controles a 6px
- * (`rounded-md`) y píldoras/etiquetas a radio completo (`rounded-full`).
+ * (`rounded-md`) y píldoras/etiquetas a radio completo (`rounded-full`). Las
+ * acciones de la cabecera son controles y siguen la regla de los 6px.
  */
 :root {
   color-scheme: dark;

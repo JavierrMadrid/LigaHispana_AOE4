@@ -8,23 +8,23 @@ import Link from "next/link";
  * llamada no cambia de aspecto en su propia página (el formulario que encuentra
  * allí ya da el contexto) y así la cabecera se queda sin JavaScript.
  *
- * El tratamiento es una cinta de oro relleno: la etiqueta anuncia la acción en
- * tinta oscura (`--accent-ink`), no en oro, para que el texto no quede en oro
- * sobre oro, y el icono viaja dentro de la misma cinta. El relleno es el
- * mismo de los demás controles primarios del sitio (entrar, filtros activos),
- * así que el dialecto se mantiene: la elevación se declara con relleno y sin
- * filete. A partir de `xl` —cuando marca, navegación y CTA comparten una sola
- * fila— la cinta abandona el radio y se estira todo el alto de la barra, de modo
- * que la cabecera se cierra en oro; por debajo de `xl` la navegación baja a su
- * propia fila y la cinta vuelve a ser un control redondeado de alto propio. El
- * enlace entero es la zona pulsable, y el foco se dibuja por dentro en tinta
- * oscura para seguir viéndose sobre el oro.
+ * Es cromo de la barra, no un cartel: para no competir con el contenido se viste
+ * como un control del sistema —radio de control, relleno interno y alto propio,
+ * sin estirarse al alto de la barra— y la jerarquía la declara el color, no el
+ * volumen. El oro de marca se queda solo aquí, así que sigue siendo la acción
+ * principal, pero en vez de una cinta rellena de dos tonos se pinta como la
+ * ficha dorada que ya usa el resto del sitio —filete `accent/40`, tinte
+ * `accent/10` y etiqueta en `accent`—, el mismo dialecto de las píldoras de
+ * puntos y de poseedor. Sin degradado ni relleno macizo: menos luz, menos peso y
+ * menos contraste, la misma lectura. El hover sube el tinte y el filete un punto,
+ * y el enlace entero es la zona pulsable. El foco lo dibuja el anillo dorado
+ * global por fuera, que sobre el tinte se lee.
  */
 export function ParticipateCta() {
   return (
     <Link
       href="/participar"
-      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md bg-accent px-3.5 py-2.5 text-sm font-medium text-accent-ink transition-colors hover:bg-accent-strong focus-visible:outline-accent-ink focus-visible:-outline-offset-2 sm:px-4 xl:-my-3 xl:self-stretch xl:rounded-none xl:py-0"
+      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md border border-accent/40 bg-accent/10 px-3.5 py-2.5 text-sm font-medium text-accent transition-colors hover:border-accent/60 hover:bg-accent/15 hover:text-accent-strong sm:px-4"
     >
       Inscríbete
       {/* En el móvil más estrecho (320 px) el icono cede su sitio al wordmark,
