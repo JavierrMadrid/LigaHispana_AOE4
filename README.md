@@ -34,6 +34,9 @@ npm run lint       # eslint
 npm run build      # build de producción
 npm run sync       # sincroniza las partidas de AoE4World (ver "Sincronización")
 npm run verify:sync  # comprobaciones de normalización y guardado (ver más abajo)
+npm run verify:alerts # comprobaciones del motor de alertas, sin BBDD (ver "Alertas de comportamiento")
+npm run alerts:check  # evalúa las alertas de todo el torneo y las imprime
+npm run alerts:cutoffs # deriva/refresca los cortes de división para la regla R5
 npm run mock:tournament  # simula el torneo completo contra la API falsa (ver "Simulación local")
 npm run mock:clean       # retira exactamente lo que crea la simulación
 npm run simulate:tournament  # torneo simulado con jugadores REALES de AoE4World (ver "Torneo simulado con jugadores reales")
@@ -197,7 +200,7 @@ Dos cosas que **no** hay que confundir con esto:
 
   Por eso los ganchos son los **síncronos** (`module.registerHooks()`) y no `module.register()`: los síncronos atienden a ESM y a CommonJS por igual y no dependen de qué formato decida tsx para el cliente generado (que es TypeScript). Con la API asíncrona, que solo cubre ESM, el arreglo se rompía en cuanto tsx compilaba a CommonJS.
 
-  Se aplica en `package.json` a los scripts que **consultan** la base (`sync`, `score`, `backfill:model`, `verify:sync`, `mock:tournament`, `mock:clean`, `simulate:tournament`, `simulate:clean`):
+  Se aplica en `package.json` a los scripts que **consultan** la base (`sync`, `score`, `backfill:model`, `verify:sync`, `verify:alerts`, `alerts:check`, `alerts:cutoffs`, `mock:tournament`, `mock:clean`, `simulate:tournament`, `simulate:clean`):
 
   ```json
   "verify:sync": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/verify-sync.ts"
@@ -353,10 +356,12 @@ El worker descarga las partidas de **todos** los participantes aprobados y las g
 
 Hay **dos** puntos de entrada, y los dos hacen el mismo trabajo (`syncApprovedPlayers()`):
 
-- **`POST /api/cron/sync`** (y `GET`, porque Vercel Cron solo emite `GET`). Es el del cron. Acepta dos formas de autenticación:
+- **`POST /api/cron/sync`** (y `GET`, porque Vercel Cron solo emite `GET`). Es el del cron de GitHub. Acepta dos formas de autenticación:
   - sesión de un admin de Supabase (misma protección que el resto de `/admin`), o
   - `Authorization: Bearer $CRON_SECRET` (imprescindible para un cron externo, que no manda cookies).
-- **`POST /api/sync`**, público, detrás del botón "Actualizar" de `/partidas`. Exige `content-type: application/json`, que es lo que descarta un POST de otro sitio (un formulario solo manda tipos "simples"), y lleva un candado **global** de un sync cada 5 min (300 s, no 60: ver ["El límite de CPU del plan Free"](#el-límite-de-cpu-del-plan-free-por-qué-el-cron-es-externo)) para que nadie pueda machacar la API de AoE4World desde el navegador. Si se pide antes de tiempo responde `{ "status": "cooldown" }` con 200, porque no es un error: la pasada se hizo hace nada. Si el candado no se puede comprobar, **no** lanza la pasada y responde 503.
+- **`POST /api/sync`**, público, **sin secreto**, que es donde dispara el job de `pg_cron` (ver ["El disparo desde Supabase Cron"](#el-disparo-desde-supabase-cron-npm-run-dbcron)). Exige `content-type: application/json`, que es lo que descarta un POST de otro sitio (un formulario solo manda tipos "simples"), y lleva un candado **global** de un sync cada 5 min (300 s, no 60: ver ["El límite de CPU del plan Free"](#el-límite-de-cpu-del-plan-free-por-qué-el-cron-es-externo)) para que ni el job ni quien descubra la URL puedan provocar más de una pasada por ventana. Si se pide antes de tiempo responde `{ "status": "cooldown" }` con 200, porque no es un error: la pasada se hizo hace nada. Si el candado no se puede comprobar, **no** lanza la pasada y responde 503.
+
+La llamada manual ya **no** es un botón público: la hace un admin desde `/admin` con la Server Action `syncNow` (`src/app/admin/actions.ts`), que comparte el mismo candado global (clave `public/manual-sync`, en [`src/lib/manual-sync.ts`](src/lib/manual-sync.ts)) para que el admin y el cron no se pisen.
 
 ```bash
 # Desde la terminal, sin levantar el servidor
@@ -366,11 +371,11 @@ npm run sync -- 4635035 8139502     # solo esos profileId
 # Como route handler (mismo trabajo)
 curl -X POST http://localhost:3000/api/cron/sync -H "Authorization: Bearer $CRON_SECRET"
 
-# El disparo público del botón (necesita el content-type, por lo del CSRF)
+# El disparo del cron (necesita el content-type, por lo del CSRF)
 curl -X POST http://localhost:3000/api/sync -H "content-type: application/json" -d '{}'
 ```
 
-`/api/cron/sync` devuelve un resumen en JSON con el detalle por jugador (partidas vistas, nuevas, actualizadas, descartadas, resueltas por refetch y abandonadas) y los contadores de la API (peticiones, reintentos, pausas por *rate limit*). `/api/sync` devuelve solo los contadores: al navegador no le aporta nada el detalle.
+`/api/cron/sync` devuelve un resumen en JSON con el detalle por jugador (partidas vistas, nuevas, actualizadas, descartadas, resueltas por refetch y abandonadas) y los contadores de la API (peticiones, reintentos, pausas por *rate limit*). `/api/sync` devuelve solo los contadores: al cron no le aporta nada el detalle.
 
 ### Cadencia recomendada
 
@@ -380,7 +385,7 @@ Hay **dos relojes**, y el primario ya no es GitHub:
 
 | Reloj | Qué es | Frecuencia real |
 |---|---|---|
-| **Supabase Cron** (primario) | Un job de `pg_cron` en la propia base de datos que llama por HTTP a `POST /api/sync` con `pg_net` | **5 minutos**, con alguna vuelta dentro del candado anterior (ver abajo) |
+| **Supabase Cron** (primario) | Un job de `pg_cron` en la propia base de datos que llama por HTTP a `POST /api/sync` con `pg_net` | **5 minutos**, con alguna vuelta dentro del candado compartido con la llamada manual de admin (ver abajo) |
 | [Workflow de GitHub](.github/workflows/cron-sync.yml) (red de seguridad) | Una petición a `POST /api/cron/sync` con `Authorization: Bearer $CRON_SECRET` | GitHub la retrasa a **una cada 4-6 h** |
 
 Se pone el primario abajo; el de GitHub se queda como está, con su `SITE_URL` y su `CRON_SECRET` definidos en el repositorio (Settings > Secrets and variables > Actions), que es lo que necesita para poder seguir funcionando si el otro se cae.
@@ -416,14 +421,14 @@ select cron.schedule(
 
 Cuatro decisiones que no son obvias:
 
-- **Apunta a `/api/sync` (público), no a `/api/cron/sync` (con `CRON_SECRET`).** Para no escribir un secreto en la base de datos: `cron.job.command` es texto plano y `cron.job_run_details` guarda una copia del comando de cada ejecución. El endpoint público no necesita ninguno, y aun así no es una puerta abierta, porque `src/app/api/sync/route.ts` pone las dos condiciones que lo cierran: exige `content-type: application/json` (que es lo que `pg_net` manda siempre, y lo que descarta un POST de formulario de otro sitio) y lleva un **candado global de 5 minutos** (clave `public/manual-sync`). Con eso, ni este job ni quien descubra la URL pueden provocar más de una pasada por ventana. Si alguien pulsa "Actualizar" en `/partidas` dentro de la ventana, el cron recibe `{"status":"cooldown"}` con 200 y no duplica trabajo. Y le pasa también **sin nadie delante**: el job dispara en punto y el candado de la pasada anterior expira unos segundos después de su propio multiplo, así que de vez en cuando el cron llega demasiado pronto y esa vuelta se salta sola (medido: 1 de cada 5 pasadas). No es un fallo, es el precio de reutilizar el candado del botón en vez de llevar un secreto en la base de datos; la cadencia real queda entre 5 y 10 minutos.
+- **Apunta a `/api/sync` (público), no a `/api/cron/sync` (con `CRON_SECRET`).** Para no escribir un secreto en la base de datos: `cron.job.command` es texto plano y `cron.job_run_details` guarda una copia del comando de cada ejecución. El endpoint público no necesita ninguno, y aun así no es una puerta abierta, porque `src/app/api/sync/route.ts` pone las dos condiciones que lo cierran: exige `content-type: application/json` (que es lo que `pg_net` manda siempre, y lo que descarta un POST de formulario de otro sitio) y lleva un **candado global de 5 minutos** (clave `public/manual-sync`, definido en [`src/lib/manual-sync.ts`](src/lib/manual-sync.ts)). Con eso, ni este job ni quien descubra la URL pueden provocar más de una pasada por ventana. Y el candado es **compartido con la llamada manual de `/admin`**: si un admin sincroniza dentro de la ventana, el cron recibe `{"status":"cooldown"}` con 200 y no duplica trabajo, y al revés. Y le pasa también **sin nadie delante**: el job dispara en punto y el candado de la pasada anterior expira unos segundos después de su propio multiplo, así que de vez en cuando el cron llega demasiado pronto y esa vuelta se salta sola (medido: 1 de cada 5 pasadas). No es un fallo, es el precio de reutilizar el candado en vez de llevar un secreto en la base de datos; la cadencia real queda entre 5 y 10 minutos.
 - **El nombre del job es fijo** (`ligahispana-sync`) porque `cron.schedule(nombre, ...)` hace *upsert* sobre `jobname_username_uniq`: repetir el script actualiza el job existente en vez de crear un segundo.
 - **`timeout_milliseconds` va explícito a 240 s** porque el valor por defecto de `net.http_post` son 2-5 s y una pasada tarda ~15 s: con el valor por defecto la petición se cortaría antes de que el Worker terminara.
 - **`pg_net` se instala en `extensions`**, no en `public`: es donde lo pone Supabase y es lo que evita el aviso del *Security Advisor*.
 
 `SITE_URL` sale del entorno y por defecto es `https://ligahispana-aoe4.javierr-ma93.workers.dev`; no hace falta definirlo mientras el dominio no cambie.
 
-**Cómo se comprueba que está disparando.** `npm run db:cron -- --check` imprime las dos extensiones con su versión y esquema, el `jobid`, el `schedule` y el comando tal cual están grabados, el resto de jobs de la base, y las **tres últimas respuestas de `pg_net`** con su código, su hora y su cuerpo (se guardan 6 h). El cuerpo es lo que separa los dos casos que comparten `200`: `"status":"ok"` es una pasada de verdad y `"status":"cooldown"` quiere decir que alguien usó antes el botón "Actualizar" dentro de la ventana. Un `error` o un `sin respuesta (timeout)` en `net._http_response` significa que la petición no salió de la base de datos. También se puede mirar `cron.job_run_details` desde el panel de Supabase y `net._http_response` en el *SQL Editor*.
+**Cómo se comprueba que está disparando.** `npm run db:cron -- --check` imprime las dos extensiones con su versión y esquema, el `jobid`, el `schedule` y el comando tal cual están grabados, el resto de jobs de la base, y las **tres últimas respuestas de `pg_net`** con su código, su hora y su cuerpo (se guardan 6 h). El cuerpo es lo que separa los dos casos que comparten `200`: `"status":"ok"` es una pasada de verdad y `"status":"cooldown"` quiere decir que alguien —el cron anterior o la llamada manual de un admin— usó antes el candado dentro de la ventana. Un `error` o un `sin respuesta (timeout)` en `net._http_response` significa que la petición no salió de la base de datos. También se puede mirar `cron.job_run_details` desde el panel de Supabase y `net._http_response` en el *SQL Editor*.
 
 **Vuelta atrás**: `npm run db:cron -- --remove` desprograma el job y deja las extensiones, que son inertes. Es reversible y repetible: si el job no está, lo dice y no rompe.
 
@@ -433,7 +438,7 @@ Comprobado contra la base de datos real (septiembre de 2026): a través del *Ses
 
 Lo de arriba demuestra que **el cron dispara**, que no es lo mismo que el sincronizador funcione. `net.http_post` encola la petición y devuelve; no espera al Worker ni mira lo que conteste. Un Worker que no levanta, una base de datos que no responde o un `profileId` mal escrito producen el mismo `200` y el mismo "todo bien" en `cron.job_run_details`. Por eso el `200` del cron no vale como prueba, y por eso el rastro va aparte.
 
-Cada pasada deja su rastro en `Setting["sync.lastRun"]`: contadores, reintentos, pausas por límite de peticiones, el error de la ladder, el error del recálculo y **los jugadores que no se pudieron sincronizar con el motivo literal** de la API. Se escribe al final de `syncApprovedPlayers()`, así que lo hacen todas las vías por igual: el cron, el botón "Actualizar" de `/partidas`, `npm run sync` y el alta desde el panel.
+Cada pasada deja su rastro en `Setting["sync.lastRun"]`: contadores, reintentos, pausas por límite de peticiones, el error de la ladder, el error del recálculo y **los jugadores que no se pudieron sincronizar con el motivo literal** de la API. Se escribe al final de `syncApprovedPlayers()`, así que lo hacen todas las vías por igual: el cron de Supabase, la llamada manual de un admin, `npm run sync` y el alta desde el panel. Por eso la acción manual no registra nada en `AdminAction`: ya deja este rastro, que es más completo.
 
 Ese rastro se lee con `getSyncHealth()` y se enseña como aviso en **`/admin`**, la pestaña donde se trabaja: enterarse al entrar y no acordarse de mirar otra pantalla. El aviso lleva **en línea** el motivo de cada jugador que no se pudo sincronizar, porque sin el texto literal de la API no sirve de nada: no dice si hay que corregir un `profileId` en el panel o solo esperar a que AoE4World deje de limitar.
 
@@ -464,7 +469,7 @@ Cada *isolate* tolera que una invocación se pase del límite **de forma esporá
 De ahí las dos consecuencias:
 
 - **Un sync cada 5 minutos de verdad necesita el plan Workers Paid** ($5/mes): el presupuesto sube a 30 s por Cron Trigger y 5 min por petición, y el mismo código sobra. Si algún día se sube, el camino ya está andado: el *handler* `scheduled` sobre un *custom worker* de OpenNext (["Custom Worker"](https://opennext.js.org/cloudflare/howtos/custom-worker)) funcionó; lo que no cabía era el CPU, no el mecanismo.
-- **Mientras se siga en Free**, el botón "Actualizar" de `/partidas` (`POST /api/sync`) dispara el mismo trabajo y está sujeto a lo mismo: pasa cuando es esporádico. Por eso su candado es de **5 minutos** y no de uno —y por eso el job de Supabase Cron reutiliza ese mismo candado en vez de tener el suyo—: en Free, insistir es lo único que garantiza que Cloudflare empiece a matar pasadas.
+- **Mientras se siga en Free**, la llamada manual que hace un admin desde `/admin` dispara el mismo trabajo y está sujeta a lo mismo: pasa cuando es esporádico. Por eso su candado es de **5 minutos** y no de uno —y por eso comparte ese mismo candado con el job de Supabase Cron en vez de tener el suyo, y con el endpoint `/api/sync` que usa el cron—: en Free, insistir es lo único que garantiza que Cloudflare empiece a matar pasadas.
 
 ### Decisiones de la fase F2
 
@@ -485,6 +490,25 @@ npm run verify:sync -- --db  # además comprueba el guardado y borra lo que crea
 ```
 
 `--db` necesita `DATABASE_URL` y trabaja con un jugador de prueba (`profileId` 9000001) que **borra al terminar siempre, incluso si una comprobación falla**, así que se puede repetir tantas veces como haga falta. Solo hay un caso en el que se niega a arrancar: que ese jugador ya exista porque una ejecución anterior murió antes de poder limpiarlo; entonces avisa y para para no pisar datos ajenos. Borrarlo con `npm run simulate:clean` no sirve (es de otra simulación), así que se borra desde `/admin/jugadores` o a mano por su `profileId`.
+
+## Alertas de comportamiento
+
+El motor vigila **comportamientos anómalos de los participantes** sobre las partidas clasificatorias ya guardadas, y deja una fila por alerta en la tabla `Alert`. Las ocho reglas (partidas cortas, rival repetido, compañero repetido, brecha de elo con el equipo y equipo en división muy inferior), sus umbrales y el modelo de datos están en [`docs/PLAN.md`](docs/PLAN.md#f9--motor-de-alertas-de-comportamiento-). Resumen de lo operativo:
+
+```bash
+npm run verify:alerts              # 53 comprobaciones puras, SIN base de datos
+npm run alerts:check                # evaluación completa + resumen por consola
+npm run alerts:check -- 6000037     # solo esos profileId
+npm run alerts:cutoffs              # deriva o refresca los cortes de división (rm_solo y rm_team)
+npm run alerts:cutoffs -- --ladder=rm_team   # solo una ladder
+npm run alerts:cutoffs -- --show    # solo enseña los cortes cacheados
+```
+
+**Cuándo se evalúa.** Colgado del sincronizador, cada 5 minutos: en `syncApprovedPlayers()`, después de `recomputeScores()`, se evalúan **solo los jugadores tocados** en la pasada, y en una pasada sin novedades no se lee ni una fila de `Match`. También se reevalúa a un jugador cuando el panel **revierte o restaura** una partida (su conjunto de clasificatorias ha cambiado), se evalúa entero cuando la ventana del torneo ha terminado (`Setting["alerts.tournamentClose"]` lo marca para no repetirlo en cada pasada), y a mano con `npm run alerts:check`. El resultado va en el resumen del sincronizador (`alerts` y `alertsError` de `SyncSummary`) y en `Setting["sync.lastRun"]`; un fallo del motor de alertas **no** mueve el `lastSuccessAt` del rastro, porque no ha parado ni una partida.
+
+**Cero llamadas nuevas a la API al evaluar.** Todo sale de `Match` y de su `rawJson`. La única excepción es la derivación de los **cortes de división** que necesita la regla R5, y no la hace el motor: se cachean en `Setting["alerts.divisionCutoffs"]` y se derivan a mano. Es trabajo de una sola vez —con búsqueda binaria sobre la ladder, **151 peticiones** para `rm_team` y **130** para `rm_solo` en septiembre de 2026— porque la API ignora en silencio `rating_min`, `rating_max` y `rank_level` y no hay más forma de saber a partir de qué rating empieza cada subdivisión. Sin cortes cacheados, **R5 se omite con un aviso** y las otras siete reglas siguen funcionando; `alerts:check` lo dice y recuerda el comando para derivarlos.
+
+**Idempotente por construcción**: el motor inserta solo lo que no está, con `createMany({ skipDuplicates: true })` sobre el `dedupeKey` único de cada alerta. Repetirlo con los mismos datos no crea nada, así que `npm run alerts:check` dos veces seguidas es también la forma de comprobar que el dedupe no se ha roto. Los **umbrales** son configurables sin desplegar en `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo); `window` y `modes` **no** se duplican ahí: se leen del ruleset de puntuación, y el filtro de clasificatorias es el mismo `rankedMatchWhere()` que usa el motor de puntos.
 
 ## Simulación local (mock de AoE4World)
 
@@ -552,12 +576,37 @@ Acceso en `/admin`, protegido con **Supabase Auth** (cookies SSR vía `@supabase
 - `/admin` — resumen (jugadores, aprobados, pendientes, partidas).
 - `/admin/jugadores` — alta de jugadores por `profileId` de AoE4World, aprobación/rechazo y borrado.
 
+### Alta de admins por invitación
+
+Las cuentas no se crean desde la web (todo usuario autenticado es admin y los registros públicos están desactivados), sino por invitación desde el panel de Supabase. El correo que manda Supabase **no** lo consume la web tal cual: por defecto deja la sesión en el **fragmento** de la URL, que el navegador nunca envía al servidor, así que sin una ruta intermedia la sesión se quedaba sin usar.
+
+La app lo resuelve con dos piezas y **un paso manual en el panel de Supabase**:
+
+1. `GET /auth/confirm` (Route Handler en [`src/app/auth/confirm/route.ts`](src/app/auth/confirm/route.ts)) recibe `token_hash`, `type` y `next`, verifica el token en servidor con `supabase.auth.verifyOtp()` y guarda la sesión en cookies antes de redirigir. Admite los tipos de token de invitación y de recuperación, así que el mismo mecanismo sirve para el "he olvidado la contraseña". El destino `next` solo puede ser una ruta interna (si no, se usa `/login/establecer-contrasena`), y todo fallo —token caducado, ya usado, tipo desconocido, enlace sin `token_hash`— va a `/login?error=enlace`.
+2. `/login/establecer-contrasena` deja al invitado fijar su contraseña con la sesión que acaba de dejar `/auth/confirm` (Server Action `setPassword` en [`src/app/login/establecer-contrasena/actions.ts`](src/app/login/establecer-contrasena/actions.ts)) y lo manda a `/admin`. A partir de ahí entra con email y contraseña en `/login` como con cualquier otro admin.
+
+Flujo completo: invitación → correo → `/auth/confirm` verifica y crea la sesión → el usuario fija su contraseña en `/login/establecer-contrasena` → entra a `/admin`.
+
+**Paso manual en Supabase (Authentication):**
+
+- **URL Configuration**: `Site URL` = el dominio de producción, y añade a `Redirect URLs` ese dominio y `http://localhost:3000`.
+- **Email Templates → plantilla "Invite user"**: cambia el enlace por uno propio en HTML que apunte a la ruta de confirmación, en vez de a `{{ .ConfirmationURL }}`:
+
+  ```html
+  <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/login/establecer-contrasena">Aceptar la invitación</a>
+  ```
+
+  Sin este cambio el correo sigue apuntando al mecanismo antiguo del fragmento, que esta app ya no consume: el enlace entra, no verifica nada y la web no abre sesión. La misma plantilla sirve para "Confirm signup" y "Reset password" cambiando `type` por `signup` y `recovery`.
+
+Aviso sobre el Proxy: su `matcher` cubre `/admin/:path*` y **`/login` exacto**, así que `/login/establecer-contrasena` no pasa por él. No hace falta: la sesión la acaba de escribir `/auth/confirm` y `setPassword` la comprueba en servidor antes de tocar nada.
+
 ## Modelo de datos (inicial)
 
 - `Player`: participante (`profileId` de AoE4World, nombre, canal de Twitch opcional, estado PENDING/APPROVED/REJECTED).
 - `Match`: partida de un jugador (`gameId`, `leaderboard`, resultado, civs, mapa, fechas, puntos y JSON crudo de la API). Se guardan **todas** las partidas, no solo las clasificatorias: el filtro es del motor de puntuación. La unicidad es por `(playerId, gameId)`: en un torneo individual dos participantes pueden jugar la misma partida y cada uno necesita su fila.
 - `Setting`: configuración del torneo (fechas, reglas, etc.) y memoria del worker (`aoe4world.sync.player.<profileId>`).
 - `RateLimitCounter`: contador de frecuencia de los endpoints públicos sin sesión, una fila por clave (`ip:<hmac>` o `global`). Nunca contiene una IP: solo su hash. La gestiona `src/lib/rate-limit.ts`.
+- `ObjectiveEvent`: objetivo del torneo cumplido por alguien, con **cuándo** se cumplió (un evento por objetivo, 38 como mucho). Lo escribe el motor de puntuación junto con la clasificación (`src/lib/objective-events.ts`) y lo lee el historial de `/admin/historial`. No guarda etiqueta ni puntos: se resuelven al leer del catálogo de objetivos y del ruleset activo, como ya hace la web con los objetivos. Detalle en [`docs/MODELO-DATOS.md`](docs/MODELO-DATOS.md) §1.6.
 
 ## Estado y plan
 

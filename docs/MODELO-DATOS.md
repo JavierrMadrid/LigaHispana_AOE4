@@ -15,7 +15,7 @@ la base de datos (que define **dónde vive cada dato**).
 |---|---|
 | Estado | **Parcialmente aplicado.** Ver "Adaptación al MVP" (§0 bis) para el desglose exacto de qué sí y qué no. |
 | Depende de | `docs/PUNTUACION.md` (§9 lista los once requisitos que este documento tiene que cubrir) y `docs/PLAN.md` (reglas heredadas de F2). |
-| Punto de partida | `prisma/schema.prisma` a fecha de hoy: `Player`, `Match`, `Setting`, más `PlayerScore`, `RateLimitCounter` y `AdminAction`. |
+| Punto de partida | `prisma/schema.prisma` a fecha de hoy: `Player`, `Match`, `Setting`, más `PlayerScore`, `RateLimitCounter`, `AdminAction`, `ObjectiveEvent` y `Alert`. |
 | Cubre | Los once requisitos de `PUNTUACION.md` §9. El cruce está en §3 y en §5. |
 | No cubre | El motor de cálculo (F3, código), la interfaz (F4), el panel de admin ni la seguridad del formulario público (`RateLimitCounter`, §1.5). |
 
@@ -91,6 +91,8 @@ mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` ex
 | `scoring.lastRun` en `Setting` | `writeScoringLastRun()` en `src/lib/settings.ts` | Rastro de la última pasada (§3.4). Lo escribe el motor **dentro** de su transacción, así que se confirma junto con la clasificación. |
 | `Match.revertedAt` (columna nueva) | `prisma/schema.prisma`, `src/lib/ranked-match.ts` | Marca de "esta partida no puntúa", nullable (`null` = cuenta). **No es un borrado**: el worker de sync volvería a importarla en su siguiente pasada, y el panel tiene que poder deshacer el cambio. Aplica a las tres traducciones de la regla (`countsAsRanked`, `rankedMatchWhere`, `rankedMatchSql`), así que una partida revertida no da ni victorias ni objetivos. El historial del panel la **lista** marcada, con `classificatoryWhere()`. |
 | `AdminAction` (tabla nueva) | `prisma/schema.prisma`, `src/lib/admin-actions.ts` | Rastro de lo que hace una persona administradora. **Ajena a las reglas de puntuación**, como `RateLimitCounter`: se escribe en la misma transacción que el cambio que registra. Aditiva, sin RLS propia más allá de la postura de §7 (`TABLES` en `scripts/db-security.ts`). |
+| `ObjectiveEvent` (tabla nueva) | `prisma/schema.prisma`, `src/lib/objective-events.ts` | Registro de **cuándo se cumplió cada objetivo**, para que el historial del panel pueda decirlo junto a las partidas. Es el único modelo que se apoya en §6 (carreras congeladas frente a objetivos en caliente): los del grupo `civilizacion` se escriben en cuanto hay poseedor y los 14 "en caliente" solo cuando el torneo ha terminado. §1.6. |
+| `Alert` (tabla nueva, F9) | `prisma/schema.prisma`, `src/lib/alerts/` | Registro **append-only** de los comportamientos anómalos que el motor detecta sobre las clasificatorias. **Ajena a las reglas de puntuación**, como `AdminAction` y `ObjectiveEvent`: sus umbrales están en `Setting["alerts.ruleset"]` y su qué-es-clasificatoria es el `rankedMatchWhere()` de siempre, así que no añade ninguna definición nueva. Aditiva, con RLS propia solo por la postura de §7 (`TABLES` en `scripts/db-security.ts`). §1.7. |
 | *Backfill* de `mode` y `civRandomized` | `npm run backfill:model` (`scripts/backfill-model.ts`) | Los SQL 3a y 3b de §8.1, idempotentes, más sus comprobaciones. |
 
 **Formato exacto de `PlayerScore.breakdown` en el MVP.** Es un objeto con tres campos, y las
@@ -147,10 +149,13 @@ esta tabla: está hecho, versionado en `scripts/db-security.ts` y se comprueba c
 | Comando | Qué hace |
 |---|---|
 | `npm run score` | Recalcula la clasificación y la imprime. Es lo que hace el worker al final de cada pasada, pero a mano. |
+| `npm run alerts:check` | Evalúa las alertas de comportamiento de todo el torneo (o de los `profileId` que se le pasen) e imprime el resumen y las rachas abiertas. Idempotente. |
+| `npm run alerts:cutoffs` | Deriva o refresca los cortes rating → subdivisión que necesita la regla R5 y los cachea en `Setting["alerts.divisionCutoffs"]`. Con `--show` solo enseña los que hay. |
 | `npm run db:security` | Aplica la postura de RLS sin políticas y sin permisos para los roles de cliente (§7). Idempotente. Con `-- --solo-rls` aplica la otra postura, la que hace que la Data API conteste `[]`. |
 | `npm run db:security -- --check` | Solo comprueba la postura y sale con código 1 si no se cumple. Dice cuál de las dos está activa. **Es la comprobación que hay que hacer después de cada `db push`.** |
 | `npm run backfill:model` | Rellena `mode` y `civRandomized` de las partidas que ya había en la base de datos. Idempotente. |
 | `npm run verify:sync -- --db` | Comprueba normalización, guardado, motor de puntuación y lecturas públicas contra la base de datos de verdad, con datos de ejemplo que limpia al terminar. |
+| `npm run verify:alerts` | Las 53 comprobaciones del motor de alertas (F9) sobre secuencias sintéticas. **Sin base de datos**: todo lo que decide el motor es una función pura, y eso es justo lo que permite comprobarlo sin preparar nada ni dejar nada limpio. |
 | `npm run simulate:tournament` | Torneo simulado con **jugadores reales** de AoE4World: elige 1 por división, da de alta, importa la ventana del torneo y recalcula. Escribe su manifiesto en `Setting["simulation.roster"]`. Idempotente. Con `-- --select-only` solo elige e informa, sin tocar la base de datos. |
 | `npm run simulate:clean` | Deshace esa simulación. **Verifica la identidad de cada fila contra el manifiesto antes de borrar y aborta si no cuadra**; con `-- --dry-run` comprueba y no borra. Detalle en [`PLAN.md`](./PLAN.md) y en el [`README`](../README.md). |
 
@@ -237,6 +242,135 @@ No tiene nada que ver con las reglas de puntuación: es la pieza de datos del l�
 **Atomicidad.** El incremento es un `INSERT ... ON CONFLICT DO UPDATE ... RETURNING count` de **una sola sentencia** (`bumpCounter` en `src/lib/rate-limit.ts`). Es lo que hace que dos envíos simultáneos no se cuelen: el `ON CONFLICT` espera a la transacción que ya tiene esa fila y la reevalúa sobre la versión nueva, así que el segundo ve el incremento del primero. Un `SELECT` seguido de un `UPDATE`, o un contador en memoria del proceso, dejarían pasar el umbral tantas veces como instancias serverless hubiera.
 
 **La ventana se decide en SQL** (`now() - $ventana`), no pasando una fecha desde el código: `DateTime` de Prisma es `timestamp` sin zona y mezclarlo con un `Date` de JavaScript depende de la zona horaria de la sesión.
+
+### 1.6 `ObjectiveEvent`
+
+Un objetivo del torneo que alguien cumplió, con **cuándo** se cumplió. Es una fila
+por objetivo del catálogo y como mucho **38 filas en toda la vida del torneo**: la
+forma más barata de responder a lo que la organización pidió ("añade también cuando
+un objetivo se cumple") sin tocar el modelo de `PlayerScore`.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `objectiveId` | `String` | Id estable del catálogo (`loco-por-ganar`, `masterizar-japanese`…), y a la vez **clave única** de la fila. |
+| `playerId` | `String` | FK a `Player.id`, `onDelete: Cascade`, como `Match` y `PlayerScore`. |
+| `achievedAt` | `DateTime` | El instante de la hazaña. Ver "Cuándo se registra" abajo: es lo que cambia según el grupo. |
+| `recordedAt` | `DateTime` (`now()`) | Cuándo se escribió la fila. `achievedAt` es el dato del torneo; esto es solo el rastro de que el motor (que corre cada 5 minutos) llegó a verlo. |
+
+| Índice | Tipo | Consulta que sostiene |
+|---|---|---|
+| `(objectiveId)` | **único** | El `upsert` de la reconciliación y, sobre todo, la garantía de que un objetivo solo tiene un evento: es lo que hace que el registro se pueda reescribir cuando el cómputo cambia. |
+| `(achievedAt)` | compuesto | El feed del historial, que ordena y filtra por ahí. |
+| `(playerId)` | compuesto | Índice de la FK: el panel filtra los hitos por jugador y el `Cascade` al borrar un participante los recorre. Postgres **no** indexa las FK por su cuenta. |
+
+**Cuándo se registra (la traducción de `PUNTUACION.md` §6).** `§6` divide los
+objetivos en dos: los que se resuelven en caliente en cada recálculo y el grupo
+`civilizacion`, que son **carreras** y se resuelven al completarse. El registro
+hereda esa división:
+
+- **Carreras** (los 23 `masterizar-<civ>` y `masterizarlos-a-todos`): en cuanto hay
+  poseedor, con `achievedAt` = el `finishedAt` de la partida que cerró la carrera. El
+  motor ya lo tenía: es el mismo `raceAt` con el que `pickHolder()` decide quién se la
+  quedó, o sea el desempate 3 de §5.
+- **Los 14 "en caliente"**: solo cuando la ventana del torneo tiene `to` informado
+  **y** ya ha pasado, con `achievedAt` = ese `window.to`. Con la ventana abierta
+  (`to: null`) no se registra nada todavía.
+
+Un objetivo **sin poseedor** no tiene evento, y si lo tenía, se borra. Es el otro
+caso de §6, y es real: si el panel revierte la partida que cerró una carrera, los
+puntos se mueven y el evento del poseedor anterior tendría que irse con ellos.
+
+**No guarda etiqueta ni puntos.** Los dos se resuelven **al leer**, contra
+`OBJECTIVE_DEFINITIONS` y el ruleset activo, con el criterio de `public.ts`
+(`ruleset.objectives[id] ?? definition.points`) y en un solo sitio
+(`resolveObjective()` en `src/lib/objective-events.ts`). Una copia en la tabla sería
+una segunda fuente de verdad que se queda vieja en cuanto se retoque un punto en
+`Setting`, y el historial enseñaría una cifra que ya no es la del torneo.
+
+**Espejo, no log.** Es la diferencia con `AdminAction` y con `Alert`, que sí son
+append-only: aquí la fila describe **quién posee el objetivo ahora mismo**, y eso no
+puede haber pasado. La escribe `reconcileObjectiveEvents()` dentro de la transacción
+de `recomputeScores()`, con el cerrojo de la clasificación ya tomado, así que o el
+registro y la clasificación dicen lo mismo o no cambia ninguno de los dos, y todos los
+caminos que recalculan (worker, `npm run score`, revertir o restaurar puntos, aprobar
+o dar de alta a un jugador) lo dejan al día. La reconciliación lee las ≤38 filas,
+compara con lo esperado y **solo escribe lo que difiere**: altas (`createMany`),
+cambios de poseedor o de instante (`update`) y bajas (`deleteMany`). En una pasada sin
+novedades no hay ni una escritura.
+
+**Relleno de verdad, medido.** Con la base de datos de este torneo y la ventana de
+pruebas (15-sep-2026 → 15-oct-2026, sin terminar) el motor registró 4 eventos, los
+cuatro `masterizar-*` cerrados entre el 16 y el 25 de septiembre, con `achievedAt` en
+el `finishedAt` de la partida que los cerró. Los otros 13 objetivos con poseedor no
+tienen evento, que es lo correcto: el torneo aún no había terminado.
+
+### 1.7 `Alert`
+
+Un comportamiento anómalo de un participante, detectado sobre las partidas
+clasificatorias que ya están guardadas. Es un registro **append-only**, como
+`AdminAction` y a diferencia de `ObjectiveEvent`: la fila dice "a la 1 se detectó
+esto" y no se reescribe nunca. La corrección de una alerta que salió mal no es
+borrarla, es que la condición que la produjo deje de cumplirse (una partida
+revertida, una ventana movida, un umbral retocado) y el informe dé cuenta del estado
+en cada momento.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `rule` | `AlertRule` | Qué comportamiento se detectó. Enum **fijo en el código**: lo configurable son los umbrales (`Setting["alerts.ruleset"]`), no la lista de comportamientos. |
+| `kind` | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END` o `TOTAL_REACHED`. Ver "Por qué tres" abajo. |
+| `playerId` | `String` | FK a `Player.id`, `onDelete: Cascade`, como `Match` y `PlayerScore`. |
+| `subjectProfileId` | `Int?` | El rival (R2) o el compañero (R3) de la que habla la alerta. Es un `profileId` de AoE4World y **no** una FK a `Player`, porque el torneo es individual y casi todos los rivales y compañeros son de fuera de la liga. `null` en las reglas sin sujeto. |
+| `subjectName` | `String?` | Nombre del sujeto **en el momento de escribir la fila**. Es el único registro que queda de a quién señalaba, y no se puede resolver con un `join`: el sujeto puede no estar en `Player`. |
+| `count` | `Int` | Partidas del tramo, o el número que se ha cruzado en un acumulado. En un total es siempre el múltiplo o el umbral, así que `count == threshold`. |
+| `threshold` | `Int` | Umbral del ruleset activo, guardado para que el informe pueda decir con qué criterio se avisó aunque las reglas cambien después. |
+| `anchorGameId` | `String?` | La partida que **rompió** la racha o cruzó el umbral; en el cierre de torneo, la última de la racha, que es la única que se puede señalar porque no hubo ninguna que la rompiera. |
+| `dedupeKey` | `String` **único** | Ver abajo. |
+| `summary` | `String` | Una línea en español **ya redactada** al escribir la fila (`src/lib/alerts/rules.ts`), que el informe pinta tal cual. |
+| `details` | `Json` | Lo que hay detrás de la frase, para el que tenga que investigar. De ahí no se lee nada para pintar el resumen. |
+
+| Índice | Tipo | Consulta que sostiene |
+|---|---|---|
+| `(dedupeKey)` | **único** | El `createMany({ skipDuplicates: true })` del motor. Ver abajo. |
+| `(createdAt)` | compuesto | El listado del panel, que es "lo más reciente primero". |
+| `(playerId, rule)` | compuesto | El detalle de un jugador y el recuento por regla, sin perder ese orden. |
+
+**Por qué `dedupeKey` es una columna de texto y no un índice único compuesto.** El
+motor es idempotente y corre muchas veces sobre los mismos datos (cada pasada del
+sincronizador, el cierre de torneo, `alerts:check`), así que tiene que poder insertar
+"solo lo nuevo" **sin leer antes lo que ya hay**: eso es un `createMany` con
+`skipDuplicates` sobre un único índice único. Y en Postgres los `NULL` de un índice
+único **no colisionan** (dos filas con `subjectProfileId = NULL` pasarían ambas), y
+el sujeto es opcional. Un índice único compuesto con columnas nullable no sujetaría
+lo que parece sujetar, así que la clave es texto no nulo y se compone en código.
+Lo que identifica una alerta es (regla, tipo, jugador, sujeto, y el remate: la
+partida que rompió la racha o el número que se cruzó); por eso el `kind` entra en la
+clave, para que una racha rota y una racha que solo cerró el fin del torneo no
+colisionen.
+
+**Por qué tres `kind` y no dos.** Una racha normalmente se avisa cuando se rompe,
+porque es cuando se sabe cuánto duró. Pero si el torneo se cierra con la racha
+abierta, el patrón ya no se va a romper nunca, y sin `STREAK_AT_TOURNAMENT_END` esa
+racha no se avisaría jamás. Los acumulados no son rachas: no tienen ni principio ni
+fin, y por eso tienen su propio `kind`.
+
+**`summary` no lleva el nombre del jugador.** La fila ya es de un jugador y el
+informe hace el `join` con `Player`, así que guardarlo ahí solo serviría para que un
+nombre renombrado dejara de ser cierto en el informe. El del **sujeto** sí se
+guarda, porque ese no sale de ningún `join` (puede no estar en la liga).
+
+**Cuántas filas sale.** Con los datos de este torneo y la ventana de pruebas,
+`npm run alerts:check` registró 25 alertas de 8 jugadores (casi todas
+`REPEATED_TEAMMATE_*`: `I'm the washing machine` juega con los mismos compañeros
+muchas veces seguidas), 3 rachas abiertas y 0 `rawJson` ilegibles. Repetir el
+comando insertó **0** filas: esa es la comprobación de que el dedupe funciona.
+
+**Lo que degrada en vez de romper.** Un `rawJson` ilegible no lanza: esa partida no
+aporta flags a las reglas de equipo y sale en el resumen. Un jugador sin
+`rankLevel` 1v1 no se evalúa con R5, con aviso. Y **R5 entera se omite** si no hay
+cortes de división cacheados (`Setting["alerts.divisionCutoffs"]`, que se derivan a
+mano con `npm run alerts:cutoffs` y no desde el motor: son ~150 peticiones por
+ladder y el sincronizador corre cada 5 minutos). El detalle de por qué R5 necesita
+cortes de la ladder **de la partida** está en `docs/PLAN.md` F9.
 
 ## 2. Resumen de lo que hay que añadir
 
@@ -768,6 +902,11 @@ Cada consulta con el índice que la sostiene. Un índice que no aparece aquí, n
 | 17 | Inscripción, purga de contadores | `delete from "RateLimitCounter" where "windowStart" < $antiguedad` | **Ninguno, a propósito** | Una vez por minuto como mucho, desde el propio contador, y la tabla es de una fila por IP vista. Un recorrido secuencial sale más barato que un índice que casi no se usaría (§1.5). |
 | 18 | `/admin` historial de partidas | `Match where <clasificatorias> [and playerId = X] [and startedAt en rango] order by startedAt desc, id desc take/skip` | `@@index([mode, startedAt])`, `@@index([playerId, startedAt])` | Es la consulta 9 **más las revertidas**: el panel las tiene que listar marcadas, así que usa `classificatoryWhere()` (la regla sin `revertedAt is null`). El `id` de desempate es lo que hace estable la paginación. |
 | 19 | `/admin` historial de acciones | `AdminAction order by createdAt desc, id desc take/skip` | `@@index([createdAt])` | Pocas filas (crece con las acciones del panel, no con las del torneo), así que la paginación es barata. El índice `(type, createdAt)` del schema sirve para el día que se filtre por tipo. |
+| 20 | `/admin` historial de partidas | `ObjectiveEvent where [playerId = X] [achievedAt en rango] order by achievedAt desc, objectiveId desc` | `@@index([achievedAt])`, `@@index([playerId])` | **Sin paginar**: son ≤ 38 filas en toda la vida del torneo, así que el feed mezclado las trae enteras. El total de la pantalla sale sumando su recuento al de las partidas, y el hueco de partidas que hay que traer depende de cuántas hay (§1.6 y el docblock de `getAdminMatchHistory`). |
+| 21 | Motor, registro de hitos | `ObjectiveEvent` leída entera y escrita solo en lo que difiere, dentro de la transacción del recálculo | `@@unique([objectiveId])` para el `upsert`, `@@index([playerId])` para el `Cascade` | No aparece en ninguna consulta como rango: es una lectura de ≤38 filas y tres escrituras (`createMany`, `update`, `deleteMany`) que no ejecutan nada cuando no hay nada que cambiar. |
+| 22 | Motor de alertas, carga | `Match where playerId in (...) and <clasificatorias> order by startedAt, gameId` | `@@index([playerId, startedAt])` | Es la consulta 9 más el `playerId`: el motor de alertas (F9) carga **las clasificatorias de los jugadores tocados** y las pasa por un módulo puro. `orderBy` por `(startedAt, gameId)` porque dos jugadores de la liga en la misma partida tienen el mismo `startedAt`, y sin el desempate el orden dentro del empate dependería del planificador. |
+| 23 | Motor de alertas, escritura | `Alert createMany (skipDuplicates) sobre dedupeKey` | `(dedupeKey)` único | Es la idempotencia entera del motor: una sentencia, sin leer antes lo que ya hay (§1.7). |
+| 24 | `/admin` alertas | `Alert [where playerId = X] [where rule = R] order by createdAt desc, id desc take/skip` | `@@index([createdAt])`, `@@index([playerId, rule])` | Pocas filas por temporada (25 en la de este torneo, todas de `REPEATED_TEAMMATE_*`), así que la paginación es barata. |
 
 Las consultas 9 a 12 son las que corren en cada pasada del worker. Con el volumen de un torneo
 (30 jugadores, 30.000 a 50.000 partidas) son milisegundos: no es un problema de rendimiento, es un
@@ -785,14 +924,17 @@ datos con una clave de cliente.** Todo el acceso pasa por el DAL del servidor co
 Así que las tablas no tienen por qué ser legibles para nadie más.
 
 > **Estado: APLICADO, no diferido.** Vive en `scripts/db-security.ts` y se ejecuta con
-> `npm run db:security`. Los cuatro pasos de la tabla se hicieron sobre las seis tablas que
-> existen (`Player`, `Match`, `PlayerScore`, `Setting`, `RateLimitCounter` y `AdminAction`);
+> `npm run db:security`. Los cuatro pasos de la tabla se hicieron sobre las ocho tablas que
+> existen (`Player`, `Match`, `PlayerScore`, `Setting`, `RateLimitCounter`, `AdminAction`,
+> `Alert` y `ObjectiveEvent`);
 > `ScoreSnapshot` no se creará hasta que las reglas cierren lo que le falta, y cuando se cree
 > hay que volver a pasar el script. La lista de `TABLES` en el script es **explícita**: al
 > añadir una tabla al schema hay que añadirla ahí, porque una tabla nueva nace con los
 > permisos por defecto de Supabase y, sin el paso 3, sería legible con la clave publicable a
 > través de la Data API. Pasada esa con `RateLimitCounter` (F6), el `--check` la cazó con
-> `clientes=anon, authenticated`.
+> `clientes=anon, authenticated`. **Y con `Alert` y `ObjectiveEvent`**: las dos nacieron
+> con RLS desactivada y `SELECT` para los roles de cliente, el `--check` posterior al
+> `db push` lo dijo, y `npm run db:security` lo cerró.
 
 | Paso | Qué | Por qué |
 |---|---|---|
@@ -809,6 +951,8 @@ alter table public."PlayerScore"       enable row level security;
 alter table public."Setting"           enable row level security;
 alter table public."RateLimitCounter"  enable row level security;
 alter table public."AdminAction"       enable row level security;
+alter table public."Alert"             enable row level security;
+alter table public."ObjectiveEvent"    enable row level security;
 
 -- Refuerzo: que los roles de cliente no puedan ni intentar leer. Sobre las
 -- secuencias no hace falta hoy (public no tiene ninguna), pero se revoca igual:
@@ -822,6 +966,8 @@ revoke all on table public."PlayerScore"      from anon, authenticated;
 revoke all on table public."Setting"          from anon, authenticated;
 revoke all on table public."RateLimitCounter" from anon, authenticated;
 revoke all on table public."AdminAction"      from anon, authenticated;
+revoke all on table public."Alert"            from anon, authenticated;
+revoke all on table public."ObjectiveEvent"   from anon, authenticated;
 ```
 
 ### 7 bis. Por qué está en un script y no en el schema

@@ -50,6 +50,15 @@ De ella se derivan los requisitos que ya estructuran las fases: clasificación s
 - [x] `/admin/jugadores`: alta por `profileId`, aprobar/rechazar/eliminar — **superado por F8**,
       que lo reorganicó en cuatro pestañas y movió las acciones a `/app/admin/actions.ts`
 - [x] Ampliar el modelo de datos (objetivos, snapshot de clasificación) — se hace en F3
+- [x] **Alta de admins por invitación**: `GET /auth/confirm` (Route Handler) verifica el
+      `token_hash` del correo en servidor con `verifyOtp()` y deja la sesión en cookies, en lugar
+      de dejarla en el fragmento de la URL, donde el navegador no la entrega y nada la consumía. El
+      destino `next` solo puede ser una ruta interna y todo fallo va a `/login?error=enlace`; los
+      tipos de token admitidos cubren la invitación y la recuperación, así que el mismo mecanismo
+      sirve para el "he olvidado la contraseña". `/login/establecer-contrasena` (página y
+      formulario, Server Action `setPassword`) fija la contraseña con esa sesión y entra a
+      `/admin`. Requiere el **paso manual** en el panel de Supabase —Site URL/Redirect URLs y la
+      plantilla "Invite user"— documentado en el [README](../README.md#alta-de-admins-por-invitación).
 
 Decisión: todo usuario autenticado es admin → **registros públicos de Supabase desactivados**; las cuentas se crean a mano.
 
@@ -198,6 +207,9 @@ PlayerScore(playerId, ruleSetVersion) pk, rank, total, wins, matches, breakdown 
 Setting    (key PK, value JSON, updatedAt)
 AdminAction(id, type: PLAYER_CREATED|PLAYER_REMOVED|MATCH_POINTS_REVERTED|MATCH_POINTS_RESTORED,
             actorEmail, summary, targetId?, details JSON, createdAt)
+Alert     (id, rule: AlertRule, kind: AlertKind, playerId FK cascade, subjectProfileId?, subjectName?,
+            count, threshold, anchorGameId?, dedupeKey unico, summary, details JSON, createdAt)
+ObjectiveEvent(objectiveId unico, playerId FK cascade, achievedAt, recordedAt)
 ```
 
 Notas:
@@ -208,7 +220,18 @@ Notas:
 - `result` admite `null`: significa que la partida aún no está resuelta por la API. El motor no puntúa esas filas.
 - `revertedAt` es la cuarta condición de "cuenta como clasificatoria" (F8): es la marca que pone el panel para que una partida deje de puntuar, y la regla la lee `src/lib/ranked-match.ts` en sus tres traducciones, así que no da ni victorias ni objetivos. **El worker no la toca**, y por eso la marca sobrevive a la reimportación.
 - `AdminAction` es el historial **append-only** de lo que hace la organización (F8). `summary` se redacta en español en el momento de escribir la fila (`src/lib/admin-actions.ts`) y la interfaz lo pinta tal cual, para que el rastro y la pantalla no puedan divergir. Aprobar o rechazar una solicitud **no** se registra: no cambia nada de lo que ve el público.
+- `ObjectiveEvent` es un **espejo reconciliado** del cómputo de objetivos, no un log: una fila por objetivo cumplido (38 como mucho) y `achievedAt` = el instante de la hazaña en las carreras de `civilizacion` y el fin del torneo en los 14 objetivos "en caliente", que solo se registran cuando la ventana ya ha terminado. Lo escribe `recomputeScores()` dentro de su transacción (`src/lib/objective-events.ts`), y **se borra** si el objetivo deja de cumplirse: por eso no guarda etiqueta ni puntos (se resuelven al leer del catálogo y del ruleset activo) ni puede quedar apuntando a un poseedor al que ya le movieron los puntos. Detalle en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md) §1.6.
 - `PlayerScore` es el agregado **versionado** que lee la web. El modelo completo está en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md): la parte que no depende de las reglas ya está aplicada y la que depende (ruleset Wololo, snapshots, categorías) está diferida.
+- `Alert` es el registro **append-only** de los comportamientos anómalos que el motor detecta sobre
+  las partidas clasificatorias (F9). Es append-only como `AdminAction`, y por el mismo motivo: nadie
+  edita filas, y la corrección es que la condición que produjo la alerta deje de cumplirse (una
+  partida revertida, una ventana movida, un umbral retocado). `summary` se redacta en español al
+  escribir la fila (`src/lib/alerts/rules.ts`) y **no lleva el nombre del jugador**: la fila ya es
+  suya y el nombre se renombra, así que guardarlo sería congelar un texto que dejaría de ser cierto.
+  El sujeto (rival o compañero) sí se guarda con su nombre, porque puede no estar en la liga y no
+  sale de ningún `join`. El `dedupeKey` es una **columna de texto** y no un índice único compuesto
+  porque en Postgres los `NULL` de un índice único no colisionan, y el sujeto es opcional; sobre él
+  va el `skipDuplicates` que hace la evaluación idempotente.
 - `Setting` no es solo configuración: también es la memoria del worker (`aoe4world.sync.player.<profileId>`) y el rastro del motor (`scoring.lastRun`). Añade `sync.lastRun`, el rastro de la última pasada del sincronizador, que es lo que hace visible un fallo suyo: contadores, errores y los jugadores que no se pudieron sincronizar, más un `lastSuccessAt` que solo avanza en las pasadas enteras. La simulación con jugadores reales añade `simulation.roster`, el **manifiesto de a quién dio de alta y con qué identidad**: es lo único que permite deshacerla sin borrar participantes de verdad.
 
 ## Integración con AoE4World
@@ -493,6 +516,15 @@ cuando hay pendientes.
   Descripción ("X ganó a Y: +N puntos") | acción. Las revertidas se listan **marcadas** y
   ofrecen **Restaurar**; el botón de revertir solo aparece donde hay puntos que quitar. El
   filtro de clasificatorias sale del ruleset activo, como el motor.
+  - **El feed mezcla también los objetivos cumplidos** (`ObjectiveEvent`, §1.6 del modelo de
+    datos): lo pidió la organización ("añade cuando un objetivo se cumple") y son 38 filas
+    como mucho, así que se traen enteras y se mezclan con las partidas por fecha, con la
+    paginación y el contador conjuntos. Las carreras de `civilizacion` salen en cuanto se
+    cierran (con la fecha de la partida que las cerró) y los 14 objetivos "en caliente"
+    **solo cuando el torneo ha terminado**, con la fecha del fin. Con el filtro de `resultado`
+    activo no salen: un hito no es ni una victoria ni una derrota. Etiqueta, grupo y puntos
+    llegan resueltos en la fila (etiqueta, grupo, métrica y puntos), así que la interfaz no
+    tiene que mirar el catálogo.
 - [x] **Historial de acciones** (`AdminAction`): altas, bajas y cambios de puntos, con la
   quien los hizo y cuándo. Se registra en la **misma transacción** que el cambio, así que o hay
   las dos cosas o no hay ninguna.
@@ -515,12 +547,21 @@ cuando hay pendientes.
       Cierra el peor fallo que ha tenido el torneo: estuvo caído horas sin que nada lo
       dijera, porque el cron dispara por HTTP y tira la respuesta y el error por
       jugador solo iba a `console.error`.
-- [ ] **Alertas queda como placeholder honesto, y a propósito**: es para
-      **comportamientos anómalos de los participantes**, no para salud del sistema, y
-      todavía no está definido qué condiciones disparan una alerta ni qué cuenta como
-      anómalo. Fabricar contadores o alertas de ejemplo enseñaría un estado del torneo
-      que no existe. El estado del sincronizador, que sí es salud del sistema, vive
-      aparte: en `getSyncHealth()` y en el aviso de `/admin`.
+- [x] **La llamada manual del sincronizador es una Server Action de `/admin`** (`syncNow`),
+      no el botón público que estaba detrás de `/partidas`. Es para cuando el cron falla, así
+      que va detrás de `requireAdmin()`: recuperar un torneo congelado es una operación de la
+      organización, no un botón que cualquiera pueda machacar. Comparte el **candado global**
+      con `/api/sync` (`src/lib/manual-sync.ts`, clave `public/manual-sync`, una pasada cada
+      5 min), de modo que el admin y el cron de Supabase se cuentan la una a la otra y no se
+      apilan pasadas contra la API de AoE4World. `/api/sync` **no se cierra**: sigue siendo el
+      disparo del cron, sin cambios de comportamiento. La acción no registra `AdminAction`
+      porque la pasada ya deja su rastro en `Setting["sync.lastRun"]`.
+- [x] **Motor de alertas de comportamiento** (F9, ver "F9 — Alertas de comportamiento"): la
+      pestaña dejó de ser un placeholder porque ya está definido qué dispara una alerta. Las
+      ocho reglas, sus umbrales versionados y el modelo `Alert` están en su sección del
+      roadmap. El estado del sincronizador, que sí es salud del sistema, sigue viviendo aparte,
+      en `getSyncHealth()` y en el aviso de `/admin`: una alerta de comportamiento y una avería
+      del sync son cosas distintas y no se mezclan.
 
 Decisiones que condicionan lo que viene:
 
@@ -528,6 +569,15 @@ Decisiones que condicionan lo que viene:
   `requireAdmin()`. El `matcher` del Proxy cubre `/admin/:path*` y **excluir una ruta del
   `matcher` excluye también sus Server Functions**, así que una acción fuera de `/admin`
   ni siquiera llegaría a comprobar nada.
+- **El candado del sync vive en `src/lib/manual-sync.ts`** y lo comparten el disparo del cron
+  (`/api/sync`) y la acción manual de admin (`syncNow`). Con dos candados, un admin podía
+  encadenar pasadas mientras el cron seguía creyendo que tenía su ventana libre, que es justo
+  lo que el candado existe para impedir; y al revés, el cron podía pisarle la pasada manual.
+  Está fuera del endpoint porque lo que protege son **la API de AoE4World y el presupuesto de
+  CPU del plan Free**, no quién pulse: por eso sigue siendo global y no por IP aunque ahora lo
+  use alguien autenticado. `consumeManualSyncLock()` **lanza** si no se puede comprobar, y los
+  dos consumidores tratan ese caso como "no se pasa": un `allowed: false` de verdad sería
+  indistinguible de un fallo, y una pasada sin candado es justo lo que hay que evitar.
 - **`classificatoryWhere()`** se exporta en `ranked-match.ts` aparte de `rankedMatchWhere()`: es
   la misma regla **sin** la marca de revertida, y existe para un solo consumidor (el historial,
   que tiene que enseñar las revertidas). No es un `options: { includeReverted }` porque una
@@ -540,9 +590,119 @@ Decisiones que condicionan lo que viene:
 **Requisito operativo, ya hecho**: el schema trae la tabla `AdminAction` y la columna
 `Match.revertedAt`, y ambos están aplicados en producción: `npm run db:push` seguido de
 `npm run db:security`, que dejó la tabla nueva con RLS activada, cero políticas y sin permisos
-para `anon` ni `authenticated` (comprobado por el propio script). El paso hace falta cada vez
-que se añada una tabla al schema, porque una tabla nueva nace con los permisos por defecto de
-Supabase en `public` y sería legible con la clave publicable por la Data API.
+para `anon` ni `authenticated` (comprobado por el propio script). Lo mismo se hizo con la tabla
+`Alert` de F9: está en la lista explícita de `TABLES` de `scripts/db-security.ts` y
+`npm run db:security -- --check` la da correcta. El paso hace falta cada vez que se añada una tabla
+al schema, porque una tabla nueva nace con los permisos por defecto de Supabase en `public` y sería
+legible con la clave publicable por la Data API.
+
+### F9 — Motor de alertas de comportamiento ✅
+
+F8 dejó `/admin/alertas` como un placeholder a propósito: es para **comportamientos anómalos de
+los participantes**, no para salud del sistema, y no se podía enseñar nada sin inventar las
+condiciones. Aquí están esas condiciones, acordadas con el cliente, y el motor que las vigila. El
+estado del sincronizador sigue en su sitio (`getSyncHealth()` y el aviso de `/admin`): son cosas
+distintas y mezclarlas haría que "el torneo lleva roto desde las 10:00" significara dos cosas.
+
+**El modelo, el mismo para las ocho reglas.** Para cada regla hay un *flag* por partida sobre la
+secuencia de clasificatorias del jugador ordenada por `startedAt`. Una **racha** es un tramo
+maximal de partidas consecutivas con el flag, y el aviso sale **cuando la racha se rompe** (llega
+una clasificatoria sin el flag), diciendo cuántas duró. Si el torneo se cierra con la racha
+abierta, sale con el conteo que tenga (`STREAK_AT_TOURNAMENT_END`): sin ese caso, una racha que
+acaba con la última partida del torneo no se avisaría nunca. Los **acumulados** se cuentan sobre
+todas las clasificatorias de la ventana y avisan al cruzar el umbral. La unidad de "consecutiva" es
+la secuencia completa de clasificatorias: una 1v1 en medio **rompe** la racha de "tres de equipo
+seguidas con este compañero", porque lo que se vigila es el comportamiento seguido. Lo que no la
+rompe son las partidas no clasificatorias, y eso está resuelto antes de llegar al motor.
+
+| Regla | Modo | Flag por partida | Racha | Acumulado |
+|---|---|---|---|---|
+| **R1** `SHORT_MATCH_*` | 1v1 y equipos | `durationSeconds < 180` | 2 | cada 5, uno por múltiplo |
+| **R2** `REPEATED_OPPONENT_*` | solo `rm_solo` | la partida tiene rival con `opponentProfileId` | 3 **con el mismo rival** | cada 10 **con el mismo rival** |
+| **R3** `REPEATED_TEAMMATE_*` | solo `rm_team` | el mismo compañero está en mi equipo | 3 **con ese compañero** | 7 con ese compañero, **una sola** |
+| **R4** `TEAMMATE_ELO_GAP` | solo `rm_team` | algún compañero a `>= 500` de elo en esa partida | 1 | — |
+| **R5** `LOW_DIVISION_TEAM_GAME` | solo `rm_team` | la media de elo de la partida cae `>= 3` escalones de subdivisión por debajo de la 1v1 del jugador | 1 | — |
+
+R2 y R3 llevan **sujeto** (el rival, el compañero), así que rachas y acumulados son *por sujeto*:
+"tres contra el mismo rival", no "tres contra quien sea". El sujeto es un `profileId` de
+AoE4World y puede ser de alguien que no está en la liga, que es lo normal en un torneo individual;
+por eso `Alert.subjectName` guarda su nombre al escribir la fila. R2 excluye las partidas de equipo
+a propósito: allí `opponentProfileId` es solo el primer rival del otro equipo y "tres veces contra
+el mismo" no significaría nada.
+
+**Qué cuenta como partida es la misma regla de siempre.** El motor no decide qué es clasificatoria:
+carga con `rankedMatchWhere()` (`src/lib/ranked-match.ts`), o sea familia del ruleset de puntos,
+partida resuelta, dentro de la ventana y **no revertida**. Por eso una alerta nunca puede acusar a
+alguien de una partida revertida, y no hay una segunda definición que se pueda desincronizar de la
+primera. Los umbrales de la ventana y la lista de modos **no** se duplican en el ruleset de
+alertas: se leen del de puntuación.
+
+**Los umbrales son configurables sin desplegar**: `Setting["alerts.ruleset"]`, versión 1, con
+`DEFAULT_ALERTS_RULESET` de respaldo y una validación que **nunca lanza** (mismo patrón que
+`readRuleset`/`mergeRuleset` del motor de puntos, con `warnings`). Un umbral inútil cae al valor por
+defecto y avisa; una `version` que no sea la del código invalida el documento entero.
+
+**El intervalo, y por qué no se derivan datos de la API al evaluar.**
+
+- **Cada 5 min, colgado del sincronizador**: en `syncApprovedPlayers()`, después de
+  `recomputeScores()`, se evalúan **solo los jugadores tocados** en la pasada (los que tengan
+  `matchesInserted`, `matchesUpdated`, `matchesResolvedByRefetch` o `matchesAbandoned` > 0). En una
+  pasada sin novedades —lo normal— no se lee ni una fila de `Match`. El coste de evaluar a un
+  jugador es leer sus clasificatorias y pasarlas por un módulo puro.
+- **Al revertir o restaurar una partida** (`src/app/admin/actions.ts`): ese jugador se reevalúa,
+  porque su conjunto de clasificatorias ha cambiado y eso mueve rachas y acumulados por las dos
+  direcciones. Va fuera de la compensación del revert a propósito: las alertas son un informe
+  derivado, y un fallo suyo no debe dar la vuelta atrás un cambio que ya está bien.
+- **Comprobación completa bajo demanda**: `npm run alerts:check`, que además imprime las **rachas
+  abiertas** (tramos que todavía no han terminado y que aún no avisan de nada).
+- **Al descargar el informe del panel**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) es
+  el botón de la pestaña y devuelve un CSV para Excel con dos bloques —alertas disparadas y rachas
+  abiertas en curso—, con la ventana del torneo, la versión del ruleset y la fecha de generación en la
+  cabecera. **Hace la comprobación completa antes de generarlo** (`evaluateAlerts({ full: true })`,
+  idempotente) para que describa el estado recién calculado y no el de la última pasada del
+  sincronizador. Vive en `src/lib/alerts/report.ts` y no en el DAL del panel: un informe no degrada a
+  medias, sale entero o no sale.
+- **Cierre de torneo**: una única evaluación completa cuando `now >= window.to`, marcada en
+  `Setting["alerts.tournamentClose"]` para que el cron no la repita cada 5 min desde el `to`. La marca
+  guarda **la ventana**, no solo una fecha, así que si se alarga el final del torneo el cierre se
+  vuelve a hacer.
+- **Cero llamadas nuevas a la API de AoE4World al evaluar.** Todo sale de `Match` y de su
+  `rawJson`. La única excepción es la derivación puntual de los cortes de división de R5, y no la
+  hace el motor: se cachean en `Setting["alerts.divisionCutoffs"]` y se derivan a mano con
+  `npm run alerts:cutoffs`. Sin cortes, R5 se **omite con aviso** y las otras siete reglas siguen.
+
+**Por qué R5 necesita cortes y de dónde salen.** Hay que comparar la media de elo de una partida
+de equipos (un número, `average_mmr`) con la división 1v1 del jugador (un `rank_level`, `gold_3`), y
+eso exige saber a partir de qué rating empieza cada subdivisión **en la ladder de esa partida**:
+`average_mmr` es elo de equipos, y los cortes de otra ladder darían escalones que no existen.
+La API **no lo publica**: `rating_min`, `rating_max` y `rank_level` los ignora en silencio y siempre
+devuelven la página 1, así que la única vía es recorrer la ladder por páginas. Se hace con
+búsqueda binaria sobre bloques contiguos —la misma técnica que `src/lib/simulation/select.ts`—, con
+la corrección de límites por páginas vecinas. Medido en septiembre de 2026: **151 peticiones** para
+`rm_team` (50 847 jugadores, 1 017 páginas) y **130** para `rm_solo` (23 735, 475). Es un trabajo de
+una sola vez, cacheado y refrescable a mano (`npm run alerts:cutoffs`, con `--show` para verlo), y
+el motor no lo hace nunca porque 288 × 130 peticiones al día no caben en ningún presupuesto. Una
+derivación **incompleta** (alguna subdivisión vacía) se **descarta**: con el catálogo a medias, la
+cuenta de escalones sería falsa sin que nada fallara.
+
+**Lo que degrada en vez de romper.** Un `rawJson` ilegible no lanza: esa partida no aporta flags a
+las reglas de equipo y sale en el resumen como `unreadableMatches`. Un jugador sin `rankLevel` 1v1
+no se evalúa con R5, con aviso. Es la dirección segura: una regla que no se puede calcular no puede
+acusar a nadie.
+
+**Lo que ve la pestaña.** `getAdminAlerts()` publica las alertas disparadas paginadas, de la más
+reciente a la más antigua, y `getAdminAlertRules()` los **umbrales vivos** más la ventana del torneo:
+sin ellos, el copy de las reglas escrito en la interfaz mentiría en cuanto se retocara un número en
+`Setting` (es el mismo pendiente que tienen `/reglas` y `/objetivos` con los del ruleset de puntos). Las
+etiquetas de regla y de tipo (`ALERT_RULE_LABELS`, `ALERT_KIND_LABELS`) viven en el dominio y las
+comparten la pestaña y el CSV, para que no puedan divergir en cómo llaman a la misma regla.
+
+**Verificación**: `npm run verify:alerts` son 53 comprobaciones puras, sin base de datos, sobre
+secuencias sintéticas: rachas y su ruptura, los múltiplos de 5 y de 10, R3 por pareja, el borde
+499/500 de R4, el borde de escalones de R5 y su omisión sin cortes, el cierre de torneo, la
+idempotencia de las claves de dedupe y la validación del ruleset. `npm run alerts:check` es la
+comprobación contra la base de verdad, y es idempotente: la segunda pasada con los mismos datos
+inserta 0 filas.
 
 ## Requisitos del cliente (frozen)
 
@@ -591,5 +751,5 @@ Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes d
 - **Next.js 16**: *middleware* → **Proxy** (`src/proxy.ts`). Los helpers de tipos `LayoutProps<"/ruta">` se generan con `next dev/build/typegen`.
 - **Supabase Auth**: sesiones en cookies SSR; el Proxy refresca el token y aplica las cabeceras anti-caché, el DAL hace la verificación segura.
 - **Rate limits AoE4World**: resueltos en F2 (backoff exponencial con jitter, separación mínima entre peticiones, pausa global ante `Retry-After`). Pendiente solo el ritmo del cron en producción y si hace falta cacheo.
-- **El plan Free de Cloudflare es el techo del sync**: 10 ms de CPU por invocación contra los ~500 ms que gasta una pasada. Un disparo **esporádico** se tolera (el *isolate* tiene flexibilidad para pasarse de vez en cuando); uno **consistente** se mata con el error 1102. Por eso el reloj es Supabase Cron y no un Cron Trigger, y por eso el candado del botón de `/partidas` es de 5 minutos. Si algún día se necesita más margen, la salida es Workers Paid (5 $/mes); el *handler* `scheduled` ya se probó y funcionaba.
+- **El plan Free de Cloudflare es el techo del sync**: 10 ms de CPU por invocación contra los ~500 ms que gasta una pasada. Un disparo **esporádico** se tolera (el *isolate* tiene flexibilidad para pasarse de vez en cuando); uno **consistente** se mata con el error 1102. Por eso el reloj es Supabase Cron y no un Cron Trigger, y por eso el candado global de las pasadas a mano (la del admin y la del cron) es de 5 minutos. Si algún día se necesita más margen, la salida es Workers Paid (5 $/mes); el *handler* `scheduled` ya se probó y funcionaba.
 - **Los Cron Triggers se declaran explícitamente**: en `wrangler.jsonc`, `"triggers": { "crons": [] }`. No es decorativo: `wrangler deploy` solo reemplaza los triggers existentes por los del archivo, y con la clave `undefined` **los deja como están**. Quitar la clave al retirar el cron nativo dejó el trigger vivo disparando cada 5 minutos contra un Worker sin handler `scheduled` hasta que se declaró el array vacío.
