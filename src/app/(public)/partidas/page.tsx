@@ -25,18 +25,20 @@ export default async function LiveMatchesPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* El temporizador va fuera de la cabecera porque no pinta nada: solo
+          vuelve a leer la base cada 75 s. Va aquí y no dentro del `aside` para
+          que, cuando no hay ninguna partida en juego, la cabecera no monte un
+          contenedor vacío. */}
+      <LiveRefresh />
       <PageHead
         title="Partidas en juego"
         aside={
-          <>
-            {matches.length > 0 ? (
-              <span className="inline-flex items-center gap-2 text-sm font-medium text-live-soft">
-                <LiveDot />
-                {matches.length === 1 ? "1 en juego" : `${matches.length} en juego`}
-              </span>
-            ) : null}
-            <LiveRefresh />
-          </>
+          matches.length > 0 ? (
+            <span className="inline-flex items-center gap-2 text-sm font-medium text-live-soft">
+              <LiveDot />
+              {matches.length === 1 ? "1 en juego" : `${matches.length} en juego`}
+            </span>
+          ) : undefined
         }
       />
 

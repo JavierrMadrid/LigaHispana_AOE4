@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { approvePlayer, rejectPlayer } from "@/app/admin/actions";
 import { ParticipantsBrowser } from "@/app/admin/participants-browser";
 import { PlayerForm } from "@/app/admin/player-form";
+import { SyncNowButton } from "@/app/admin/sync-now-button";
 import { EmptyState } from "@/components/empty-state";
 import { PendingButton } from "@/components/pending-button";
 import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
@@ -13,7 +14,8 @@ export const metadata: Metadata = {
 };
 
 /**
- * Pestaña de participantes: resumen, cola de aprobación, alta y listado.
+ * Pestaña de participantes: resumen, cola de aprobación, estado del sincronizador,
+ * alta y listado.
  *
  * Los cuatro contadores salen de consultas directas a la base y no del DAL
  * porque son agregados que `getAdminParticipants()` no publica (el total de
@@ -36,6 +38,12 @@ export default async function AdminPage() {
   const participants = participantsRead.status === "ok" ? participantsRead.data : [];
   const pending = participants.filter((player) => player.status === "PENDING");
 
+  // `syncHealth` es un `PublicRead`: `status` distingue "no se ha podido leer" de
+  // "leído", y `data.degraded`/`data.stale` son el estado del sincronizador. Son
+  // dos cosas distintas y por eso no comparten nombre.
+  const syncState = syncHealth.status === "ok" ? syncHealth.data : null;
+  const syncAlarm = syncState !== null && (syncState.degraded || syncState.stale);
+
   // El resumen se lee como una línea de registro ("Jugadores 24 · Aprobados 18
   // …"), no como cuatro tarjetas iguales con el número en grande: la única cifra
   // que se destaca es la de pendientes, que es la que pide una acción.
@@ -46,13 +54,17 @@ export default async function AdminPage() {
     { label: "Partidas", value: totalMatches, highlight: false },
   ];
 
-  // El aviso va aquí porque esta es la pestaña donde se trabaja: si el
-  // sincronizador está roto, lo que importa es enterarse al entrar y no tener que
-  // acordarse de mirar otra pantalla. Los motivos van en línea y no en un enlace,
-  // porque no hay ninguna otra pantalla que los muestre: `/admin/alertas` está
-  // reservada para anomalías de participantes y sigue sin hacerse. Sin el motivo
-  // literal de la API el aviso no serviría de nada, ya que no dice si hay que
-  // corregir un `profileId` o solo esperar a que AoE4World pare de limitar.
+  // El estado y el botón del sincronizador van en una sección propia, siempre
+  // visible, porque el botón es el "por si falla el cron" y no puede depender de
+  // que el aviso esté de mal humor. El `headline` lo redacta el servidor
+  // (`getSyncHealth()`); aquí no se reimplementa. La sección va **después** de la
+  // cola de pendientes: aprobar una solicitud es la acción del día, y el estado del
+  // sincronizador es salud del sistema, secundaria frente a ella. Los motivos de
+  // cada jugador que falló van en línea y no en un enlace, porque no hay ninguna
+  // otra pantalla que los muestre: `/admin/alertas` está reservada para anomalías
+  // de participantes y sigue sin hacerse. Sin el motivo literal de la API el aviso
+  // no serviría de nada, ya que no dice si hay que corregir un `profileId` o solo
+  // esperar a que AoE4World pare de limitar.
   return (
     <div className="flex flex-col gap-8">
       <section>
@@ -62,27 +74,6 @@ export default async function AdminPage() {
           en la clasificación pública.
         </p>
       </section>
-
-      {syncHealth.status === "ok" && (syncHealth.data.degraded || syncHealth.data.stale) ? (
-        <section
-          aria-label="Estado del sincronizador"
-          className="rounded-lg border border-loss/40 bg-surface px-4 py-3 text-sm"
-        >
-          <p role="status" className="text-loss">
-            {syncHealth.data.headline}
-          </p>
-          {syncHealth.data.lastRun?.failures.length ? (
-            <ul className="mt-2 flex flex-col gap-1 text-muted">
-              {syncHealth.data.lastRun.failures.map((fallo) => (
-                <li key={fallo.profileId}>
-                  <span className="text-foreground">{fallo.name}</span> ({fallo.profileId}):{" "}
-                  {fallo.error}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ) : null}
 
       <section
         aria-label="Resumen del torneo"
@@ -155,6 +146,37 @@ export default async function AdminPage() {
           </ul>
         </section>
       ) : null}
+
+      <section
+        aria-label="Sincronización"
+        className={`rounded-lg border bg-surface px-4 py-4 ${
+          syncAlarm ? "border-loss/40" : "border-line"
+        }`}
+      >
+        <h2 className="text-lg font-medium">Sincronización</h2>
+        <p
+          className={`mt-1 max-w-[70ch] text-sm ${
+            syncAlarm ? "text-loss" : "text-muted"
+          }`}
+        >
+          {syncState !== null
+            ? syncState.headline
+            : "No se ha podido leer el estado del sincronizador. El botón sigue disponible para forzar una pasada."}
+        </p>
+        {syncState?.lastRun?.failures.length ? (
+          <ul className="mt-2 flex flex-col gap-1 text-sm text-muted">
+            {syncState.lastRun.failures.map((fallo) => (
+              <li key={fallo.profileId}>
+                <span className="text-foreground">{fallo.name}</span> ({fallo.profileId}):{" "}
+                {fallo.error}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <div className="mt-4">
+          <SyncNowButton />
+        </div>
+      </section>
 
       <section>
         <h2 className="mb-3 text-lg font-medium">Añadir jugador</h2>

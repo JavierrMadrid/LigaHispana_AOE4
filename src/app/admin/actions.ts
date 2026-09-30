@@ -772,3 +772,145 @@ export async function restoreMatchPoints(
 ): Promise<AdminActionResult> {
   return setMatchReverted(formData, false);
 }
+
+/* -------------------------------------------------------------------------- */
+/* Sincronización a mano                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Estado de `syncNow`.
+ *
+ * No reutiliza `AdminActionResult` porque esta necesita un tercer estado: el candado
+ * puede responder "ahora no" sin que sea un fallo —la pasada se hizo hace nada—, y
+ * quien lo lee tiene que distinguir "no he podido sincronizar" de "no hacía falta".
+ */
+export type SyncNowState = {
+  status: "idle" | "success" | "cooldown" | "error";
+  message: string | null;
+};
+
+/**
+ * Minutos que dice el mensaje de cooldown.
+ *
+ * Salen de la constante del candado y no de un número escrito a mano, para que el texto
+ * no pueda mentir si algún día cambia la ventana. Ver `src/lib/manual-sync.ts`.
+ */
+const MINUTOS_DE_CANDADO = MANUAL_SYNC_COOLDOWN_SECONDS / 60;
+
+/**
+ * Lanza una pasada del sincronizador a mano, para cuando el cron no llega.
+ *
+ * Es la **única** vía manual que queda: el botón de `/partidas` se retiró y la llamada
+ * pasó aquí, detrás de `requireAdmin()`. Eso no es una comodidad —recuperar un torneo
+ * congelado es una operación de la organización— y además es lo que evita tener un
+ * botón público que cualquiera pueda machacar. `/api/sync` no se cierra: sigue siendo el
+ * disparo del cron de Supabase, sin cambios.
+ *
+ * ## Por qué comparte candado con el cron
+ *
+ * Es el mismo candado global de `/api/sync` (`src/lib/manual-sync.ts`), y no uno
+ * propio. Con dos candados, un admin podía encadenar pasadas seguidas mientras el cron
+ * seguía creyendo que su ventana estaba libre: el trabajo real —las peticiones a la API
+ * de AoE4World y el presupuesto de CPU del plan Free— lo pagan las dos, y el candado
+ * compartido es lo que impide que se apilen. El precio es que la cadencia real del
+ * torneo sigue siendo la de un sync cada 5-10 minutos, no mejor.
+ *
+ * ## Por qué no registra `AdminAction`
+ *
+ * Porque la pasada ya deja un rastro más completo: `Setting["sync.lastRun"]` guarda los
+ * contadores, los errores y los jugadores que no se pudieron sincronizar, y es lo que
+ * alimenta el aviso de salud de `/admin`. Una fila en el historial de acciones por cada
+ * pasada sería ruido: esto no cambia el torneo, solo lo consulta.
+ *
+ * ## Por qué no declara parámetros
+ *
+ * Porque no lee ni un campo del formulario ni el estado anterior: el botón no tiene nada
+ * que mandar. Sigue siendo la acción que espera `useActionState` —devuelve el estado
+ * nuevo y React refresca la ruta—, porque una función sin parámetros es asignable a la
+ * que la pide.
+ */
+export async function syncNow(): Promise<SyncNowState> {
+  await requireAdmin();
+
+  let lock: ManualSyncLock;
+
+  try {
+    lock = await consumeManualSyncLock();
+  } catch (error) {
+    // Sin candado comprobado **no** se lanza la pasada. Al revés, el botón sería una
+    // forma de pedir tantas pasadas como se pulsara, que es justo lo que el candado
+    // existe para impedir. El motivo se queda en el log; a quien lo pulsó solo le
+    // llega que ahora no se puede.
+    console.error(
+      "[admin/syncNow] No se ha podido comprobar el candado del sync manual:",
+      error instanceof Error ? error.message : String(error),
+    );
+
+    return {
+      status: "error",
+      message:
+        "No se ha podido comprobar si toca sincronizar. Inténtalo de nuevo en unos minutos.",
+    };
+  }
+
+  if (!lock.allowed) {
+    // No es un error: la pasada ya se hizo hace nada, así que tampoco hacía falta otra.
+    // Por eso tiene su propio estado y no se pinta como fallo.
+    return {
+      status: "cooldown",
+      message: `Se ha sincronizado hace poco; el candado deja una pasada cada ${MINUTOS_DE_CANDADO} minutos.`,
+    };
+  }
+
+  let summary: SyncSummary;
+
+  try {
+    // La pasada son ~15 s de llamadas a AoE4World más el recálculo, así que el botón
+    // tiene que aguantar en estado de "pendiente" ese rato. Es normal que tarde: no es
+    // una escritura de formulario corta.
+    summary = await syncApprovedPlayers();
+  } catch (error) {
+    // `syncApprovedPlayers()` no propaga ni el fallo de un jugador ni el del recálculo:
+    // los deja en el resumen. Lo que llega aquí es que la pasada no se pudo hacer
+    // (configuración o base de datos), y entonces el rastro tampoco se ha escrito.
+    console.error(
+      "[admin/syncNow] La pasada manual ha fallado:",
+      error instanceof Error ? error.message : String(error),
+    );
+
+    return {
+      status: "error",
+      message: "No se ha podido sincronizar ahora mismo. El motivo está en el log del servidor.",
+    };
+  }
+
+  // Al final, no antes: la pasada acaba de reescribir `PlayerScore` y `sync.lastRun`, que
+  // son justo las dos cosas que pinta `/admin` (los contadores y el aviso de salud del
+  // sincronizador).
+  revalidatePath("/admin");
+
+  const segundos = Math.round(summary.durationMs / 1000);
+
+  return {
+    status: "success",
+    message: frase(
+      `Pasada terminada en ${segundos} s.`,
+      // Con cero aprobados la frase de "3 de 3 sincronizados" sería mentira de rigor:
+      // no se ha sincronizado a nadie porque no hay a quién.
+      summary.playersTotal === 0
+        ? "No hay jugadores aprobados que sincronizar."
+        : `${summary.playersOk} de ${summary.playersTotal} jugadores sincronizados.`,
+      summary.playersFailed > 0
+        ? `${summary.playersFailed} no se han podido sincronizar; están en el aviso de esta misma pestaña.`
+        : "",
+      `${summary.newMatches} ${summary.newMatches === 1 ? "partida nueva" : "partidas nuevas"}.`,
+      // Un fallo del recálculo no da la vuelta atrás el trabajo ya hecho —las partidas
+      // están guardadas— así que es un éxito con aviso, no un `error`. El motivo literal
+      // no se enseña: ya lo registra el worker, y aquí solo hace falta que se sepa que la
+      // clasificación que se ve es la anterior.
+      summary.scoringError !== null
+        ? "No se ha podido recalcular la clasificación, así que la web sigue enseñando la anterior: se reintentará en la próxima pasada."
+        : "",
+    ),
+  };
+}

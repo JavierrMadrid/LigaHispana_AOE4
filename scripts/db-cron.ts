@@ -39,13 +39,25 @@ import { Client } from "pg";
  *
  * - exige `content-type: application/json` (lo que `pg_net` manda siempre), que
  *   es justo lo que descarta un POST de formulario de otro sitio, y
- * - lleva un **candado global de 5 minutos** (clave `public/manual-sync`), así
- *   que ni este job ni quien descubra la URL pueden provocar más de una pasada
- *   por ventana. Si alguien pulsa "Actualizar" en `/partidas` dentro de la
- *   ventana, el cron recibe `{"status":"cooldown"}` con 200 y no duplica trabajo.
+ * - lleva un **candado global de 5 minutos** (clave `public/manual-sync`, en
+ *   `src/lib/manual-sync.ts`), así que ni este job ni quien descubra la URL
+ *   pueden provocar más de una pasada por ventana.
  *
- * `/api/cron/sync` y ese candado no se tocan: siguen siendo los del workflow de
- * GitHub, que queda como red de seguridad.
+ * ## Por qué comparte candado con la acción manual de `/admin`
+ *
+ * El candado no es solo de este endpoint: lo usa también `syncNow`, la Server
+ * Action con la que un admin dispara una pasada a mano cuando el cron falla (ver
+ * `src/app/admin/actions.ts`). Que sea el **mismo** es lo que evita que las dos
+ * vías se pisen: si un admin sincroniza dentro de la ventana, el cron recibe
+ * `{"status":"cooldown"}` con 200 y no duplica trabajo, y al revés. El precio es
+ * el de siempre —la cadencia real queda entre 5 y 10 minutos en vez de exactamente
+ * 5— y la alternativa (dos candados) sería dejar la API de AoE4World y el
+ * presupuesto de CPU del plan Free sin nada que los protegiera el día que
+ * coincidieran.
+ *
+ * `/api/cron/sync` no se toca: sigue siendo el del workflow de GitHub, que queda
+ * como red de seguridad. Aquel va con `CRON_SECRET` y sin candado, y por eso es
+ * el único reloj que puede saltarse la ventana de 5 minutos a propósito.
  *
  * ## Por qué habla con `pg` y no con Prisma
  *

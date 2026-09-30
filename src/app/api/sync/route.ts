@@ -1,44 +1,33 @@
+import type { ManualSyncLock } from "@/lib/manual-sync";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
-import { consumeRateLimit } from "@/lib/rate-limit";
+import { consumeManualSyncLock } from "@/lib/manual-sync";
 
 /**
- * Disparo manual del sync, detrás del botón "Actualizar" de `/partidas`.
+ * Disparo periódico del sync desde la propia base de datos: Supabase Cron
+ * (`pg_cron` + `pg_net`) llama a este endpoint cada 5 minutos. El job está escrito y
+ * versionado en `scripts/db-cron.ts`.
  *
- * Hace exactamente el mismo trabajo que `/api/cron/sync`, por la misma función,
- * pero sin secreto: lo llama el navegador de cualquiera que esté mirando las
- * partidas en juego. Como es público y cada pasada son ~15 peticiones a la API
- * de AoE4World, lleva **un único candado**: un sync cada {@link COOLDOWN_SECONDS},
- * global para todo el sitio.
+ * Hace exactamente el mismo trabajo que `/api/cron/sync`, por la misma función, pero
+ * **sin secreto**: lo llama la base de datos y no lleva ni sesión ni `Authorization`.
+ * Por eso sigue siendo un endpoint público, y por eso no puede perder las dos
+ * condiciones que lo cierran (ver el cuerpo del `POST`): el `content-type` de JSON y
+ * un candado global de una pasada cada 5 minutos.
  *
- * El candado es global a propósito, no por IP. Lo que se protege no es "que un
- * visitante no abuse" sino la API de AoE4World, y la pasada es un trabajo único
- * para todos: si dos personas pulsan a la vez, no hay razón para hacer dos
- * pasadas. El contador vive en Postgres y su incremento es una sola sentencia,
- * así que dos pulsaciones simultáneas no se cuelan (ver `src/lib/rate-limit.ts`).
+ * El candado es el mismo que usa la llamada manual del panel de admin
+ * (`syncNow` en `src/app/admin/actions.ts`, sobre `src/lib/manual-sync.ts`), así que
+ * las dos vías se coordinan: si un admin sincronizó hace nada, el cron recibe
+ * `{"status":"cooldown"}` con 200 y no duplica trabajo, y al revés.
  *
- * Por qué no basta con el Cron Trigger: entre pasada y pasada de 5 minutos, la
- * lista puede quedar desfasada. El botón es "quiero verlo ahora".
+ * Ya no hay ningún botón público detrás —la llamada manual es la Server Action del
+ * panel de admin—, pero **no se cierra**: es el reloj del torneo, y el plan Free de
+ * Cloudflare es lo que impide traer el disparo a un Cron Trigger nativo.
  */
 
 export const maxDuration = 300;
 
 /**
- * Lo que hay que esperar entre dos pasadas manuales (y con el cron, no se coordina).
- *
- * Son 5 minutos y no uno por el plan: en el plan Free cada invocación tiene 10 ms
- * de CPU y una pasada del sync gasta ~500 ms, así que el *isolate* solo lo tolera
- * si es esporádico. Insistir es justo lo que hace que Cloudflare empiece a matar
- * pasadas con `Worker exceeded CPU time limit`. Ver README, "El límite de CPU del
- * plan Free".
- */
-const COOLDOWN_SECONDS = 300;
-
-/** Clave del candado global: fija, no sale de la petición. */
-const COOLDOWN_KEY = "public/manual-sync";
-
-/**
- * Resumen reducido: el cliente solo necesita saber si fue bien. No se devuelve
- * el detalle por jugador, que no aporta nada aquí y engorda la respuesta.
+ * Resumen reducido: quien dispara solo necesita saber si fue bien. No se devuelve el
+ * detalle por jugador, que no aporta nada aquí y engorda la respuesta.
  */
 type ManualSyncPayload = {
   status: "ok" | "cooldown" | "rejected" | "unavailable" | "error";
@@ -66,18 +55,10 @@ export async function POST(request: Request): Promise<Response> {
     return json({ status: "rejected" }, 415);
   }
 
-  let allowed: boolean;
-  let retryAfterSeconds = 0;
+  let lock: ManualSyncLock;
 
   try {
-    const limit = await consumeRateLimit(COOLDOWN_KEY, "global", {
-      maxAttempts: 1,
-      windowSeconds: COOLDOWN_SECONDS,
-      staleSeconds: 3_600,
-    });
-
-    allowed = limit.allowed;
-    retryAfterSeconds = limit.retryAfterSeconds;
+    lock = await consumeManualSyncLock();
   } catch (error) {
     // Si no se puede comprobar el candado, **no** se lanza la pasada: sin el
     // candado el endpoint quedaría abierto a cualquiera que lo machaque.
@@ -89,10 +70,10 @@ export async function POST(request: Request): Promise<Response> {
     return json({ status: "unavailable" }, 503);
   }
 
-  if (!allowed) {
-    // No es un error para quien mira: la pasada se hizo hace nada. Se responde
-    // 200 para no ensuciar la consola del navegador ni pedirle que reintente.
-    return json({ status: "cooldown", retryAfterSeconds });
+  if (!lock.allowed) {
+    // No es un error para quien dispara: la pasada se hizo hace nada. Se responde
+    // 200 para no ensuciar la consola ni pedir que se reintente.
+    return json({ status: "cooldown", retryAfterSeconds: lock.retryAfterSeconds });
   }
 
   try {
