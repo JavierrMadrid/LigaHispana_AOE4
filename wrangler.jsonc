@@ -53,14 +53,15 @@
   // en `env.HYPERDRIVE.connectionString`, y `src/lib/db.ts` la lee con
   // `readHyperdriveConnectionString()` de `src/lib/runtime-env.ts`. Si el binding
   // no esta, cae a `DATABASE_URL`, que es lo que usan `next dev` y los scripts de
-  // `scripts/`. Ver README.md, "La base de datos en el Worker".
+  // `scripts/`. Ver docs/DESPLIEGUE.md, "La base de datos en el Worker: Hyperdrive".
   //
   // La configuracion de Hyperdrive esta creada y el binding **activo** (septiembre
   // de 2026). Antes el bloque iba comentado y el Worker resolvia la base por el
   // `DATABASE_URL` del panel, que apunta al *Session pooler* de Supabase: ahi se le
   // cortaban las conexiones y el worker de sync se caia con
   // "Connection terminated unexpectedly" / "db/pool: Network connection lost", sin
-  // que nada lo reflejara (ver README.md, "La base de datos en el Worker").
+  // que nada lo reflejara (ver docs/DESPLIEGUE.md, "La base de datos en el Worker:
+  // Hyperdrive").
   //
   // El paso que no se puede saltar es la emulacion: `opennextjs-cloudflare deploy`
   // llama a `getPlatformProxy()` de wrangler para leer el entorno, y esa emulacion
