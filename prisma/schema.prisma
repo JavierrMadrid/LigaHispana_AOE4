@@ -10,8 +10,8 @@ generator client {
   // `workerd` prohibe por ser generacion de codigo: todo lo que lee de la base
   // revienta con "Wasm code generation disallowed by embedder"
   // (prisma/prisma#28657). Con `workerd` el `.wasm` se importa como modulo y lo
-  // enlaza el empaquetador, sin generacion de codigo en runtime. Detalle en el
-  // README, seccion "Prisma 7 necesita `runtime = \"workerd\"`".
+  // enlaza el empaquetador, sin generacion de codigo en runtime. Detalle en
+  // docs/DESPLIEGUE.md, seccion "Prisma 7 necesita `runtime = \"workerd\"`".
   // El precio es que `?module` solo lo entienden los empaquetadores: los scripts
   // de `scripts/` (Node con tsx) cargan el WASM con
   // `scripts/prisma-wasm-node.mjs`, que se pasa con `--import`. No es un valor
@@ -104,6 +104,22 @@ model Player {
   // no lo tienen. El motor de puntos no lo lee nunca: es un dato de contacto, no
   // de juego, así que no entra en la clasificación ni en ningún desglose.
   contactEmail  String?
+  // País del participante, guardado con el **rótulo canónico** de la lista que
+  // admite el torneo (`Setting["registration.countries"]`, sembrada desde
+  // `paises.txt` con `npm run countries:seed`): "República Dominicana", no "RD" ni
+  // "Republica Dominicana". Es un `String` y no un enum porque la lista la cambia
+  // la organización sin desplegar, y un enum obligaría a una migración cada vez que
+  // entra o sale un país —que es justo lo que este proyecto no puede hacer, porque
+  // la base de datos es la de producción y no hay *staging*.
+  //
+  // Nullable a propósito, y por el mismo motivo que `contactEmail`: el formulario
+  // público de `/participar` lo **exige** (es de los datos con los que la
+  // organización organiza el torneo), pero el alta manual de admin no tiene por qué
+  // traerlo y las filas que ya estaban guardadas no lo tienen. La columna existe
+  // para todas las filas y eso que unas no la informen es información —"no lo
+  // sabemos"— y no una fila a medias. Como el correo, el motor de puntos no lo lee:
+  // no entra en la clasificación ni en ningún desglose.
+  country       String?
   status        PlayerStatus @default(PENDING)
 
   // Lo siguiente se rellena con `GET /leaderboards/rm_solo`, una sola vez por

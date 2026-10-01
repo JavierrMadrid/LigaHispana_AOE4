@@ -42,7 +42,7 @@ const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "
  * motivo se lee a su lado, enlazado con `aria-describedby`. El servidor lo
  * rechaza igualmente: esto es la cara visible del mismo flag, no la defensa.
  */
-export function RegistrationForm() {
+export function RegistrationForm({ countries }: { countries: string[] }) {
   const [state, formAction, pending] = useActionState(registerPlayer, initialState);
 
   // El token de Turnstile es de un solo uso: la Server Action lo canjea contra
@@ -67,9 +67,9 @@ export function RegistrationForm() {
         Inscripción
       </h2>
       <p className="mt-4 max-w-[58ch] text-sm leading-relaxed text-muted">
-        Necesitas el identificador de tu perfil de AoE4World. El canal de Twitch
-        es opcional y solo sirve para señalar tu directo cuando emites partidas de
-        la liga.
+        Necesitas el identificador de tu perfil de AoE4World. El país y el correo
+        son obligatorios; el canal de Twitch es opcional y solo sirve para señalar
+        tu emisión cuando juegas partidas de la liga.
       </p>
 
       <form action={formAction} className="mt-6 flex flex-col gap-5">
@@ -117,6 +117,20 @@ export function RegistrationForm() {
           maxLength={CONTACT_EMAIL_MAX_LENGTH}
           required
           error={fieldErrors.email}
+        />
+
+        {/* El país es obligatorio y se elige de la lista viva que admite el torneo
+            (`Setting["registration.countries"]`), que llega resuelta del servidor: el
+            desplegable y la validación del servidor no pueden ofrecer países distintos. */}
+        <SelectField
+          id="country"
+          name="country"
+          label="País"
+          hint="El país con el que compites en el torneo."
+          placeholder="Elige tu país"
+          options={countries}
+          required
+          error={fieldErrors.country}
         />
 
         <TextField
@@ -220,6 +234,76 @@ function TextField({ id, name, label, hint, error, ...inputProps }: TextFieldPro
         }`}
         {...inputProps}
       />
+      {message ? (
+        <p
+          id={messageId}
+          className={
+            error ? "text-sm leading-relaxed text-red-400" : "text-xs leading-relaxed text-muted"
+          }
+        >
+          {message}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+type SelectFieldProps = {
+  id: string;
+  name: string;
+  label: string;
+  hint?: string;
+  error?: string;
+  required?: boolean;
+  /** Texto de la opción vacía, deshabilitada: dice qué hay que hacer. */
+  placeholder: string;
+  options: readonly string[];
+};
+
+/**
+ * Desplegable del formulario. Comparte el tratamiento de error de `TextField`
+ * (la pista y el aviso en la misma línea, con `aria-describedby`), pero no admite
+ * `placeholder` como un `<input>`: el estado "sin elegir" es un `option` vacío y
+ * deshabilitado, que además no se puede marcar.
+ */
+function SelectField({
+  id,
+  name,
+  label,
+  hint,
+  error,
+  required,
+  placeholder,
+  options,
+}: SelectFieldProps) {
+  const messageId = `${id}-message`;
+  const message = error ?? hint;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-sm font-medium text-foreground">
+        {label}
+      </label>
+      <select
+        id={id}
+        name={name}
+        required={required}
+        defaultValue=""
+        aria-invalid={error ? true : undefined}
+        aria-describedby={message ? messageId : undefined}
+        className={`h-10 rounded-md border bg-background px-3 text-foreground ${
+          error ? "border-red-500/60" : "border-line"
+        }`}
+      >
+        <option value="" disabled>
+          {placeholder}
+        </option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
       {message ? (
         <p
           id={messageId}

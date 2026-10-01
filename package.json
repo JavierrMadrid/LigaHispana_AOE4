@@ -13,6 +13,7 @@
     "db:security": "tsx --conditions=react-server scripts/db-security.ts",
     "db:cron": "tsx --conditions=react-server scripts/db-cron.ts",
     "db:window": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/db-window.ts",
+    "countries:seed": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/db-countries.ts",
     "studio": "prisma studio",
     "sync": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/sync.ts",
     "score": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/score.ts",

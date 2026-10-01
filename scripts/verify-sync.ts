@@ -1,6 +1,8 @@
 import "dotenv/config";
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame, readOwnCivRandomized, resolveGameMode } from "@/lib/aoe4world/normalize";
 import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/parse";
@@ -65,6 +67,40 @@ const EXPECTED_OBJECTIVE_COUNT = 38;
  */
 const WINDOW_PROFILE_ID = 9_000_006;
 
+/**
+ * Los países de `paises.txt`, escritos aquí aparte a propósito: es la lista que la
+ * organización definió y la que `npm run countries:seed` siembra, así que si
+ * `DEFAULT_COUNTRIES` dejara de coincidir con ella la comprobación tiene que
+ * fallar. Igual que `EXPECTED_OBJECTIVE_COUNT`, vive como constante para que los
+ * dos sitios no puedan cambiar a la vez sin que se note.
+ */
+const EXPECTED_COUNTRIES = [
+  "Colombia",
+  "España",
+  "Venezuela",
+  "Perú",
+  "Ecuador",
+  "Guatemala",
+  "Bolivia",
+  "Cuba",
+  "República Dominicana",
+  "Honduras",
+  "Paraguay",
+  "El Salvador",
+  "Nicaragua",
+  "Costa Rica",
+  "Panamá",
+  "Guinea Ecuatorial",
+  "Antigua y Barbuda",
+  "México",
+  "Argentina",
+  "Chile",
+  "Uruguay",
+  "Puerto Rico",
+];
+
+/** La lista fuente de la siembra, en la raíz del repositorio. */
+const PAISES_FILE = path.join(process.cwd(), "paises.txt");
 
 /**
  * Reloj congelado para las comprobaciones de normalización: al pasarle `NOW` a
@@ -2135,6 +2171,154 @@ async function runDatabaseChecks(): Promise<void> {
   }
 }
 
+/**
+ * La lista de países de la inscripción, sin tocar la base de datos.
+ *
+ * Lo que decide qué países admite el torneo es un documento de `Setting` que la
+ * organización cambia sin desplegar, así que hay tres cosas que comprobar aquí y
+ * ninguna necesita `--db`:
+ *
+ * - que la lista por defecto del código sea la de `paises.txt`, la fuente de verdad
+ *   para sembrarla, y que las dos no divergan;
+ * - que la validación del documento sea **de todo o nada**: un array vacío, un
+ *   elemento que no es texto o un país repetido se descartan enteros, no a medias;
+ * - que `parseCountry()` resuelva el valor escrito al rótulo canónico, incluidos
+ *   los casos en los que está escrito de otra manera (sin tilde, con espacios).
+ *
+ * Lo que sí necesita la base es que la lista **publicada** sea la que se está
+ * usando, y eso lo comprueba `--db`.
+ */
+async function checkRegistrationCountries(): Promise<void> {
+  console.log("Países de la inscripción");
+
+  const { DEFAULT_COUNTRIES, REGISTRATION_COUNTRIES_KEY, mergeCountries } = await import(
+    "@/lib/countries"
+  );
+  const { parseCountry } = await import("@/lib/player-input");
+
+  await check(
+    `la lista por defecto son los ${EXPECTED_COUNTRIES.length} países de paises.txt, en su orden`,
+    () => {
+      assert.deepEqual([...DEFAULT_COUNTRIES], EXPECTED_COUNTRIES);
+      assert.equal(
+        REGISTRATION_COUNTRIES_KEY,
+        "registration.countries",
+        "la clave de `Setting` es la que leen la inscripción y el panel",
+      );
+    },
+  );
+
+  await check("paises.txt y la lista por defecto del código no divergen", () => {
+    // El fichero es lo que se versiona y lo que siembra `npm run countries:seed`;
+    // la constante es lo que se usa antes de que haya lista publicada. Si divergen,
+    // el primer despliegue sin sembrar ofrecería una lista que no es la del
+    // repositorio, y nadie se enteraría hasta que alguien mirara el desplegable.
+    const delFichero = readFileSync(PAISES_FILE, "utf8")
+      .replace(/^\uFEFF/, "")
+      .split(/\r?\n/)
+      .map((linea) => linea.trim())
+      .filter((linea) => linea !== "");
+
+    assert.deepEqual(delFichero, [...DEFAULT_COUNTRIES]);
+  });
+
+  await check("la lista por defecto pasa su propia validación", () => {
+    const propia = mergeCountries(DEFAULT_COUNTRIES);
+
+    assert.deepEqual(propia.warnings, [], "si avisara, el respaldo se descartaría a sí mismo");
+    assert.deepEqual(propia.countries, [...DEFAULT_COUNTRIES]);
+  });
+
+  await check("una lista publicada válida se respeta tal cual, con sus espacios", () => {
+    const buena = mergeCountries(["España", "Colombia", "República Dominicana"]);
+
+    assert.deepEqual(buena.countries, ["España", "Colombia", "República Dominicana"]);
+    assert.deepEqual(buena.warnings, []);
+
+    // Los espacios de fuera se recortan en vez de invalidar el documento: es lo que
+    // hace falta para tolerar que alguien edite el JSON a mano en el panel de
+    // Supabase. El **rótulo** que sale es el recortado, que es el que se guarda.
+    const conEspacios = mergeCountries([" España ", "  Colombia"]);
+
+    assert.deepEqual(conEspacios.countries, ["España", "Colombia"]);
+    assert.deepEqual(conEspacios.warnings, []);
+  });
+
+  await check("un documento que no se entiende se descarta entero, no a medias", () => {
+    const porDefecto = [...DEFAULT_COUNTRIES];
+    const invalidos: Array<{ valor: unknown; motivo: string }> = [
+      { valor: "España", motivo: "un texto suelto" },
+      { valor: { paises: ["España"] }, motivo: "un objeto" },
+      { valor: [], motivo: "una lista vacía" },
+      { valor: ["España", 42], motivo: "un elemento que no es texto" },
+      { valor: ["España", null], motivo: "un elemento nulo" },
+      { valor: ["España", "   "], motivo: "un elemento en blanco" },
+      { valor: ["España", "España"], motivo: "un país repetido" },
+      {
+        valor: ["España", "  España  "],
+        motivo: "un repetido que solo cambia en el espaciado",
+      },
+      { valor: ["España", " españa"], motivo: "un repetido que solo cambia en la tilde" },
+      {
+        valor: ["España", " ESPANA".normalize("NFD")],
+        motivo: "un repetido con la ñ descompuesta",
+      },
+    ];
+
+    for (const { valor, motivo } of invalidos) {
+      const resultado = mergeCountries(valor);
+
+      assert.deepEqual(
+        resultado.countries,
+        porDefecto,
+        `${motivo} debería caer a la lista por defecto entera`,
+      );
+      assert.equal(
+        resultado.warnings.length > 0,
+        true,
+        `${motivo} debería avisar, y el aviso es lo único que avisa de que la lista publicada no sirve`,
+      );
+    }
+  });
+
+  await check("parseCountry devuelve el rótulo canónico de la lista", () => {
+    assert.equal(parseCountry("España", DEFAULT_COUNTRIES), "España");
+    assert.equal(parseCountry("Colombia", DEFAULT_COUNTRIES), "Colombia");
+    assert.equal(parseCountry("Puerto Rico", DEFAULT_COUNTRIES), "Puerto Rico");
+
+    // Elegido bien y escrito de otra manera: no está mal, está escrito distinto, y
+    // guardarlo tal cual haría que el mismo país tuviera dos formas en la tabla.
+    assert.equal(parseCountry("Republica Dominicana", DEFAULT_COUNTRIES), "República Dominicana");
+    assert.equal(parseCountry(" PUERTO RICO ", DEFAULT_COUNTRIES), "Puerto Rico");
+    assert.equal(parseCountry("  españa  ", DEFAULT_COUNTRIES), "España");
+    assert.equal(parseCountry("guinea ecuatorial", DEFAULT_COUNTRIES), "Guinea Ecuatorial");
+
+    // La `ñ` se dobla como cualquier otro diacrítico (en Unicode es una `n` con
+    // tilde), y da igual si el texto la traía compuesta o descompuesta: sin el
+    // `NFC` previo de `foldCountryName`, "ESPANA" descompuesta no se reconocería
+    // como "España" y el mismo país dependería de quién lo escribió.
+    assert.equal(parseCountry("Espana", DEFAULT_COUNTRIES), "España");
+    assert.equal(parseCountry("Panama", DEFAULT_COUNTRIES), "Panamá");
+    assert.equal(
+      parseCountry("Espan\u0303a", DEFAULT_COUNTRIES),
+      "España",
+      "la ñ descompuesta resuelve al mismo rótulo",
+    );
+
+    // Lo que no está en la lista no se admite, por escrito parecido que sea: un
+    // desplegable de 22 países no puede convertirse en "cualquier texto que se
+    // parezca a uno de ellos".
+    assert.equal(parseCountry("Estados Unidos", DEFAULT_COUNTRIES), null);
+    assert.equal(parseCountry("Espana", ["Colombia", "España"]), "España");
+    assert.equal(parseCountry("España", []), null, "sin lista no se admite nada");
+
+    // Vacío y no admitido devuelven ambos `null`, y quien llama los distingue
+    // mirando el valor crudo: el campo es opcional en el alta de admin.
+    assert.equal(parseCountry("", DEFAULT_COUNTRIES), null);
+    assert.equal(parseCountry("   ", DEFAULT_COUNTRIES), null);
+    assert.equal(parseCountry(null, DEFAULT_COUNTRIES), null);
+  });
+}
 
 
 /**
@@ -2189,7 +2373,7 @@ async function checkAdminQueryParams(): Promise<void> {
 
   await check("mayúsculas y acentos no son la misma columna", () => {
     // Los valores de `sort` los escriben los enlaces de la propia tabla, así que la
-    // comparación es literal: no se pliega el texto ni se ignoran tildes.
+    // comparación es literal: aquí no se resuelve el texto como en `parseCountry()`.
     assert.deepEqual(readAlertsSort({ sort: "FECHA" }), { key: "fecha", dir: "desc" });
     assert.deepEqual(readAlertsSort({ sort: "Jugador" }), { key: "fecha", dir: "desc" });
     assert.deepEqual(readActionsSort({ sort: "Ádmin" }), { key: "fecha", dir: "desc" });
@@ -2642,6 +2826,8 @@ async function main(): Promise<void> {
   await checkNormalization();
   console.log("");
   await checkObjectiveCatalogue();
+  console.log("");
+  await checkRegistrationCountries();
   console.log("");
   await checkAdminQueryParams();
   console.log("");
