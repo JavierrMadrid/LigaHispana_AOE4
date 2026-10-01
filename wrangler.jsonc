@@ -119,4 +119,41 @@
       "persist": true
     }
   },
+  // Previews: el despliegue que hace Workers Builds en las ramas que no son la de
+  // produccion.
+  //
+  // Workers Builds no repite el despliegue: en la rama de produccion ejecuta
+  // `wrangler deploy`, y en cualquier otra `wrangler preview`, que crea un entorno
+  // aislado del mismo Worker. Y el bloque `previews` **no es opcional** desde wrangler
+  // 4.135: sin el, el build muere con "Your Wrangler configuration is missing a
+  // `previews` block". Es error, no aviso, y en CI no hay quien conteste al prompt que
+  // wrangler ofrece en local para escribir el bloque por ti.
+  //
+  // Los bindings **no se heredan** del nivel superior, asi que se declaran aqui.
+  // `assets`, `compatibility_*` y `migrations` se quedan arriba, y los Cron Triggers no
+  // se replican: apuntan a produccion, luego un Preview no puede disparar el sync.
+  //
+  // `HYPERDRIVE` apunta a la misma base de produccion, y a proposito: el Preview sirve
+  // para mirar la interfaz de una rama (streams, clasificaciones) y sin base no hay nada
+  // que ver. Es trafico de lectura; las escrituras se quedan sin autenticacion porque los
+  // secretos del panel no se heredan, y `WORKER_SELF_REFERENCE` sigue llamando al
+  // despliegue de produccion. Para aislarlo de verdad: crear otro config de Hyperdrive
+  // sobre una base de pruebas y cambiar el `id` de aqui. En plan Free no se cobra por
+  // config, el limite es el mismo (100.000 consultas al dia).
+  //
+  // Ojo con el despliegue automatico: la emulacion de wrangler tambien exige
+  // `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` en *Build variables and
+  // secrets* del Worker, o el build falla al emular el binding (ver
+  // docs/DESPLIEGUE.md, "La base de datos en el Worker: Hyperdrive").
+  "previews": {
+    "hyperdrive": [
+      {
+        "binding": "HYPERDRIVE",
+        "id": "04fab935a8f34fce814ccebfc4301042"
+      }
+    ],
+    "images": {
+      "binding": "IMAGES"
+    }
+  }
 }

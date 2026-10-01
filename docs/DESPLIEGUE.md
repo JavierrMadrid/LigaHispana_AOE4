@@ -458,9 +458,10 @@ mirar ningún fichero, así que **tenerla en `.dev.vars` no basta**. El valor se
 versiona: lleva la contraseña) y [`scripts/deploy-worker.mjs`](../scripts/deploy-worker.mjs) lo
 exporta antes de lanzar el CLI, que es el paso `deploy` de `npm run deploy`. (No vale hacerlo con
 `node --import`: `opennextjs-cloudflare` es un *shim* de `node_modules/.bin`, no un módulo, y `node`
-lo resuelve con `ERR_MODULE_NOT_FOUND`.) Si algún día el despliegue pasa a ser automático (Workers
-Builds), esa misma variable hay que ponerla en *Build variables and secrets* del Worker, o el build
-falla al ver el binding.
+lo resuelve con `ERR_MODULE_NOT_FOUND`.) Con Workers Builds ya conectado (ver
+[Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)),
+esa misma variable hay que ponerla en *Build variables and secrets* del Worker, o el build falla al
+ver el binding.
 
 ## El cliente de Prisma: uno por invocación en el Worker, y uno fuera de él
 
@@ -522,3 +523,45 @@ npm run preview    # build + preview local del Worker
 
 Lo que hay que hacer en la base de datos antes o después de esto, en
 [`docs/OPERACION.md`](./OPERACION.md#requisitos-operativos-de-un-despliegue).
+
+## Workers Builds: `main` despliega y las ramas hacen Preview
+
+El repositorio está conectado a **Workers Builds**, así que el despliegue es automático. Pero Workers
+Builds no repite el mismo despliegue en todas las ramas: en la rama de producción (`main`) ejecuta
+`npx wrangler deploy`, y en **cualquier otra** `npx wrangler preview`, que crea un *Preview*: un
+entorno aislado del mismo Worker, con URL propia (`<preview>-ligahispana-aoe4.<subdominio>.workers.dev`,
+con `X-Robots-Tag: noindex`) y con sus propias variables, secretos y bindings.
+
+Ese cambio de comando es la causa de un error que no tiene nada que ver con el código. **`wrangler
+preview` exige un bloque `previews` en `wrangler.jsonc`, y sin él el build muere** con:
+
+```txt
+✘ [ERROR] Your Wrangler configuration is missing a `previews` block. Add the following to your configuration file:
+```
+
+No es un aviso, es un error, y en CI no hay quien conteste al prompt que wrangler ofrece en local
+para escribir el bloque por ti (en local te lo añade solo, con los valores propuestos marcados como
+`<REPLACE_ME>`). El bloque apareció en `wrangler` 4.135 y el proyecto ya va por 4.143, así que salta
+sin avisar.
+
+Lo que resuelve el bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc), y son las tres cosas
+que hacen falta aquí:
+
+- **Los bindings no se heredan del nivel superior.** Hay que declararlos dentro: `HYPERDRIVE` e
+  `IMAGES`. Sin `HYPERDRIVE` el build pasa, pero el Preview sale entero en
+  [modo degradado](../README.md#qué-ve-la-web-cuando-la-base-de-datos-no-responde), que en un sitio
+  cuyas páginas leen de Postgres no sirve para mirar nada.
+- **`assets`, `compatibility_*` y las migraciones se quedan arriba**, y los Cron Triggers **no se
+  replican**: apuntan a producción, así que un Preview no puede disparar el sync.
+- **Los secretos tampoco se heredan.** Los del panel son solo de producción; en un Preview hay que
+  ponerlos a mano (`npx wrangler preview secret put <NOMBRE> --name <preview>`). Las `NEXT_PUBLIC_*`
+  sí llegan, porque van en *Build variables and secrets* y Next las compila dentro del bundle.
+
+**Que el `HYPERDRIVE` del Preview apunte a la base de producción es una decisión, no un descuido.** El
+Preview sirve para mirar la interfaz de una rama (streams, clasificaciones) y sin base no hay nada
+que ver. El riesgo está acotado: el cron no corre en un Preview y las rutas que escriben piden
+`CRON_SECRET`, que un Preview no tiene, así que ni siquiera llegan a autenticarse. Lo que sí conviene
+tener presente es que `WORKER_SELF_REFERENCE` sigue llamando al **despliegue de producción**, y que
+quien se autentique en un Preview escribe en la base de producción. Para aislarlo del todo: crear
+otro config de Hyperdrive sobre una base de pruebas y cambiar el `id` de `previews.hyperdrive` (en
+plan Free no se cobra por config; el límite son las mismas 100.000 consultas al día).
