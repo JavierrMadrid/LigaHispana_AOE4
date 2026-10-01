@@ -8,6 +8,7 @@ import type {
   StandingObjective,
   StandingRow,
 } from "@/lib/public";
+import { ChannelLinks } from "@/components/channel-links";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
 import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
@@ -15,7 +16,6 @@ import { LiveDot } from "@/components/live-dot";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { StandingsFilters } from "@/components/standings-filters";
-import { TwitchIcon } from "@/components/twitch-icon";
 import {
   SortIndicator,
   nextSortState,
@@ -183,7 +183,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
         return false;
       }
 
-      if (liveOnly && !row.twitchIsLive) {
+      if (liveOnly && !row.twitchIsLive && !row.youtubeIsLive && !row.kickIsLive) {
         return false;
       }
 
@@ -193,7 +193,9 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
 
       if (needle !== "") {
         const haystack = normalize(
-      `${row.name} ${row.aoe4WorldName ?? ""} ${row.twitchChannel ?? ""}`,
+          `${row.name} ${row.aoe4WorldName ?? ""} ${row.twitchChannel ?? ""} ${
+            row.youtubeChannel ?? ""
+          } ${row.kickChannel ?? ""}`,
         );
 
         if (!haystack.includes(needle)) {
@@ -712,10 +714,18 @@ function StandingsCard({
 }
 
 /**
- * Señales de estado del jugador en la fila: en partida, canal de Twitch, en
- * directo y el desplegable de objetivos. Vive aparte porque la fila de la tabla
- * y la tarjeta de móvil comparten exactamente los mismos distintivos; solo cambia
- * a qué panel de objetivos apunta el botón.
+ * Señales de estado del jugador en la fila: en partida, los canales de directo y
+ * el desplegable de objetivos.
+ *
+ * Las tres plataformas se pintan con `ChannelLinks`, que resuelve el icono, la URL
+ * y el color de cada una, y solo aparece la plataforma que tiene canal. El
+ * distintivo "En directo" lo pinta el propio componente **junto a la plataforma que
+ * está emitiendo**, con su color: si alguien emite a la vez por dos, se ven los dos
+ * distintivos, que es lo que está pasando.
+ *
+ * Vive aparte porque la fila de la tabla y la tarjeta de móvil comparten
+ * exactamente los mismos distintivos; solo cambia a qué panel de objetivos apunta el
+ * botón.
  */
 function PlayerChips({
   row,
@@ -736,12 +746,25 @@ function PlayerChips({
           <span className="sr-only">En partida ahora mismo</span>
         </span>
       ) : null}
-      {row.twitchChannel !== null ? <TwitchLink row={row} /> : null}
-      {row.twitchIsLive ? (
-        <span className="inline-flex shrink-0 items-center rounded-full bg-twitch/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-twitch-soft">
-          En directo
-        </span>
-      ) : null}
+      <ChannelLinks
+        name={row.name}
+        twitch={
+          row.twitchChannel === null
+            ? null
+            : { channel: row.twitchChannel, isLive: row.twitchIsLive }
+        }
+        youtube={
+          row.youtubeChannel === null
+            ? null
+            : { channel: row.youtubeChannel, isLive: row.youtubeIsLive }
+        }
+        kick={
+          row.kickChannel === null
+            ? null
+            : { channel: row.kickChannel, isLive: row.kickIsLive }
+        }
+        showLive
+      />
       {row.objectives.length > 0 ? (
         <ObjectivesToggle
           count={row.objectives.length}
@@ -963,26 +986,6 @@ function RankBadge({ rank }: { rank: number }) {
       <span className="sr-only">Puesto </span>
       {rank}
     </span>
-  );
-}
-
-function TwitchLink({ row }: { row: StandingRow }) {
-  const live = row.twitchIsLive;
-
-  return (
-    <a
-      href={`https://twitch.tv/${row.twitchChannel}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label={`Canal de Twitch de ${row.name}${
-        live ? ", en directo ahora mismo" : ""
-      } (se abre en una pestaña nueva)`}
-      className={`-m-1 inline-flex shrink-0 items-center justify-center p-1 transition-colors ${
-        live ? "text-twitch hover:opacity-80" : "text-muted/70 hover:text-muted"
-      }`}
-    >
-      <TwitchIcon className="size-3.5" />
-    </a>
   );
 }
 

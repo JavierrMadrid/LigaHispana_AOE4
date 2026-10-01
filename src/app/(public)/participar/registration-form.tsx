@@ -68,8 +68,9 @@ export function RegistrationForm({ countries }: { countries: string[] }) {
       </h2>
       <p className="mt-4 max-w-[58ch] text-sm leading-relaxed text-muted">
         Necesitas el identificador de tu perfil de AoE4World. El país y el correo
-        son obligatorios; el canal de Twitch es opcional y solo sirve para señalar
-        tu emisión cuando juegas partidas de la liga.
+        son obligatorios; los canales de directo (Twitch, YouTube y Kick) son
+        opcionales y solo sirven para señalar tu emisión cuando juegas partidas de
+        la liga.
       </p>
 
       <form action={formAction} className="mt-6 flex flex-col gap-5">
@@ -142,6 +143,28 @@ export function RegistrationForm({ countries }: { countries: string[] }) {
           maxLength={25}
           autoComplete="off"
           error={fieldErrors.twitchChannel}
+        />
+
+        <TextField
+          id="youtubeChannel"
+          name="youtubeChannel"
+          label="Canal de YouTube (opcional)"
+          hint="El @nombre de tu canal, como aparece en youtube.com/@nombre."
+          placeholder="@tu_canal"
+          maxLength={100}
+          autoComplete="off"
+          error={fieldErrors.youtubeChannel}
+        />
+
+        <TextField
+          id="kickChannel"
+          name="kickChannel"
+          label="Canal de Kick (opcional)"
+          hint="El nombre de tu canal, tal cual está en kick.com/nombre."
+          placeholder="tu_canal"
+          maxLength={100}
+          autoComplete="off"
+          error={fieldErrors.kickChannel}
         />
 
         <div className="flex flex-col gap-1.5">

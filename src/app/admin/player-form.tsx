@@ -77,6 +77,28 @@ export function PlayerForm({ countries }: { countries: string[] }) {
       </label>
 
       <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted">Canal de YouTube (opcional)</span>
+        <input
+          name="youtubeChannel"
+          placeholder="@canal"
+          maxLength={100}
+          autoComplete="off"
+          className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted">Canal de Kick (opcional)</span>
+        <input
+          name="kickChannel"
+          placeholder="canal"
+          maxLength={100}
+          autoComplete="off"
+          className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
         <span className="text-muted">Estado</span>
         <select
           name="status"

@@ -400,8 +400,9 @@ function readSortDir(value: AdminQueryParam): AdminSortDir {
  *   ascendente", no "nada": un enlace de "quitar orden" puede limitarse a borrar
  *   `sort` y dejar `dir=desc` sin que eso signifique un estado imposible.
  * - La comparación es **literal**: ni se ignoran mayúsculas ni se normalizan acentos.
- *   Los valores los escriben los enlaces de la propia tabla, y un valor en minúsculas
- *   o sin tilde ahí no es una forma de escribir la misma columna, es otra URL.
+ *   Al revés que en `parseCountry()`, que resuelve un país escrito por una persona; aquí
+ *   los valores los escriben los enlaces de la propia tabla, y un valor en minúsculas o
+ *   sin tilde ahí no es una forma de escribir la misma columna, es otra URL.
  */
 function readSort<K extends string>(
   query: AdminSortQuery,
@@ -600,7 +601,25 @@ export type AdminParticipant = {
   name: string;
   aoe4WorldName: string | null;
   twitchChannel: string | null;
+  /**
+   * Canales de YouTube y de Kick, tal cual están en la fila.
+   *
+   * Llega sin normalizar a propósito, igual que `twitchChannel`: el panel los
+   * **muestra** y quien los escribió pasó por `parseYoutubeChannel()` /
+   * `parseKickChannel()`, que ya guardan la forma canónica. Normalizarlos aquí
+   * otra vez taparía un dato escrito a mano en la base sin avisar de nada.
+   */
+  youtubeChannel: string | null;
+  kickChannel: string | null;
   contactEmail: string | null;
+  /**
+   * `Player.country`: el rótulo canónico de la lista admitida
+   * (`Setting["registration.countries"]`), o `null` si el alta no lo trajo. El
+   * panel no lo resuelve ni lo normaliza —lo hace `parseCountry()` al validarlo—,
+   * así que aquí llega tal cual está en la fila y quien pinte puede compararlo
+   * con la lista viva sin que las dos cosas puedan divergir.
+   */
+  country: string | null;
   status: PlayerStatus;
   avatarUrl: string | null;
   /** Partidas clasificatorias de las que tiene fila; `null` si no rankea. */
@@ -615,7 +634,10 @@ const PARTICIPANT_SELECT = {
   name: true,
   aoe4WorldName: true,
   twitchChannel: true,
+  youtubeChannel: true,
+  kickChannel: true,
   contactEmail: true,
+  country: true,
   status: true,
   avatarUrl: true,
 } satisfies Prisma.PlayerSelect;

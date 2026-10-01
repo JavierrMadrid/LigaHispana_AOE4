@@ -436,6 +436,7 @@ async function checkNormalization(): Promise<void> {
       ladderError: null,
       scoringError: null,
       alertsError: null,
+      streamsError: null,
       failures: [],
     };
 
@@ -486,6 +487,18 @@ async function checkNormalization(): Promise<void> {
       buena.finishedAt,
       "fallar el motor de alertas tampoco lo mueve",
     );
+    // `streamsError` va en el mismo grupo por la misma razón, y con un caso que
+    // importa más: **la falta de `YOUTUBE_API_KEY` es permanente**, así que si
+    // contara, un torneo entero con la detección de YouTube apagada se publicaría
+    // como sincronizador roto desde el día que se puso en marcha.
+    assert.equal(
+      salida(
+        { ...buena, streamsError: "sin YOUTUBE_API_KEY no se comprueba YouTube" },
+        { ...buena, lastSuccessAt: buena.finishedAt },
+      ),
+      buena.finishedAt,
+      "no comprobar los directos tampoco lo mueve",
+    );
   });
 
   await check("una pasada vieja se detecta como vieja y una ausente no", () => {
@@ -511,6 +524,7 @@ async function checkNormalization(): Promise<void> {
       ladderError: null,
       scoringError: null,
       alertsError: null,
+      streamsError: null,
       failures: [],
       lastSuccessAt: finishedAt,
     });
@@ -2320,6 +2334,392 @@ async function checkRegistrationCountries(): Promise<void> {
   });
 }
 
+/**
+ * Los canales de YouTube y de Kick, sin base de datos y sin red.
+ *
+ * Son los parsers que comparten los dos formularios (el alta de admin y la
+ * inscripción pública) y los normalizadores que usa el DAL, así que lo que se
+ * comprueba aquí son dos cosas distintas que tienen que seguir de acuerdo:
+ *
+ * - **Lo que acepta un parser**: las tres formas que la gente pega de verdad (el
+ *   `@nombre`, la URL del canal y la URL de un directo), con y sin esquema, con
+ *   `www.`, con parámetros y con barra final, y siempre saliendo en la misma forma
+ *   canónica. Y lo que **no** acepta: las URL `/c/…` y `/user/…` de YouTube, que
+ *   no llevan el handle dentro, y el slug que se sale del rango de cada plataforma.
+ * - **Que un `null` sea siempre un `null`**: los tres parsers reciben
+ *   `FormDataEntryValue | null`, que también puede ser un `File` (`formData.get()`
+ *   nunca garantiza un texto) y no a un `undefined` en un `FormData` hecho a mano.
+ *   Si alguno de ellos lancera con un `File`, un envío manipulado tiraría el
+ *   formulario con un 500 en lugar de un error de campo.
+ *
+ * Y una tercera, que es la que importa de verdad para la clasificación: el DAL
+ * normaliza con `normalizeYoutubeChannel()` / `normalizeKickChannel()`, así que si
+ * el parser guardara una forma que el normalizador no reconoce, el canal aparecería
+ * como `null` en la tabla y el enlace no se podría componer. Aquí se comprueba que
+ * **todo lo que los parsers aceptan también lo aceptan los normalizadores**.
+ */
+async function checkStreamChannels(): Promise<void> {
+  console.log("Canales de YouTube y Kick");
+
+  const {
+    isLegacyYoutubeUrl,
+    parseKickChannel,
+    parseTwitchChannel,
+    parseYoutubeChannel,
+  } = await import("@/lib/player-input");
+  const {
+    normalizeKickChannel,
+    normalizeTwitchChannel,
+    normalizeYoutubeChannel,
+  } = await import("@/lib/stream-channels");
+  const { kickChannelUrl, twitchChannelUrl, youtubeChannelUrl } = await import("@/lib/format");
+
+  await check("el handle de YouTube sale canónico, sin arroba y en minúsculas", () => {
+    assert.equal(parseYoutubeChannel("@Beastyqt"), "beastyqt", "el @nombre de siempre");
+    assert.equal(parseYoutubeChannel("  @BeastyQT  "), "beastyqt", "espacios de los dos lados");
+    assert.equal(parseYoutubeChannel("beastyqt"), "beastyqt", "sin arroba también vale");
+    assert.equal(parseYoutubeChannel("@canal.con.guion_bajo-1"), "canal.con.guion_bajo-1");
+  });
+
+  await check("la URL de YouTube se recorta a handle, con esquema o sin él", () => {
+    assert.equal(parseYoutubeChannel("https://www.youtube.com/@Beastyqt"), "beastyqt");
+    assert.equal(parseYoutubeChannel("http://youtube.com/@Beastyqt"), "beastyqt");
+    assert.equal(parseYoutubeChannel("youtube.com/@Beastyqt"), "beastyqt", "sin esquema");
+    assert.equal(parseYoutubeChannel("www.youtube.com/@Beastyqt"), "beastyqt", "con www.");
+    assert.equal(parseYoutubeChannel("m.youtube.com/@Beastyqt"), "beastyqt", "con m.");
+    assert.equal(
+      parseYoutubeChannel("https://www.youtube.com/@Beastyqt/live"),
+      "beastyqt",
+      "la URL de un directo",
+    );
+    assert.equal(
+      parseYoutubeChannel("https://www.youtube.com/@Beastyqt/streams?view=0&sort=d&flow=grid"),
+      "beastyqt",
+      "con pestaña y parámetros",
+    );
+    assert.equal(
+      parseYoutubeChannel("https://www.youtube.com/@Beastyqt/"),
+      "beastyqt",
+      "con barra final",
+    );
+  });
+
+  await check("las URL /c/ y /user/ de YouTube se rechazan con motivo explícito", () => {
+    // No son derivables a un handle: el identificador del canal es un `UC…` que no
+    // lo contiene, así que aceptarlas produciría un canal que no existe.
+    const antiguas = [
+      "https://www.youtube.com/c/Beastyqt",
+      "youtube.com/user/Beastyqt",
+      "https://youtube.com/user/Beastyqt/videos",
+    ];
+
+    for (const url of antiguas) {
+      assert.equal(parseYoutubeChannel(url), null, `${url} no es un canal`);
+      assert.equal(isLegacyYoutubeUrl(url), true, `${url} debe decir por qué`);
+    }
+
+    // Y una URL normal **no** se confunde con una antigua: si lo hiciera, el
+    // formulario pediría el @nombre a quien ya lo había escrito.
+    assert.equal(isLegacyYoutubeUrl("https://www.youtube.com/@beastyqt"), false);
+    assert.equal(isLegacyYoutubeUrl("@beastyqt"), false);
+    assert.equal(isLegacyYoutubeUrl("beastyqt"), false);
+    assert.equal(isLegacyYoutubeUrl(""), false);
+    assert.equal(isLegacyYoutubeUrl(null), false);
+  });
+
+  await check("lo que no es un handle de YouTube se rechaza", () => {
+    const invalidos = [
+      "@ab",
+      `@${"a".repeat(31)}`,
+      "@con espacio",
+      "@con/barra",
+      "https://www.youtube.com/live/abcdefgh",
+      "https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv",
+      "canal?t=123",
+    ];
+
+    for (const valor of invalidos) {
+      assert.equal(parseYoutubeChannel(valor), null, `"${valor}" no es un handle`);
+    }
+  });
+
+  await check("el slug de Kick sale canónico, con o sin URL", () => {
+    assert.equal(parseKickChannel("beastyqt"), "beastyqt");
+    assert.equal(parseKickChannel("  BEASTYQT "), "beastyqt", "en minúsculas");
+    assert.equal(parseKickChannel("@beastyqt"), null, "Kick no lleva arroba");
+    assert.equal(parseKickChannel("canal.con.guion_bajo-1"), "canal.con.guion_bajo-1");
+    assert.equal(parseKickChannel("https://www.kick.com/Beastyqt"), "beastyqt");
+    assert.equal(parseKickChannel("http://kick.com/beastyqt"), "beastyqt");
+    assert.equal(parseKickChannel("kick.com/beastyqt"), "beastyqt", "sin esquema");
+    assert.equal(parseKickChannel("www.kick.com/beastyqt"), "beastyqt", "con www.");
+    assert.equal(
+      parseKickChannel("https://www.kick.com/beastyqt?lang=es"),
+      "beastyqt",
+      "con parámetros",
+    );
+    assert.equal(parseKickChannel("https://www.kick.com/beastyqt/"), "beastyqt", "con barra final");
+  });
+
+  await check("lo que no es un slug de Kick se rechaza", () => {
+    const invalidos = [
+      "ab",
+      "a".repeat(26),
+      "canal con espacio",
+      "canal/barra",
+      "https://kick.com/",
+      "otro-sitio.com/beastyqt",
+    ];
+
+    for (const valor of invalidos) {
+      assert.equal(parseKickChannel(valor), null, `"${valor}" no es un slug`);
+    }
+  });
+
+  await check("los tres canales devuelven null ante vacío, null y valores raros", () => {
+    // Un `File` es un `FormDataEntryValue` perfectamente legal: `String(file)` vale
+    // `"[object File]"`, que ningún patrón acepta, así que el resultado es `null` y
+    // no una excepción. Es el caso que separa "un parser que lanza" de uno que no.
+    // `null` va aparte porque es lo que devuelve `formData.get()` cuando el campo
+    // no está en el formulario.
+    const raros: FormDataEntryValue[] = ["", "   ", new File(["contenido"], "canal.txt")];
+
+    for (const valor of raros) {
+      assert.equal(parseYoutubeChannel(valor), null, "YouTube con un valor raro");
+      assert.equal(parseKickChannel(valor), null, "Kick con un valor raro");
+      assert.equal(parseTwitchChannel(valor), null, "Twitch con un valor raro");
+    }
+
+    for (const parser of [parseYoutubeChannel, parseKickChannel, parseTwitchChannel]) {
+      assert.equal(parser(null), null, "campo ausente");
+    }
+  });
+
+  await check("los normalizadores del DAL aceptan lo que los parsers guardan", () => {
+    // Es el contrato entre las dos capas: lo que el parser escribe en la columna
+    // tiene que ser algo que el DAL sepa convertir en un enlace, o el canal
+    // desaparecería de la clasificación sin que nada fallara.
+    const guardados = [
+      parseYoutubeChannel("@Beastyqt"),
+      parseYoutubeChannel("https://www.youtube.com/@Beastyqt/live"),
+      parseKickChannel("Beastyqt"),
+      parseKickChannel("https://www.kick.com/Beastyqt"),
+      parseTwitchChannel("@Beastyqt"),
+    ];
+
+    for (const canal of guardados) {
+      assert.ok(canal !== null, "el parser debería devolver un canal");
+
+      assert.equal(normalizeYoutubeChannel(canal), canal, `YouTube: "${canal}"`);
+      assert.equal(normalizeKickChannel(canal), canal, `Kick: "${canal}"`);
+      assert.equal(normalizeTwitchChannel(canal), canal, `Twitch: "${canal}"`);
+    }
+
+    assert.equal(normalizeYoutubeChannel(null), null);
+    assert.equal(normalizeKickChannel(null), null);
+    assert.equal(normalizeTwitchChannel(null), null);
+    assert.equal(normalizeTwitchChannel(undefined), null);
+    assert.equal(normalizeYoutubeChannel(""), null);
+    assert.equal(normalizeKickChannel("  "), null);
+  });
+
+  await check("el DAL acepta una URL guardada a mano, y una antigua de YouTube no", () => {
+    // Una fila puede traer una URL si alguien la escribió directamente en la base o
+    // desde una versión anterior del panel. El normalizador la recorta, igual que
+    // el parser; y la `/c/` se queda en `null`, por el motivo de siempre.
+    assert.equal(normalizeYoutubeChannel("https://www.youtube.com/@Beastyqt/streams"), "beastyqt");
+    assert.equal(normalizeKickChannel("https://kick.com/Beastyqt"), "beastyqt");
+    assert.equal(normalizeTwitchChannel("https://www.twitch.tv/Beastyqt"), "beastyqt");
+    assert.equal(normalizeYoutubeChannel("https://www.youtube.com/c/Beastyqt"), null);
+    assert.equal(normalizeYoutubeChannel("https://www.youtube.com/user/Beastyqt"), null);
+  });
+
+  await check("las tres plataformas componen su URL con el mismo criterio", () => {
+    assert.equal(twitchChannelUrl("beastyqt"), "https://twitch.tv/beastyqt");
+    assert.equal(youtubeChannelUrl("beastyqt"), "https://www.youtube.com/@beastyqt");
+    assert.equal(kickChannelUrl("beastyqt"), "https://www.kick.com/beastyqt");
+
+    // La única diferencia entre las tres es dónde va la arroba, y por eso la URL
+    // se compone en un sitio y no repetida en cada componente.
+    for (const url of [twitchChannelUrl("x"), youtubeChannelUrl("x"), kickChannelUrl("x")]) {
+      assert.equal(url.startsWith("https://"), true, "todas por https");
+      assert.equal(url.includes(" "), false, "ninguna lleva espacios que puedan romper el href");
+    }
+  });
+}
+
+/**
+ * La lectura de las respuestas de YouTube y de Kick, con un cliente HTTP falso.
+ *
+ * Son las dos piezas más frágiles de la integración y las dos que no se pueden
+ * comprobar de otra manera:
+ *
+ * - **Kick** usa un endpoint no documentado, así que su payload no tiene contrato
+ *   ninguno: lo que se comprueba aquí es que se lee lo que se ve hoy y que lo que no
+ *   se entiende se convierte en `null` (no se comprobará) en lugar de interpretar a
+ *   medias. Un `404` sí es una respuesta —el canal no existe— y un `false`.
+ * - **YouTube** con `eventType=live` devuelve también las emisiones ya terminadas, así
+ *   que decidir por el `liveBroadcastContent` del `snippet` es lo que separa "está
+ *   emitiendo" de "emitió hace un rato". Sin ese campo se cae al criterio de la
+ *   llamada, que es lo que hay que decidir explícitamente y no por descuido.
+ *
+ * Con un cliente falso no sale nada a la red: la clave que se le pasa es de mentira
+ * y solo se comprueba que viaja en la `key` de la URL.
+ */
+async function checkStreamPayloads(): Promise<void> {
+  console.log("Respuestas de YouTube y Kick");
+
+  const { isKickChannelLive } = await import("@/lib/streams/kick");
+  const { isYoutubeStreamLive } = await import("@/lib/streams/youtube");
+  const { getStreamsConfig } = await import("@/lib/streams/env");
+  const { StreamsError } = await import("@/lib/streams/http");
+
+  const config = {
+    ...getStreamsConfig(),
+    youtubeApiKey: "clave-de-prueba",
+    timeoutMs: 1,
+    minRequestIntervalMs: 0,
+    maxRetries: 0,
+  };
+
+  /**
+   * Cliente falso: responde con el payload que le pasen y anota la URL que le
+   * pidieron, para poder comprobar los parámetros de la llamada. `stats` y `drain`
+   * están porque son parte del tipo: el cliente real los lleva y las funciones de
+   * plataforma no los usan, así que aquí solo tienen que existir.
+   */
+  const cliente = (
+    payload: unknown,
+    error?: unknown,
+  ): {
+    fetchJson: (url: URL, options?: { signal?: AbortSignal }) => Promise<unknown>;
+    pedidos: URL[];
+    stats: { requests: number; retries: number; rateLimitResponses: number; rateLimitPausesMs: number };
+    drain: () => Promise<void>;
+  } => {
+    const pedidos: URL[] = [];
+
+    return {
+      pedidos,
+      stats: { requests: 0, retries: 0, rateLimitResponses: 0, rateLimitPausesMs: 0 },
+      drain: async () => undefined,
+      fetchJson: (url: URL) => {
+        pedidos.push(url);
+
+        return error === undefined
+          ? Promise.resolve(payload)
+          : Promise.reject(error);
+      },
+    };
+  };
+
+  await check("YouTube: hay items con liveBroadcastContent=live, está en directo", async () => {
+    const falso = cliente({
+      items: [{ id: { videoId: "abc" }, snippet: { liveBroadcastContent: "live" } }],
+    });
+
+    assert.equal(
+      await isYoutubeStreamLive("UC123", falso, config, {}),
+      true,
+    );
+    assert.equal(falso.pedidos[0]?.hostname, "www.googleapis.com", "va a la Data API");
+    assert.equal(falso.pedidos[0]?.searchParams.get("channelId"), "UC123");
+    assert.equal(falso.pedidos[0]?.searchParams.get("eventType"), "live");
+    assert.equal(falso.pedidos[0]?.searchParams.get("type"), "video");
+    assert.equal(falso.pedidos[0]?.searchParams.get("maxResults"), "1");
+    assert.equal(falso.pedidos[0]?.searchParams.get("key"), "clave-de-prueba");
+  });
+
+  await check("YouTube: una emisión ya terminada no se pinta como directo", async () => {
+    // El caso que justifica mirar el `snippet`: `eventType=live` la devuelve igual.
+    for (const estado of ["completed", "upcoming", "none"]) {
+      const falso = cliente({ items: [{ snippet: { liveBroadcastContent: estado } }] });
+
+      assert.equal(
+        await isYoutubeStreamLive("UC123", falso, config, {}),
+        false,
+        `liveBroadcastContent=${estado} no es un directo en curso`,
+      );
+    }
+  });
+
+  await check("YouTube: sin items no hay directo, y un payload raro avisa", async () => {
+    assert.equal(await isYoutubeStreamLive("UC123", cliente({ items: [] }), config, {}), false);
+
+    // Sin `liveBroadcastContent` se cae al criterio de la llamada: hay resultado,
+    // luego hay directo. Es una decisión explícita, no un descuido.
+    assert.equal(
+      await isYoutubeStreamLive("UC123", cliente({ items: [{ snippet: {} }] }), config, {}),
+      true,
+      "sin el campo se usa el criterio de la llamada",
+    );
+    assert.equal(
+      await isYoutubeStreamLive("UC123", cliente({ items: [{}] }), config, {}),
+      true,
+      "un item sin snippet tampoco invalida la respuesta",
+    );
+
+    // Un payload que no tiene la forma de `search.list` sí es un fallo: no se puede
+    // distinguir "no hay items" de "esto no es la respuesta que esperaba".
+    await assert.rejects(
+      isYoutubeStreamLive("UC123", cliente({ error: "nada" }), config, {}),
+      (error: unknown) => error instanceof StreamsError,
+      "un payload sin `items` se avisa, no se lee como que no hay directo",
+    );
+  });
+
+  await check("Kick: el estado sale de livestream.is_live", async () => {
+    assert.equal(
+      await isKickChannelLive("canal", cliente({ livestream: { is_live: true } }), config, {}),
+      true,
+    );
+    assert.equal(
+      await isKickChannelLive("canal", cliente({ livestream: { is_live: false } }), config, {}),
+      false,
+    );
+    assert.equal(
+      await isKickChannelLive("canal", cliente({ livestream: null }), config, {}),
+      null,
+      "un canal sin emisión es null, no false",
+    );
+    assert.equal(
+      await isKickChannelLive("canal", cliente({ is_live: true }), config, {}),
+      true,
+      "el campo también se acepta en la raíz",
+    );
+  });
+
+  await check("Kick: lo que no se entiende es null y un 404 es un canal que no existe", async () => {
+    for (const raro of [{}, { livestream: "sí" }, { livestream: { is_live: "sí" } }, null]) {
+      assert.equal(
+        await isKickChannelLive("canal", cliente(raro), config, {}),
+        null,
+        `un payload raro (${JSON.stringify(raro)}) no se interpreta`,
+      );
+    }
+
+    const falso = cliente(null, new StreamsError("no existe", { status: 404 }));
+
+    assert.equal(
+      await isKickChannelLive("canal", falso, config, {}),
+      false,
+      "un 404 es una respuesta, no un fallo",
+    );
+    assert.equal(
+      falso.pedidos[0]?.pathname,
+      "/api/v2/channels/canal",
+      "la ruta es la del endpoint no documentado",
+    );
+
+    // Cualquier otro error sí se propaga: el llamante lo registra y no escribe nada.
+    const roto = cliente(null, new StreamsError("se cayó la red", { retryable: true }));
+
+    await assert.rejects(
+      isKickChannelLive("canal", roto, config, {}),
+      (error: unknown) => error instanceof StreamsError,
+      "un fallo de red no se convierte en un `false`",
+    );
+  });
+}
 
 /**
  * Parámetros de la URL del panel: los filtros y el orden de las tres listas paginadas.
@@ -2828,6 +3228,10 @@ async function main(): Promise<void> {
   await checkObjectiveCatalogue();
   console.log("");
   await checkRegistrationCountries();
+  console.log("");
+  await checkStreamChannels();
+  console.log("");
+  await checkStreamPayloads();
   console.log("");
   await checkAdminQueryParams();
   console.log("");

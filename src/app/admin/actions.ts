@@ -14,10 +14,13 @@ import { db } from "@/lib/db";
 import { logDatabaseFailure } from "@/lib/db-errors";
 import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
 import {
+  isLegacyYoutubeUrl,
   parseCountry,
+  parseKickChannel,
   parseName,
   parseProfileId,
   parseTwitchChannel,
+  parseYoutubeChannel,
 } from "@/lib/player-input";
 import { countsAsRanked } from "@/lib/ranked-match";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
@@ -199,6 +202,23 @@ const COUNTRIES_UNAVAILABLE_MESSAGE =
 const COUNTRY_UNKNOWN_ERROR =
   "Ese país no está en la lista de los que admite el torneo. Elígelo en el desplegable o déjalo vacío.";
 
+/**
+ * Los tres canales de directo se validan con la misma regla: un valor escrito que no
+ * se puede guardar es un error, no algo que se ignore en silencio y se guarde como
+ * `null`. Guardarlo como `null` diría "no tiene canal" cuando lo que pasó es que lo
+ * que escribió no era un canal, y esas dos cosas son distintas para quien después
+ * busca a un participante para enlazarlo. Vacío sí es `null`, que es lo que la columna
+ * significa.
+ */
+const YOUTUBE_INVALID_ERROR =
+  "Ese canal de YouTube no vale. Se puede escribir el @nombre del canal (3 a 30 letras, números, punto, guion o guion bajo) o la dirección del canal.";
+
+const YOUTUBE_LEGACY_URL_ERROR =
+  "Esa dirección no lleva el @nombre del canal. Las URLs /c/ y /user/ no lo tienen, así que escribe el @nombre, que es lo que aparece en youtube.com/@nombre.";
+
+const KICK_INVALID_ERROR =
+  "Ese canal de Kick no vale. Se puede escribir el nombre del canal o la dirección kick.com/nombre.";
+
 /** Junta frases sin que aparezca ni un espacio de más ni un doble espacio. */
 function frase(...partes: string[]): string {
   return partes
@@ -253,6 +273,12 @@ function actorEmail(user: User): string {
  * a propósito: traer las partidas es una llamada a AoE4World de varios segundos, y
  * meterla dentro dejaría la fila bloqueada todo ese rato.
  *
+ * Los canales de YouTube y de Kick se guardan **junto al de Twitch y con su mismo
+ * criterio**: opcionales, y un valor escrito que no se puede guardar es un error en
+ * lugar de un `null` silencioso (ver los mensajes al principio de esta acción).
+ * Que no haya respaldo desde el perfil de AoE4World es justamente lo que hace que
+ * un canal mal escrito no se pueda arreglar solo en la siguiente pasada.
+ *
  * La lista de países se lee **fuera** de la transacción y solo si lo obligatorio ya
  * vale, por lo mismo que los validadores: es una lectura de `Setting` y no tiene
  * sentido pagarla en un envío que ya está descartado.
@@ -266,6 +292,10 @@ export async function createPlayer(
   const profileId = parseProfileId(formData.get("profileId"));
   const name = parseName(formData.get("name"));
   const twitchChannel = parseTwitchChannel(formData.get("twitchChannel"));
+  const youtubeRaw = readField(formData, "youtubeChannel");
+  const youtubeChannel = parseYoutubeChannel(formData.get("youtubeChannel"));
+  const kickRaw = readField(formData, "kickChannel");
+  const kickChannel = parseKickChannel(formData.get("kickChannel"));
   const countryRaw = readField(formData, "country");
   const statusRaw = String(formData.get("status") ?? "APPROVED");
   const status =
@@ -277,6 +307,20 @@ export async function createPlayer(
 
   if (!name) {
     return { error: "El nombre es obligatorio (máx. 64 caracteres).", message: null };
+  }
+
+  // Canales de YouTube y de Kick: vacíos son `null` (son opcionales, como el de
+  // Twitch) y un valor que no se puede guardar es un error. Se comprueban aquí, antes
+  // de leer la lista de países, porque son validaciones gratis.
+  if (youtubeChannel === null && youtubeRaw !== "") {
+    return {
+      error: isLegacyYoutubeUrl(youtubeRaw) ? YOUTUBE_LEGACY_URL_ERROR : YOUTUBE_INVALID_ERROR,
+      message: null,
+    };
+  }
+
+  if (kickChannel === null && kickRaw !== "") {
+    return { error: KICK_INVALID_ERROR, message: null };
   }
 
   // La lista se lee solo si el resto de lo obligatorio ya vale: es una lectura de
@@ -321,6 +365,8 @@ export async function createPlayer(
           profileId,
           name,
           twitchChannel,
+          youtubeChannel,
+          kickChannel,
           country,
           status: status as PlayerStatus,
         },

@@ -61,6 +61,43 @@ export function aoe4WorldProfileUrl(profileId: number): string {
   return `https://aoe4world.com/players/${profileId}`;
 }
 
+/**
+ * Enlaces a los canales de directo, para que la interfaz no monte ninguna URL.
+ *
+* Los tres tienen la misma firma y el mismo criterio por una razón concreta: quien
+ * pinta un distintivo de canal no debería tener que recordar en qué plataforma la
+ * arroba va delante y en cuál no, ni qué subdominio lleva cada una. Las tres
+ * reciben ya el canal **canónico** desde el DAL (`normalizeTwitchChannel`,
+ * `normalizeYoutubeChannel`, `normalizeKickChannel`), así que aquí solo se compone:
+ *
+ * - Twitch va sin arroba: `twitch.tv/<canal>`.
+ * - YouTube **con** arroba: es la única de las tres donde la URL la lleva, y es lo
+ *   que distingue un handle de un nombre de usuario.
+ * - Kick con su subdominio `www.`, que es el que redirecciona de forma estable.
+ *
+ * Las tres usan `https` y ninguna lleva parámetros: son enlaces que abre una
+ * persona, no URLs que el proyecto tenga que interpretar.
+ *
+ * Reciben **el canal canónico**, no una cadena cualquiera, y por eso el parámetro
+ * no es nullable: quien no tiene canal no pinta el icono, y en el punto del
+ * componente donde se decide eso el valor ya ha sido estrecho a `string`. Es
+ * también lo que evita que un `null` llegue a la URL y produzca un enlace a
+ * `twitch.tv/null`.
+ */
+export function twitchChannelUrl(channel: string): string {
+  return `https://twitch.tv/${channel}`;
+}
+
+/** Enlace al canal de YouTube. El `handle` es el canónico, sin arroba. */
+export function youtubeChannelUrl(handle: string): string {
+  return `https://www.youtube.com/@${handle}`;
+}
+
+/** Enlace al canal de Kick. El `slug` es el canónico, en minúsculas. */
+export function kickChannelUrl(slug: string): string {
+  return `https://www.kick.com/${slug}`;
+}
+
 const LADDER_SIZE = /^rm_(\d)v(\d)$/i;
 
 /**

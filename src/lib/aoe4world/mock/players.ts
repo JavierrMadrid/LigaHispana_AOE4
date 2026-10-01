@@ -21,6 +21,21 @@ export type MockTournamentPlayer = {
   twitchUrl: string | null;
   /** `twitch_is_live` en la ladder: 1 o 2 en directo para poder ver el indicador. */
   twitchIsLive: boolean;
+  /**
+   * Canal de YouTube (handle sin arroba) o `null`; lo escribe el script en
+   * `Player.youtubeChannel`.
+   *
+   * **AoE4World no publica canales de YouTube ni de Kick**, así que a diferencia de
+   * `twitchUrl` esto no es parte del payload de la API: es un dato del participante
+   * que el mock reparte para que la pantalla se pueda ver completa. Por eso el
+   * estado de directo de los dos lo fija también el script (ver `*IsLive`) en lugar
+   * de dejarlo a una API externa que la simulación no puede llamar.
+   */
+  youtubeChannel: string | null;
+  kickChannel: string | null;
+  /** Alguien en directo en YouTube y alguien en Kick, para ver los tres indicadores. */
+  youtubeIsLive: boolean;
+  kickIsLive: boolean;
   /** Rating que aparece en las fixtures de partidas **y** en la ladder. */
   rating: number;
   /** `rank_level` de la ladder; el orden coincide con el del rating. */
@@ -54,8 +69,15 @@ export const MOCK_PROFILE_ID_MAX = 90_000_010;
  * una) y con `rating`, `rank_level` y `streak` coherentes entre sí: el rating
  * sube al mismo tiempo que la división, igual que en la ladder real. También
  * hay rachas positivas, negativas y `null`, y dos jugadores en directo en
- * Twitch (uno de ellos, además, jugando partida). Todo fijo: el mock tiene que
- * ser determinista.
+ * Twitch (uno de ellos, además, jugando partida).
+ *
+ * Los canales de YouTube y de Kick se reparten **sparse a propósito**: cada
+ * plataforma tiene algunos con canal y la mayoría sin él, y hay uno en directo en
+ * cada una. Es la forma de que la pantalla muestre a la vez los tres estados
+ * posibles —con canal y apagado, con canal y encendido, y sin canal— sin que
+ * ningún jugador tenga los tres a la vez, que es lo raro.
+ *
+ * Todo fijo: el mock tiene que ser determinista.
  */
 export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
   {
@@ -65,6 +87,10 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     twitchChannel: "serrano_hernan",
     twitchUrl: "https://www.twitch.tv/serrano_hernan",
     twitchIsLive: true,
+    youtubeChannel: "serranohernan",
+    kickChannel: null,
+    youtubeIsLive: false,
+    kickIsLive: false,
     rating: 845,
     rankLevel: "bronze_2",
     streak: -3,
@@ -77,6 +103,10 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     twitchChannel: null,
     twitchUrl: null,
     twitchIsLive: false,
+    youtubeChannel: null,
+    kickChannel: null,
+    youtubeIsLive: false,
+    kickIsLive: false,
     rating: 995,
     rankLevel: "silver_2",
     streak: null,
@@ -89,6 +119,12 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     twitchChannel: "el_cid_campeador",
     twitchUrl: "https://www.twitch.tv/el_cid_campeador",
     twitchIsLive: false,
+    // En directo en YouTube: el indicador de la plataforma nueva tiene que poder
+    // verse con el torneo simulado, y este jugador no está en directo en Twitch.
+    youtubeChannel: "elcidcampeador",
+    kickChannel: null,
+    youtubeIsLive: true,
+    kickIsLive: false,
     rating: 1175,
     rankLevel: "gold_1",
     streak: 2,
@@ -103,6 +139,10 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     // AoE4World: es el caso que ejercita el respaldo de `twitchUrl` en la tabla.
     twitchUrl: "https://www.twitch.tv/giraldo_sin_miedo",
     twitchIsLive: false,
+    youtubeChannel: null,
+    kickChannel: "giraldo_sin_miedo",
+    youtubeIsLive: false,
+    kickIsLive: false,
     rating: 1295,
     rankLevel: "gold_3",
     streak: -1,
@@ -115,6 +155,10 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     twitchChannel: "leonor_aragon",
     twitchUrl: "https://www.twitch.tv/leonor_aragon",
     twitchIsLive: false,
+    youtubeChannel: null,
+    kickChannel: null,
+    youtubeIsLive: false,
+    kickIsLive: false,
     rating: 1440,
     rankLevel: "platinum_1",
     streak: 5,
@@ -127,6 +171,13 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     twitchChannel: null,
     twitchUrl: null,
     twitchIsLive: false,
+    // El único con las dos plataformas a la vez, y ninguna emitiendo: es el caso que
+    // enseña que los iconos son independientes y que "tiene canal" no es "está en
+    // directo".
+    youtubeChannel: "abenhumar",
+    kickChannel: "abenhumar",
+    youtubeIsLive: false,
+    kickIsLive: false,
     rating: 1265,
     rankLevel: "platinum_3",
     streak: null,
@@ -141,6 +192,12 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     // En directo pero **sin** partida en curso: la tabla tiene que poder
     // mostrar los dos indicadores por separado.
     twitchIsLive: true,
+    youtubeChannel: null,
+    // En directo en Kick, y además en directo en Twitch sin canal de YouTube: los
+    // tres estados juntos en la tabla.
+    kickChannel: "nicolaudepinel",
+    youtubeIsLive: false,
+    kickIsLive: true,
     rating: 1665,
     rankLevel: "diamond_1",
     streak: 8,
@@ -153,6 +210,10 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     twitchChannel: null,
     twitchUrl: null,
     twitchIsLive: false,
+    youtubeChannel: null,
+    kickChannel: null,
+    youtubeIsLive: false,
+    kickIsLive: false,
     rating: 1760,
     rankLevel: "diamond_3",
     streak: -2,
@@ -165,6 +226,10 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     twitchChannel: "maria_la_brava",
     twitchUrl: "https://www.twitch.tv/maria_la_brava",
     twitchIsLive: false,
+    youtubeChannel: "marialabrava",
+    kickChannel: null,
+    youtubeIsLive: false,
+    kickIsLive: false,
     rating: 1895,
     rankLevel: "conqueror_1",
     streak: 12,
@@ -177,6 +242,10 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
     twitchChannel: null,
     twitchUrl: null,
     twitchIsLive: false,
+    youtubeChannel: null,
+    kickChannel: null,
+    youtubeIsLive: false,
+    kickIsLive: false,
     rating: 2015,
     rankLevel: "conqueror_2",
     streak: 4,
@@ -184,7 +253,7 @@ export const MOCK_TOURNAMENT_PLAYERS: readonly MockTournamentPlayer[] = [
   },
 ];
 
-/** Los cinco canales registrados arriba son los que poblarán el indicante de Twitch de la clasificación. */
+/** Los cinco canales de Twitch registrados arriba son los que poblarán el indicante de Twitch de la clasificación. */
 export const MOCK_PROFILE_IDS: number[] = MOCK_TOURNAMENT_PLAYERS.map(
   (player) => player.profileId,
 );

@@ -6,6 +6,7 @@ import type { PlayerStatus } from "@/generated/prisma/enums";
 import { approvePlayer, deletePlayer, rejectPlayer } from "@/app/admin/actions";
 import type { AdminParticipant } from "@/lib/admin";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
+import { ChannelLinks } from "@/components/channel-links";
 import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
 import {
@@ -56,9 +57,10 @@ const CELL = "px-4 py-3 align-top";
 
 /**
  * Las columnas ordenables del listado. Quedan fuera Acciones (no es un dato) y
- * Twitch (es un enlace: ordenar por él sería ordenar por un dato de contacto).
+ * Canales (es un grupo de enlaces: ordenar por él sería ordenar por el primero de
+ * tres canales distintos, que no significa nada).
  */
-type SortKey = "name" | "aoe4WorldName" | "status" | "matchCount" | "points";
+type SortKey = "name" | "aoe4WorldName" | "country" | "status" | "matchCount" | "points";
 
 /**
  * Orden de los estados, calcado del que aplica el servidor (`status asc`): en
@@ -73,7 +75,7 @@ const STATUS_ORDER: Record<PlayerStatus, number> = {
 
 /**
  * Los nulos van al final en los dos sentidos: un jugador sin perfil oficial, sin
- * partidas o sin fila en la clasificación no debe encabezar la tabla ni
+ * país, sin partidas o sin fila en la clasificación no debe encabezar la tabla ni
  * al ordenar ascendente ni al descendente.
  */
 function compareNullableText(a: string | null, b: string | null, dir: 1 | -1): number {
@@ -120,6 +122,8 @@ function comparePlayers(
       return normalize(a.name).localeCompare(normalize(b.name), "es") * dir;
     case "aoe4WorldName":
       return compareNullableText(a.aoe4WorldName, b.aoe4WorldName, dir);
+    case "country":
+      return compareNullableText(a.country, b.country, dir);
     case "status":
       return (STATUS_ORDER[a.status] - STATUS_ORDER[b.status]) * dir;
     case "matchCount":
@@ -178,7 +182,9 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
 
       if (needle !== "") {
         const haystack = normalize(
-          `${player.name} ${player.aoe4WorldName ?? ""} ${player.twitchChannel ?? ""}`,
+          `${player.name} ${player.aoe4WorldName ?? ""} ${player.country ?? ""} ${
+            player.twitchChannel ?? ""
+          } ${player.youtubeChannel ?? ""} ${player.kickChannel ?? ""}`,
         );
 
         if (!haystack.includes(needle)) {
@@ -252,7 +258,7 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
                 setQuery(event.target.value);
                 setPage(1);
               }}
-              placeholder="Buscar por nombre, perfil o canal"
+              placeholder="Buscar por nombre, perfil, país o canal"
               autoComplete="off"
               className="h-10 w-full rounded-md border border-line bg-surface px-3 text-sm text-foreground transition-colors placeholder:text-muted"
             />
@@ -345,10 +351,10 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
             <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
               <table className="w-full text-left text-sm">
                 <caption className="sr-only">
-                  Jugadores del torneo: nombre, perfil de AoE4World, canal de Twitch, estado,
-                  partidas clasificatorias y puntos. Una raya significa que el
-                  jugador no tiene fila en la clasificación. Las columnas de jugador,
-                  perfil, estado, partidas y puntos se pueden ordenar.
+                  Jugadores del torneo: nombre, perfil de AoE4World, canales de directo,
+                  país, estado, partidas clasificatorias y puntos. Una raya significa que el
+                  jugador no tiene fila en la clasificación. Las columnas de jugador, perfil,
+                  país, estado, partidas y puntos se pueden ordenar.
                 </caption>
                 <thead className="bg-surface text-muted">
                   <tr>
@@ -366,9 +372,17 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
                       onSort={toggleSort}
                       className="hidden px-4 py-3 font-medium lg:table-cell"
                     />
+                    {/* Los canales son enlaces: no se ordenan, no hay un criterio único. */}
                     <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                      Twitch
+                      Canales
                     </th>
+                    <SortableHeaderButton
+                      column="country"
+                      label="País"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="hidden px-4 py-3 font-medium lg:table-cell"
+                    />
                     <SortableHeaderButton
                       column="status"
                       label="Estado"
@@ -458,6 +472,11 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
 }
 
 function ParticipantRow({ player }: { player: AdminParticipant }) {
+  const hasChannels =
+    player.twitchChannel !== null ||
+    player.youtubeChannel !== null ||
+    player.kickChannel !== null;
+
   return (
     <tr>
       <td className={CELL}>
@@ -472,8 +491,15 @@ function ParticipantRow({ player }: { player: AdminParticipant }) {
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted lg:hidden">
               <StatusBadge status={player.status} />
               <ProfileLink player={player} />
+              {player.country !== null ? <span>{player.country}</span> : null}
               {player.twitchChannel !== null ? (
                 <span className="break-all">Twitch {player.twitchChannel}</span>
+              ) : null}
+              {player.youtubeChannel !== null ? (
+                <span className="break-all">YouTube {player.youtubeChannel}</span>
+              ) : null}
+              {player.kickChannel !== null ? (
+                <span className="break-all">Kick {player.kickChannel}</span>
               ) : null}
               <span className="tabular-nums">
                 {player.matchCount === null
@@ -492,19 +518,33 @@ function ParticipantRow({ player }: { player: AdminParticipant }) {
         <ProfileLink player={player} />
       </td>
 
-      <td className={`${CELL} hidden text-muted lg:table-cell`}>
-        {player.twitchChannel === null ? (
-          "—"
+      <td className={`${CELL} hidden lg:table-cell`}>
+        {hasChannels ? (
+          <ChannelLinks
+            name={player.name}
+            twitch={
+              player.twitchChannel === null
+                ? null
+                : { channel: player.twitchChannel, isLive: false }
+            }
+            youtube={
+              player.youtubeChannel === null
+                ? null
+                : { channel: player.youtubeChannel, isLive: false }
+            }
+            kick={
+              player.kickChannel === null
+                ? null
+                : { channel: player.kickChannel, isLive: false }
+            }
+          />
         ) : (
-          <a
-            href={`https://twitch.tv/${player.twitchChannel}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block max-w-[8rem] truncate text-foreground underline-offset-4 hover:text-accent hover:underline"
-          >
-            {player.twitchChannel}
-          </a>
+          <span className="text-muted">—</span>
         )}
+      </td>
+
+      <td className={`${CELL} hidden lg:table-cell`}>
+        {player.country === null ? <span className="text-muted">—</span> : player.country}
       </td>
 
       <td className={`${CELL} hidden lg:table-cell`}>

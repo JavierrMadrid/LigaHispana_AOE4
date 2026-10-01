@@ -20,6 +20,33 @@
 const TWITCH_CHANNEL = /^[a-zA-Z0-9_]{3,25}$/;
 
 /**
+ * Handle de YouTube: 3 a 30 caracteres de `[A-Za-z0-9._-]`.
+ *
+ * El rango es el que publica YouTube para los handles y **no** el de un nombre de
+ * canal de Twitch: son dos plataformas con reglas propias, y por eso hay dos
+ * patrones en vez de uno compartido.
+ */
+const YOUTUBE_HANDLE = /^[a-zA-Z0-9._-]{3,30}$/;
+
+/**
+ * Slug de Kick: 3 a 25 caracteres en minúsculas, más restrictivo que el de YouTube
+ * porque es lo que acepta la propia URL del canal (`kick.com/<slug>`).
+ */
+const KICK_SLUG = /^[a-z0-9._-]{3,25}$/;
+
+/**
+ * Prefijos de las URLs de YouTube que **no** contienen el handle.
+ *
+ * `/c/<nombre>` y `/user/<nombre>` son las dos formas antiguas: el identificador
+ * del canal es un `UC…` y el handle no se puede deducir de ahí sin preguntar a la
+ * API (`channels.list` no acepta esos nombres). Adivinarlos sería inventar un
+ * canal, así que se rechazan con un motivo explícito para que el formulario pueda
+ * decir "usa el @nombre del canal" en vez de un "el valor no es válido" que no
+ * explica nada.
+ */
+const YOUTUBE_URL_SIN_HANDLE = /^(?:https?:\/\/)?(?:[\w-]+\.)*youtube\.com\/(?:c|user)\//i;
+
+/**
  * Tope del correo de contacto. 254 es el máximo de la parte "ruta" de una
  * dirección según RFC 5321; se exporta para que el formulario pueda ponerlo en
  * el `maxLength` del campo y así el navegador avise antes de enviar.
@@ -80,6 +107,96 @@ export function parseTwitchChannel(value: FormDataEntryValue | null) {
   }
 
   return TWITCH_CHANNEL.test(channel) ? channel.toLowerCase() : null;
+}
+
+/**
+ * ¿Lo que se ha escrito es una URL antigua de canal de YouTube?
+ *
+ * Existe para que los dos formularios puedan decir algo útil: `/c/…` y `/user/…`
+ * no llevan el handle dentro, así que `parseYoutubeChannel` las rechaza igual que
+ * cualquier otra cosa inválida, pero el motivo que le importa a quien está
+ * escribiendo no es "esto no vale" sino "esto no lleva el @nombre". Sin esta
+ * pregunta, el formulario solo podría ofrecer el mismo texto para un `/c/` y para
+ * un nombre con una barra.
+ */
+export function isLegacyYoutubeUrl(value: FormDataEntryValue | null): boolean {
+  return YOUTUBE_URL_SIN_HANDLE.test(String(value ?? "").trim());
+}
+
+/**
+ * Canal de YouTube: el handle canónico, **sin arroba** y en minúsculas.
+ *
+ * Acepta a propósito tres formas porque las tres se teclean en la práctica: el
+ * `@nombre` que dice el propio canal, la URL del canal (`youtube.com/@nombre`,
+ * con o sin `https://` y con o sin `www.`) y la URL de un directo o de una pestaña
+ * del canal, que es la misma con `/live`, `/streams` o `/videos` detrás. Lo que se
+ * guarda es siempre el handle pelado: es la forma que consume `forHandle` de la
+ * API de YouTube y la que se compone en la URL del enlace, así que guardarlo con
+ * arroba o con la URL obligaría a recortarlo en cada uso.
+ *
+ * **Las URLs `/c/…` y `/user/…` se rechazan a propósito**, no por prudencia
+ * regexp sino porque no hay forma de llegar al handle sin una llamada a la API: el
+ * identificador del canal es un `UC…` que no lo contiene. Aceptarlas guardando el
+ * trozo de la URL produciría un canal que no existe, y probarlo ya es trabajo de
+ * una pasada por cada participante. Quien las escriba recibe el motivo con
+ * `isLegacyYoutubeUrl()` y el formulario le pide el `@nombre`.
+ *
+ * Un canal vacío y uno inválido devuelven ambos `null`, como en el de Twitch: el
+ * campo es opcional y quien llama los distingue mirando el valor crudo.
+ */
+export function parseYoutubeChannel(value: FormDataEntryValue | null) {
+  const raw = String(value ?? "").trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  // Si el valor parece una URL de YouTube se lee el handle de dentro, que es el
+  // caso largo (con esquema o sin él, con `www.` o sin él, y con `/live`,
+  // `/streams` o un `?sub_confirmation=1` detrás). Si no, lo que se ha escrito es
+  // el handle a secas y solo hay que quitarle la arroba.
+  const fromUrl = raw.match(/youtube\.com\/@([A-Za-z0-9._-]{3,30})/i);
+  const handle = (fromUrl === null ? raw : fromUrl[1]).replace(/^@/, "");
+
+  if (!handle) {
+    return null;
+  }
+
+  return YOUTUBE_HANDLE.test(handle) ? handle.toLowerCase() : null;
+}
+
+/**
+ * Canal de Kick: el slug canónico, en minúsculas y sin esquema.
+ *
+ * Acepta el slug suelto y la URL (`kick.com/slug`, con o sin `https://` y con o
+ * sin `www.`). No necesita un motivo especial para las formas antiguas: Kick no
+ * tuvo nombres de canal antes del slug, así que una URL que no sea
+ * `kick.com/<algo>` no es un canal y no hay de dónde sacarlo.
+ *
+ * El rango es más corto que el de YouTube (25 frente a 30) porque es lo que admite
+ * la URL del canal, y los caracteres son los mismos en minúsculas: son las reglas
+ * de la plataforma, no una decisión de este repositorio.
+ */
+export function parseKickChannel(value: FormDataEntryValue | null) {
+  const raw = String(value ?? "").trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  const fromUrl = raw.match(/kick\.com\/([a-z0-9._-]{3,25})/i);
+  const slug = fromUrl === null ? raw : fromUrl[1];
+
+  if (!slug) {
+    return null;
+  }
+
+  // El patrón es de minúsculas y el valor puede venir con mayúsculas (`Kick.com/`),
+  // así que la comprobación y el guardado usan la misma forma canónica: validar una
+  // cosa y guardar otra dejaría filas que el enlace no puede resolver.
+  const canonical = slug.toLowerCase();
+
+  return KICK_SLUG.test(canonical) ? canonical : null;
 }
 
 /**

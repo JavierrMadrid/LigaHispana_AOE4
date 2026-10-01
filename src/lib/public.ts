@@ -14,6 +14,11 @@ import {
   type ObjectiveMetric,
 } from "@/lib/objectives";
 import { RULESET_VERSION, readRuleset, type ScoringRuleset } from "@/lib/scoring";
+import {
+  normalizeKickChannel,
+  normalizeTwitchChannel,
+  normalizeYoutubeChannel,
+} from "@/lib/stream-channels";
 
 export { getObjectives } from "@/lib/scoring";
 export type {
@@ -161,6 +166,25 @@ export type StandingRow = {
   /** Canal para el enlace: el registrado o el extraído de `twitchUrl`. */
   twitchChannel: string | null;
   twitchIsLive: boolean;
+  /**
+   * Canal de YouTube ya normalizado (handle en minúsculas, sin arroba), o `null`.
+   *
+   * A diferencia del de Twitch **no hay respaldo**: AoE4World no publica un canal
+   * de YouTube en el perfil, así que el valor es el que escribió la persona o el
+   * admin, o nada. La normalización es la misma red de seguridad que en Twitch.
+   */
+  youtubeChannel: string | null;
+  /**
+   * "En directo" en YouTube. Lo escribe el worker (`src/lib/streams/`) preguntando
+   * a la API de YouTube; `false` es también el estado degradado sin
+   * `YOUTUBE_API_KEY`, así que **no** significa "no está en directo" sino "no se ha
+   * comprobado que lo esté".
+   */
+  youtubeIsLive: boolean;
+  /** Canal de Kick ya normalizado (slug en minúsculas), o `null`. */
+  kickChannel: string | null;
+  /** "En directo" en Kick, con la misma degradación que `youtubeIsLive`. */
+  kickIsLive: boolean;
   /** Tiene una partida con `finishedAt IS NULL` ahora mismo. */
   isPlaying: boolean;
   avatarUrl: string | null;
@@ -303,6 +327,10 @@ async function loadStandings(): Promise<StandingRow[]> {
             twitchChannel: true,
             twitchUrl: true,
             twitchIsLive: true,
+            youtubeChannel: true,
+            youtubeIsLive: true,
+            kickChannel: true,
+            kickIsLive: true,
             elo: true,
             rankLevel: true,
             streak: true,
@@ -333,6 +361,13 @@ async function loadStandings(): Promise<StandingRow[]> {
     const fromProfile =
       row.player.twitchUrl === null ? null : normalizeTwitchChannel(row.player.twitchUrl);
 
+    // YouTube y Kick no tienen respaldo: AoE4World no publica ninguno de los dos, así
+    // que el canal es solo el que escribió la persona o el admin, y la
+    // normalización es la red de seguridad para lo que ya está guardado (por ejemplo
+    // una fila que se guardara antes de que existiera el parser).
+    const youtubeChannel = normalizeYoutubeChannel(row.player.youtubeChannel);
+    const kickChannel = normalizeKickChannel(row.player.kickChannel);
+
     // El total se parte en dos columnas. Los puntos de objetivos se leen del
     // desglose y los de victorias salen por resta, nunca al revés: así
     // `pointsByWins + pointsByObjectives` es siempre `points`, incluso si el
@@ -356,6 +391,10 @@ async function loadStandings(): Promise<StandingRow[]> {
       streak: row.player.streak,
       twitchChannel: registered ?? fromProfile,
       twitchIsLive: row.player.twitchIsLive,
+      youtubeChannel,
+      youtubeIsLive: row.player.youtubeIsLive,
+      kickChannel,
+      kickIsLive: row.player.kickIsLive,
       isPlaying: playing.has(row.player.id),
       avatarUrl: row.player.avatarUrl,
       profileUrl: aoe4WorldProfileUrl(row.player.profileId),
@@ -757,34 +796,14 @@ export type TwitchChannelRow = {
   twitchChannel: string;
 };
 
-/** El panel de admin guarda el nombre del canal, no la URL. Si aparece una, se recorta. */
-const TWITCH_CHANNEL_PATTERN = /^[a-z0-9_]{3,25}$/;
-
-function normalizeTwitchChannel(value: string): string | null {
-  const trimmed = value.trim().toLowerCase();
-
-  if (TWITCH_CHANNEL_PATTERN.test(trimmed)) {
-    return trimmed;
-  }
-
-  // Acepta `https://twitch.tv/canal`, con `www.`, sin esquema o con parámetros
-  // añadidos, por si algún día alguien pega un enlace en lugar del nombre.
-  const fromUrl = trimmed.match(/^(?:https?:\/\/)?(?:www\.)?twitch\.tv\/([^/?#]+)/);
-
-  if (fromUrl !== null) {
-    const channel = fromUrl[1].replace(/^@/, "");
-    return TWITCH_CHANNEL_PATTERN.test(channel) ? channel : null;
-  }
-
-  return null;
-}
-
 /**
  * Canales de Twitch de los jugadores aprobados, ordenados por nombre.
  *
  * `Player.twitchChannel` lo rellena el admin y el panel lo valida como nombre de
  * canal, así que lo normal es que ya venga limpio; la normalización de aquí es
- * solo una red de seguridad para los datos ya guardados.
+ * solo una red de seguridad para los datos ya guardados, y es la misma de
+ * `src/lib/stream-channels.ts` que usa la clasificación, para que un canal no
+ * pueda salir como enlace en un sitio y como `null` en otro.
  *
  * No se deduplica: si dos jugadores apuntan al mismo canal saldrán dos filas. Si
  * la pantalla pinta una tarjeta por canal, quitar el duplicado es cosa de la

@@ -7,7 +7,7 @@ import { RegistrationForm } from "./registration-form";
 export const metadata: Metadata = {
   title: "Participa",
   description:
-    "Inscripción en la Liga Hispana de Age of Empires IV: alta de la cuenta de AoE4World, país y, de forma opcional, el canal de Twitch, con revisión de la organización antes de entrar en la clasificación.",
+    "Inscripción en la Liga Hispana de Age of Empires IV: alta de la cuenta de AoE4World, país y, de forma opcional, los canales de Twitch, YouTube y Kick, con revisión de la organización antes de entrar en la clasificación.",
 };
 
 // La lista de países admitidos se lee de `Setting` en cada petición, así que la
