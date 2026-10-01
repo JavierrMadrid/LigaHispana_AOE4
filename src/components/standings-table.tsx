@@ -16,6 +16,12 @@ import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { StandingsFilters } from "@/components/standings-filters";
 import { TwitchIcon } from "@/components/twitch-icon";
+import {
+  SortIndicator,
+  nextSortState,
+  sortHint,
+  type ActiveSort,
+} from "@/components/sortable-header";
 
 const HEADING = "px-3 pb-2 text-xs font-medium text-muted";
 const CELL = "bg-surface px-3 py-2.5 transition-colors group-hover:bg-surface-raised";
@@ -60,7 +66,7 @@ type SortKey =
   | "elo"
   | "record"
   | "streak";
-type SortState = { key: SortKey; direction: "asc" | "desc" } | null;
+type SortState = ActiveSort<SortKey>;
 
 /** "V - D" en color: comparte forma entre cabecera y control de orden de móvil. */
 const RECORD_VISUAL = (
@@ -88,23 +94,6 @@ const SORT_FIELDS: { key: SortKey; label: string; visual?: ReactNode }[] = [
 ];
 
 /**
- * Texto accesible del control de orden. El ciclo tiene tres estados (ascendente,
- * descendente y sin orden), así que el `aria-label` tiene que anticipar el
- * siguiente, no solo describir el actual.
- */
-function sortHint(label: string, state: "none" | "asc" | "desc"): string {
-  if (state === "asc") {
-    return `${label}: orden ascendente. Pulsar para descendente`;
-  }
-
-  if (state === "desc") {
-    return `${label}: orden descendente. Pulsar para quitar la ordenación`;
-  }
-
-  return `Ordenar por ${label}`;
-}
-
-/**
  * Los nulos nunca participan del sentido de la ordenación: van al final tanto en
  * ascendente como en descendente. Así un jugador sin clasificar no encabeza la
  * tabla al ordenar por elo o racha en un sentido o en el otro.
@@ -112,7 +101,7 @@ function sortHint(label: string, state: "none" | "asc" | "desc"): string {
 function compareNullable(
   a: number | null,
   b: number | null,
-  direction: 1 | -1,
+  dir: 1 | -1,
 ): number {
   if (a === null && b === null) {
     return 0;
@@ -126,7 +115,7 @@ function compareNullable(
     return -1;
   }
 
-  return (a - b) * direction;
+  return (a - b) * dir;
 }
 
 /**
@@ -137,33 +126,33 @@ function compareNullable(
 function compareRows(
   a: StandingRow,
   b: StandingRow,
-  sort: { key: SortKey; direction: "asc" | "desc" },
+  sort: { key: SortKey; dir: "asc" | "desc" },
 ): number {
-  const direction = sort.direction === "asc" ? 1 : -1;
+  const dir = sort.dir === "asc" ? 1 : -1;
 
   switch (sort.key) {
     case "rank":
-      return (a.rank - b.rank) * direction;
+      return (a.rank - b.rank) * dir;
     case "matches":
-      return (a.wins + a.losses - (b.wins + b.losses)) * direction;
+      return (a.wins + a.losses - (b.wins + b.losses)) * dir;
     case "points":
-      return (a.points - b.points) * direction;
+      return (a.points - b.points) * dir;
     case "elo":
-      return compareNullable(a.elo, b.elo, direction);
+      return compareNullable(a.elo, b.elo, dir);
     case "streak":
-      return compareNullable(a.streak, b.streak, direction);
+      return compareNullable(a.streak, b.streak, dir);
     case "record": {
       const diffA = a.wins - a.losses;
       const diffB = b.wins - b.losses;
 
       if (diffA !== diffB) {
-        return (diffA - diffB) * direction;
+        return (diffA - diffB) * dir;
       }
 
-      return (a.wins - b.wins) * direction;
+      return (a.wins - b.wins) * dir;
     }
     case "name":
-      return normalize(a.name).localeCompare(normalize(b.name), "es") * direction;
+      return normalize(a.name).localeCompare(normalize(b.name), "es") * dir;
   }
 }
 
@@ -204,7 +193,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
 
       if (needle !== "") {
         const haystack = normalize(
-          `${row.name} ${row.aoe4WorldName ?? ""} ${row.twitchChannel ?? ""}`,
+      `${row.name} ${row.aoe4WorldName ?? ""} ${row.twitchChannel ?? ""}`,
         );
 
         if (!haystack.includes(needle)) {
@@ -238,13 +227,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
   // Un clic ordena ascendente, el segundo descendente y el tercero devuelve el
   // orden original del servidor (puesto ascendente).
   function toggleSort(key: SortKey) {
-    setSort((current) => {
-      if (current === null || current.key !== key) {
-        return { key, direction: "asc" };
-      }
-
-      return current.direction === "asc" ? { key, direction: "desc" } : null;
-    });
+    setSort((current) => nextSortState(current, key));
   }
 
   function toggleObjectives(profileId: number) {
@@ -464,7 +447,7 @@ function SortableHeader({
   className?: string;
 }) {
   const state: "none" | "asc" | "desc" =
-    sort?.key === sortKey ? sort.direction : "none";
+    sort?.key === sortKey ? sort.dir : "none";
 
   const ariaSort =
     state === "asc" ? "ascending" : state === "desc" ? "descending" : "none";
@@ -520,7 +503,7 @@ function SortControls({
       </span>
       {SORT_FIELDS.map((field) => {
         const state: "none" | "asc" | "desc" =
-          sort?.key === field.key ? sort.direction : "none";
+          sort?.key === field.key ? sort.dir : "none";
 
         return (
           <button
@@ -540,57 +523,6 @@ function SortControls({
         );
       })}
     </div>
-  );
-}
-
-/**
- * Indicador de orden: la forma distingue el sentido, no solo el color. Sin
- * ordenar se ven dos chevrones apagados como pista de que la columna se puede
- * pulsar; ascendente y descendente muestran uno solo, orientado.
- */
-function SortIndicator({ state }: { state: "none" | "asc" | "desc" }) {
-  if (state === "none") {
-    return (
-      <svg
-        viewBox="0 0 12 12"
-        aria-hidden="true"
-        className="size-3 shrink-0 text-muted/40 transition-colors group-hover/header:text-muted"
-      >
-        <path
-          d="M3 6.25 6 3.25l3 3"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M3 5.75 6 8.75l3-3"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-
-  return (
-    <svg
-      viewBox="0 0 12 12"
-      aria-hidden="true"
-      className="size-3 shrink-0 text-accent"
-    >
-      <path
-        d={state === "asc" ? "M2.5 7.25 6 3.75l3.5 3.5" : "M2.5 4.75 6 8.25l3.5-3.5"}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
 

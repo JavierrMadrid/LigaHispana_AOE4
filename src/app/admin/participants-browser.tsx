@@ -14,6 +14,11 @@ import {
   readPageSize,
 } from "@/components/page-size-select";
 import { PendingButton } from "@/components/pending-button";
+import {
+  SortableHeaderButton,
+  nextSortState,
+  type ActiveSort,
+} from "@/components/sortable-header";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { PLAYER_STATUS_LABELS, PLAYER_STATUS_STYLES } from "./participant-status";
 
@@ -45,20 +50,106 @@ const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
 
 const CELL = "px-4 py-3 align-top";
 
+/* -------------------------------------------------------------------------- */
+/* Orden por columna                                                           */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Listado completo de participantes con buscador y filtro por estado en cliente.
+ * Las columnas ordenables del listado. Quedan fuera Acciones (no es un dato) y
+ * Twitch (es un enlace: ordenar por él sería ordenar por un dato de contacto).
+ */
+type SortKey = "name" | "aoe4WorldName" | "status" | "matchCount" | "points";
+
+/**
+ * Orden de los estados, calcado del que aplica el servidor (`status asc`): en
+ * Postgres el enum se ordena por el orden de declaración (`PENDING`, `APPROVED`,
+ * `REJECTED`), que es el que deja la cola de solicitudes primero.
+ */
+const STATUS_ORDER: Record<PlayerStatus, number> = {
+  PENDING: 0,
+  APPROVED: 1,
+  REJECTED: 2,
+};
+
+/**
+ * Los nulos van al final en los dos sentidos: un jugador sin perfil oficial, sin
+ * partidas o sin fila en la clasificación no debe encabezar la tabla ni
+ * al ordenar ascendente ni al descendente.
+ */
+function compareNullableText(a: string | null, b: string | null, dir: 1 | -1): number {
+  if (a === null && b === null) {
+    return 0;
+  }
+
+  if (a === null) {
+    return 1;
+  }
+
+  if (b === null) {
+    return -1;
+  }
+
+  return normalize(a).localeCompare(normalize(b), "es") * dir;
+}
+
+function compareNullableNumber(a: number | null, b: number | null, dir: 1 | -1): number {
+  if (a === null && b === null) {
+    return 0;
+  }
+
+  if (a === null) {
+    return 1;
+  }
+
+  if (b === null) {
+    return -1;
+  }
+
+  return (a - b) * dir;
+}
+
+function comparePlayers(
+  a: AdminParticipant,
+  b: AdminParticipant,
+  sort: { key: SortKey; dir: "asc" | "desc" },
+): number {
+  const dir = sort.dir === "asc" ? 1 : -1;
+
+  switch (sort.key) {
+    case "name":
+      return normalize(a.name).localeCompare(normalize(b.name), "es") * dir;
+    case "aoe4WorldName":
+      return compareNullableText(a.aoe4WorldName, b.aoe4WorldName, dir);
+    case "status":
+      return (STATUS_ORDER[a.status] - STATUS_ORDER[b.status]) * dir;
+    case "matchCount":
+      return compareNullableNumber(a.matchCount, b.matchCount, dir);
+    case "points":
+      return compareNullableNumber(a.points, b.points, dir);
+  }
+}
+
+/**
+ * Listado completo de participantes con buscador, filtro por estado y orden por
+ * columna en cliente.
  *
- * El DAL manda la lista entera (son decenas de filas) y aquí solo se filtra, se pagina
- * y se pinta, así que buscar no recarga la página. **La paginación es de cliente a
- * propósito**: con la búsqueda filtrando sobre lo que ya hay, paginar en servidor haría
- * que buscar solo encontrara lo de la página visible, que es el fallo clásico de
- * combinar las dos cosas. Los estados no aprobados no se esconden: se marcan, y cuando
- * el jugador no tiene fila en la clasificación los números salen como raya y no como
- * cero, que afirmaría algo falso.
+ * El DAL manda la lista entera (son decenas de filas) y aquí solo se filtra, se
+ * ordena, se pagina y se pinta, así que buscar no recarga la página. **La
+ * paginación es de cliente a propósito**: con la búsqueda filtrando sobre lo que ya
+ * hay, paginar en servidor haría que buscar solo encontrara lo de la página visible,
+ * que es el fallo clásico de combinar las dos cosas. Los estados no aprobados no se
+ * esconden: se marcan, y cuando el jugador no tiene fila en la clasificación los
+ * números salen como raya y no como cero, que afirmaría algo falso.
+ *
+ * El orden sigue el ciclo de tres estados de la tabla pública (ascendente →
+ * descendente → orden original del servidor, que aquí es `status` y después `name`),
+ * con `aria-sort` y chevron. "Quitar filtros" **no** toca el orden; cambiar filtros,
+ * búsqueda u orden vuelve a la primera página.
  */
 export function ParticipantsBrowser({ participants }: { participants: AdminParticipant[] }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("ALL");
+  const [sort, setSort] = useState<ActiveSort<SortKey>>(null);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE_VALUE);
   const [page, setPage] = useState(1);
 
@@ -99,6 +190,16 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
     });
   }, [participants, query, status]);
 
+  // El orden se aplica sobre el resultado ya filtrado: primero se decide quién
+  // entra y después en qué orden se muestra.
+  const sorted = useMemo(() => {
+    if (sort === null) {
+      return filtered;
+    }
+
+    return [...filtered].sort((a, b) => comparePlayers(a, b, sort));
+  }, [filtered, sort]);
+
   const hasFilters = query.trim() !== "" || status !== "ALL";
 
   /**
@@ -108,12 +209,12 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
    * página 3 deja de existir porque el filtro reduce la lista, esto cae solo en la
    * última válida, sin un renderizado de más ni un estado intermedio incoherente.
    */
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, pageCount);
 
   const paged = useMemo(
-    () => filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-    [filtered, currentPage, pageSize],
+    () => sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [sorted, currentPage, pageSize],
   );
 
   function clearFilters() {
@@ -124,6 +225,14 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
 
   function changePageSize(next: number) {
     setPageSize(next);
+    setPage(1);
+  }
+
+  // Un clic ordena ascendente, el segundo descendente y el tercero vuelve al orden
+  // original del servidor (`status` y después `name`). Cada cambio vuelve a la
+  // primera página, porque la página 3 de un orden nuevo no significa nada.
+  function toggleSort(column: string) {
+    setSort((current) => nextSortState(current, column as SortKey));
     setPage(1);
   }
 
@@ -236,30 +345,53 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
             <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
               <table className="w-full text-left text-sm">
                 <caption className="sr-only">
-                  Jugadores del torneo: nombre, perfil de AoE4World, canal de Twitch,
-                  estado, partidas clasificatorias y puntos. Una raya significa que el
-                  jugador no tiene fila en la clasificación.
+                  Jugadores del torneo: nombre, perfil de AoE4World, canal de Twitch, estado,
+                  partidas clasificatorias y puntos. Una raya significa que el
+                  jugador no tiene fila en la clasificación. Las columnas de jugador,
+                  perfil, estado, partidas y puntos se pueden ordenar.
                 </caption>
                 <thead className="bg-surface text-muted">
                   <tr>
-                    <th scope="col" className="px-4 py-3 font-medium">
-                      Jugador
-                    </th>
-                    <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                      AoE4World
-                    </th>
+                    <SortableHeaderButton
+                      column="name"
+                      label="Jugador"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="px-4 py-3 font-medium"
+                    />
+                    <SortableHeaderButton
+                      column="aoe4WorldName"
+                      label="AoE4World"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="hidden px-4 py-3 font-medium lg:table-cell"
+                    />
                     <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
                       Twitch
                     </th>
-                    <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                      Estado
-                    </th>
-                    <th scope="col" className="hidden px-4 py-3 text-right font-medium lg:table-cell">
-                      Partidas
-                    </th>
-                    <th scope="col" className="hidden px-4 py-3 text-right font-medium lg:table-cell">
-                      Puntos
-                    </th>
+                    <SortableHeaderButton
+                      column="status"
+                      label="Estado"
+                      sort={sort}
+                      onSort={toggleSort}
+                      className="hidden px-4 py-3 font-medium lg:table-cell"
+                    />
+                    <SortableHeaderButton
+                      column="matchCount"
+                      label="Partidas"
+                      sort={sort}
+                      onSort={toggleSort}
+                      align="right"
+                      className="hidden px-4 py-3 font-medium lg:table-cell"
+                    />
+                    <SortableHeaderButton
+                      column="points"
+                      label="Puntos"
+                      sort={sort}
+                      onSort={toggleSort}
+                      align="right"
+                      className="hidden px-4 py-3 font-medium lg:table-cell"
+                    />
                     <th scope="col" className="px-4 py-3 text-right font-medium">
                       Acciones
                     </th>
@@ -292,7 +424,7 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
 
               <nav aria-label="Paginación" className="flex flex-wrap items-center gap-3">
                 <p className="text-xs text-muted">
-                  Mostrando {paged.length} de {filtered.length}
+                  Mostrando {paged.length} de {sorted.length}
                   {pageCount > 1 ? ` · página ${currentPage} de ${pageCount}` : ""}
                 </p>
 
@@ -336,7 +468,7 @@ function ParticipantRow({ player }: { player: AdminParticipant }) {
               {player.name}
             </span>
             {/* Por debajo de `lg` las columnas secundarias se leen aquí, bajo el
-                nombre, en vez de comprimir siete columnas en un móvil. */}
+                nombre, en vez de comprimir ocho columnas en un móvil. */}
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted lg:hidden">
               <StatusBadge status={player.status} />
               <ProfileLink player={player} />

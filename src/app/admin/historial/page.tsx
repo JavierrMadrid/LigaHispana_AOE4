@@ -5,6 +5,7 @@ import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PageSizeSelect } from "@/components/page-size-select";
+import { SortableHeaderLink } from "@/components/sortable-header";
 import {
   getAdminMatchHistory,
   getAdminParticipants,
@@ -166,6 +167,8 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
     from: single(params.from),
     to: single(params.to),
     resultado: single(params.resultado),
+    sort: single(params.sort),
+    dir: single(params.dir),
     pageSize: single(params.pageSize),
   };
   const hasFilters =
@@ -230,12 +233,24 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                     </caption>
                     <thead className="bg-surface text-muted">
                       <tr>
-                        <th scope="col" className="hidden w-44 px-4 py-3 font-medium md:table-cell">
-                          Fecha
-                        </th>
-                        <th scope="col" className="w-28 px-4 py-3 font-medium">
-                          Resultado
-                        </th>
+                        <SortableHeaderLink
+                          column="fecha"
+                          label="Fecha"
+                          sort={history.data.sort}
+                          basePath="/admin/historial"
+                          query={query}
+                          className="hidden w-44 px-4 py-3 font-medium md:table-cell"
+                        />
+                        <SortableHeaderLink
+                          column="resultado"
+                          label="Resultado"
+                          sort={history.data.sort}
+                          basePath="/admin/historial"
+                          query={query}
+                          className="w-28 px-4 py-3 font-medium"
+                        />
+                        {/* La descripción es una frase montada en la interfaz y las
+                            acciones no son un dato ordenable. */}
                         <th scope="col" className="px-4 py-3 font-medium">
                           Descripción
                         </th>

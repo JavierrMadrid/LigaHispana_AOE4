@@ -46,6 +46,32 @@ import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/set
  *
  * Lo que sí es salud del sistema y no una alerta de jugador sigue fuera de la pestaña:
  * el estado del sincronizador, que vive en `getSyncHealth()` y en el aviso de `/admin`.
+ *
+ * ## El orden y los filtros de las listas
+ *
+ * Las tres listas que **se paginan en servidor** (participantes no: se filtra y pagina en
+ * cliente) comparten el mismo patrón de estado: **la URL es la fuente de verdad**.
+ * `page`, `pageSize`, los filtros y el orden viajan en los parámetros, con el mismo
+ * criterio que ya tenía el historial: la vista es compartible y la recarga no la
+ * pierde, así que quien pinte no necesita estado propio para la tabla.
+ *
+ * Tres reglas rigen el contrato, y las tres son del módulo desde antes:
+ *
+ * - **Un valor que no se entiende es ausencia, no error.** `?sort=inventado`,
+ *   `?dir=arriba`, `?playerId=noSoyUnCuid` o `?to=2026-13-45` se comportan como si no
+ *   estuvieran escritos. Una URL manipulada no rompe la página y, sobre todo, no hace
+ *   creer que un filtro deja cero filas cuando en realidad no está filtrando nada.
+ * - **El orden que se publica es el que se ha aplicado.** Cada lectura devuelve su
+ *   `sort` ya validado —`AdminAlertsSort`, `AdminHistorySort`, `AdminActionsSort`—, no
+ *   el `sort` crudo de la URL. Quien pinte el `aria-sort` y el chevron no lo deduce de
+ *   los parámetros, porque en cuanto uno sea inválido se equivocaría.
+ * - **Todo orden es total.** Cada uno acaba en una columna única —`id`, o la clave
+ *   propia de cada clase de fila en el historial mezclado—, porque sin desempate dos
+ *   filas del mismo instante pueden salir en cualquier orden entre sí y una página
+ *   puede repetir o perder filas de la anterior. Es la misma exigencia que ya tenía el
+ *   orden por fecha de las tres listas, y la razón por la que el orden por resultado del
+ *   feed mezclado no puede ser un `orderBy` cualquiera: cambia el eje del merge y obliga
+ *   a que el comparador y los dos `orderBy` digan exactamente lo mismo.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -67,8 +93,43 @@ export type AdminPageQuery = {
   pageSize?: AdminQueryParam;
 };
 
-/** Filas de una lectura paginada, con la paginación ya resuelta. */
-export type AdminPage<T> = {
+/**
+ * Ordenación de una lectura paginada, con los valores aún sin validar.
+ *
+ * `sort` es el nombre de la columna —en español, y solo de las que cada lista
+ * admite— y `dir` el sentido. Los dos viajan en la URL por lo mismo que los filtros:
+ * el estado de la tabla es compartible y la recarga no lo pierde.
+ *
+ * Cualquier valor que no sea válido es **ausencia** y nunca error, por lo que dice
+ * `readSingleParam`: un enlace puede llevar parámetros que esta versión de la tabla
+ * todavía no entiende sin que la página se rompa ni aparezcan filas raras.
+ */
+export type AdminSortQuery = {
+  sort?: AdminQueryParam;
+  dir?: AdminQueryParam;
+};
+
+/**
+ * Sentido de un orden.
+ *
+ * Deliberadamente los mismos dos literales que usa Prisma en `orderBy`, porque es lo
+ * que viaja a la consulta sin traducción: un tipo propio con `"arriba"` y `"abajo"`
+ * obligaría a convertirlo en cada consulta, y esa conversión es donde estos filtros
+ * se suelen equivocar.
+ */
+export type AdminSortDir = "asc" | "desc";
+
+/**
+ * Filas de una lectura paginada, con la paginación y el orden ya resueltos.
+ *
+ * El segundo tipo es el del **orden efectivo**, y cada lista publica el suyo
+ * (`AdminAlertsSort`, `AdminHistorySort`, `AdminActionsSort`) en lugar de un tipo
+ * genérico con todas las columnas mezcladas. Va en el retorno y no se deja que la
+ * interfaz lo deduzca de los parámetros, por una razón concreta: si lo dedujera, en
+ * cuanto un valor fuera inválido pintaría un `aria-sort` y un chevron que no
+ * corresponden con lo que la tabla está haciendo de verdad.
+ */
+export type AdminPage<T, S> = {
   rows: T[];
   /** Filas que cumplen el filtro, sin paginar: de ahí sale `pageCount`. */
   total: number;
@@ -77,6 +138,11 @@ export type AdminPage<T> = {
   pageSize: number;
   /** Páginas que hay con este filtro; `0` si no hay ninguna fila. */
   pageCount: number;
+  /**
+   * Orden con el que se ha consultado, ya validado: la columna que se está
+   * ordenando y el sentido. Lo publica la lectura, no la interfaz.
+   */
+  sort: S;
 };
 
 /** Filas por página que se piden por defecto. */
@@ -139,16 +205,21 @@ function readBoundedInt(
  * lecturas paginadas, y sobre todo evita el error de contar una página y traer las
  * filas de otra.
  *
+ * `sort` viaja tal cual hacia el retorno: es el orden **efectivo** que la carga ha
+ * aplicado, y por eso lo pasa quien llama ya validado y no se vuelve a leer de los
+ * parámetros aquí.
+ *
  * Se ajusta la página al rango real (una URL que pide la 7 con un filtro que solo
  * tiene dos páginas devuelve la última con filas): una tabla vacía con "página 7 de
  * 2" desconcierta más que devolver directamente lo que hay. El ajuste solo repite
  * la consulta cuando hace falta, porque el camino normal es una sola pasada.
  */
-async function adminPage<T>(
+async function adminPage<T, S>(
   load: (page: number) => Promise<{ rows: T[]; total: number }>,
   page: number,
   pageSize: number,
-): Promise<AdminPage<T>> {
+  sort: S,
+): Promise<AdminPage<T, S>> {
   const first = await load(page);
   const pageCount = Math.ceil(first.total / pageSize);
   const current = pageCount === 0 ? 1 : Math.min(page, pageCount);
@@ -156,11 +227,359 @@ async function adminPage<T>(
   if (current !== page) {
     const last = await load(current);
 
-    return { rows: last.rows, total: last.total, page: current, pageSize, pageCount };
+    return { rows: last.rows, total: last.total, page: current, pageSize, pageCount, sort };
   }
 
-  return { rows: first.rows, total: first.total, page: current, pageSize, pageCount };
+  return { rows: first.rows, total: first.total, page: current, pageSize, pageCount, sort };
 }
+
+/* -------------------------------------------------------------------------- */
+/* Filtros compartidos de la URL                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `Player.id` es un `cuid`, así que se valida la **forma** y no el valor: un id
+ * manipulado no puede dar de sí nada, y comprobar el patrón evita pasar a Prisma
+ * basura desde la URL.
+ *
+ * Un valor que no tiene la forma del id se trata como **ausencia de filtro**, no
+ * como un filtro sin resultados: desde la interfaz, un filtro mal escrito se
+ * parece más a "sin filtrar" que a "no hay ninguna partida con ese jugador", y lo
+ * segundo sería una afirmación falsa sobre una URL manipulada.
+ */
+const PLAYER_ID_PATTERN = /^[a-z0-9]{1,64}$/;
+
+/**
+ * El filtro de jugador de la URL, ya validado.
+ *
+ * Lo comparten el historial y las alertas, que filtran por `Player.id` los dos, y por
+ * eso vive aquí y no en la sección de ninguna de las dos listas: dos copias del mismo
+ * patrón acabarían discrepando en cuanto una aceptara algo más que la otra.
+ *
+ * Exportado para `npm run verify:sync`, que lo comprueba sin base de datos: es una
+ * función pura y es justo donde se decide qué hace una URL manipulada.
+ */
+export function readPlayerIdFilter(value: AdminQueryParam): string | null {
+  const raw = readSingleParam(value);
+
+  return raw !== null && PLAYER_ID_PATTERN.test(raw) ? raw : null;
+}
+
+/** Fecha suelta `YYYY-MM-DD`, que es lo que produce un `<input type="date">`. */
+const DAY_PATTERN = /^(\d{4}-\d{2}-\d{2})$/;
+
+/**
+ * Un límite del filtro de fechas, ya resuelto a instante.
+ *
+ * Admite las dos formas que la interfaz tiene a mano: un instante con zona
+ * explícita —el mismo criterio estricto que el ruleset, `readInstant`, que rechaza
+ * `"2026-09-15T00:00:00"` porque se interpretaría en hora local— o una fecha suelta,
+ * que se resuelve a medianoche UTC de ese día.
+ *
+ * La fecha suelta se resuelve distinto en cada borde, y es lo que hace que "del 1
+ * al 30" incluya el día 30 entero:
+ *
+ * - `from`: las `00:00:00.000Z` de ese día, **inclusivo**.
+ * - `to`: las `00:00:00.000Z` del día **siguiente**, con un filtro `< to`: el día
+ *   que escribió quien filtró queda dentro y el siguiente, fuera.
+ *
+ * Un instante con zona se usa tal cual, sin desplazarlo. Cualquier otra cosa —un
+ * `ayer`, un `2026-13-45`, un instante sin zona— se ignora y ese filtro no se
+ * aplica: una URL manipulada se comporta como si el filtro no estuviera, en vez de
+ * romper la página con un error que no sabe explicar nadie.
+ */
+function readDateBound(value: AdminQueryParam, bound: "from" | "to"): Date | null {
+  const raw = readSingleParam(value);
+
+  if (raw === null) {
+    return null;
+  }
+
+  const instant = readInstant(raw);
+
+  if (instant !== null) {
+    return instant;
+  }
+
+  const day = DAY_PATTERN.exec(raw);
+
+  if (day === null) {
+    return null;
+  }
+
+  const inicio = readInstant(`${day[1]}T00:00:00.000Z`);
+
+  // `Date.parse` no rechaza los días que no existen: `"2026-02-31T00:00:00.000Z"`
+  // rueda a `2026-03-03`. La ida y la vuelta es lo que los descarta, y con ello un
+  // filtro escrito a mano con una fecha imposible se trata como ausencia de filtro
+  // en vez de como un rango desplazado tres días.
+  if (inicio === null || inicio.toISOString().slice(0, 10) !== day[1]) {
+    return null;
+  }
+
+  return bound === "from" ? inicio : new Date(inicio.getTime() + DAY_MS);
+}
+
+/**
+ * Rango de fechas de un filtro, ya validado y listo para una columna `DateTime`.
+ *
+ * Es un tipo propio y no el `DateTimeFilter` de Prisma a propósito: lo que sale de
+ * aquí son dos comparadores opcionales, y el filtro los mete dentro de la columna
+ * concreta (`Match.startedAt`, `ObjectiveEvent.achievedAt` o `Alert.createdAt`) junto
+ * con lo que ya traiga el resto de condiciones.
+ *
+ * Los dos límites son los **mismos** para las dos clases de fila del historial: el
+ * filtro de la pantalla es un rango de fechas, no "fechas de partidas". Por eso se
+ * resuelve una vez y se reparte.
+ */
+export type AdminDateRange = { gte?: Date; lt?: Date };
+
+/**
+ * El rango de fechas de un filtro, ya validado.
+ *
+ * Vive aquí porque lo comparten el historial y las alertas, con los **mismos** bordes
+ * inclusivo y exclusivo: un `?to=2026-09-30` tiene que incluir el día 30 entero en
+ * las dos tablas, y sería una sorpresa que en una significara algo distinto.
+ */
+function dateRangeWhere(from: AdminQueryParam, to: AdminQueryParam): AdminDateRange {
+  const desde = readDateBound(from, "from");
+  const hasta = readDateBound(to, "to");
+
+  return {
+    ...(desde === null ? {} : { gte: desde }),
+    ...(hasta === null ? {} : { lt: hasta }),
+  };
+}
+
+/**
+ * ¿Ha quedado algún límite puesto?
+ *
+ * Para no meter `{ createdAt: {} }` en un `where`: un filtro de rango vacío no filtra
+ * nada, pero obligaría a comprobar en cada sitio si un `DateTimeFilter` sin
+ * comparadores significa "cualquier fecha" o es un error de Prisma.
+ */
+function hasDateBounds(rango: AdminDateRange): boolean {
+  return rango.gte !== undefined || rango.lt !== undefined;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Ordenación                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Sentido por defecto de las tres listas, y en las tres es el mismo: **descendente**.
+ *
+ * Las tres se abren "de lo más reciente a lo más antiguo", que es el orden con el que se
+ * lee un registro de un torneo en marcha. Un `sort` sin `dir` vale, por tanto, el
+ * orden con el que ya se veía la tabla.
+ */
+const DEFAULT_SORT_DIR: AdminSortDir = "desc";
+
+/** El `dir` de la URL, ya validado; lo que no vale, es el sentido por defecto. */
+function readSortDir(value: AdminQueryParam): AdminSortDir {
+  const raw = readSingleParam(value);
+
+  return raw === "asc" || raw === "desc" ? raw : DEFAULT_SORT_DIR;
+}
+
+/**
+ * Orden efectivo a partir de los dos parámetros de la URL.
+ *
+ * Genérico sobre la lista de columnas admitidas, y esa lista la pasa quien llama: no
+ * hay forma de que `readSort` devuelva una columna que la lista no pinte, ni de que una
+ * lista acepte por error el nombre de la columna de otra.
+ *
+ * Las cuatro reglas, y las cuatro son de "ausencia":
+ *
+ * - Una columna que no está en la lista admitida —o un `sort` vacío— es la columna por
+ *   defecto de la lista. Una URL con `?sort=inventado` se lee como la tabla sin tocar,
+ *   con el mismo criterio que un `playerId` mal formado.
+ * - Un `dir` que no es `asc` ni `desc` es el sentido por defecto.
+ * - **`dir` no necesita `sort`.** Son dos parámetros independientes y cada uno tiene su
+ *   valor por defecto, así que `?dir=asc` quiere decir "la columna de por defecto en
+ *   ascendente", no "nada": un enlace de "quitar orden" puede limitarse a borrar
+ *   `sort` y dejar `dir=desc` sin que eso signifique un estado imposible.
+ * - La comparación es **literal**: ni se ignoran mayúsculas ni se normalizan acentos.
+ *   Los valores los escriben los enlaces de la propia tabla, y un valor en minúsculas
+ *   o sin tilde ahí no es una forma de escribir la misma columna, es otra URL.
+ */
+function readSort<K extends string>(
+  query: AdminSortQuery,
+  admitidas: readonly K[],
+  porDefecto: K,
+): { key: K; dir: AdminSortDir } {
+  const raw = readSingleParam(query.sort);
+  const key = admitidas.find((columna) => columna === raw) ?? porDefecto;
+
+  return { key, dir: readSortDir(query.dir) };
+}
+
+/**
+ * Orden de la tabla de alertas.
+ *
+ * Las cinco columnas que se pueden ordenar y la columna de la tabla a la que va cada
+ * una:
+ *
+ * | `key` | Se ordena por | Columna |
+ * |---|---|---|
+ * | `fecha` (por defecto) | `Alert.createdAt` | Fecha |
+ * | `jugador` | el nombre del `join` con `Player` | Jugador |
+ * | `regla` | `Alert.rule` | Regla |
+ * | `sujeto` | `Alert.subjectName` | Sujeto |
+ * | `conteo` | `Alert.count` | Conteo |
+ *
+ * ## Qué **no** se ordena, y por qué
+ *
+ * - **Detalle**: es `Alert.summary`, una frase redactada por el motor y escrita para
+ *   leerse ("3 partidas seguidas contra Marta"). Ordenarla sería ordenarlas por la
+ *   primera palabra de cada frase, que además empieza por un número ("3", "7", "12")
+ *   y no por la información de la frase, así que el orden no significaría nada; además
+ *   obligaría a traer la columna entera y ordenarla en memoria, porque el criterio no
+ *   es una columna de la tabla.
+ * - **Tipo de alerta** (`kind`): son tres valores, se filtran con `?tipo=` y ya se
+ *   pintan como distintivo en cada fila. Ordenarlos no respondería a nada que alguien
+ *   se pregunte ("¿cuántas rachas rotas hay y cuántas acumuladas?"), y el filtro cubre
+ *   la necesidad real.
+ *
+ * ## El detalle de cada columna
+ *
+ * - `sujeto` usa los **nulos al final en los dos sentidos**, no solo en ascendente: las
+ *   reglas sin sujeto (R1, R4 y R5) son `null`, y en descendente mezclarlas con los
+ *   nombres sacaría las alertas sin sujeto por delante de todo.
+ * - `regla` ordena por el **enum**, y en Postgres un enum se ordena por el orden de sus
+ *   valores en el esquema, no alfabéticamente por la etiqueta. Aquí eso sale bien: el
+ *   esquema los declara en el orden R1, R2, R3, R4 y R5, así que ordenar por regla
+ *   agrupa por familia de reglas, que es como se explican.
+ * - `jugador` ordena por el nombre y con la **intercalación de Postgres**, que puede no
+ *   coincidir con cómo se lee el alfabeto español. No hay forma mejor sin arrastrar el
+ *   nombre a la tabla de alertas o ordenarlo en memoria.
+ * - Los índices que hay son `@@index([createdAt])` y `@@index([playerId, rule])`, así que
+ *   solo el orden por fecha y el filtro por jugador + regla se apoyan en uno; el resto
+ *   ordena en memoria el conjunto que ya ha filtrado el `where`. Con miles de alertas de
+ *   un torneo largo sale igual de bien, y si algún día molestara, el arreglo es un índice
+ *   compuesto (`[rule, createdAt]` y `[kind, createdAt]`), no un cambio en esta lectura.
+ */
+export type AdminAlertsSort = {
+  key: "fecha" | "jugador" | "regla" | "sujeto" | "conteo";
+  dir: AdminSortDir;
+};
+
+/** Las columnas ordenables de las alertas, con `satisfies` para que la lista no crezca sola. */
+const ALERT_SORT_COLUMNS = [
+  "fecha",
+  "jugador",
+  "regla",
+  "sujeto",
+  "conteo",
+] as const satisfies readonly AdminAlertsSort["key"][];
+
+/**
+ * El orden efectivo de la tabla de alertas.
+ *
+ * Exportado para `npm run verify:sync`: es una función pura y es donde se decide qué
+ * hace una URL manipulada (`?sort=inventado`, `?dir=arriba`, `?sort=sujeto` sin `dir`).
+ */
+export function readAlertsSort(query: AdminSortQuery): AdminAlertsSort {
+  return readSort(query, ALERT_SORT_COLUMNS, "fecha");
+}
+
+/**
+ * Orden de la tabla de alertas en `orderBy` de Prisma.
+ *
+ * Un `Record` con una función por columna, y no un `switch`, porque el `Record` con
+ * las cinco claves **falla al compilar** si mañana se añade una columna a
+ * `AdminAlertsSort` y aquí no se decide su criterio. Cada uno acaba en `{ id }`, el
+ * desempate que necesita la paginación, y en el mismo sentido que el resto: `asc` es
+ * el inverso exacto de `desc`.
+ */
+const ALERT_ORDER_BY: Record<
+  AdminAlertsSort["key"],
+  (dir: AdminSortDir) => Prisma.AlertOrderByWithRelationInput[]
+> = {
+  fecha: (dir) => [{ createdAt: dir }, { id: dir }],
+  jugador: (dir) => [{ player: { name: dir } }, { id: dir }],
+  regla: (dir) => [{ rule: dir }, { id: dir }],
+  sujeto: (dir) => [{ subjectName: { sort: dir, nulls: "last" } }, { id: dir }],
+  conteo: (dir) => [{ count: dir }, { id: dir }],
+};
+
+/**
+ * Orden del historial de partidas: por fecha o por resultado.
+ *
+ * | `key` | Orden |
+ * |---|---|
+ * | `fecha` (por defecto) | `Match.startedAt` / `ObjectiveEvent.achievedAt` |
+ * | `resultado` | objetivo, victoria o derrota; dentro de cada grupo, por fecha |
+ *
+ * La columna que se ordena por resultado es la que la interfaz pinta con tres
+ * distintivos —"Objetivo", "Victoria", "Derrota"—, así que el orden no puede ser por el
+ * enum de `Match.result`: en el feed no hay solo partidas. El criterio, y por qué, están
+ * en `historyComparator()`.
+ *
+ * Exportado para `npm run verify:sync`, como el de las alertas.
+ */
+export type AdminHistorySort = {
+  key: "fecha" | "resultado";
+  dir: AdminSortDir;
+};
+
+/** Las columnas ordenables del historial. */
+const HISTORY_SORT_COLUMNS = [
+  "fecha",
+  "resultado",
+] as const satisfies readonly AdminHistorySort["key"][];
+
+/**
+ * El orden efectivo del historial.
+ *
+ * Convive con el **filtro** `?resultado=WIN|LOSS` y no se confunde con él: uno recorta
+ * las filas (y deja fuera los objetivos, a propósito) y el otro las ordena. Viven en
+ * parámetros distintos y en tipos distintos, y `npm run verify:sync` comprueba que los
+ * dos se puedan usar a la vez sin que uno pise al otro.
+ */
+export function readHistorySort(query: AdminSortQuery): AdminHistorySort {
+  return readSort(query, HISTORY_SORT_COLUMNS, "fecha");
+}
+
+/** Orden del historial de acciones: por fecha, por tipo o por admin. */
+export type AdminActionsSort = {
+  key: "fecha" | "tipo" | "admin";
+  dir: AdminSortDir;
+};
+
+/** Las columnas ordenables del historial de acciones. */
+const ACTION_SORT_COLUMNS = ["fecha", "tipo", "admin"] as const satisfies
+  readonly AdminActionsSort["key"][];
+
+/**
+ * El orden efectivo del historial de acciones.
+ *
+ * `admin` ordena por `actorEmail` —la columna que muestra la tabla—, no por un
+ * identificador de usuario que no existe: el rastro guarda el correo de quien hizo
+ * cada acción y no hay nada más de esa persona en el modelo.
+ *
+ * Exportado para `npm run verify:sync`, como los otros dos.
+ */
+export function readActionsSort(query: AdminSortQuery): AdminActionsSort {
+  return readSort(query, ACTION_SORT_COLUMNS, "fecha");
+}
+
+/**
+ * Orden del historial de acciones en `orderBy` de Prisma.
+ *
+ * `tipo` ordena por el enum `AdminActionType`, que en Postgres se ordena por el orden
+ * de sus valores en el esquema (altas, bajas y cambios de puntos) y no alfabéticamente
+ * por la etiqueta. Es el mismo criterio que en la columna de regla de las alertas, y
+ * con la misma garantía de desempate por `id`.
+ */
+const ACTION_ORDER_BY: Record<
+  AdminActionsSort["key"],
+  (dir: AdminSortDir) => Prisma.AdminActionOrderByWithRelationInput[]
+> = {
+  fecha: (dir) => [{ createdAt: dir }, { id: dir }],
+  tipo: (dir) => [{ type: dir }, { id: dir }],
+  admin: (dir) => [{ actorEmail: dir }, { id: dir }],
+};
 
 /* -------------------------------------------------------------------------- */
 /* Participantes                                                               */
@@ -365,17 +784,24 @@ function syncHeadline(trace: SyncRunTrace | null, stale: boolean): string {
 /* Historial de partidas y objetivos                                            */
 /* -------------------------------------------------------------------------- */
 
-/** Filtros del historial de partidas, tal como llegan de la URL. */
-export type AdminMatchHistoryQuery = AdminPageQuery & {
-  /** `Player.id` (no `profileId`): el mismo id que usan los formularios de admin. */
-  playerId?: AdminQueryParam;
-  /** Límite inferior **inclusivo** de fechas; en las partidas, sobre `startedAt`. */
-  from?: AdminQueryParam;
-  /** Límite superior **exclusivo** de fechas; en las partidas, sobre `startedAt`. */
-  to?: AdminQueryParam;
-  /** `WIN` o `LOSS`; cualquier otra cosa se trata como ausencia de filtro. */
-  resultado?: AdminQueryParam;
-};
+/**
+ * Parámetros del historial de partidas, tal como llegan de la URL.
+ *
+ * Filtros y orden son parámetros **distintos** y con nombres distintos, aunque uno de
+ * los dos se llame `resultado`: `?resultado=WIN` recorta las filas y `?sort=resultado`
+ * las ordena. `npm run verify:sync` comprueba que se puedan usar juntos.
+ */
+export type AdminMatchHistoryQuery = AdminPageQuery &
+  AdminSortQuery & {
+    /** `Player.id` (no `profileId`): el mismo id que usan los formularios de admin. */
+    playerId?: AdminQueryParam;
+    /** Límite inferior **inclusivo** de fechas; en las partidas, sobre `startedAt`. */
+    from?: AdminQueryParam;
+    /** Límite superior **exclusivo** de fechas; en las partidas, sobre `startedAt`. */
+    to?: AdminQueryParam;
+    /** `WIN` o `LOSS`; cualquier otra cosa se trata como ausencia de filtro. */
+    resultado?: AdminQueryParam;
+  };
 
 /**
  * El objetivo cumplido de una fila del historial, ya resuelto.
@@ -469,98 +895,6 @@ export type AdminMatchHistoryRow = {
 };
 
 /**
- * `Player.id` es un `cuid`, así que se valida la **forma** y no el valor: un id
- * manipulado no puede dar de sí nada, y comprobar el patrón evita pasar a Prisma
- * basura desde la URL.
- *
- * Un valor que no tiene la forma del id se trata como **ausencia de filtro**, no
- * como un filtro sin resultados: desde la interfaz, un filtro mal escrito se
- * parece más a "sin filtrar" que a "no hay ninguna partida con ese jugador", y lo
- * segundo sería una afirmación falsa sobre una URL manipulada.
- */
-const PLAYER_ID_PATTERN = /^[a-z0-9]{1,64}$/;
-
-/** Fecha suelta `YYYY-MM-DD`, que es lo que produce un `<input type="date">`. */
-const DAY_PATTERN = /^(\d{4}-\d{2}-\d{2})$/;
-
-/**
- * Un límite del filtro de fechas, ya resuelto a instante.
- *
- * Admite las dos formas que la interfaz tiene a mano: un instante con zona
- * explícita —el mismo criterio estricto que el ruleset, `readInstant`, que rechaza
- * `"2026-09-15T00:00:00"` porque se interpretaría en hora local— o una fecha suelta,
- * que se resuelve a medianoche UTC de ese día.
- *
- * La fecha suelta se resuelve distinto en cada borde, y es lo que hace que "del 1
- * al 30" incluya el día 30 entero:
- *
- * - `from`: las `00:00:00.000Z` de ese día, **inclusivo**.
- * - `to`: las `00:00:00.000Z` del día **siguiente**, con un filtro `< to`: el día
- *   que escribió quien filtró queda dentro y el siguiente, fuera.
- *
- * Un instante con zona se usa tal cual, sin desplazarlo. Cualquier otra cosa —un
- * `ayer`, un `2026-13-45`, un instante sin zona— se ignora y ese filtro no se
- * aplica: una URL manipulada se comporta como si el filtro no estuviera, en vez de
- * romper la página con un error que no sabe explicar nadie.
- */
-function readDateBound(value: AdminQueryParam, bound: "from" | "to"): Date | null {
-  const raw = readSingleParam(value);
-
-  if (raw === null) {
-    return null;
-  }
-
-  const instant = readInstant(raw);
-
-  if (instant !== null) {
-    return instant;
-  }
-
-  const day = DAY_PATTERN.exec(raw);
-
-  if (day === null) {
-    return null;
-  }
-
-  const inicio = readInstant(`${day[1]}T00:00:00.000Z`);
-
-  // `Date.parse` no rechaza los días que no existen: `"2026-02-31T00:00:00.000Z"`
-  // rueda a `2026-03-03`. La ida y la vuelta es lo que los descarta, y con ello un
-  // filtro escrito a mano con una fecha imposible se trata como ausencia de filtro
-  // en vez de como un rango desplazado tres días.
-  if (inicio === null || inicio.toISOString().slice(0, 10) !== day[1]) {
-    return null;
-  }
-
-  return bound === "from" ? inicio : new Date(inicio.getTime() + DAY_MS);
-}
-
-/**
- * Rango de fechas del filtro, ya validado y listo para una columna `DateTime`.
- *
- * Es un tipo propio y no el `DateTimeFilter` de Prisma a propósito: lo que sale de
- * aquí son dos comparadores opcionales, y el filtro los mete dentro de la columna
- * concreta (`Match.startedAt` o `ObjectiveEvent.achievedAt`) junto con lo que ya
- * trae `classificatoryWhere`.
- *
- * Los dos límites son los **mismos** para las dos clases de fila: el filtro de la
- * pantalla es un rango de fechas, no "fechas de partidas". Por eso se resuelve una
- * vez y se reparte.
- */
-type DateRange = { gte?: Date; lt?: Date };
-
-/** El filtro de fechas del historial, ya validado. */
-function dateRangeWhere(query: AdminMatchHistoryQuery): DateRange {
-  const from = readDateBound(query.from, "from");
-  const to = readDateBound(query.to, "to");
-
-  return {
-    ...(from === null ? {} : { gte: from }),
-    ...(to === null ? {} : { lt: to }),
-  };
-}
-
-/**
  * El filtro de resultado de la URL, ya validado.
  *
  * Solo `WIN` y `LOSS` son válidos y cualquier otra cosa se trata como **ausencia de
@@ -578,6 +912,41 @@ function readResultFilter(value: AdminQueryParam): MatchResult | null {
 }
 
 /**
+ * Los filtros del historial, ya validados.
+ *
+ * Se resuelven en un sitio y se reparten entre las dos consultas del feed (las partidas
+ * y los objetivos), y por eso son un tipo y no tres valores sueltos: es lo que hace
+ * imposible que las dos mitadas del merge se filtren por cosas distintas.
+ */
+export type AdminHistoryFilters = {
+  /** `Player.id` con forma de `cuid`, o `null` si no hay filtro. */
+  playerId: string | null;
+  /** Rango sobre `Match.startedAt` y, con los mismos límites, sobre `achievedAt`. */
+  rango: AdminDateRange;
+  /** `WIN`, `LOSS` o `null`. Cuando no es `null`, **excluye los objetivos**. */
+  resultado: MatchResult | null;
+};
+
+/**
+ * Los filtros del historial, ya validados y listos para sus dos consultas.
+ *
+ * El filtro de **resultado** no se propaga a los objetivos, y es a propósito: un hito no
+ * es ni una victoria ni una derrota, y quien escribe `?resultado=WIN` está buscando las
+ * victorias de alguien, no sus hitos. El filtro de **orden** por resultado no tiene nada
+ * que ver con este y sí llega a las dos mitades.
+ *
+ * Exportado para `npm run verify:sync`: son funciones puras y son donde se decide qué
+ * hace una URL manipulada.
+ */
+export function readHistoryFilters(query: AdminMatchHistoryQuery): AdminHistoryFilters {
+  return {
+    playerId: readPlayerIdFilter(query.playerId),
+    rango: dateRangeWhere(query.from, query.to),
+    resultado: readResultFilter(query.resultado),
+  };
+}
+
+/**
  * Campos de `ObjectiveEvent` que se leen. `objectiveId` es la clave única de la fila
  * y a la vez el id del objetivo en el catálogo.
  */
@@ -589,34 +958,135 @@ const OBJECTIVE_EVENT_SELECT = {
 } satisfies Prisma.ObjectiveEventSelect;
 
 /**
- * Orden total del feed mezclado, del más reciente al más antiguo. Tres criterios:
+ * Rango de una fila dentro de la columna de resultado del historial: 0 objetivo,
+ * 1 victoria, 2 derrota.
  *
- * 1. **Fecha descendente**: `Match.startedAt` o `ObjectiveEvent.achievedAt`.
- * 2. **La partida antes que el objetivo** si comparten instante. Ese es el criterio
- *    que hace el orden **total**, que es lo que necesita la paginación (sin él, dos
- *    filas del mismo instante podrían salir en cualquier orden entre sí y una página
- *    podría repetir o perder filas de la anterior), y además es el que mejor se lee:
- *    casi siempre la partida es la fila que explica el hito, así que va delante. Como
- *    el criterio 3 no cambia, **el orden entre partidas es el de siempre**.
- * 3. **La clave propia de cada clase**, descendente: `Match.id` para las partidas y
- *    `ObjectiveEvent.objectiveId` para los objetivos. Ambas son únicas, así que con
- *    los tres criterios no quedan dos filas empatadas, y las dos consultas que
- *    alimentan el merge ya traen sus filas en este mismo orden.
+ * El criterio es **de lo mejor a lo peor**, y es una decisión: la columna muestra tres
+ * cosas distintas —"Objetivo", "Victoria", "Derrota"— y recorrerla en diagonal tiene que
+ * enseñar primero lo que primero se busca. Los hitos son lo raro y lo que más información
+ * da (≤ 38 en toda la vida del torneo, frente a decenas de miles de partidas), así que
+ * van delante; detrás quedan victorias y derrotas, que ya son el grueso, y donde lo
+ * útil es agrupar por signo —"¿cuántas ha perdido?"—, que es justo lo que hace la
+ * segunda pulsación de la cabecera.
+ *
+ * El cuarto rango (3) es para una partida sin resultado, que **no llega nunca** al feed:
+ * `classificatoryWhere()` exige `result is not null`. El tipo de la fila lo admite, y un
+ * orden total tiene que decidir en vez de dejar un `undefined` en el comparador, así que
+ * va al final en los dos sentidos, como los nulos del sujeto en las alertas.
  */
-function compareHistoryRows(a: AdminMatchHistoryRow, b: AdminMatchHistoryRow): number {
-  const porFecha = b.startedAt.getTime() - a.startedAt.getTime();
-
-  if (porFecha !== 0) {
-    return porFecha;
+function historyResultRank(row: AdminMatchHistoryRow): number {
+  if (row.objective !== null) {
+    return 0;
   }
 
-  const aEsPartida = a.objective === null;
-
-  if (aEsPartida !== (b.objective === null)) {
-    return aEsPartida ? -1 : 1;
+  if (row.result === "WIN") {
+    return 1;
   }
 
-  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+  return row.result === "LOSS" ? 2 : 3;
+}
+
+/**
+ * El comparador del feed mezclado, para el orden que se ha pedido.
+ *
+ * ## Todo orden es total
+ *
+ * Es lo que necesita la paginación, igual que lo necesitaba el orden por fecha: sin un
+ * desempate único, dos filas del mismo instante pueden salir en cualquier orden entre sí
+ * y una página puede repetir o perder filas de la anterior. Los dos órdenes terminan en
+ * la **clave propia de cada clase** (`Match.id` y `ObjectiveEvent.objectiveId`), que es
+ * única dentro de cada lista, así que no quedan dos filas empatadas.
+ *
+ * ## `dir` invierte el orden entero
+ *
+ * `asc` es el inverso exacto de `desc`, desempate y criterio de clase incluidos. Es lo que
+ * espera quien pulsa por segunda vez una cabecera, y además es lo que garantiza que dos
+ * páginas del mismo filtro no se solapen. Por eso **todos** los criterios se multiplican
+ * por el mismo signo y ninguno se queda fuera: un criterio que no se invirtiera rompería
+ * esa promesa sin ganar nada a cambio.
+ *
+ * ## Los criterios, en orden
+ *
+ * - **`resultado`**: el rango de resultado (objetivo, victoria, derrota), luego la fecha,
+ *   luego la clase y la clave. El criterio de clase no decide nada aquí, porque dentro de
+ *   un rango las dos clases de fila ya son la misma: el rango 0 es solo de objetivos y los
+ *   otros dos, solo de partidas.
+ * - **`fecha`** (por defecto): la fecha, luego **la partida antes que el objetivo** si
+ *   comparten instante, luego la clave. Ese criterio de clase es el que completa el orden
+ *   total y además el que mejor se lee en el orden por defecto, porque casi siempre la
+ *   partida es la fila que explica el hito y así va delante.
+ *
+ * Exportado para `npm run verify:sync`, que lo comprueba con filas sintéticas: que sea un
+ * orden **total**, que `asc` sea el inverso de `desc` y que no reordene las mitadas que
+ * llegan ya ordenadas de sus consultas. Son las tres condiciones de las que depende que la
+ * página sea una ventana real del feed, y no se pueden comprobar contra la base de datos
+ * sin escribir en ella.
+ */
+export function historyComparator(
+  sort: AdminHistorySort,
+): (a: AdminMatchHistoryRow, b: AdminMatchHistoryRow) => number {
+  // `1` en `desc`, que es el sentido por defecto, y `-1` en `asc`. **Todos** los
+  // criterios se multiplican por este signo, y todos se calculan con la misma
+  // convención: un número positivo significa "a va después de b en descendente".
+  const signo = sort.dir === "desc" ? 1 : -1;
+
+  return (a, b) => {
+    if (sort.key === "resultado") {
+      const porResultado = historyResultRank(b) - historyResultRank(a);
+
+      if (porResultado !== 0) {
+        return porResultado * signo;
+      }
+    }
+
+    const porFecha = b.startedAt.getTime() - a.startedAt.getTime();
+
+    if (porFecha !== 0) {
+      return porFecha * signo;
+    }
+
+    const aEsPartida = a.objective === null;
+
+    if (aEsPartida !== (b.objective === null)) {
+      return (aEsPartida ? -1 : 1) * signo;
+    }
+
+    // La clave de cada clase de fila, con la misma convención que el resto: en
+    // descendente va la mayor primero, que es lo que hacen los dos `orderBy`.
+    const porClave = a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+
+    return porClave * signo;
+  };
+}
+
+/**
+ * Orden de las **partidas** del feed, en `orderBy` de Prisma.
+ *
+ * Tiene que ser el mismo orden que devuelve `historyComparator()` recortado a la clase
+ * de las partidas, porque el merge compara las dos mitades: si la consulta las trajera
+ * en otro orden, la página dejaría de ser una ventana del feed real.
+ *
+ * En `resultado` el `result` va primero y luego la fecha y la clave. El `result` es
+ * `not null` en este listado (`classificatoryWhere`), así que su orden no tiene nulos
+ * que colocar y no hace falta ninguna regla para ellos.
+ */
+const MATCH_HISTORY_ORDER_BY: Record<
+  AdminHistorySort["key"],
+  (dir: AdminSortDir) => Prisma.MatchOrderByWithRelationInput[]
+> = {
+  fecha: (dir) => [{ startedAt: dir }, { id: dir }],
+  resultado: (dir) => [{ result: dir }, { startedAt: dir }, { id: dir }],
+};
+
+/**
+ * Orden de los **objetivos** del feed, en `orderBy` de Prisma.
+ *
+ * Es el mismo en los dos órdenes, y no es una casualidad: un objetivo es siempre rango
+ * 0 en la columna de resultado, así que ordenar por resultado no le cambia el sitio
+ * relativo a nada y solo quedan la fecha y su clave.
+ */
+function objectiveEventOrderBy(dir: AdminSortDir): Prisma.ObjectiveEventOrderByWithRelationInput[] {
+  return [{ achievedAt: dir }, { objectiveId: dir }];
 }
 
 /** Una fila de `Match`, con los datos de partida resueltos y los de objetivo a `null`. */
@@ -661,11 +1131,56 @@ function partidaEnFila(
 }
 
 /**
+ * El hueco que hay que traer de partidas para servir una página del feed mezclado.
+ *
+ * Con `skip` el desplazamiento de la página **en el feed** y `eventosAntes` los
+ * objetivos que pasan el filtro (los que van delante de la página en el peor caso):
+ *
+ * - `skipPartidas`: de dónde se leen las partidas. En el peor caso, los `eventosAntes`
+ *   objetivos van todos antes de la página, así que la primera fila de la página está,
+ *   como mucho, en la posición `skip - eventosAntes` de la lista de partidas. Antes de
+ *   ese punto no hace falta traer nada.
+ * - `takePartidas`: cuántas. `skip + pageSize - skipPartidas`, y **no** `pageSize` a
+ *   secas: si la página tiene objetivos intercalados, con `pageSize` saldrían menos
+ *   filas de las que la página pide.
+ * - `desde`: el índice de la lista combinada que corresponde al inicio de la página. La
+ *   combinada empieza en la partida número `skipPartidas`, así que lo que se ha dejado
+ *   atrás son `skipPartidas` filas; con `skip < eventosAntes` no se ha saltado ninguna
+ *   partida y el índice es `skip` directamente.
+ *
+ * **No depende del eje del orden**, y por eso el orden por resultado no necesita otro
+ * hueco: solo cuenta cuántas filas del otro lado del merge caben en las `skip` posiciones
+ * anteriores. Lo que sí necesita el eje nuevo es que el comparador sea un orden total y
+ * que las dos mitadas lleguen en ese mismo orden, que es de `historyComparator()`.
+ *
+ * Exportado para `npm run verify:sync`, que pagina el feed entero con esta aritmética y
+ * comprueba que ninguna fila se repite ni se pierde.
+ */
+export function historyHole(
+  skip: number,
+  pageSize: number,
+  eventosAntes: number,
+): { skipPartidas: number; takePartidas: number; desde: number } {
+  const skipPartidas = Math.max(0, skip - eventosAntes);
+
+  return {
+    skipPartidas,
+    takePartidas: skip + pageSize - skipPartidas,
+    desde: skip - skipPartidas,
+  };
+}
+
+/**
  * Los objetivos cumplidos que pasan el filtro, ya en filas del historial.
  *
  * Se piden **todos** (no una página): son como mucho 38 filas en toda la vida del
  * torneo, y hace falta el recuento para saber cuántas hay que colar antes de la
  * primera partida de la página.
+ *
+ * Vienen en el mismo orden que el comparador del merge (`objectiveEventOrderBy()`), que
+ * es lo que permite que la mezcla siga siendo correcta cuando el `sort` cambia el eje
+ * del feed: si se pidieran en otro orden, la concatenación de las dos mitades no sería
+ * el feed.
  *
  * Una fila cuyo `objectiveId` no está en el catálogo se descarta con un aviso en el
  * log en vez de publicarse a medias: solo puede existir si alguien insertó la fila a
@@ -675,10 +1190,11 @@ function partidaEnFila(
 async function eventosDeObjetivo(
   where: Prisma.ObjectiveEventWhereInput,
   ruleset: ScoringRuleset,
+  dir: AdminSortDir,
 ): Promise<AdminMatchHistoryRow[]> {
   const filas = await db.objectiveEvent.findMany({
     where,
-    orderBy: [{ achievedAt: "desc" }, { objectiveId: "desc" }],
+    orderBy: objectiveEventOrderBy(dir),
     select: OBJECTIVE_EVENT_SELECT,
   });
 
@@ -757,16 +1273,11 @@ async function eventosDeObjetivo(
  * ## El merge, y por qué sale barato
  *
  * Los eventos son ≤ 38, así que se piden enteros (y por el mismo motivo no se pueden
- * pedir en paralelo con las partidas: el hueco de partidas depende de cuántos son).
- * Acotando solo las partidas, con `S` el desplazamiento de la página **en el feed
- * mezclado** y `E` los eventos que pasan el filtro:
- *
- * - La partida que cae en la posición `S` del feed está, en el peor caso, en la
- *   posición `S - E` de la lista de partidas (si los `E` eventos van todos antes), y
- *   la de la posición `S + pageSize - 1` no puede pasar de esa misma posición. O sea
- *   que basta con traer las partidas desde `max(0, S - E)` y hasta `S + pageSize`.
- * - Mergeados esos datos con todos los eventos, la posición `S` del feed es el
- *   índice `S - max(0, S - E)` de la lista combinada, y de ahí se recorta la página.
+ * pedir en paralelo con las partidas: el hueco de partidas depende de cuántos son). El
+ * hueco que hay que traer y por dónde se recorta la página están en `historyHole()`, que
+ * explica la aritmética y que **no depende del eje del orden**: solo cuenta cuántas filas
+ * del otro lado del merge caben en las posiciones anteriores. Por eso el
+ * `?sort=resultado` reutiliza el mismo hueco y lo único que cambia son los dos `orderBy`.
  *
  * ## El filtro de clasificatorias sale del ruleset activo
  *
@@ -775,7 +1286,7 @@ async function eventosDeObjetivo(
  */
 export async function getAdminMatchHistory(
   query: AdminMatchHistoryQuery = {},
-): Promise<PublicRead<AdminPage<AdminMatchHistoryRow>>> {
+): Promise<PublicRead<AdminPage<AdminMatchHistoryRow, AdminHistorySort>>> {
   return readFromDatabase("admin/getAdminMatchHistory", async () => {
     const page = readBoundedInt(query.page, { min: 1, max: 100_000, fallback: 1 });
     const pageSize = readBoundedInt(query.pageSize, {
@@ -785,50 +1296,47 @@ export async function getAdminMatchHistory(
     });
 
     const ruleset = await readRuleset();
-    const playerId = readSingleParam(query.playerId);
-    const rango = dateRangeWhere(query);
-    const resultado = readResultFilter(query.resultado);
-    const filtrandoFechas = rango.gte !== undefined || rango.lt !== undefined;
-    const filtrandoJugador = playerId !== null && PLAYER_ID_PATTERN.test(playerId);
+    const sort = readHistorySort(query);
+    const filtros = readHistoryFilters(query);
+    const { playerId, rango, resultado } = filtros;
 
     // Los filtros se suman, no se eligen: `where` es una conjunción, así que jugador
     // + fechas + resultado se combinan solos. No hace falta ninguna lógica de "si hay
     // dos, el segundo gana", que es justo donde estos filtros se suelen equivocar.
     const where: Prisma.MatchWhereInput = {
       ...classificatoryWhere(ruleset.modes, ruleset.window),
-      ...(filtrandoJugador ? { playerId } : {}),
-      ...(filtrandoFechas ? { startedAt: rango } : {}),
+      ...(playerId === null ? {} : { playerId }),
+      ...(hasDateBounds(rango) ? { startedAt: rango } : {}),
       ...(resultado === null ? {} : { result: resultado }),
     };
 
     // Los mismos filtros para los hitos, sobre su columna de fecha. Sin el de
     // resultado, por lo que dice el docblock de la función.
     const eventosWhere: Prisma.ObjectiveEventWhereInput = {
-      ...(filtrandoJugador ? { playerId } : {}),
-      ...(filtrandoFechas ? { achievedAt: rango } : {}),
+      ...(playerId === null ? {} : { playerId }),
+      ...(hasDateBounds(rango) ? { achievedAt: rango } : {}),
     };
 
-    return adminPage<AdminMatchHistoryRow>(async (wanted) => {
+    return adminPage<AdminMatchHistoryRow, AdminHistorySort>(async (wanted) => {
       const skip = (wanted - 1) * pageSize;
 
       // Los eventos salen enteros y antes que las partidas, porque el hueco de
       // partidas depende de cuántos sean. El `count` de partidas no depende de eso, así
       // que sí se pide en paralelo con ellos.
       const [eventos, totalPartidas] = await Promise.all([
-        resultado === null ? eventosDeObjetivo(eventosWhere, ruleset) : [],
+        resultado === null ? eventosDeObjetivo(eventosWhere, ruleset, sort.dir) : [],
         db.match.count({ where }),
       ]);
 
-      // El hueco acotado del docblock, y no `pageSize` a secas: una página puede
-      // tener eventos delante y, si solo se trajeran `pageSize` partidas, saldrían
-      // menos filas de las que la página pide.
+      // El hueco acotado del docblock de `historyHole()`, y no `pageSize` a secas: una
+      // página puede tener eventos delante y, si solo se trajeran `pageSize` partidas,
+      // saldrían menos filas de las que la página pide.
       const eventosAntes = eventos.length;
-      const skipPartidas = Math.max(0, skip - eventosAntes);
-      const takePartidas = skip + pageSize - skipPartidas;
+      const { skipPartidas, takePartidas, desde } = historyHole(skip, pageSize, eventosAntes);
 
       const partidas = await db.match.findMany({
         where,
-        orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+        orderBy: MATCH_HISTORY_ORDER_BY[sort.key](sort.dir),
         skip: skipPartidas,
         take: takePartidas,
         select: {
@@ -850,21 +1358,16 @@ export async function getAdminMatchHistory(
       });
 
       const combined = [...partidas.map(partidaEnFila), ...eventos].sort(
-        compareHistoryRows,
+        historyComparator(sort),
       );
 
-      // Índice de `combined` que corresponde a la posición `skip` del feed: la lista
-      // combinada empieza en la partida número `skipPartidas`, así que lo que se ha
-      // dejado atrás son `skipPartidas` filas. Con `skip >= eventosAntes` son
-      // justamente las partidas saltadas; con `skip < eventosAntes` no se ha saltado
-      // ninguna, y el índice es `skip` directamente.
-      const desde = skip - skipPartidas;
-
+      // `desde` es el índice de `combined` que corresponde a la posición `skip` del
+      // feed, según el mismo docblock de `historyHole()`.
       return {
         total: totalPartidas + eventosAntes,
         rows: combined.slice(desde, desde + pageSize),
       };
-    }, page, pageSize);
+    }, page, pageSize, sort);
   });
 }
 
@@ -925,6 +1428,9 @@ function readDetails(value: unknown): Record<string, string | number | boolean> 
   return hayValores ? details : null;
 }
 
+/** Parámetros del historial de acciones, tal como llegan de la URL. */
+export type AdminActionsQuery = AdminPageQuery & AdminSortQuery;
+
 /**
  * Historial de acciones del admin, de la más reciente a la más antigua.
  *
@@ -935,10 +1441,19 @@ function readDetails(value: unknown): Record<string, string | number | boolean> 
  * Paginada en servidor por el mismo motivo que el historial de partidas, y con
  * `id` de desempate del orden por la misma razón: dos acciones del mismo milisegundo
  * tienen que tener un orden estable para que la paginación no las mezcle.
+ *
+ * ## El `where` lo usan las dos consultas
+ *
+ * Hoy esta lista **no tiene filtros** —es un rastro que se lee entero y son pocas
+ * filas—, así que el `where` está vacío. Se construye igualmente y lo comparten el
+ * `findMany` y el `count`, porque es lo que hace imposible la afirmación falsa: contar
+ * sin el filtro de la consulta daría una paginación que miente ("página 1 de 40"
+ * con un filtro que deja tres filas), y en cuanto esta lista reciba un filtro ese
+ * error aparecería solo.
  */
 export async function getAdminActions(
-  query: AdminPageQuery = {},
-): Promise<PublicRead<AdminPage<AdminActionRow>>> {
+  query: AdminActionsQuery = {},
+): Promise<PublicRead<AdminPage<AdminActionRow, AdminActionsSort>>> {
   return readFromDatabase("admin/getAdminActions", async () => {
     const page = readBoundedInt(query.page, { min: 1, max: 100_000, fallback: 1 });
     const pageSize = readBoundedInt(query.pageSize, {
@@ -946,11 +1461,15 @@ export async function getAdminActions(
       max: MAX_PAGE_SIZE,
       fallback: DEFAULT_PAGE_SIZE,
     });
+    const sort = readActionsSort(query);
 
-    return adminPage<AdminActionRow>(async (wanted) => {
+    const where: Prisma.AdminActionWhereInput = {};
+
+    return adminPage<AdminActionRow, AdminActionsSort>(async (wanted) => {
       const [rows, total] = await Promise.all([
         db.adminAction.findMany({
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          where,
+          orderBy: ACTION_ORDER_BY[sort.key](sort.dir),
           skip: (wanted - 1) * pageSize,
           take: pageSize,
           select: {
@@ -963,7 +1482,7 @@ export async function getAdminActions(
             createdAt: true,
           },
         }),
-        db.adminAction.count(),
+        db.adminAction.count({ where }),
       ]);
 
       return {
@@ -978,7 +1497,7 @@ export async function getAdminActions(
           createdAt: row.createdAt,
         })),
       };
-    }, page, pageSize);
+    }, page, pageSize, sort);
   });
 }
 
@@ -1046,30 +1565,138 @@ const ALERT_SELECT = {
 } satisfies Prisma.AlertSelect;
 
 /**
- * Alertas disparadas, de la más reciente a la más antigua y paginadas.
+ * Parámetros de la tabla de alertas, tal como llegan de la URL.
  *
- * ## Por qué no hay filtros
+ * | Parámetro | Filtra por | Valores admitidos |
+ * |---|---|---|
+ * | `from` / `to` | `Alert.createdAt` | fecha `YYYY-MM-DD` o instante con zona, con los mismos bordes que el historial |
+ * | `playerId` | `Alert.playerId` | un `Player.id` con forma de `cuid` |
+ * | `regla` | `Alert.rule` | uno de los ocho `AlertRule` |
+ * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED` |
  *
- * Una tabla de avisos se lee, no se consulta: el filtro útil (por jugador, por regla) es
- * el encargo de la interfaz sobre esta página, igual que el buscador de participantes va
- * en cliente. Lo que sí está resuelto en el servidor es la paginación, con el mismo
- * `DEFAULT_PAGE_SIZE` y el mismo tope que el resto de pestañas, porque son miles de filas
- * en un torneo largo y mandarlas todas dentro del *payload* de RSC no es una opción.
+ * Los cuatro se combinan (es una conjunción), y los tres que son una lista usan
+ * **allowlist**: un valor que no está en la lista es ausencia de filtro, no "cero alertas
+ * con esa regla", que sería una afirmación falsa sobre una URL manipulada.
+ *
+ * `tipo` no es una columna de la tabla —el tipo se pinta como distintivo dentro de la de
+ * regla—, pero sí es el cuarto criterio por el que se recorta una tabla de avisos: "solo
+ * lo que rompió una racha", "solo los acumulados que se alcanzaron".
+ */
+export type AdminAlertsQuery = AdminPageQuery &
+  AdminSortQuery & {
+    /** `Player.id` (no `profileId`): el mismo id que usan los formularios de admin. */
+    playerId?: AdminQueryParam;
+    /** Límite inferior **inclusivo** de fechas sobre `createdAt`. */
+    from?: AdminQueryParam;
+    /** Límite superior **exclusivo** de fechas sobre `createdAt`. */
+    to?: AdminQueryParam;
+    /** Un `AlertRule`; cualquier otra cosa se trata como ausencia de filtro. */
+    regla?: AdminQueryParam;
+    /** Un `AlertKind`; cualquier otra cosa se trata como ausencia de filtro. */
+    tipo?: AdminQueryParam;
+  };
+
+/** Un `AlertRule` de la URL, ya validado. */
+function readAlertRuleFilter(value: AdminQueryParam): AlertRule | null {
+  const raw = readSingleParam(value);
+
+  return raw !== null && isAlertRule(raw) ? raw : null;
+}
+
+/** Un `AlertKind` de la URL, ya validado. */
+function readAlertKindFilter(value: AdminQueryParam): AlertKind | null {
+  const raw = readSingleParam(value);
+
+  return raw !== null && isAlertKind(raw) ? raw : null;
+}
+
+/**
+ * ¿Es un `AlertRule` del enum?
+ *
+ * Allowlist contra el enum generado, y no contra una lista escrita aquí: una regla nueva
+ * —que exige un cambio de esquema, así que es un cambio de código— se puede filtrar en
+ * cuanto existe, y sin tener que acordarse de añadirla a dos sitios. Lo que no se acepta
+ * es un valor inventado, porque entonces el filtro sería una afirmación falsa.
+ */
+function isAlertRule(value: string): value is AlertRule {
+  return (Object.values(AlertRule) as string[]).includes(value);
+}
+
+/** ¿Es un `AlertKind` del enum? Con la misma Allowlist que `isAlertRule()`. */
+function isAlertKind(value: string): value is AlertKind {
+  return (Object.values(AlertKind) as string[]).includes(value);
+}
+
+/**
+ * Los filtros de la tabla de alertas, ya validados.
+ *
+ * El rango es el mismo que el del historial y con los mismos bordes: un `?to` tiene que
+ * incluir el día entero en las dos tablas, y sería una sorpresa que en una significara
+ * algo distinto.
+ */
+export type AdminAlertsFilters = {
+  /** `Player.id` con forma de `cuid`, o `null` si no hay filtro. */
+  playerId: string | null;
+  /** Rango sobre `Alert.createdAt`. */
+  rango: AdminDateRange;
+  /** La regla, o `null`. */
+  regla: AlertRule | null;
+  /** El tipo de alerta (`kind`), o `null`. */
+  kind: AlertKind | null;
+};
+
+/**
+ * Los filtros de la tabla de alertas, ya validados y listos para el `where`.
+ *
+ * Exportado para `npm run verify:sync`: son funciones puras y son donde se decide qué
+ * hace una URL manipulada (`?regla=inventada`, `?tipo=GANADOR`, `?from=2026-02-31`).
+ */
+export function readAlertsFilters(query: AdminAlertsQuery): AdminAlertsFilters {
+  return {
+    playerId: readPlayerIdFilter(query.playerId),
+    rango: dateRangeWhere(query.from, query.to),
+    regla: readAlertRuleFilter(query.regla),
+    kind: readAlertKindFilter(query.tipo),
+  };
+}
+
+/**
+ * Alertas disparadas, de la más reciente a la más antigua y paginadas, con sus filtros
+ * y su orden en la URL.
+ *
+ * ## Qué se filtra y qué no, y por qué
+ *
+ * Se filtra por **fecha, jugador, regla y tipo**. Los tres primeros son columnas de la
+ * tabla y el cuarto se pinta como distintivo dentro de la de regla, pero es el criterio por
+ * el que más se recorta una tabla de avisos —"solo lo que rompió una racha", "solo los
+ * acumulados que se alcanzaron"— y por eso tiene su propio parámetro en vez de quedar
+ * metido en la regla.
+ *
+ * **No** hay filtro por sujeto, por detalle ni por conteo, y es una decisión del cliente
+ * y no un hueco:
+ *
+ * - El **sujeto** es el nombre de alguien que puede no estar en la liga (es lo normal en
+ *   un torneo individual), así que no hay una lista de la que elegir: un desplegable
+ *   tendría que ser un buscador sobre la propia tabla.
+ * - El **detalle** es una frase redactada por el motor ("3 partidas seguidas contra
+ *   Marta"), y filtrar por un trozo de texto libre no es un filtro, es un buscador.
+ * - El **conteo** es un número, y con la vista se escanea; un filtro por él solo valdría
+ *   para "solo las de 5 o más", que no es ninguna pregunta que alguien se haga con unos
+ *   avisos.
  *
  * ## El orden es total a propósito
  *
- * `createdAt` y luego `id`: dos alertas del mismo milisegundo tienen que tener un orden
- * estable, o una página podría repetir o perder filas de la anterior. Es el mismo
- * desempate que usa el historial de acciones, y el índice `@@index([createdAt])` sostiene
- * la consulta.
+ * Todos los órdenes acaban en `id`: dos alertas del mismo milisegundo tienen que tener un
+ * orden estable, o una página podría repetir o perder filas de la anterior. El índice
+ * `@@index([createdAt])` sostiene el orden por defecto, que es el que se usa casi siempre.
  *
  * `degraded` significa lo mismo que en el resto del módulo: **no se ha podido leer**, no
  * "no hay alertas". Un corte de la base dejaría la pestaña vacía y parecería que el
  * torneo está limpio, que es la afirmación más falsa que puede hacer esta pantalla.
  */
 export async function getAdminAlerts(
-  query: AdminPageQuery = {},
-): Promise<PublicRead<AdminPage<AdminAlertRow>>> {
+  query: AdminAlertsQuery = {},
+): Promise<PublicRead<AdminPage<AdminAlertRow, AdminAlertsSort>>> {
   return readFromDatabase("admin/getAdminAlerts", async () => {
     const page = readBoundedInt(query.page, { min: 1, max: 100_000, fallback: 1 });
     const pageSize = readBoundedInt(query.pageSize, {
@@ -1077,16 +1704,28 @@ export async function getAdminAlerts(
       max: MAX_PAGE_SIZE,
       fallback: DEFAULT_PAGE_SIZE,
     });
+    const sort = readAlertsSort(query);
+    const filtros = readAlertsFilters(query);
 
-    return adminPage<AdminAlertRow>(async (wanted) => {
+    // Un solo `where` para las **dos** consultas, como en el resto de listas con filtro:
+    // un `count` que no contara lo mismo que la página daría una paginación falsa.
+    const where: Prisma.AlertWhereInput = {
+      ...(filtros.playerId === null ? {} : { playerId: filtros.playerId }),
+      ...(hasDateBounds(filtros.rango) ? { createdAt: filtros.rango } : {}),
+      ...(filtros.regla === null ? {} : { rule: filtros.regla }),
+      ...(filtros.kind === null ? {} : { kind: filtros.kind }),
+    };
+
+    return adminPage<AdminAlertRow, AdminAlertsSort>(async (wanted) => {
       const [rows, total] = await Promise.all([
         db.alert.findMany({
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          where,
+          orderBy: ALERT_ORDER_BY[sort.key](sort.dir),
           skip: (wanted - 1) * pageSize,
           take: pageSize,
           select: ALERT_SELECT,
         }),
-        db.alert.count(),
+        db.alert.count({ where }),
       ]);
 
       return {
@@ -1105,7 +1744,7 @@ export async function getAdminAlerts(
           summary: row.summary,
         })),
       };
-    }, page, pageSize);
+    }, page, pageSize, sort);
   });
 }
 

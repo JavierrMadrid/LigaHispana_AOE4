@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { PlayerCombobox, type ComboboxOption } from "./player-combobox";
+import { PlayerCombobox, type ComboboxOption } from "@/components/player-combobox";
 
 type MatchHistoryFiltersProps = {
   players: ComboboxOption[];

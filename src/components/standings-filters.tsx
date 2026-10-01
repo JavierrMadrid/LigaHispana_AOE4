@@ -151,7 +151,7 @@ function FilterPill({
           : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
       }`}
     >
-      <span aria-hidden="true" className="flex size-3.5 shrink-0 items-center justify-center">
+      <span aria-hidden="true" className="flex h-3.5 shrink-0 items-center justify-center">
         {mark}
       </span>
       {children}

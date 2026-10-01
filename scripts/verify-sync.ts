@@ -9,6 +9,19 @@ import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 import { CIVILIZATIONS, isKnownCivilization } from "@/lib/civs";
 import { unwrapRead } from "@/lib/db-errors";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
+import { AlertKind, AlertRule } from "@/generated/prisma/enums";
+import {
+  historyComparator,
+  historyHole,
+  readActionsSort,
+  readAlertsFilters,
+  readAlertsSort,
+  readHistoryFilters,
+  readHistorySort,
+  readPlayerIdFilter,
+  type AdminHistorySort,
+  type AdminMatchHistoryRow,
+} from "@/lib/admin";
 import {
   countsAsRanked,
   DEFAULT_RULESET,
@@ -51,6 +64,7 @@ const EXPECTED_OBJECTIVE_COUNT = 38;
  * de `[from, to)` y son las que deciden qué cuenta.
  */
 const WINDOW_PROFILE_ID = 9_000_006;
+
 
 /**
  * Reloj congelado para las comprobaciones de normalización: al pasarle `NOW` a
@@ -2121,10 +2135,517 @@ async function runDatabaseChecks(): Promise<void> {
   }
 }
 
+
+
+/**
+ * Parámetros de la URL del panel: los filtros y el orden de las tres listas paginadas.
+ *
+ * Sin base de datos, y sin tocar ninguna: son funciones puras del DAL, y lo que se
+ * comprueba es la parte del contrato que decide **qué hace una URL manipulada**. El
+ * criterio es el del DAL —un valor que no se entiende es ausencia, nunca error ni "cero
+ * resultados"—, y estas comprobaciones son las que lo fijan para que no se pueda relajar
+ * sin que se note.
+ *
+ * El script corre con `--conditions=react-server` (ver `package.json`) porque el DAL es
+ * `server-only`. Importarlo no toca la base de datos: el cliente de Prisma es perezoso y
+ * solo se crea en la primera consulta.
+ */
+async function checkAdminQueryParams(): Promise<void> {
+  console.log("Parámetros del panel: filtros y orden");
+
+  await check("sin parámetros, las tres listas salen por fecha descendente", () => {
+    assert.deepEqual(readAlertsSort({}), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readHistorySort({}), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readActionsSort({}), { key: "fecha", dir: "desc" });
+  });
+
+  await check("toda columna admitida, en los dos sentidos", () => {
+    for (const key of ["fecha", "jugador", "regla", "sujeto", "conteo"] as const) {
+      assert.deepEqual(readAlertsSort({ sort: key, dir: "asc" }), { key, dir: "asc" });
+      assert.deepEqual(readAlertsSort({ sort: key, dir: "desc" }), { key, dir: "desc" });
+    }
+
+    for (const key of ["fecha", "resultado"] as const) {
+      assert.deepEqual(readHistorySort({ sort: key, dir: "asc" }), { key, dir: "asc" });
+      assert.deepEqual(readHistorySort({ sort: key, dir: "desc" }), { key, dir: "desc" });
+    }
+
+    for (const key of ["fecha", "tipo", "admin"] as const) {
+      assert.deepEqual(readActionsSort({ sort: key, dir: "asc" }), { key, dir: "asc" });
+      assert.deepEqual(readActionsSort({ sort: key, dir: "desc" }), { key, dir: "desc" });
+    }
+  });
+
+  await check("una columna que no es de esa lista cae al orden por defecto", () => {
+    // El nombre técnico de la columna, una columna de otra lista y una inventada.
+    assert.deepEqual(readAlertsSort({ sort: "subjectName" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "resultado" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "admin" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readHistorySort({ sort: "conteo" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readHistorySort({ sort: "jugador" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readActionsSort({ sort: "jugador" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "" }), { key: "fecha", dir: "desc" });
+  });
+
+  await check("mayúsculas y acentos no son la misma columna", () => {
+    // Los valores de `sort` los escriben los enlaces de la propia tabla, así que la
+    // comparación es literal: no se pliega el texto ni se ignoran tildes.
+    assert.deepEqual(readAlertsSort({ sort: "FECHA" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "Jugador" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readActionsSort({ sort: "Ádmin" }), { key: "fecha", dir: "desc" });
+  });
+
+  await check("un `dir` que no vale es el sentido por defecto", () => {
+    assert.deepEqual(readAlertsSort({ sort: "conteo", dir: "arriba" }), {
+      key: "conteo",
+      dir: "desc",
+    });
+    assert.deepEqual(readAlertsSort({ sort: "conteo", dir: "ASC" }), {
+      key: "conteo",
+      dir: "desc",
+    });
+    assert.deepEqual(readAlertsSort({ sort: "conteo", dir: "" }), { key: "conteo", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "conteo", dir: "1" }), { key: "conteo", dir: "desc" });
+  });
+
+  await check("`dir` sin `sort` es la columna por defecto en ese sentido", () => {
+    // Los dos parámetros son independientes: un enlace de "quitar orden" puede borrar
+    // solo `sort` y dejar `dir=desc` sin que eso sea un estado imposible.
+    assert.deepEqual(readAlertsSort({ dir: "asc" }), { key: "fecha", dir: "asc" });
+    assert.deepEqual(readHistorySort({ dir: "asc" }), { key: "fecha", dir: "asc" });
+    assert.deepEqual(readActionsSort({ dir: "asc" }), { key: "fecha", dir: "asc" });
+  });
+
+  await check("un parámetro repetido se queda con el primero", () => {
+    assert.deepEqual(readAlertsSort({ sort: ["conteo", "regla"], dir: "asc" }), {
+      key: "conteo",
+      dir: "asc",
+    });
+    assert.deepEqual(readHistorySort({ sort: ["resultado", "inventada"] }), {
+      key: "resultado",
+      dir: "desc",
+    });
+  });
+
+  await check("filtro de jugador: un `Player.id` con forma, o nada", () => {
+    assert.equal(readPlayerIdFilter("clx123abc"), "clx123abc");
+    assert.equal(readPlayerIdFilter("noSoyUnCuid"), null);
+    assert.equal(readPlayerIdFilter("CLX123ABC"), null);
+    assert.equal(readPlayerIdFilter("clx-123"), null);
+    assert.equal(readPlayerIdFilter(""), null);
+    assert.equal(readPlayerIdFilter(undefined), null);
+    assert.equal(readPlayerIdFilter(["clx1", "clx2"]), "clx1");
+  });
+
+  await check("filtro de regla: allowlist de los ocho `AlertRule`", () => {
+    for (const regla of Object.values(AlertRule)) {
+      assert.equal(readAlertsFilters({ regla }).regla, regla, `la regla ${regla} se admite`);
+    }
+
+    assert.equal(readAlertsFilters({}).regla, null);
+    assert.equal(readAlertsFilters({ regla: "" }).regla, null);
+    assert.equal(readAlertsFilters({ regla: "short_match_streak" }).regla, null);
+    assert.equal(readAlertsFilters({ regla: "INVENTADA" }).regla, null);
+    assert.equal(readAlertsFilters({ regla: "TEAMMATE_ELO_GAP " }).regla, "TEAMMATE_ELO_GAP");
+  });
+
+  await check("filtro de tipo: allowlist de los tres `AlertKind`", () => {
+    for (const tipo of Object.values(AlertKind)) {
+      assert.equal(readAlertsFilters({ tipo }).kind, tipo, `el tipo ${tipo} se admite`);
+    }
+
+    assert.equal(readAlertsFilters({}).kind, null);
+    assert.equal(readAlertsFilters({ tipo: "streak_closed" }).kind, null);
+    assert.equal(readAlertsFilters({ tipo: "GANADOR" }).kind, null);
+  });
+
+  await check("rango de fechas: `from` inclusivo y `to` con el día entero dentro", () => {
+    const desde = readAlertsFilters({ from: "2026-09-01" }).rango;
+    const hasta = readAlertsFilters({ to: "2026-09-30" }).rango;
+
+    assert.equal(desde.gte?.toISOString(), "2026-09-01T00:00:00.000Z");
+    assert.equal(desde.lt, undefined);
+    assert.equal(hasta.lt?.toISOString(), "2026-10-01T00:00:00.000Z");
+    assert.equal(hasta.gte, undefined);
+  });
+
+  await check("una fecha imposible es ausencia de filtro, no un rango desplazado", () => {
+    assert.deepEqual(readAlertsFilters({ from: "2026-02-31" }).rango, {});
+    assert.deepEqual(readAlertsFilters({ to: "2026-13-01" }).rango, {});
+    assert.deepEqual(readAlertsFilters({ from: "ayer" }).rango, {});
+    // Un instante sin zona no se admite: se interpretaría en hora local.
+    assert.deepEqual(readAlertsFilters({ from: "2026-09-01T10:00:00" }).rango, {});
+    // Con zona explícita se usa tal cual, sin desplazarlo.
+    assert.equal(
+      readAlertsFilters({ from: "2026-09-01T10:00:00Z" }).rango.gte?.toISOString(),
+      "2026-09-01T10:00:00.000Z",
+    );
+  });
+
+  await check("los cuatro filtros de alertas se combinan y no se pisan", () => {
+    const filtros = readAlertsFilters({
+      playerId: "clx1",
+      from: "2026-09-01",
+      to: "2026-09-30",
+      regla: AlertRule.REPEATED_OPPONENT_STREAK,
+      tipo: AlertKind.STREAK_CLOSED,
+    });
+
+    assert.equal(filtros.playerId, "clx1");
+    assert.equal(filtros.rango.gte?.toISOString(), "2026-09-01T00:00:00.000Z");
+    assert.equal(filtros.rango.lt?.toISOString(), "2026-10-01T00:00:00.000Z");
+    assert.equal(filtros.regla, "REPEATED_OPPONENT_STREAK");
+    assert.equal(filtros.kind, "STREAK_CLOSED");
+  });
+
+  await check("el filtro de resultado del historial y su orden no se pisan", () => {
+    // `?resultado=WIN` recorta filas (y deja fuera los objetivos) y `?sort=resultado`
+    // las ordena: dos parámetros distintos que pueden ir a la vez.
+    assert.equal(readHistoryFilters({ resultado: "WIN" }).resultado, "WIN");
+    assert.deepEqual(readHistorySort({ sort: "resultado", dir: "asc" }), {
+      key: "resultado",
+      dir: "asc",
+    });
+    assert.equal(readHistoryFilters({ resultado: "WIN", sort: "resultado" }).resultado, "WIN");
+
+    assert.equal(readHistoryFilters({ resultado: "VICTORIA" }).resultado, null);
+    assert.equal(readHistoryFilters({ resultado: "win" }).resultado, null);
+    assert.equal(readHistoryFilters({}).resultado, null);
+
+    // Y los otros filtros del historial son los mismos criterios, con los mismos bordes.
+    const conTodo = readHistoryFilters({ playerId: "clx1", from: "2026-09-01", resultado: "LOSS" });
+
+    assert.equal(conTodo.playerId, "clx1");
+    assert.equal(conTodo.rango.gte?.toISOString(), "2026-09-01T00:00:00.000Z");
+    assert.equal(conTodo.resultado, "LOSS");
+  });
+}
+
+/**
+ * Una fila del feed mezclado del historial, con lo mínimo para poder compararla.
+ *
+ * Solo el `resultado` o el `objetivo` la convierten en una cosa u otra: el feed real ya
+ * viene de `partidaEnFila()` y de `eventosDeObjetivo()`, y aquí solo hace falta que el
+ * comparador tenga filas de las dos clases con instantes repetidos, que es donde se
+ * comprueba que el orden es total.
+ */
+function filaHistorial(row: {
+  id: string;
+  fecha: string;
+  resultado?: "WIN" | "LOSS" | null;
+  objetivo?: string;
+}): AdminMatchHistoryRow {
+  return {
+    id: row.id,
+    startedAt: new Date(row.fecha),
+    playerId: "clx1",
+    playerName: "Jugador",
+    playerProfileId: 9_000_001,
+    points: 0,
+    objective:
+      row.objetivo === undefined
+        ? null
+        : {
+            id: row.objetivo,
+            label: row.objetivo,
+            group: "actividad",
+            metric: "partidas",
+            points: 40,
+          },
+    gameId: row.objetivo === undefined ? "9000001" : null,
+    opponentName: null,
+    opponentProfileId: null,
+    result: row.objetivo === undefined ? (row.resultado ?? "WIN") : null,
+    teamSize: row.objetivo === undefined ? "1vs1" : null,
+    mode: row.objetivo === undefined ? "rm_solo" : null,
+    leaderboard: row.objetivo === undefined ? "rm_solo" : null,
+    map: null,
+    revertedAt: null,
+  };
+}
+
+/** Fechas de las filas sintéticas: tres días, con instantes repetidos a propósito. */
+const H1 = "2026-09-01T10:00:00.000Z";
+const H2 = "2026-09-02T10:00:00.000Z";
+const H3 = "2026-09-03T10:00:00.000Z";
+
+/**
+ * Orden del feed mezclado del historial: el comparador que sostiene la paginación.
+ *
+ * Sin base de datos, porque las tres propiedades de las que depende que una página sea
+ * una ventana real del feed son de comparación de filas y se pueden comprobar con filas
+ * sintéticas. Son exactamente las que seonthrow: **totalidad** (sin desempate, dos filas
+ * del mismo instante podrían salir en cualquier orden entre sí y una página podría
+ * repetir o perder filas), **inversión** (`asc` es el reverso exacto de `desc`) y
+ * **consistencia con las consultas** (el merge solo es correcto si las dos mitadas
+ * llegan ya ordenadas como el comparador las ordena).
+ */
+/**
+ * Paginar el feed mezclado con la aritmética de `historyHole()`, sin base de datos.
+ *
+ * Reproduce lo que hace `getAdminMatchHistory()` —traer los objetivos enteros, acotar las
+ * partidas con el hueco, mezclar con el comparador y recortar la página— y comprueba que
+ * recorriendo **todas** las páginas salen exactamente las filas del feed, en su orden y
+ * sin repeticiones. Es la comprobación que respalda que el orden por resultado puede
+ * reutilizar el hueco del orden por fecha: si la aritmética dependiera del eje, aquí se
+ * vería con solo cambiar `sort`.
+ */
+async function checkHistoryPaging(): Promise<void> {
+  // Doce partidas y cinco objetivos repartidos por tres días, con empates de fecha y con
+  // hitos intercalados, que es la forma de que el hueco tenga que trabajar de verdad.
+  const instantes = [
+    "2026-09-01T09:00:00.000Z",
+    "2026-09-01T15:00:00.000Z",
+    "2026-09-02T09:00:00.000Z",
+    "2026-09-02T15:00:00.000Z",
+    "2026-09-03T09:00:00.000Z",
+    "2026-09-03T15:00:00.000Z",
+  ];
+
+  const partidas = instantes.flatMap((fecha, i) => [
+    filaHistorial({ id: `m${i}a`, fecha, resultado: i % 3 === 0 ? "LOSS" : "WIN" }),
+    filaHistorial({ id: `m${i}b`, fecha, resultado: i % 3 === 0 ? "WIN" : "LOSS" }),
+  ]);
+
+  const objetivos = [0, 1, 2, 3, 4].map((i) =>
+    filaHistorial({
+      id: `o${i}`,
+      fecha: instantes[i % instantes.length],
+      objetivo: `objetivo-${i}`,
+    }),
+  );
+
+  const total = partidas.length + objetivos.length;
+
+  await check(
+    "paginar el feed no repite ni pierde filas, en los dos ejes de orden",
+    () => {
+      for (const sort of [
+        { key: "fecha", dir: "desc" },
+        { key: "fecha", dir: "asc" },
+        { key: "resultado", dir: "desc" },
+        { key: "resultado", dir: "asc" },
+      ] satisfies AdminHistorySort[]) {
+        for (const pageSize of [1, 2, 5, 25]) {
+          // El feed entero, que es contra lo que se compara lo que sale de paginar.
+          const feed = [...partidas, ...objetivos]
+            .sort(historyComparator(sort))
+            .map((row) => row.id);
+
+          const recorrido: string[] = [];
+          const pageCount = Math.ceil(total / pageSize);
+          const signo = sort.dir === "desc" ? -1 : 1;
+
+          for (let page = 1; page <= pageCount; page += 1) {
+            const skip = (page - 1) * pageSize;
+            const eventos = [...objetivos].sort(historyComparator(sort));
+            const { skipPartidas, takePartidas, desde } = historyHole(
+              skip,
+              pageSize,
+              eventos.length,
+            );
+
+            // Lo que devolverían las dos consultas con ese `orderBy`: las partidas acotadas
+            // por el hueco y todos los objetivos.
+            const ventanaPartidas = [...partidas]
+              .sort((a, b) => {
+                if (sort.key === "resultado") {
+                  const rango = (row: AdminMatchHistoryRow) => (row.result === "WIN" ? 1 : 2);
+                  const diferencia = rango(a) - rango(b);
+
+                  if (diferencia !== 0) {
+                    return diferencia * signo;
+                  }
+                }
+
+                const porFecha = (a.startedAt.getTime() - b.startedAt.getTime()) * signo;
+
+                return porFecha !== 0 ? porFecha : (a.id < b.id ? -1 : 1) * signo;
+              })
+              .slice(skipPartidas, skipPartidas + takePartidas);
+
+            const pagina = [...ventanaPartidas, ...eventos]
+              .sort(historyComparator(sort))
+              .slice(desde, desde + pageSize)
+              .map((row) => row.id);
+
+            const etiqueta = `sort=${sort.key}&dir=${sort.dir}&pageSize=${pageSize}&pagina=${page}`;
+
+            assert.deepEqual(
+              pagina,
+              feed.slice(skip, skip + pageSize),
+              `${etiqueta}: la página no es una ventana del feed`,
+            );
+            recorrido.push(...pagina);
+          }
+
+          assert.deepEqual(
+            recorrido,
+            feed,
+            `sort=${sort.key}&dir=${sort.dir}&pageSize=${pageSize}: recorrido con huecos o repeticiones`,
+          );
+          assert.equal(new Set(recorrido).size, total, "alguna fila sale repetida");
+        }
+      }
+    },
+  );
+}
+
+async function checkHistoryOrder(): Promise<void> {
+  console.log("Orden del feed mezclado del historial");
+
+  await checkHistoryPaging();
+
+  // Dos días con empates de fecha, las dos clases de fila y los tres rangos de resultado,
+  // que es la peor combinación posible para el comparador.
+  const partidas = [
+    filaHistorial({ id: "m1", fecha: H3, resultado: "WIN" }),
+    filaHistorial({ id: "m2", fecha: H3, resultado: "LOSS" }),
+    filaHistorial({ id: "m3", fecha: H2, resultado: "LOSS" }),
+    filaHistorial({ id: "m4", fecha: H1, resultado: "WIN" }),
+  ];
+
+  const objetivos = [
+    filaHistorial({ id: "o1", fecha: H3, objetivo: "loco-por-ganar" }),
+    filaHistorial({ id: "o2", fecha: H2, objetivo: "otp" }),
+  ];
+
+  const todas = [...partidas, ...objetivos];
+
+  const orden = (sort: AdminHistorySort, filas: AdminMatchHistoryRow[]) =>
+    [...filas].sort(historyComparator(sort));
+
+  await check("el comparador no deja dos filas empatadas", () => {
+    for (const key of ["fecha", "resultado"] as const) {
+      for (const dir of ["asc", "desc"] as const) {
+        const comparar = historyComparator({ key, dir });
+
+        for (const a of todas) {
+          for (const b of todas) {
+            if (a.id === b.id) {
+              continue;
+            }
+
+            assert.notEqual(
+              comparar(a, b),
+              0,
+              `${a.id} y ${b.id} empatan con sort=${key}&dir=${dir}`,
+            );
+            assert.equal(
+              comparar(a, b),
+              -comparar(b, a),
+              `${a.id} y ${b.id} no son simétricos con sort=${key}&dir=${dir}`,
+            );
+          }
+        }
+      }
+    }
+  });
+
+  await check("asc es el inverso exacto de desc", () => {
+    for (const key of ["fecha", "resultado"] as const) {
+      const asc = orden({ key, dir: "asc" }, todas).map((row) => row.id);
+      const desc = orden({ key, dir: "desc" }, todas).map((row) => row.id);
+
+      assert.deepEqual(asc, [...desc].reverse(), `sort=${key} no se invierte entero`);
+    }
+  });
+
+  await check("por fecha, la partida va delante del objetivo del mismo instante", () => {
+    // Descendente y con la clave de desempate también descendente: en H3 son `m2`, `m1` y
+    // `o1`, y la partida que explica el hito va delante de él.
+    assert.deepEqual(
+      orden({ key: "fecha", dir: "desc" }, todas).map((row) => row.id),
+      ["m2", "m1", "o1", "m3", "o2", "m4"],
+    );
+  });
+
+  await check("por resultado, los objetivos van delante de victorias y derrotas", () => {
+    const asc = orden({ key: "resultado", dir: "asc" }, todas);
+    const rangos = asc.map((row) => (row.objective !== null ? 0 : row.result === "WIN" ? 1 : 2));
+
+    assert.deepEqual(rangos, [...rangos].sort((a, b) => a - b), "los rangos no salen agrupados");
+    assert.equal(rangos[0], 0, "el primer rango de ascendente es el de objetivo");
+    assert.equal(rangos[rangos.length - 1], 2, "el último rango de ascendente es el de derrota");
+
+    // Dentro de cada rango se ordena por fecha **en el sentido del orden**, y `asc` es el
+    // inverso entero de `desc`: o2 (2-sep) antes que o1 (3-sep), y al revés en `desc`.
+    assert.deepEqual(
+      asc.map((row) => row.id),
+      ["o2", "o1", "m4", "m1", "m3", "m2"],
+    );
+  });
+
+  await check("comparar no reordena las mitadas que ya llegan ordenadas", () => {
+    // Es la condición del merge: las dos consultas traen sus filas en el orden del
+    // comparador, así que mezclar las dos mitadas solo puede **intercalar** filas, nunca
+    // cambiar el orden dentro de una de ellas. Si el comparador contradijera al `orderBy`
+    // de alguna consulta, la página dejaría de ser una ventana del feed real.
+    for (const sort of [
+      { key: "fecha", dir: "desc" },
+      { key: "fecha", dir: "asc" },
+      { key: "resultado", dir: "desc" },
+      { key: "resultado", dir: "asc" },
+    ] satisfies AdminHistorySort[]) {
+      // Cada mitad, ordenada como su consulta. Es una copia de los `orderBy` de
+      // `admin.ts` a propósito, porque es lo que hay que comprobar que no se contradiga:
+      // en `resultado` el `result` va primero, y las dos mitadas terminan en su clave,
+      // ambas en el sentido del orden.
+      // `signo` aquí es el del `orderBy` escrito al revés: estas diferencias van en
+      // ascendente, así que `desc` es el que multiplica por `-1`.
+      const signo = sort.dir === "desc" ? -1 : 1;
+
+      const mitadPartidas = [...partidas].sort((a, b) => {
+        if (sort.key === "resultado") {
+          const rango = (row: AdminMatchHistoryRow) => (row.result === "WIN" ? 1 : 2);
+          const diferencia = rango(a) - rango(b);
+
+          if (diferencia !== 0) {
+            return diferencia * signo;
+          }
+        }
+
+        const porFecha = (a.startedAt.getTime() - b.startedAt.getTime()) * signo;
+
+        return porFecha !== 0 ? porFecha : (a.id < b.id ? -1 : 1) * signo;
+      });
+
+      const mitadObjetivos = [...objetivos].sort(
+        (a, b) =>
+          (a.startedAt.getTime() - b.startedAt.getTime()) * signo ||
+          (a.id < b.id ? -1 : 1) * signo,
+      );
+
+      const mezcladas = orden(sort, [...mitadPartidas, ...mitadObjetivos]);
+      const ids = (filas: AdminMatchHistoryRow[]) => filas.map((row) => row.id);
+
+      assert.deepEqual(
+        ids(mezcladas.filter((row) => row.objective === null)),
+        ids(mitadPartidas),
+        `sort=${sort.key}&dir=${sort.dir} reordena las partidas`,
+      );
+      assert.deepEqual(
+        ids(mezcladas.filter((row) => row.objective !== null)),
+        ids(mitadObjetivos),
+        `sort=${sort.key}&dir=${sort.dir} reordena los objetivos`,
+      );
+
+      // Y ninguna fila se pierde ni se repite en el merge, que es lo que la paginación
+      // necesita para que dos páginas no se solapen.
+      assert.equal(mezcladas.length, todas.length, "el merge pierde o repite filas");
+      assert.equal(new Set(ids(mezcladas)).size, todas.length, "el merge repite una fila");
+    }
+  });
+}
+
 async function main(): Promise<void> {
   await checkNormalization();
   console.log("");
   await checkObjectiveCatalogue();
+  console.log("");
+  await checkAdminQueryParams();
+  console.log("");
+  await checkHistoryOrder();
   console.log("");
 
   if (process.argv.includes("--db")) {

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { AdminActionType } from "@/generated/prisma/enums";
 import { EmptyState } from "@/components/empty-state";
 import { PageSizeSelect } from "@/components/page-size-select";
+import { SortableHeaderLink } from "@/components/sortable-header";
 import { getAdminActions } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
 import { formatAbsoluteTime } from "@/lib/format";
@@ -37,15 +38,24 @@ const ACTION_STYLES: Record<AdminActionType, string> = {
   MATCH_POINTS_RESTORED: "border-win/40 text-win",
 };
 
+/** Un valor de `searchParams` reducido a texto, para los enlaces de paginación. */
+function single(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export default async function AdminActionsPage({ searchParams }: PageProps<"/admin/acciones">) {
   await requireAdmin();
 
   const params = await searchParams;
   const actions = await getAdminActions(params);
 
-  // El historial de acciones no tiene filtros, pero sí tamaño de página: viaja en la
-  // URL y hay que devolvérselo a la paginación, o al pasar de página volvería a 25.
-  const pageSize = Array.isArray(params.pageSize) ? params.pageSize[0] : params.pageSize;
+  // El historial de acciones no tiene filtros, pero sí tamaño de página y orden: viajan
+  // en la URL y hay que devolvérselos a la paginación, o al pasar de página se perderían.
+  const query = {
+    pageSize: single(params.pageSize),
+    sort: single(params.sort),
+    dir: single(params.dir),
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -78,15 +88,30 @@ export default async function AdminActionsPage({ searchParams }: PageProps<"/adm
               </caption>
               <thead className="bg-surface text-muted">
                 <tr>
-                  <th scope="col" className="hidden w-44 px-4 py-3 font-medium md:table-cell">
-                    Fecha
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-medium">
-                    Acción
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                    Admin
-                  </th>
+                  <SortableHeaderLink
+                    column="fecha"
+                    label="Fecha"
+                    sort={actions.data.sort}
+                    basePath="/admin/acciones"
+                    query={query}
+                    className="hidden w-44 px-4 py-3 font-medium md:table-cell"
+                  />
+                  <SortableHeaderLink
+                    column="tipo"
+                    label="Acción"
+                    sort={actions.data.sort}
+                    basePath="/admin/acciones"
+                    query={query}
+                    className="px-4 py-3 font-medium"
+                  />
+                  <SortableHeaderLink
+                    column="admin"
+                    label="Admin"
+                    sort={actions.data.sort}
+                    basePath="/admin/acciones"
+                    query={query}
+                    className="hidden px-4 py-3 font-medium lg:table-cell"
+                  />
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -144,7 +169,7 @@ export default async function AdminActionsPage({ searchParams }: PageProps<"/adm
               shown={actions.data.rows.length}
               total={actions.data.total}
               basePath="/admin/acciones"
-              query={{ pageSize }}
+              query={query}
             />
           </div>
         </>
