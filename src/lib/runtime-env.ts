@@ -8,7 +8,9 @@
  *
  * - `workerd`, con el flag `nodejs_compat_populate_process_env` (activo por
  *   defecto desde `compatibility_date` 2025-04-01), vuelca ahí los bindings de
- *   texto del Worker.
+ *   texto del Worker. Este repo va con `2025-03-25`, así que hoy ese camino
+ *   **no** existe; por eso leer el binding primero no es una medida de
+ *   robustez, es lo único que funciona. Ver `docs/DESPLIEGUE.md`.
  * - `@opennextjs/cloudflare`, en `populateProcessEnv()` (la ejecuta el entrypoint
  *   del Worker en la primera petición del isolate), copia a `process.env` las
  *   entradas de texto del `env` que le llega a `fetch`.

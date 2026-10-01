@@ -46,15 +46,40 @@ Lo que hay que tener delante al escribirlo:
 - **`name` tiene que ser el Worker donde están las variables.** Si no coincide, se despliega a otro
   Worker, sin bindings, y todo lo de más pasa desapercibido porque la app responde igual. Es la
   primera causa que hay que descartar.
-- **`compatibility_date` de 2025-04-01 o posterior** activa `nodejs_compat_populate_process_env`. La
-  que genera la CLI sale del último `workerd` de npm, así que hoy ya es moderna; bajarla a una
-  anterior desactivaría el relleno de `process.env` y solo se vería en los bindings.
+- **`compatibility_date`: el umbral es 2025-04-01 y el valor del repo es `2025-03-25`, por debajo.**
+  `nodejs_compat_populate_process_env` (el flag que vuelca los *bindings* en `process.env`) está
+  activo por defecto a partir de 2025-04-01, así que **hoy no lo está**. Una versión anterior de
+  este documento decía que la fecha la generaba la CLI a partir del último `workerd` de npm y que
+  por eso "ya era moderna": es falso. El valor real está en el `wrangler.jsonc` versionado y se
+  puede confirmar en el panel (Settings → *Deployments*), que hoy enseña `2025-03-25`.
+  **No rompe nada**, porque el proyecto no depende de ese relleno: toda lectura de configuración
+  del servidor pasa por [`src/lib/runtime-env.ts`](../src/lib/runtime-env.ts), que lee **los
+  bindings** y usa `process.env` solo como reserva (ver
+  [Cómo se lee la configuración en el Worker](#cómo-se-lee-la-configuración-en-el-worker)).
+- **Subir la fecha es una opción con riesgo, no un arreglo pendiente, y no se ha hecho.** Workers
+  Builds avisa en cada build:
+
+  ```txt
+  WARN workerd compatibility_date: 2025-03-25, consider updating your wrangler
+  config to a more recent date to benefit from the latest features and fixes.
+  ```
+
+  Ese aviso se puede ignorar mientras siga siendo eso. Lo que no es gratis es moverla:
+  `compatibility_date` gobierna el comportamiento del runtime, así que subirla en un Worker de
+  producción puede cambiar cómo se ejecutan cosas que hoy funcionan (parcheos de `workerd`
+  activados por fecha), y el proyecto depende de ese runtime para lo más delicado que tiene: la
+  conexión a Postgres y el cliente de Prisma por invocación. Si algún día se sube, es una decisión
+  de la organización, y toca comprobar a mano las tres páginas que leen la base (`/`, `/partidas`,
+  `/objetivos`).
 - **Los secretos no van aquí.** Se siguen poniendo en el panel (Settings → Variables and Secrets) y
   se despliega con `npx wrangler deploy --keep-vars`. Solo las *vars* de texto que Next u OpenNext
-  necesitan en build (p. ej. `NEXTJS_ENV`) van en el archivo.
-- Para **ver el `compatibility_date` y el `name` que se están usando hoy** sin desplegar:
-  `npx wrangler deploy --dry-run` imprime a qué Worker y con qué configuración sube, y falla si el
-  archivo no cuadra con lo que hay en `.open-next`.
+  necesitan en build (p. ej. `NEXTJS_ENV`) van en el archivo. Y lo que el build necesita **además**,
+  en *Build variables and secrets* del trigger, es **otra lista**: ver
+  [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
+- Para **ver el `name` y los bindings que se están usando hoy** sin desplegar:
+  `npx wrangler deploy --dry-run` imprime a qué Worker y con qué bindings sube, y falla si el
+  archivo no cuadra con lo que hay en `.open-next`. El `compatibility_date` no lo imprime: ese está
+  en el `wrangler.jsonc` versionado y en el panel (Settings → *Deployments*).
 
 ### El bloque `triggers`
 
@@ -324,7 +349,9 @@ Workers implementation, there is no process-level environment, so by default `en
 object"*, y solo se puebla con los bindings cuando está el flag
 `nodejs_compat_populate_process_env` (activo por defecto para `compatibility_date` de 2025-04-01 o
 posterior) — [docs de
-Cloudflare](https://developers.cloudflare.com/workers/runtime-apis/nodejs/process/#processenv). Por
+Cloudflare](https://developers.cloudflare.com/workers/runtime-apis/nodejs/process/#processenv). **En
+este proyecto ese flag no está activo**: el `compatibility_date` es `2025-03-25`, anterior al
+umbral (ver [`compatibility_date`](#cómo-se-construye-el-worker)). Por
 su parte, `@opennextjs/cloudflare` copia también a `process.env` las entradas de texto del `env` que
 recibe el `fetch`, en la primera invocación del isolate
 ([`populateProcessEnv`](https://github.com/opennextjs/opennextjs-cloudflare/blob/main/packages/cloudflare/src/cli/templates/init.ts)).
@@ -366,8 +393,8 @@ const secret = readRuntimeEnv("CRON_SECRET");
   inlined"*, [docs de
   Next](https://nextjs.org/docs/app/guides/environment-variables#bundling-environment-variables-for-the-browser)).
   Un binding del Worker no puede llegar al bundle del navegador de ninguna manera. Consecuencia
-  práctica: definirlas **también en *Build variables and secrets***, que es lo que hace que existan
-  cuando `next build` compila ([OpenNext,
+  práctica: definirlas **también en *Build variables and secrets*** del trigger, que es lo que hace
+  que existan cuando `next build` compila ([OpenNext,
   env vars](https://opennext.js.org/cloudflare/howtos/env-vars#workers-builds)); en runtime quedan de
   adorno para el servidor.
 - **`NODE_ENV`.** No es configuración: Next lo sustituye por un literal (`production` en build) y no
@@ -397,6 +424,10 @@ Ningún cambio de código lo arregla: es configuración de despliegue. La causa 
 `wrangler.jsonc` no estaba versionado, así que `@opennextjs/cloudflare` lo generaba en cada build y
 `wrangler deploy` reconstruía el Worker solo con lo que traía ese archivo, perdiendo las variables
 del panel. Ya está versionado (ver arriba).
+
+La otra causa posible es de las dos listas del panel: un secreto está en *Build variables and secrets*
+y no en los secretos del Worker, o al revés. Ver
+[Los dos sitios del panel: secretos del Worker y build variables](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
 
 ## La base de datos en el Worker: Hyperdrive
 
@@ -460,8 +491,111 @@ exporta antes de lanzar el CLI, que es el paso `deploy` de `npm run deploy`. (No
 `node --import`: `opennextjs-cloudflare` es un *shim* de `node_modules/.bin`, no un módulo, y `node`
 lo resuelve con `ERR_MODULE_NOT_FOUND`.) Con Workers Builds ya conectado (ver
 [Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)),
-esa misma variable hay que ponerla en *Build variables and secrets* del Worker, o el build falla al
-ver el binding.
+esa misma variable hay que ponerla en *Build variables and secrets* del trigger, o el build falla al
+ver el binding. No es la única: ese sitio del panel tiene su propia lista y no es el mismo que el
+de los secretos del Worker. Está en
+[Los dos sitios del panel: secretos del Worker y build variables](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
+
+## Los dos sitios del panel: secretos del Worker y build variables
+
+Son **dos listas distintas y no intercambiables**, y confundirlas es lo que hace que una variable
+esté puesta y aun así falte:
+
+| Sitio del panel | Quién la lee | Cuándo existe |
+|---|---|---|
+| **Settings → Variables and Secrets** (secretos y *vars* del Worker) | El **Worker en runtime**: son los *bindings* que llegan en `ctx.env`. | Mientras el Worker esté desplegado. |
+| **Build variables and secrets** (del *trigger* de Workers Builds) | El **proceso de build**: el `next build` y el `npx wrangler deploy` que ejecuta el pipeline. | Solo mientras dura el build de ese trigger. |
+
+El síntoma de tenerla en el sitio equivocado es que **nada avisa hasta que algo la lee**. El build de
+Next compila entero y bien, el Worker desplegado arranca, y el fallo aparece en el primer módulo que
+la necesita, que puede ser el paso de deploy del pipeline o una petición de una sola página días
+después.
+
+### Qué tiene que estar en las build variables
+
+- **`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`.** Obligatoria: sin ella, el paso
+  `npx wrangler deploy` **aborta**. Es la variable que faltó cuatro pushes seguidos.
+- **Las `NEXT_PUBLIC_*`** (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
+  `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `NEXT_PUBLIC_SITE_URL`). Obligatorias: Next las sustituye por un
+  literal al compilar y en runtime ningún binding puede llegar al bundle del navegador.
+- **Los secretos que lee el código de servidor** (`YOUTUBE_API_KEY`, `CRON_SECRET`,
+  `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`): también están, y deben estarlo. Ojo con el matiz, que
+  es lo que distingue este caso de los dos anteriores: hoy sus lecturas son **perezosas** (dentro
+  del módulo que las usa, nunca al importar), así que el build no las necesita para pasar. La razón
+  de tenerlas no es esa, sino que **el entorno del build no es el entorno del Worker**: en cuanto un
+  módulo de servidor lea su configuración al importar, o se añada un paso de build que la lea, el
+  fallo es el mismo que el de Hyperdrive y con el mismo mensaje engañoso. En el Worker en runtime lo
+  que manda es el binding, y ese lo da el panel del Worker.
+
+Las dos listas se revisaron y quedaron completas el **1 de octubre de 2026**, el mismo día que el
+build dejó de fallar. En la de build variables faltaban la de Hyperdrive (la que rompía el
+despliegue, cuatro pushes seguidos) y `YOUTUBE_API_KEY`.
+
+### El mensaje que sale es engañoso
+
+Cuando falta la variable de Hyperdrive, el build de Next **acaba bien**: `OpenNext build complete.`,
+`Compiled successfully`, `Generating static pages (19/19)` y TypeScript sin errores. Unos 13
+segundos después, ya en el paso `npx wrangler deploy`, muere con esto:
+
+```txt
+UserError: When developing locally, you should use a local Postgres connection
+string to emulate Hyperdrive functionality. Please setup Postgres locally and
+set the value of the 'CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE'
+variable...
+    at applyHyperdriveEnvVars (wrangler-dist/cli.js)
+    at getPlatformProxy → getEnvFromPlatformProxy → deployCommand
+```
+
+Habla de *developing locally* y de montar un Postgres local, y no hay nada de eso: es una variable
+de entorno que falta en CI. Leerlo como un problema de base de datos lleva a mirar el binding, el
+firewall y las credenciales, que es donde no está la causa; el mensaje está escrito para el
+`wrangler dev` local y en el pipeline describe otra cosa.
+
+Lo caro no es el mensaje, es lo que pasa mientras el build falla: **`main` no despliega y producción
+se queda sirviendo la versión anterior**. Pasó dos días así, con el repositorio en `main` y el
+Worker en un número de versión anterior, sin que nada en la web lo dijera.
+
+### Las build variables son por trigger, y hoy solo hay uno
+
+Las *build variables and secrets* cuelgan del **trigger** de Workers Builds, no del Worker. El
+trigger único tiene `branch_includes: ["main"]`, así que **`main` es la única rama que construye y
+despliega, y es el único sitio donde hay que ponerlas**. Consecuencia que conviene tener delante: el
+bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc) está escrito y es correcto, pero **hoy
+no lo ejecuta ningún build**, porque no hay trigger para las ramas. Si se añade uno, ese trigger
+necesita **sus propias** build variables y sus propios secretos, porque de un trigger no se hereda
+nada.
+
+### Ruido conocido del log: `ERROR Failed to copy node_modules/...`
+
+En el build salen, en rojo:
+
+```txt
+ERROR Failed to copy node_modules/{env-paths,grammex,graphmatch,robust-predicates,zeptomatch}
+```
+
+Son **ruido**. Los cinco son dependencias transitivas del **CLI de Prisma** (`prisma` →
+`@prisma/dev` → `@prisma/studio-core`, `@prisma/streams-local`, `zeptomatch`), todo ello
+`devDependencies`: nada de eso entra en el bundle del Worker, que usa el cliente generado en
+`src/generated/prisma`, y el build **termina bien**. Salen porque `copyWorkerdPackages` de OpenNext
+(`dist/cli/build/utils/workerd.js`) copia los paquetes externos que declaran condición `workerd` y
+envuelve cada copia en un `try/catch` que solo registra el error y sigue; no son la causa de nada.
+
+### Qué valor poner en la variable de Hyperdrive
+
+El de la **Session pooler** de Supabase (`*.pooler.supabase.com`, puerto `5432`), que es el mismo
+que va en el `.env` local. **No** el de la conexión directa: esa es solo IPv6, y el entorno de
+build no llega a ella.
+
+El valor de la **build variable** y el de la **configuración de Hyperdrive** son justo al revés, y
+no es un descuido:
+
+| Dónde | Cadena | Por qué |
+|---|---|---|
+| Configuración de Hyperdrive (runtime) | **directa** (`db.<ref>.supabase.co`) | El *pooling* lo pone Hyperdrive; él sí alcanza la directa |
+| `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>` (build) | **Session pooler** | Solo la emulación local de wrangler la mira, y solo llega a IPv4 |
+
+La cadena de la build variable no conecta con nada: la emulación de wrangler solo comprueba que
+exista.
 
 ## El cliente de Prisma: uno por invocación en el Worker, y uno fuera de él
 
@@ -510,16 +644,25 @@ npm run deploy     # opennextjs-cloudflare build y luego deploy --keep-vars
 npm run preview    # build + preview local del Worker
 ```
 
+Este camino es el de **una máquina con el repositorio**. En producción despliega el *trigger* de
+Workers Builds (ver
+[Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)),
+y ahí el envoltorio no se ejecuta: es el *pipeline* el que pone la variable de Hyperdrive, desde
+*Build variables and secrets*. El detalle de las dos listas del panel está en
+[Los dos sitios del panel: secretos del Worker y build variables](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
+
 - `npm run deploy` es un envoltorio, no el CLI a pelo: `scripts/deploy-worker.mjs` exporta
   `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>` desde `.dev.vars` y lanza el punto de
   entrada real de `@opennextjs/cloudflare` con `--keep-vars`.
 - **`--keep-vars`** es lo que OpenNext recomienda para que un despliegue no borre las variables y
   secretos que están en el panel del Worker (Settings → Variables and Secrets). `DATABASE_URL` en el
-  panel es el respaldo para cuando no hay binding de Hyperdrive, y las `NEXT_PUBLIC_*` necesitan
-  estar **además** en *Build variables and secrets*, porque Next las compila dentro del bundle.
+  panel es el respaldo para cuando no hay binding de Hyperdrive.
 - El resto de variables (`NEXT_PUBLIC_SUPABASE_*`, `TURNSTILE_SECRET_KEY`, `CRON_SECRET`,
-  `YOUTUBE_API_KEY`, …) se define en el panel del Worker, y la lista completa está en el
-  [README](../README.md#configuración).
+  `RATE_LIMIT_SALT`, `YOUTUBE_API_KEY`, …) se define en el panel del Worker, y la lista completa está
+  en el [README](../README.md#configuración). Las que el **build** puede necesitar van **además** en
+  *Build variables and secrets* del trigger: las `NEXT_PUBLIC_*` porque Next las compila dentro del
+  bundle, y los secretos que lee el código de servidor porque el entorno del build no es el del
+  Worker.
 
 Lo que hay que hacer en la base de datos antes o después de esto, en
 [`docs/OPERACION.md`](./OPERACION.md#requisitos-operativos-de-un-despliegue).
@@ -531,6 +674,15 @@ Builds no repite el mismo despliegue en todas las ramas: en la rama de producci�
 `npx wrangler deploy`, y en **cualquier otra** `npx wrangler preview`, que crea un *Preview*: un
 entorno aislado del mismo Worker, con URL propia (`<preview>-ligahispana-aoe4.<subdominio>.workers.dev`,
 con `X-Robots-Tag: noindex`) y con sus propias variables, secretos y bindings.
+
+**Hoy solo hay un trigger, y escucha `main`** (`branch_includes: ["main"]`). Es decir: `main` es la
+única rama que construye y despliega, y **la única para la que existen build variables**. Todo lo
+que dice este documento sobre `wrangler preview` describe cómo **sería**, no lo que está pasando: el
+bloque `previews` está escrito y correcto, pero **ningún build lo ejecuta** porque no hay trigger para
+las ramas. Si algún día se añade, ese trigger necesita sus propias build variables y sus propios
+secretos, y el comando pasa a ser `wrangler preview` (ver abajo). Las dos listas y lo que va en cada
+una están en
+[Los dos sitios del panel: secretos del Worker y build variables](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
 
 Ese cambio de comando es la causa de un error que no tiene nada que ver con el código. **`wrangler
 preview` exige un bloque `previews` en `wrangler.jsonc`, y sin él el build muere** con:

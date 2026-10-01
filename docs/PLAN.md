@@ -854,8 +854,11 @@ Kick**, nunca que el torneo se quede sin sincronizar.
    `npm run db:security`: no se crea ninguna tabla y las columnas nuevas heredan la
    postura de `Player`.
 2. Definir `YOUTUBE_API_KEY` en el panel del Worker (Settings → Variables and
-   Secrets), como secreto. **Sin ella no pasa nada**, pero tampoco se detecta ningún
-   directo de YouTube; con ella definida se detecta.
+   Secrets), como secreto, y **además** en *Build variables and secrets* del trigger
+   de Workers Builds, que es otra lista distinta: la del proceso de build, no la del
+   Worker. **Sin ella no pasa nada**, pero tampoco se detecta ningún directo de YouTube;
+   con ella definida se detecta. Ver
+   [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
 
 **La interfaz de los tres canales** (`@design-ux`, ya hecha). La capa de datos
 publica los cuatro campos por participante (`StandingRow` y `AdminParticipant`) y el

@@ -67,9 +67,10 @@ npm run dev          # arranca en http://localhost:3000
 ## Configuración
 
 Copia `.env.example` a `.env`. Las descripciones son de una línea; los valores por defecto van entre
-paréntesis. En producción, en el Worker, la lectura es de dos capas (bindings y `process.env`) y las
-`NEXT_PUBLIC_*` necesitan estar además en *Build variables and secrets*: ver
-[`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
+paréntesis. En producción, en el Worker, hay **dos listas distintas** en el panel: los secretos del
+Worker (Settings → Variables and Secrets) y las *Build variables and secrets* del trigger, que son
+las que ve el proceso de build. Las dos se llenan, y en la segunda también los secretos que lee el
+código de servidor: ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 
 | Variable | Uso |
 |---|---|
@@ -199,7 +200,9 @@ traga un corte de la base y sale con "todo correcto" es peor que no comprobar na
 ## Despliegue en Cloudflare Workers
 
 El Worker se construye con **OpenNext** (`@opennextjs/cloudflare`): `next build` produce `.next/`,
-OpenNext lo convierte en `.open-next/` y de ahí sale el Worker.
+OpenNext lo convierte en `.open-next/` y de ahí sale el Worker. **Producción despliega solo**: el
+repositorio está conectado a Workers Builds y el trigger de `main` ejecuta `npx wrangler deploy`.
+`npm run deploy` es el camino manual, para una máquina con el repositorio.
 
 - **`wrangler.jsonc` y `open-next.config.ts` están versionados a propósito.** Si no existen, OpenNext
   los genera en cada build y su contenido se pierde en cada despliegue: las variables del panel dejan
@@ -209,12 +212,19 @@ OpenNext lo convierte en `.open-next/` y de ahí sale el Worker.
 - Los **secretos** (`DATABASE_URL`, `CRON_SECRET`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`,
   `YOUTUBE_API_KEY`…) se ponen en el panel del Worker, en **Settings → Variables and Secrets**; **no**
   van en `wrangler.jsonc`. `--keep-vars` es lo que evita que un despliegue los borre.
-- Las **`NEXT_PUBLIC_*` además** en **Build variables and secrets**, porque Next las sustituye por
-  literales al compilar y en runtime un binding no puede llegar al bundle del navegador.
+- **Build variables and secrets** (del *trigger* de Workers Builds) es **otra lista distinta**, y no
+  es heredable: ahí es donde vive lo que ve el proceso de build, que es lo único que existe durante
+  el `next build` y el `npx wrangler deploy` del pipeline. Tienen que estar **también** las
+  `NEXT_PUBLIC_*` (Next las sustituye por literales al compilar y en runtime un binding no puede
+  llegar al bundle del navegador), los secretos que lee el código de servidor (`YOUTUBE_API_KEY`,
+  `CRON_SECRET`…) y la cadena local de Hyperdrive
+  `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`, que es la que aborta el paso de deploy
+  si falta. Hoy solo hay un trigger y escucha `main`, así que ese es el único sitio donde hay que
+  ponerlas. Detalle en `docs/DESPLIEGUE.md`, "Los dos sitios del panel".
 - La conexión a la base va por el **binding de Hyperdrive**: `src/lib/db.ts` lee
-  `env.HYPERDRIVE.connectionString` y, si no está, cae a `DATABASE_URL`. El paso que no se puede
-  saltar es la cadena local `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`, que
-  `scripts/deploy-worker.mjs` exporta desde `.dev.vars` antes de lanzar el CLI.
+  `env.HYPERDRIVE.connectionString` y, si no está, cae a `DATABASE_URL`. Ese paso, que no se puede
+  saltar, en local lo hace `scripts/deploy-worker.mjs`, que exporta desde `.dev.vars` la cadena local
+  antes de lanzar el CLI; en CI lo hace la build variable de arriba.
 
 Todo el desarrollo que hay detrás de esto —`pg-cloudflare` y su rama `workerd`,
 `outputFileTracingIncludes`, `runtime = "workerd"`, la lectura de la configuración, Hyperdrive y el
@@ -335,7 +345,7 @@ Sin ese cambio el enlace entra, no verifica nada y la web no abre sesión.
 | [`docs/PLAN.md`](docs/PLAN.md) | Estado de las fases (F0–F10), arquitectura, roadmap, decisiones de stack y decisiones pendientes. **Léelo antes de tocar nada.** |
 | [`docs/PUNTUACION.md`](docs/PUNTUACION.md) | Las reglas de puntuación v2: qué cuenta como clasificatoria, puntos por partida, los 38 objetivos, desempates, calendario y ruleset versionado. |
 | [`docs/MODELO-DATOS.md`](docs/MODELO-DATOS.md) | El modelo de datos tabla por tabla, los índices, las consultas calientes, RLS y privilegios, y el orden de aplicación. |
-| [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md) | El Worker de Cloudflare: OpenNext, `pg-cloudflare`, Prisma con `runtime = "workerd"`, lectura de la configuración, Hyperdrive y el cliente de Prisma. |
+| [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md) | El Worker de Cloudflare: OpenNext, `pg-cloudflare`, Prisma con `runtime = "workerd"`, lectura de la configuración, las dos listas de variables del panel y el build de Workers Builds, Hyperdrive y el cliente de Prisma. |
 | [`docs/OPERACION.md`](docs/OPERACION.md) | Lo que hay que hacer y mirar con el proyecto en marcha: sincronización y sus relojes, salud del sincronizador, límite de CPU, inscripción, alertas, simulaciones y requisitos de un despliegue. |
 
 ## Agentes y skills
