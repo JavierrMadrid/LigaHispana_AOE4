@@ -15,7 +15,12 @@ import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
 import { LiveDot } from "@/components/live-dot";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
-import { StandingsFilters } from "@/components/standings-filters";
+import {
+  DivisionFilterButtons,
+  SearchField,
+  StandingsFilters,
+  StatusFilterPills,
+} from "@/components/standings-filters";
 import {
   SortIndicator,
   nextSortState,
@@ -218,6 +223,10 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
   }, [filtered, sort]);
 
   const hasFilters = query.trim() !== "" || playingOnly || liveOnly || division !== null;
+  // Solo los controles plegables: la búsqueda está a la vista, así que no entra
+  // en el contador del botón "Filtros".
+  const activeFilterCount =
+    (playingOnly ? 1 : 0) + (liveOnly ? 1 : 0) + (division !== null ? 1 : 0);
 
   function clearFilters() {
     setQuery("");
@@ -276,6 +285,20 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
         onDivisionChange={setDivision}
       />
 
+      <MobileStandingsControls
+        query={query}
+        onQueryChange={setQuery}
+        playingOnly={playingOnly}
+        onPlayingOnlyChange={setPlayingOnly}
+        liveOnly={liveOnly}
+        onLiveOnlyChange={setLiveOnly}
+        division={division}
+        onDivisionChange={setDivision}
+        activeFilterCount={activeFilterCount}
+        sort={sort}
+        onSort={toggleSort}
+      />
+
       {hasFilters ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Con resultados, el recuento se lee; sin resultados, el aviso grande
@@ -318,8 +341,6 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
         </div>
       ) : (
         <>
-          <SortControls sort={sort} onSort={toggleSort} />
-
           {/* Por debajo de `lg` la clasificación se lee como tarjetas apiladas:
               con siete columnas la tabla solo cabría desplazando en horizontal.
               Es la misma fila, con las cifras secundarias bajo el jugador. */}
@@ -423,6 +444,136 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
   );
 }
 
+/**
+ * Controles de la clasificación en pantallas estrechas.
+ *
+ * En escritorio los filtros viven desplegados y el orden está en las cabeceras
+ * de la tabla. Por debajo de `lg` no existe ninguna de las dos cosas —la tabla no
+ * se pinta—, así que aquí se concentra todo, pero plegado: una fila con el
+ * buscador, un botón "Filtros" con el contador de los que están activos y un
+ * botón "Ordenar" que enseña el campo y el sentido vigentes. El panel que abre
+ * cada uno se pide, no se sirve.
+ *
+ * El motivo es de espacio: medido en 390 px, la barra de filtros desplegada más
+ * los siete chips de orden gastaban 226 px de alto antes de la primera tarjeta de
+ * jugador. Con los controles plegados son 44 px, y la clasificación empieza a
+ * enseñar datos en la primera pantalla.
+ *
+ * El orden no puede desaparecer sin sustituto: sin cabeceras que pulsar, este
+ * control es el único acceso a la ordenación en móvil, así que su panel abre los
+ * mismos chips de tres estados (`SortControls`).
+ */
+function MobileStandingsControls({
+  query,
+  onQueryChange,
+  playingOnly,
+  onPlayingOnlyChange,
+  liveOnly,
+  onLiveOnlyChange,
+  division,
+  onDivisionChange,
+  activeFilterCount,
+  sort,
+  onSort,
+}: {
+  query: string;
+  onQueryChange: (value: string) => void;
+  playingOnly: boolean;
+  onPlayingOnlyChange: (value: boolean) => void;
+  liveOnly: boolean;
+  onLiveOnlyChange: (value: boolean) => void;
+  division: DivisionId | null;
+  onDivisionChange: (value: DivisionId | null) => void;
+  activeFilterCount: number;
+  sort: SortState;
+  onSort: (key: SortKey) => void;
+}) {
+  const [panel, setPanel] = useState<"filters" | "sort" | null>(null);
+  const sortField =
+    sort === null ? null : (SORT_FIELDS.find((field) => field.key === sort.key) ?? null);
+
+  return (
+    <div className="lg:hidden">
+      <div className="flex items-center gap-2">
+        <SearchField
+          id="buscar-jugador-movil"
+          query={query}
+          onQueryChange={onQueryChange}
+          className="min-w-0 flex-1"
+        />
+
+        <button
+          type="button"
+          aria-expanded={panel === "filters"}
+          aria-controls="filtros-movil"
+          onClick={() => setPanel((current) => (current === "filters" ? null : "filters"))}
+          className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-md border px-3 text-xs font-semibold transition-colors ${
+            panel === "filters"
+              ? "border-line-strong bg-surface-raised text-foreground"
+              : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
+          }`}
+        >
+          Filtros
+          {activeFilterCount > 0 ? (
+            <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-accent px-1 text-xs font-semibold leading-4 tabular-nums text-accent-ink">
+              {activeFilterCount}
+            </span>
+          ) : null}
+        </button>
+
+        <button
+          type="button"
+          aria-expanded={panel === "sort"}
+          aria-controls="orden-movil"
+          aria-label={
+            sortField === null
+              ? "Elegir el orden de la clasificación"
+              : `Elegir el orden de la clasificación. Ahora: ${sortField.label}, ${
+                  sort?.dir === "desc" ? "descendente" : "ascendente"
+                }`
+          }
+          onClick={() => setPanel((current) => (current === "sort" ? null : "sort"))}
+          className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-md border px-3 text-xs font-semibold transition-colors ${
+            panel === "sort"
+              ? "border-line-strong bg-surface-raised text-foreground"
+              : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
+          }`}
+        >
+          {sortField?.label ?? "Ordenar"}
+          <SortIndicator state={sort?.dir ?? "none"} />
+        </button>
+      </div>
+
+      {panel === "filters" ? (
+        <div
+          id="filtros-movil"
+          className="mt-3 flex flex-col gap-3 rounded-lg border border-line bg-surface p-4"
+        >
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-xs font-semibold text-muted">Estado</span>
+            <StatusFilterPills
+              playingOnly={playingOnly}
+              onPlayingOnlyChange={onPlayingOnlyChange}
+              liveOnly={liveOnly}
+              onLiveOnlyChange={onLiveOnlyChange}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-xs font-semibold text-muted">División</span>
+            <DivisionFilterButtons division={division} onDivisionChange={onDivisionChange} />
+          </div>
+        </div>
+      ) : null}
+
+      {panel === "sort" ? (
+        <div id="orden-movil" className="mt-3 rounded-lg border border-line bg-surface p-4">
+          <SortControls sort={sort} onSort={onSort} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SortableHeader({
   label,
   visual,
@@ -470,7 +621,7 @@ function SortableHeader({
           <SortIndicator state={state} />
         </button>
         {sublabel !== undefined ? (
-          <span className="whitespace-nowrap text-[11px] font-normal leading-none text-muted">
+          <span className="whitespace-nowrap text-xs font-normal leading-none text-muted">
             {sublabel}
           </span>
         ) : null}
@@ -484,8 +635,9 @@ function SortableHeader({
  *
  * Por debajo de `lg` la tabla completa se sustituye por tarjetas, así que sus
  * cabeceras ordenables no están; este control reproduce el mismo ciclo de tres
- * estados (ascendente, descendente y sin orden) sobre todos los campos. A partir
- * de `lg` desaparece y el orden vuelve a las cabeceras.
+ * estados (ascendente, descendente y sin orden) sobre todos los campos. Se pinta
+ * dentro del panel "Ordenar" de `MobileStandingsControls`, que es su única puerta
+ * en móvil; a partir de `lg` desaparece y el orden vuelve a las cabeceras.
  */
 function SortControls({
   sort,
@@ -498,7 +650,7 @@ function SortControls({
     <div
       role="group"
       aria-label="Ordenar la clasificación"
-      className="flex flex-wrap items-center gap-1.5 lg:hidden"
+      className="flex flex-wrap items-center gap-1.5"
     >
       <span aria-hidden="true" className="text-xs text-muted">
         Ordenar
@@ -584,7 +736,7 @@ function StandingsRow({
             >
               {row.points}
             </span>
-            <span className="whitespace-nowrap text-[11px] leading-none tabular-nums text-muted">
+            <span className="whitespace-nowrap text-xs leading-none tabular-nums text-muted">
               {row.pointsByWins}
               <span aria-hidden="true"> / </span>
               {row.pointsByObjectives}
@@ -686,6 +838,7 @@ function StandingsCard({
             />
           </div>
           <CompactStats row={row} />
+          <CompactPointsBreakdown row={row} />
         </div>
 
         <div className="shrink-0 text-right">
@@ -696,10 +849,10 @@ function StandingsCard({
           >
             {row.points}
           </span>
-          <span className="block whitespace-nowrap text-[11px] leading-none tabular-nums text-muted">
-            {row.pointsByWins}
-            <span aria-hidden="true"> / </span>
-            {row.pointsByObjectives}
+          {/* En la tabla de escritorio el desglose se explica con el subtítulo de
+              la columna; aquí, sin columna, hace falta el rótulo. */}
+          <span className="block text-xs font-medium uppercase tracking-wide text-muted">
+            Puntos
           </span>
         </div>
       </div>
@@ -788,35 +941,75 @@ function CompactStats({ row }: { row: StandingRow }) {
   const league = rankLevelToLeague(row.rankLevel);
   const matches = row.wins + row.losses;
 
+  // Rejilla fija de dos columnas en lugar de una fila con `flex-wrap`. Al
+  // repartirse, el alto de la tarjeta dependía del ancho del nombre del jugador
+  // (medido entre 98 y 134 px para el mismo componente), y con alturas
+  // distintas las tarjetas no se comparan de una a otra: el ojo necesita que
+  // cada cifra ocupe siempre la misma celda.
+  //
+  // En cada celda la cifra va encima de su rótulo, y no al lado: en una tarjeta
+  // de 320 px la columna central ronda los 115 px, y con el par en línea
+  // "Partidas 56" el número quedaba recortado. Con la cifra arriba, lo que no
+  // se recorta nunca es el dato, que es lo que se compara.
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs text-muted">
-      <span className="tabular-nums">
-        {matches} {matches === 1 ? "partida" : "partidas"}
-      </span>
-      <span className="inline-flex items-center gap-1">
-        <span className="sr-only">Victorias y derrotas:</span>
-        <span className="tabular-nums">
+    <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+      <div className="min-w-0">
+        <dd className="truncate text-sm font-medium tabular-nums text-foreground">
+          {matches}
+        </dd>
+        <dt className="truncate text-muted">Partidas</dt>
+      </div>
+      <div className="min-w-0">
+        <dd className="truncate text-sm font-medium tabular-nums">
           <span className="text-win">{row.wins}</span>
-          <span aria-hidden="true"> - </span>
-          <span className="text-loss">{row.losses}</span>
-        </span>
-      </span>
-      <span className="inline-flex items-center gap-1 tabular-nums">
-        Elo {row.elo === null ? "-" : row.elo}
-        {league !== null ? (
-          <span
-            title={league.label}
-            className="inline-flex"
-            style={{ color: divisionColor(league.division) }}
-          >
-            <LeagueIcon rank={league} label={league.label} className="h-5 w-3.5" />
+          <span aria-hidden="true" className="text-muted">
+            {" "}
+            -{" "}
           </span>
-        ) : null}
-      </span>
-      <span className="inline-flex items-center gap-1">
-        Racha <StreakValue streak={row.streak} />
-      </span>
-    </div>
+          <span className="text-loss">{row.losses}</span>
+        </dd>
+        <dt className="truncate text-muted">V - D</dt>
+      </div>
+      <div className="min-w-0">
+        <dd className="flex min-w-0 items-baseline gap-1 text-sm font-medium tabular-nums text-foreground">
+          <span className="min-w-0 truncate">{row.elo === null ? "-" : row.elo}</span>
+          {league !== null ? (
+            <span
+              title={league.label}
+              className="inline-flex shrink-0"
+              style={{ color: divisionColor(league.division) }}
+            >
+              <LeagueIcon rank={league} label={league.label} className="h-5 w-3.5" />
+            </span>
+          ) : null}
+        </dd>
+        <dt className="truncate text-muted">Elo</dt>
+      </div>
+      <div className="min-w-0">
+        <dd className="truncate text-sm font-medium">
+          <StreakValue streak={row.streak} />
+        </dd>
+        <dt className="truncate text-muted">Racha</dt>
+      </div>
+    </dl>
+  );
+}
+
+/**
+ * Desglose del total de puntos por debajo de `lg`.
+ *
+ * En la tabla lo explica el subtítulo de la columna; en la tarjeta, sin columna,
+ * hace falta el rótulo. Es texto explicativo y no una cifra que se compare de
+ * una tarjeta a otra, así que puede partirse en varias líneas: lo que no puede
+ * es recortarse.
+ */
+function CompactPointsBreakdown({ row }: { row: StandingRow }) {
+  return (
+    <p className="mt-2.5 flex flex-wrap items-baseline gap-x-1.5 border-t border-line pt-2 text-xs text-muted">
+      <span>{row.pointsByWins} de victorias</span>
+      <span aria-hidden="true">+</span>
+      <span>{row.pointsByObjectives} de objetivos</span>
+    </p>
   );
 }
 
@@ -843,7 +1036,7 @@ function ObjectivesToggle({
       aria-expanded={expanded}
       aria-controls={controls}
       onClick={onClick}
-      className={`-my-1 inline-flex shrink-0 items-center gap-1 rounded-sm py-1 text-xs font-medium underline-offset-4 transition-colors hover:underline ${
+      className={`-my-3.5 inline-flex shrink-0 items-center gap-1 rounded-sm py-3.5 text-xs font-medium underline-offset-4 transition-colors hover:underline ${
         expanded ? "text-accent" : "text-muted hover:text-accent"
       }`}
     >
@@ -950,7 +1143,10 @@ function PlayerName({ row }: { row: StandingRow }) {
       href={row.profileUrl}
       target="_blank"
       rel="noopener noreferrer"
-      className="group/name flex min-w-0 flex-col rounded-sm"
+      // El relleno vertical amplía el área de pulsación del enlace, que sin él
+      // se quedaba en la altura de la línea de texto; los márgenes negativos lo
+      // compensan para que la tarjeta no crezca por debajo de `lg`.
+      className="group/name -my-3 flex min-w-0 flex-col rounded-sm py-3"
     >
       <span
         title={row.name}

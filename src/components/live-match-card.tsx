@@ -154,7 +154,7 @@ function Versus() {
       className="flex items-center gap-3 sm:w-10 sm:flex-col sm:gap-2"
     >
       <span className="h-px flex-1 bg-line sm:h-auto sm:w-px sm:flex-1" />
-      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted/80">
+      <span className="text-xs font-semibold uppercase tracking-[0.18em] text-muted/80">
         vs
       </span>
       <span className="h-px flex-1 bg-line sm:h-auto sm:w-px sm:flex-1" />

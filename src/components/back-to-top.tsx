@@ -14,6 +14,10 @@ const REVEAL_AT_PX = 400;
  * usuario está cerca del principio y el botón se oculta. Así no hay ningún
  * escucha de `scroll` por fotograma. El centinela se posiciona en absoluto, por
  * eso el `body` del layout raíz declara `relative`.
+ *
+ * En móvil se eleva por encima de `SiteTabBar` (`bottom-[4.5rem]`): la barra de
+ * destinos ocupa el pie fijo y el control quedaría debajo de ella. Desde `sm`,
+ * sin barra, vuelve a la esquina.
  */
 export function BackToTop() {
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -48,7 +52,7 @@ export function BackToTop() {
         type="button"
         onClick={scrollToTop}
         aria-label="Volver arriba"
-        className={`fixed bottom-4 right-4 z-20 inline-flex size-11 items-center justify-center rounded-full border border-line bg-surface-raised text-muted transition-[opacity,transform,visibility] duration-200 ease-out hover:border-accent/60 hover:text-accent active:translate-y-px motion-reduce:transition-none sm:bottom-6 sm:right-6 ${
+        className={`fixed bottom-[4.5rem] right-4 z-20 inline-flex size-11 items-center justify-center rounded-full border border-line bg-surface-raised text-muted transition-[opacity,transform,visibility] duration-200 ease-out hover:border-accent/60 hover:text-accent active:translate-y-px motion-reduce:transition-none sm:bottom-6 sm:right-6 ${
           visible ? "visible translate-y-0 opacity-100" : "invisible translate-y-2 opacity-0"
         }`}
       >

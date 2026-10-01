@@ -28,22 +28,31 @@ export function SiteFooter() {
           </p>
         </div>
 
+        {/* Cada enlace lleva su propia fila (`flex-col`) en lugar de un `gap` del
+            grupo, y `py-3` para que el área de pulsación llegue a los 44 px del
+            mínimo táctil: con solo el interlineado, un `text-sm` mide 18 px. */}
         <nav aria-label="Enlaces del pie" className="shrink-0">
-          <ul className="flex flex-col items-start gap-2 text-sm">
+          <ul className="-my-3 flex flex-col text-sm">
             <li>
-              <Link href="/objetivos" className="text-muted transition-colors hover:text-accent">
+              <Link
+                href="/objetivos"
+                className="block py-3 text-muted transition-colors hover:text-accent"
+              >
                 Objetivos especiales
               </Link>
             </li>
             <li>
-              <Link href="/reglas" className="text-muted transition-colors hover:text-accent">
+              <Link
+                href="/reglas"
+                className="block py-3 text-muted transition-colors hover:text-accent"
+              >
                 Reglas del torneo
               </Link>
             </li>
             <li>
               <Link
                 href="/login"
-                className="text-muted transition-colors hover:text-foreground"
+                className="block py-3 text-muted transition-colors hover:text-foreground"
               >
                 Acceso de la organización
               </Link>

@@ -30,8 +30,13 @@ export function ObjectiveCard({
   const held = option.holder !== null;
 
   return (
+    // `min-w-0`: como ítem de la rejilla, el ancho mínimo por defecto es
+    // `auto`, o sea su min-content, y ese lo fija el pie (poseedor + botón
+    // "Ver clasificación"). Con nombres largos la tarjeta mide más que la
+    // columna y desborda la página en móvil estrecho; con `min-w-0` el pie
+    // cede y su nombre se recorta donde ya lo hace.
     <article
-      className={`flex h-full flex-col rounded-lg border bg-surface p-5 ${
+      className={`flex h-full min-w-0 flex-col rounded-lg border bg-surface p-5 ${
         held ? "border-accent/35" : "border-line"
       }`}
     >
@@ -55,7 +60,7 @@ export function ObjectiveCard({
       */}
       <div className="mt-auto flex items-end justify-between gap-4 border-t border-line pt-4">
         <div className="min-w-0">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Poseedor</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">Poseedor</p>
           {option.holder === null ? (
             <p className="mt-1 truncate text-sm text-muted">Sin poseedor todavía</p>
           ) : (
@@ -63,7 +68,7 @@ export function ObjectiveCard({
               <PlayerAvatar
                 name={option.holder.name}
                 avatarUrl={option.holder.avatarUrl}
-                className="size-6 shrink-0 text-[10px]"
+                className="size-6 shrink-0 text-xs"
               />
               <ContenderName
                 contender={option.holder}
@@ -72,10 +77,13 @@ export function ObjectiveCard({
             </div>
           )}
         </div>
+        {/* El relleno vertical amplía el área de pulsación hasta los 44 px del
+            mínimo táctil sin engordar el texto: los márgenes negativos lo
+            compensan para que la fila del pie no crezca. */}
         <button
           type="button"
           onClick={onOpen}
-          className="shrink-0 text-sm font-medium text-accent underline-offset-4 transition-colors hover:underline focus-visible:underline"
+          className="-my-3 shrink-0 py-3 text-sm font-medium text-accent underline-offset-4 transition-colors hover:underline focus-visible:underline"
         >
           Ver clasificación
         </button>
@@ -91,7 +99,7 @@ function PrizePlate({ points }: { points: number }) {
       <span className="block font-display text-xl font-semibold leading-none tabular-nums text-accent">
         +{points}
       </span>
-      <span className="mt-1 block text-[10px] font-medium uppercase tracking-wide text-muted">
+      <span className="mt-1 block text-xs font-medium uppercase tracking-wide text-muted">
         puntos
       </span>
     </span>

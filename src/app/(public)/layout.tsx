@@ -3,7 +3,7 @@ import Link from "next/link";
 import { AdminAccess } from "@/components/admin-access";
 import { ParticipateCta } from "@/components/participate-cta";
 import { SiteFooter } from "@/components/site-footer";
-import { SiteNav } from "@/components/site-nav";
+import { SiteNav, SiteTabBar } from "@/components/site-nav";
 
 export default function PublicLayout({
   children,
@@ -13,7 +13,10 @@ export default function PublicLayout({
   modal: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-full flex-col">
+    // El relleno inferior deja libre la franja que ocupa `SiteTabBar` en móvil:
+    // la barra es fija y, sin él, taparía el último tramo del pie. Desde `sm` la
+    // barra no existe y el relleno sobra.
+    <div className="flex min-h-full flex-col pb-[calc(3.5rem+env(safe-area-inset-bottom))] sm:pb-0">
       <a
         href="#contenido"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-30 focus:bg-accent focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-accent-ink"
@@ -31,7 +34,9 @@ export default function PublicLayout({
             Esa fila necesita el ancho completo del contenedor (1248 px), de ahí que
             se active en `xl` y no en `lg`: por debajo, marca y acciones comparten la
             primera fila y la navegación baja a la segunda, a ancho completo, sin que
-            el wordmark se recorte.
+            el wordmark se recorte. En móvil (`< sm`) esa segunda fila desaparece: los
+            cuatro destinos bajan a `SiteTabBar`, la barra fija del pie, y la cabecera
+            se queda en una sola fila compacta.
             En la celda de la derecha viven las dos acciones de la barra —la
             inscripción y el acceso de la organización—. Son cromo: cada una tiene
             su alto propio, su radio de control y ningún protagónico, para no
@@ -40,7 +45,7 @@ export default function PublicLayout({
             filete neutro (el porqué, en su componente). El contenedor las centra
             con `items-center` y las separa con el `gap-2` de entre controles; en
             `xl` la celda se estira para que el centrado sea el de la fila. */}
-        <div className="mx-auto grid w-full max-w-[78rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-3 sm:gap-x-4 sm:px-6 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-6 xl:gap-y-0">
+        <div className="mx-auto grid w-full max-w-[78rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:gap-x-4 sm:px-6 sm:py-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-6 xl:gap-y-0">
           <Link
             href="/"
             className="col-start-1 row-start-1 inline-flex min-w-0 items-center gap-2 transition-colors hover:text-accent sm:gap-3"
@@ -75,8 +80,11 @@ export default function PublicLayout({
 
           {/* `min-w-0`: sin él, el ancho mínimo de la lista de navegación (con
               enlaces que no se parten) empujaría la rejilla y abriría scroll de
-              página en lugar de desplazarse solo la barra. */}
-          <div className="col-span-2 row-start-2 min-w-0 w-full xl:col-span-1 xl:col-start-2 xl:row-start-1 xl:w-auto">
+              página en lugar de desplazarse solo la barra.
+              Por debajo de `sm` no se pinta: los cuatro destinos no caben sin
+              desplazamiento horizontal y ahí navega `SiteTabBar`. La fila queda
+              vacía y la rejilla se cierra en una sola altura. */}
+          <div className="col-span-2 row-start-2 hidden min-w-0 w-full sm:block xl:col-span-1 xl:col-start-2 xl:row-start-1 xl:w-auto">
             <SiteNav />
           </div>
         </div>
@@ -90,6 +98,12 @@ export default function PublicLayout({
       </main>
 
       <SiteFooter />
+
+      {/* La navegación de móvil vive fuera de la cabecera: es una capa fija al
+          pie de la ventana, así que no entra en el flujo ni desplaza el
+          contenido. Solo se pinta por debajo de `sm`, donde la nav de la
+          cabecera no cabe. */}
+      <SiteTabBar />
 
       {/* El slot `@modal` aloja la ventana de acceso interceptada. Va después
           del contenido porque es una capa, pero el `<dialog>` con `showModal()`

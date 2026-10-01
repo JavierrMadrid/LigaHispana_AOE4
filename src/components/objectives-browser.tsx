@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { ObjectiveGroup, ObjectiveOption, ObjectiveView } from "@/lib/public";
 import { ObjectiveCard } from "@/components/objective-card";
 import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
@@ -11,10 +11,68 @@ import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
  * El servidor entrega los objetivos ya resueltos y aquí solo se agrupa y se
  * filtra por tipo. El `ranking` completo de un objetivo no se pinta en la
  * tarjeta: se enseña entero en el diálogo que abre "Ver clasificación", para
- * que la rejilla se pueda escanear de un vistazo. Las secciones arrancan
- * abiertas porque el contenido es la página; plegarlas es una comodidad para
- * quien quiere ir directo a un grupo.
+ * que la rejilla se pueda escanear de un vistazo.
+ *
+ * ## Por qué las secciones no arrancan siempre abiertas
+ *
+ * En escritorio la rejilla es a tres columnas y el contenido es la página: los
+ * grupos se despliegan solos y plegarlos es una comodidad para quien quiere ir
+ * directo a uno. En móvil, a una columna, los 38 objetivos suman del orden de
+ * 11 000 px de desplazamiento (unas 29 pantallas), y ahí "el contenido es la
+ * página" ya no describe nada: la página no se ve. Por eso por debajo de `sm`
+ * los grupos arrancan **plegados** y la lista de cabeceras hace de índice, con
+ * "Desplegar los grupos" para quien quiera leerlo entero.
+ *
+ * El ancho no se conoce en el servidor, así que el defecto lo resuelve el CSS
+ * (`hidden sm:grid`): la primera pintura ya sale plegada en móvil y desplegada
+ * en escritorio, sin parpadeo. `useIsDesktop` solo ajusta el `aria-expanded` y
+ * el rótulo de "Desplegar los grupos". La decisión de una persona manda sobre
+ * el defecto.
  */
+
+/** Corte de la rejilla a una columna (móvil) frente a varias (escritorio). */
+const DESKTOP_QUERY = "(min-width: 640px)";
+
+function subscribeDesktop(callback: () => void) {
+  const query = window.matchMedia(DESKTOP_QUERY);
+  query.addEventListener("change", callback);
+
+  return () => query.removeEventListener("change", callback);
+}
+
+function getDesktopSnapshot() {
+  return window.matchMedia(DESKTOP_QUERY).matches;
+}
+
+/** Sin viewport en el servidor: se asume móvil, que es el caso que necesita el índice. */
+function getDesktopServerSnapshot() {
+  return false;
+}
+
+function useIsDesktop() {
+  return useSyncExternalStore(subscribeDesktop, getDesktopSnapshot, getDesktopServerSnapshot);
+}
+
+/**
+ * Clases del cuerpo de un grupo.
+ *
+ * Sin decisión de la persona el defecto lo resuelve el CSS —plegado por debajo
+ * de `sm`, rejilla desde ahí—, así que se puede pintar entero desde el servidor
+ * sin saber el ancho. Un `true`/`false` explícito manda sobre las dos cosas.
+ * No se añade un `grid` de base a propósito: ganaría a `hidden` en la cascada y
+ * el grupo plegado se vería.
+ */
+function bodyClass(override: boolean | undefined): string {
+  if (override === true) {
+    return "grid";
+  }
+
+  if (override === false) {
+    return "hidden";
+  }
+
+  return "hidden sm:grid";
+}
 
 type ObjectivesBrowserProps = {
   options: ObjectiveOption[];
@@ -34,6 +92,10 @@ export function ObjectivesBrowser({
 }: ObjectivesBrowserProps) {
   const [group, setGroup] = useState<ObjectiveGroup | null>(null);
   const [active, setActive] = useState<ObjectiveOption | null>(null);
+  // Solo guarda lo que la persona ha decidido a mano; lo que no está aquí sigue
+  // el defecto del ancho. Así un cambio de tamaño no pisa su elección.
+  const [overrides, setOverrides] = useState<Partial<Record<ObjectiveGroup, boolean>>>({});
+  const desktop = useIsDesktop();
 
   // El orden de los grupos se toma de los propios objetivos, que ya llegan en
   // el orden de presentación de `docs/PUNTUACION.md`.
@@ -75,6 +137,43 @@ export function ObjectivesBrowser({
     [groups, group, options, groupLabels],
   );
 
+  // Estado tri-valor de una sección: `undefined` significa que lo decide el CSS
+  // (plegado por debajo de `sm`, abierto desde ahí). Con un filtro activo el
+  // defecto es abierto en cualquier ancho —quien filtra ya dijo qué quiere ver—
+  // salvo que la persona haya plegado esa sección a mano, que entonces manda.
+  function sectionState(id: ObjectiveGroup): boolean | undefined {
+    const override = overrides[id];
+
+    if (override !== undefined) {
+      return override;
+    }
+
+    return group !== null ? true : undefined;
+  }
+
+  function isOpen(id: ObjectiveGroup): boolean {
+    const state = sectionState(id);
+
+    return state !== undefined ? state : desktop;
+  }
+
+  function toggle(id: ObjectiveGroup) {
+    setOverrides((current) => ({ ...current, [id]: !isOpen(id) }));
+  }
+
+  const allOpen = sections.every((section) => isOpen(section.id));
+
+  function toggleAll() {
+    const next = !allOpen;
+    const updated: Partial<Record<ObjectiveGroup, boolean>> = {};
+
+    for (const section of sections) {
+      updated[section.id] = next;
+    }
+
+    setOverrides(updated);
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-4 rounded-lg border border-line bg-surface p-4">
@@ -94,6 +193,18 @@ export function ObjectivesBrowser({
             </FilterPill>
           ))}
         </FilterCategory>
+
+        {sections.length > 1 ? (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="text-xs font-medium text-muted underline-offset-4 transition-colors hover:text-accent hover:underline"
+            >
+              {allOpen ? "Plegar los grupos" : "Desplegar los grupos"}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {group === null ? null : (
@@ -130,50 +241,60 @@ export function ObjectivesBrowser({
           </button>
         </div>
       ) : (
-        <div className="flex flex-col gap-10">
-          {sections.map((section) => (
-            <details
-              key={section.id}
-              id={`grupo-${section.id}`}
-              open
-              className="group scroll-mt-24"
-            >
-              <summary className="flex cursor-pointer list-none flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-line pb-3 transition-colors hover:border-line-strong [&::-webkit-details-marker]:hidden">
-                <h2 className="font-display text-xl font-semibold text-foreground">
-                  {section.label}
-                </h2>
-                <span className="flex items-center gap-2 text-xs tabular-nums text-muted">
-                  {section.totals.count}{" "}
-                  {section.totals.count === 1 ? "objetivo" : "objetivos"} ·{" "}
-                  {section.totals.points} puntos · {section.totals.holders} con poseedor
-                  <svg
-                    viewBox="0 0 12 12"
-                    aria-hidden="true"
-                    className="size-3 shrink-0 text-muted transition-transform group-open:rotate-180"
-                  >
-                    <path
-                      d="M2.5 4.5 6 8l3.5-3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-              </summary>
+        <div className="flex flex-col gap-8">
+          {sections.map((section) => {
+            const open = isOpen(section.id);
+            const bodyId = `grupo-${section.id}-contenido`;
 
-              <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {section.shown.map((option) => (
-                  <ObjectiveCard
-                    key={option.id}
-                    option={option}
-                    onOpen={() => setActive(option)}
-                  />
-                ))}
-              </div>
-            </details>
-          ))}
+            return (
+              <section key={section.id} id={`grupo-${section.id}`} className="scroll-mt-24">
+                {/* La cabecera es el control: el `h2` mantiene el encabezado de la
+                    sección y el botón de dentro lleva el estado y el nombre, para
+                    que se pueda plegar sin perder la jerarquía de encabezados. */}
+                <h2 className="group/head border-b border-line transition-colors hover:border-line-strong">
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    aria-controls={bodyId}
+                    onClick={() => toggle(section.id)}
+                    className="flex w-full flex-col gap-1 pb-3 text-left sm:flex-row sm:flex-wrap sm:items-baseline sm:justify-between sm:gap-x-4"
+                  >
+                    <span className="font-display text-xl font-semibold text-foreground">
+                      {section.label}
+                    </span>
+                    <span className="flex items-center gap-2 text-xs tabular-nums text-muted">
+                      {section.totals.count}{" "}
+                      {section.totals.count === 1 ? "objetivo" : "objetivos"} ·{" "}
+                      {section.totals.points} puntos · {section.totals.holders} con poseedor
+                      <Chevron open={open} />
+                    </span>
+                  </button>
+                </h2>
+
+                {/* El cuerpo se renderiza siempre y se enseña u oculta con clases,
+                    no condicionalmente: así el HTML sale entero —los 38 objetivos
+                    se pueden rastrear y un escritorio sin JavaScript los lee— y la
+                    visibilidad en la primera pintura la decide el CSS (`hidden
+                    sm:grid`), sin parpadeo ni salto. `isOpen` solo alimenta el
+                    `aria-expanded` y el botón; el estado explícito de la persona
+                    manda sobre el defecto del ancho. */}
+                <div
+                  id={bodyId}
+                  className={`mt-5 gap-4 sm:grid-cols-2 xl:grid-cols-3 ${bodyClass(
+                    sectionState(section.id),
+                  )}`}
+                >
+                  {section.shown.map((option) => (
+                    <ObjectiveCard
+                      key={option.id}
+                      option={option}
+                      onOpen={() => setActive(option)}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
         </div>
       )}
 
@@ -187,6 +308,28 @@ export function ObjectivesBrowser({
         />
       )}
     </div>
+  );
+}
+
+/** Chevron del grupo: hacia abajo plegado, girado hacia arriba desplegado. */
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 12 12"
+      aria-hidden="true"
+      className={`size-3 shrink-0 text-muted transition-transform motion-reduce:transition-none ${
+        open ? "rotate-180" : ""
+      }`}
+    >
+      <path
+        d="M2.5 4.5 6 8l3.5-3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
