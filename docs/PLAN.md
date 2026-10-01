@@ -519,6 +519,72 @@ Pendiente de F4:
       el CTA a 320 px; refuerzo de tamaño táctil en pills, botones y enlaces. Sin cambios de
       identidad, tokens ni copy.
 
+### F7.1 — Segunda pasada responsive (móvil) ✅
+
+La pasada anterior resolvió el *qué* (qué se ve en cada ancho) pero no el *cómo*: la web era legible
+en móvil y aun así gastaba dos tercios de la primera pantalla en controles y era incómoda al
+tocar. Esta pasada se hizo **midiendo el sitio desplegado con Playwright** a 320/360/375/390/412/768/1023
+px —`scrollWidth` real, cajas, alturas de los targets de pulsación y tamaños de fuente— en lugar de a
+ojo, y cierra cinco cosas.
+
+- [x] **`/objetivos` desbordaba la página a 320 px** (el único desbordamiento real que había):
+      `scrollWidth` 358 contra 320 de ventana. La causa no era el contenido sino el contenedor: el
+      `<article>` de `ObjectiveCard` es ítem de la rejilla, así que su ancho mínimo era `auto`, o sea
+      su **min-content**, y ese lo fijaba el pie de la tarjeta (poseedor + botón "Ver clasificación",
+      300 px) más el `p-5`. Con `min-w-0` el pie cede donde ya se recortaba y la página deja de
+      desbordar a cualquier ancho (verificado inyectando la clase en el DOM antes de escribirla).
+- [x] **Objetivos plegados por debajo de `sm`**. Los `<details open>` medían los 38 objetivos
+      como ~11.000 px de desplazamiento (unas 29 pantallas a 390 px), donde "el contenido es la
+      página" ya no describe nada. En móvil arrancan plegados y las cinco cabeceras hacen de índice,
+      con "Desplegar los grupos" para quien quiera leerlo entero; en escritorio siguen abiertos. La
+      sección pasa de ~11.100 px a ~660 px. El defecto **no lo decide JavaScript**: el cuerpo se
+      renderiza siempre y lo muestra el CSS (`hidden sm:grid`), así que el HTML sale entero desde
+      el servidor —los 38 objetivos se pueden rastrear y un escritorio sin JS los lee— y no hay
+      parpadeo al hidratar. `useSyncExternalStore` con `matchMedia` solo ajusta `aria-expanded` y el
+      rótulo; una decisión explícita de la persona manda sobre el defecto del ancho.
+- [x] **Barra de destinos fija en móvil** (`SiteTabBar`, en `site-nav.tsx`). El problema era que la
+      nav de cabecera medía 463 px de contenido en 370 px visibles: "Reglas" quedaba **fuera de
+      pantalla con un desplazamiento horizontal sin ninguna señal** de que había más. Por debajo de
+      `sm` los cuatro destinos bajan a una barra fija al pie, con etiqueta corta ("Partidas" en vez
+      de "Partidas en juego") y glifos propios en el dialecto de `objective-icon.tsx`. A partir de
+      `sm` la nav de cabecera cabe entera y no cambia nada. La cabecera móvil baja de **119 a 59 px**,
+      que era el 14 % del viewport en `sticky` para mostrar un emblema, un wordmark y dos botones.
+- [x] **Controles de la clasificación plegados** por debajo de `lg`: una fila con el buscador a la
+      vista, un botón "Filtros" con contador de activos y un "Ordenar" que muestra el campo y el
+      sentido vigentes; el panel de cada uno se abre a petición. Los controles pasan de **226 a 56 px**
+      y la primera tarjeta de jugador sube de y≈531 a y≈269 en la página real. El orden no puede
+      desaparecer sin sustituto —por debajo de `lg` no hay cabeceras de tabla que pulsar—, así que
+      su panel abre los mismos `SortControls` de tres estados. `StandingsFilters` se desmontó en
+      `SearchField`, `StatusFilterPills` y `DivisionFilterButtons`, que usan las dos formas sin
+      duplicar comportamiento.
+- [x] **Cifras de la tarjeta de clasificación con rejilla fija**. `CompactStats` usaba `flex-wrap`, así
+      que el alto dependía del ancho del nombre (medido entre 98 y 134 px para el mismo componente) y
+      las tarjetas no se comparaban entre sí. Ahora es una rejilla de dos columnas con la **cifra
+      encima de su rótulo**, no al lado: a 320 px la columna central ronda los 115 px y con el par en
+      línea "Partidas 56" el número quedaba recortado. Lo que no se recorta nunca es el dato.
+      Además, el `490 / 290` del total llevaba su leyenda en el subtítulo del `<th>`, que no existe
+      en móvil: ahora es `CompactPointsBreakdown`, "490 de victorias + 290 de objetivos", y el total
+      lleva su rótulo "Puntos".
+- [x] **Áreas de pulsación y tamaño de texto**: `+N objetivos`, el enlace al perfil de AoE4World,
+      "Ver clasificación" y los enlaces del pie pasan a **44 px** con `py-3`/`py-3.5` y márgenes
+      negativos `-my-3` (el relleno amplía el área sin que la tarjeta crezca ni una línea); los
+      enlaces del pie llevan además su propia fila en vez de un `gap` del grupo, que les daba la
+      altura del interlineado (18 px). Los 44 nodos que había a `text-[10px]` y `text-[11px]` —25 en
+      `/objetivos`, 19 en la clasificación— pasan a `text-xs`, que además responde al zoom del
+      navegador, cosa que un tamaño fijo en px no hace.
+
+Verificado en navegador antes y después: desbordamiento de documento 358→320 a 320 px; targets por
+debajo de 44 px 20→0; nodos por debajo de 12 px 44→0; alturas de tarjeta 98–134→iguales; ninguna
+cifra recortada a 320 px. Sin cambios de tokens, paleta, tipografía ni copy normativo de `/reglas`.
+
+**Lo que sigue pendiente en móvil**: el wordmark se recorta a "LIGA HI…" de 320 a 412 px (recuperarlo
+exigiría ocultar el wordmark o una de las dos acciones de la cabecera); la cabecera pública sigue en
+dos filas —125 px— entre 640 y 1023 px, donde la nav no cabe en la primera fila hasta `xl`; y
+`scroll-padding-top: 5.5rem` de `globals.css` queda holgado para una cabecera de 59 px. El panel
+`/admin` no se ha revisado: requiere sesión y las cuatro tablas son `overflow-x-auto` con columnas
+colapsadas en lugar de tarjetas, así que el patrón de la clasificación pública sigue sin llevarse
+ahí.
+
 ### F8 — Panel de administración en 4 pestañas ✅
 
 El panel dejó de ser "Resumen + Jugadores" y pasó a tener **cuatro pestañas**: Participantes
@@ -854,8 +920,11 @@ Kick**, nunca que el torneo se quede sin sincronizar.
    `npm run db:security`: no se crea ninguna tabla y las columnas nuevas heredan la
    postura de `Player`.
 2. Definir `YOUTUBE_API_KEY` en el panel del Worker (Settings → Variables and
-   Secrets), como secreto. **Sin ella no pasa nada**, pero tampoco se detecta ningún
-   directo de YouTube; con ella definida se detecta.
+   Secrets), como secreto, y **además** en *Build variables and secrets* del trigger
+   de Workers Builds, que es otra lista distinta: la del proceso de build, no la del
+   Worker. **Sin ella no pasa nada**, pero tampoco se detecta ningún directo de YouTube;
+   con ella definida se detecta. Ver
+   [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
 
 **La interfaz de los tres canales** (`@design-ux`, ya hecha). La capa de datos
 publica los cuatro campos por participante (`StandingRow` y `AdminParticipant`) y el

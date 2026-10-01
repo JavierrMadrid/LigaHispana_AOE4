@@ -501,7 +501,11 @@ npm run db:cron                  # programa el job de sincronización cada 5 min
   la detección de YouTube no se hace (ni una petición) y `Player.youtubeIsLive` se queda en `false`
   con un aviso en el rastro de la pasada. El detalle de los tres canales está en
   [`docs/PLAN.md`](./PLAN.md#f10--youtube-y-kick-en-el-tratamiento-de-canales-de-directo-).
+- `YOUTUBE_API_KEY` va **además** en *Build variables and secrets* del trigger de Workers Builds, que
+  es otra lista distinta y es la única que existe durante el build. Igual que el resto de secretos que
+  lee el código de servidor.
 
-Lo que hay que poner en el panel del Worker (secretos, `NEXT_PUBLIC_*` también en *Build variables
-and secrets*, y el paso de Hyperdrive) está en
-[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#publicar).
+Lo que hay que poner en el panel del Worker (secretos y build variables, que no son la misma cosa, y
+el paso de Hyperdrive) está en
+[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#publicar) y en
+[Los dos sitios del panel](./DESPLIEGUE.md#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).

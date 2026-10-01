@@ -142,7 +142,7 @@ export function ChannelLinks({
             <ChannelLink meta={meta} value={value} name={name} />
             {showLive && value.isLive ? (
               <span
-                className={`inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none ${meta.badge}`}
+                className={`inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-xs font-semibold leading-none ${meta.badge}`}
               >
                 En directo
               </span>

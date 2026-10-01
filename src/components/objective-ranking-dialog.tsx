@@ -248,7 +248,7 @@ function HolderSummary({
           {contenderValue(option, option.holder, masterizarTodosId)}
         </p>
       </div>
-      <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold text-accent">
+      <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
         Poseedor
       </span>
     </div>
@@ -272,16 +272,16 @@ function RankingRow({
   return (
     <li className={`flex items-center gap-3 px-4 py-3 sm:px-6 ${isHolder ? "bg-accent/5" : ""}`}>
       <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">{rank}</span>
-      <PlayerAvatar name={contender.name} avatarUrl={contender.avatarUrl} className="size-8 text-[11px]" />
+      <PlayerAvatar name={contender.name} avatarUrl={contender.avatarUrl} className="size-8 text-xs" />
       <span className="min-w-0 flex-1">
         <ContenderName contender={contender} className="truncate text-sm text-foreground/90" />
         {isHolder || contender.eligible ? null : (
-          <span className="mt-0.5 block text-[11px] text-muted">{ineligibleTag(option)}</span>
+          <span className="mt-0.5 block text-xs text-muted">{ineligibleTag(option)}</span>
         )}
       </span>
 
       {isHolder ? (
-        <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold text-accent">
+        <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
           Poseedor
         </span>
       ) : null}
@@ -300,7 +300,7 @@ function PrizePlate({ points }: { points: number }) {
       <span className="block font-display text-2xl font-semibold leading-none tabular-nums text-accent">
         +{points}
       </span>
-      <span className="mt-1 block text-[10px] font-medium uppercase tracking-wide text-muted">
+      <span className="mt-1 block text-xs font-medium uppercase tracking-wide text-muted">
         puntos
       </span>
     </span>
