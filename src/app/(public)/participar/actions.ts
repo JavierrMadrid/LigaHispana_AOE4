@@ -1,16 +1,21 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { logDatabaseFailure } from "@/lib/db-errors";
 import { Prisma } from "@/generated/prisma/client";
 import { PlayerStatus } from "@/generated/prisma/enums";
 import {
   CONTACT_EMAIL_MAX_LENGTH,
+  isLegacyYoutubeUrl,
+  parseCountry,
   parseEmail,
+  parseKickChannel,
   parseName,
   parseProfileId,
   parseTwitchChannel,
+  parseYoutubeChannel,
 } from "@/lib/player-input";
 import { consumePublicFormAttempt } from "@/lib/rate-limit";
 import { checkAoe4WorldProfile } from "@/lib/registration";
@@ -28,11 +33,25 @@ import { readTurnstileToken, verifyTurnstile } from "@/lib/turnstile";
  * `input`. Los dos van juntos: un error de campo suele convivir con un mensaje
  * general que explica el conjunto.
  *
- * `fieldErrors` lleva una clave por campo del formulario, y su nombre es el
+* `fieldErrors` lleva una clave por campo del formulario, y su nombre es el
  * `name` del `input` correspondiente: `profileId`, `name`, `email`,
- * `twitchChannel` y `terms`. El correo es obligatorio desde F6 (está en
- * `Player.contactEmail`), así que el formulario tiene que mandar ese `input` con
- * ese nombre exacto.
+ * `twitchChannel`, `youtubeChannel`, `kickChannel`, `country` y `terms`. El correo
+ * es obligatorio desde F6 (está en `Player.contactEmail`) y el país también (está en
+ * `Player.country` y es uno de los datos con los que la organización organiza el
+ * torneo), así que el formulario tiene que mandar esos dos `input` con esos nombres
+ * exactos. Los tres canales son **opcionales**: quien no emite puede dejarlos vacíos
+ * y no pierde nada por ello.
+ *
+ * Los dos canales nuevos (YouTube y Kick) usan los mismos parsers que el alta de
+ * admin, y un valor escrito que no vale sale como error de campo en lugar de
+ * guardarse como `null`: `Player.youtubeChannel` y `Player.kickChannel` no tienen
+ * respaldo desde AoE4World, así que un canal mal escrito no lo arregla nadie en la
+ * siguiente pasada del sincronizador.
+ *
+ * El país **no** se valida contra una lista escrita en el componente: la lista
+ * admitida vive en `Setting["registration.countries"]` (ver `src/lib/countries.ts`)
+ * y se pasa a `parseCountry()`. Así el desplegable y esta validación no pueden
+ * ofrecer países distintos.
  */
 export type RegistrationFormState = {
   status: "idle" | "error" | "success";
@@ -42,6 +61,9 @@ export type RegistrationFormState = {
     name?: string;
     email?: string;
     twitchChannel?: string;
+    youtubeChannel?: string;
+    kickChannel?: string;
+    country?: string;
     terms?: string;
   };
 };
@@ -109,6 +131,30 @@ const EMAIL_TOO_LONG_ERROR = `El correo no puede superar los ${CONTACT_EMAIL_MAX
 const EMAIL_INVALID_ERROR =
   "Ese correo no parece válido. Revisa que tenga algo antes y después de la arroba.";
 
+const COUNTRY_REQUIRED_ERROR =
+  "El país es obligatorio: elígelo en la lista de los que admite el torneo.";
+
+const COUNTRY_UNKNOWN_ERROR =
+  "Ese país no está en la lista de los que admite el torneo. Elígelo en el desplegable.";
+
+/**
+ * Los tres canales de directo: opcionales, y con el mismo criterio de "un valor
+ * escrito que no vale es un error, no un `null` en silencio".
+ *
+ * Los mensajes de Twitch los lleva el campo desde F6, con un texto más corto; los
+ * de YouTube y Kick se explican algo más porque las dos plataformas tienen formas
+ * que la gente pega y este proyecto no admite: la URL antigua `/c/…` de YouTube y
+ * las URLs con `https://` de las tres.
+ */
+const YOUTUBE_INVALID_ERROR =
+  "Ese canal de YouTube no parece válido. Escribe el @nombre del canal (3 a 30 letras, números, punto, guion o guion bajo) o la dirección youtube.com/@nombre.";
+
+const YOUTUBE_LEGACY_URL_ERROR =
+  "Esa dirección no lleva el @nombre del canal. Las URLs /c/ y /user/ no lo tienen, así que escribe el @nombre, que es lo que aparece en youtube.com/@nombre.";
+
+const KICK_INVALID_ERROR =
+  "Ese canal de Kick no parece válido. Escribe el nombre del canal o la dirección kick.com/nombre.";
+
 /** Lo que la escritura puede devolver. Ningún camino crea nada por la mitad. */
 type WriteOutcome = "created" | "resubmitted" | "duplicate" | "failed";
 
@@ -118,7 +164,13 @@ type RegistrationInput = {
   profileId: number;
   name: string;
   contactEmail: string;
+  /** Rótulo canónico de la lista admitida, ya resuelto por `parseCountry`. */
+  country: string;
   twitchChannel: string | null;
+  /** Handle de YouTube sin arroba, ya resuelto por `parseYoutubeChannel`. */
+  youtubeChannel: string | null;
+  /** Slug de Kick en minúsculas, ya resuelto por `parseKickChannel`. */
+  kickChannel: string | null;
   aoe4WorldName: string;
   avatarUrl: string | null;
 };
@@ -140,6 +192,11 @@ type RegistrationInput = {
  * aprobado. Con `update` la escritura pisaría esa aprobación sin avisar; así, si
  * el estado ya no es `REJECTED` el `UPDATE` no toca nada, `count` sale a 0 y se
  * trata como duplicado, que es lo que es.
+ *
+ * En la reinscripción se reescriben **los tres canales** junto al nombre y al
+ * correo, por el mismo motivo que el país: quien se reinscribe dice cómo emite
+ * ahora, y dejarlo como estaba sería guardar el dato de una solicitud que la
+ * organización ya miró y rechazó.
  */
 async function persistRegistration(input: RegistrationInput): Promise<WriteOutcome> {
   // El retrato solo si la API lo trae: un `avatars.full` vacío no pisa el último
@@ -157,7 +214,13 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
           // campo que se deja vacío se queda vacío.
           name: input.name,
           twitchChannel: input.twitchChannel,
+          youtubeChannel: input.youtubeChannel,
+          kickChannel: input.kickChannel,
           contactEmail: input.contactEmail,
+          // El país también se vuelve a pedir: quien se reinscribe dice de dónde
+          // es ahora, y dejarlo como estaba sería guardar el dato de una solicitud
+          // que la organización ya miró y rechazó.
+          country: input.country,
           aoe4WorldName: input.aoe4WorldName,
           ...portrait,
           // `PENDING` fijo y no el que tuviera: reinscribirse es volver a pedir
@@ -179,7 +242,10 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
         aoe4WorldName: input.aoe4WorldName,
         ...portrait,
         twitchChannel: input.twitchChannel,
+        youtubeChannel: input.youtubeChannel,
+        kickChannel: input.kickChannel,
         contactEmail: input.contactEmail,
+        country: input.country,
         // `PENDING` fijo y no el que venga en el `FormData`: aprobar o rechazar
         // es una decisión de la organización, y un formulario público no puede
         // autoaprobar su propia solicitud por mucho que mida el campo.
@@ -237,7 +303,11 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
  * 4. **Validadores de los campos**, compartidos con el alta de admin
  *    (`src/lib/player-input.ts`), y después la comprobación de la fila existente:
  *    las dos son gratis y así la API no se gasta en un envío que iba a fallar
- *    igualmente.
+ *    igualmente. El país rompe un poco el patrón porque su lista **no** la fija el
+ *    código: se lee de `Setting` (`readCountries()`), y si esa lectura falla no se
+ *    valida contra la lista por defecto en silencio sino que se pide reintentar,
+ *    porque escribir el país de una lista que ya no es la vigente sería peor que no
+ *    haber escrito nada.
  * 5. **Comprobación del perfil contra AoE4World** (`src/lib/registration.ts`): si
  *    el `profileId` no existe no se escribe nada, y si existe se guarda el nombre
  *    oficial en `aoe4WorldName` junto al de display, que es el que escribió
@@ -325,11 +395,15 @@ export async function registerPlayer(
   const nameRaw = String(formData.get("name") ?? "").trim();
   const emailRaw = String(formData.get("email") ?? "").trim();
   const twitchRaw = String(formData.get("twitchChannel") ?? "").trim();
+  const youtubeRaw = String(formData.get("youtubeChannel") ?? "").trim();
+  const kickRaw = String(formData.get("kickChannel") ?? "").trim();
 
   const profileId = parseProfileId(profileIdRaw);
   const name = parseName(nameRaw);
   const contactEmail = parseEmail(emailRaw);
   const twitchChannel = parseTwitchChannel(twitchRaw);
+  const youtubeChannel = parseYoutubeChannel(youtubeRaw);
+  const kickChannel = parseKickChannel(kickRaw);
 
   const fieldErrors: RegistrationFormState["fieldErrors"] = {};
 
@@ -362,6 +436,20 @@ export async function registerPlayer(
       "El canal de Twitch solo admite letras, números y guion bajo, de 3 a 25 caracteres.";
   }
 
+  // YouTube y Kick, con el mismo criterio de opcionales que el de Twitch: vacío es
+  // `null` y no pasa nada; un valor que no vale es un error de su campo. La URL
+  // antigua `/c/…` y `/user/…` de YouTube tiene su propio texto porque el motivo
+  // concreto ayuda mucho más que "no vale": lo que hay que escribir es el @nombre.
+  if (youtubeChannel === null && youtubeRaw !== "") {
+    fieldErrors.youtubeChannel = isLegacyYoutubeUrl(youtubeRaw)
+      ? YOUTUBE_LEGACY_URL_ERROR
+      : YOUTUBE_INVALID_ERROR;
+  }
+
+  if (kickChannel === null && kickRaw !== "") {
+    fieldErrors.kickChannel = KICK_INVALID_ERROR;
+  }
+
   // Casilla de aceptación: se exige marcada y no se persiste, porque no es un
   // dato del jugador sino una condición del formulario.
   if (!formData.get("terms")) {
@@ -380,6 +468,45 @@ export async function registerPlayer(
       status: "error",
       message: "Revisa los campos marcados para completar la inscripción.",
       fieldErrors,
+    };
+  }
+
+  // El país es el único campo cuya validación necesita **leer** algo: la lista de
+  // los que admite el torneo está en `Setting`, y es lo que hace que se pueda
+  // cambiar sin desplegar. Va después de los campos que no la necesitan y antes de
+  // la comprobación de la fila previa, por el orden de coste que lleva el resto de
+  // la acción: primero lo gratis, y ninguna escritura ni ninguna llamada a la API
+  // hasta que todo lo que se puede comprobar gratis está comprobado.
+  let countries: string[];
+
+  try {
+    countries = await readCountries();
+  } catch (error) {
+    // Sin lista no hay contra qué validar, y validar contra `DEFAULT_COUNTRIES` en
+    // silencio escribiría el país de una lista que la organización puede haber
+    // cambiado: es el mismo criterio que el contador de frecuencia más arriba. "No
+    // hay lista publicada" sí tiene su lista por defecto (es el estado normal, de
+    // antes de sembrar); "no se ha podido leer" no la tiene, y no se puede
+    // distinguir una cosa de otra con un `null`. Se pide reintentar y el motivo se
+    // queda en el log del servidor.
+    logDatabaseFailure("participar/paises", error);
+
+    return { status: "error", message: DATABASE_UNAVAILABLE_MESSAGE, fieldErrors: {} };
+  }
+
+  // El país es obligatorio y no hay "opcional" detrás, así que los dos `null` del
+  // parser (un vacío y un valor que no está en la lista) son dos mensajes
+  // distintos, igual que con el correo.
+  const countryRaw = String(formData.get("country") ?? "").trim();
+  const country = parseCountry(countryRaw, countries);
+
+  if (country === null) {
+    return {
+      status: "error",
+      message: "Revisa los campos marcados para completar la inscripción.",
+      fieldErrors: {
+        country: countryRaw ? COUNTRY_UNKNOWN_ERROR : COUNTRY_REQUIRED_ERROR,
+      },
     };
   }
 
@@ -439,7 +566,10 @@ export async function registerPlayer(
     profileId,
     name,
     contactEmail,
+    country,
     twitchChannel,
+    youtubeChannel,
+    kickChannel,
     aoe4WorldName: profile.name,
     avatarUrl: profile.avatarUrl,
   });

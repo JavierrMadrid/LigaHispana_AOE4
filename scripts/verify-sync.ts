@@ -1,6 +1,8 @@
 import "dotenv/config";
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame, readOwnCivRandomized, resolveGameMode } from "@/lib/aoe4world/normalize";
 import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/parse";
@@ -9,6 +11,19 @@ import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 import { CIVILIZATIONS, isKnownCivilization } from "@/lib/civs";
 import { unwrapRead } from "@/lib/db-errors";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
+import { AlertKind, AlertRule } from "@/generated/prisma/enums";
+import {
+  historyComparator,
+  historyHole,
+  readActionsSort,
+  readAlertsFilters,
+  readAlertsSort,
+  readHistoryFilters,
+  readHistorySort,
+  readPlayerIdFilter,
+  type AdminHistorySort,
+  type AdminMatchHistoryRow,
+} from "@/lib/admin";
 import {
   countsAsRanked,
   DEFAULT_RULESET,
@@ -51,6 +66,41 @@ const EXPECTED_OBJECTIVE_COUNT = 38;
  * de `[from, to)` y son las que deciden qué cuenta.
  */
 const WINDOW_PROFILE_ID = 9_000_006;
+
+/**
+ * Los países de `paises.txt`, escritos aquí aparte a propósito: es la lista que la
+ * organización definió y la que `npm run countries:seed` siembra, así que si
+ * `DEFAULT_COUNTRIES` dejara de coincidir con ella la comprobación tiene que
+ * fallar. Igual que `EXPECTED_OBJECTIVE_COUNT`, vive como constante para que los
+ * dos sitios no puedan cambiar a la vez sin que se note.
+ */
+const EXPECTED_COUNTRIES = [
+  "Colombia",
+  "España",
+  "Venezuela",
+  "Perú",
+  "Ecuador",
+  "Guatemala",
+  "Bolivia",
+  "Cuba",
+  "República Dominicana",
+  "Honduras",
+  "Paraguay",
+  "El Salvador",
+  "Nicaragua",
+  "Costa Rica",
+  "Panamá",
+  "Guinea Ecuatorial",
+  "Antigua y Barbuda",
+  "México",
+  "Argentina",
+  "Chile",
+  "Uruguay",
+  "Puerto Rico",
+];
+
+/** La lista fuente de la siembra, en la raíz del repositorio. */
+const PAISES_FILE = path.join(process.cwd(), "paises.txt");
 
 /**
  * Reloj congelado para las comprobaciones de normalización: al pasarle `NOW` a
@@ -386,6 +436,7 @@ async function checkNormalization(): Promise<void> {
       ladderError: null,
       scoringError: null,
       alertsError: null,
+      streamsError: null,
       failures: [],
     };
 
@@ -436,6 +487,18 @@ async function checkNormalization(): Promise<void> {
       buena.finishedAt,
       "fallar el motor de alertas tampoco lo mueve",
     );
+    // `streamsError` va en el mismo grupo por la misma razón, y con un caso que
+    // importa más: **la falta de `YOUTUBE_API_KEY` es permanente**, así que si
+    // contara, un torneo entero con la detección de YouTube apagada se publicaría
+    // como sincronizador roto desde el día que se puso en marcha.
+    assert.equal(
+      salida(
+        { ...buena, streamsError: "sin YOUTUBE_API_KEY no se comprueba YouTube" },
+        { ...buena, lastSuccessAt: buena.finishedAt },
+      ),
+      buena.finishedAt,
+      "no comprobar los directos tampoco lo mueve",
+    );
   });
 
   await check("una pasada vieja se detecta como vieja y una ausente no", () => {
@@ -461,6 +524,7 @@ async function checkNormalization(): Promise<void> {
       ladderError: null,
       scoringError: null,
       alertsError: null,
+      streamsError: null,
       failures: [],
       lastSuccessAt: finishedAt,
     });
@@ -2121,10 +2185,1057 @@ async function runDatabaseChecks(): Promise<void> {
   }
 }
 
+/**
+ * La lista de países de la inscripción, sin tocar la base de datos.
+ *
+ * Lo que decide qué países admite el torneo es un documento de `Setting` que la
+ * organización cambia sin desplegar, así que hay tres cosas que comprobar aquí y
+ * ninguna necesita `--db`:
+ *
+ * - que la lista por defecto del código sea la de `paises.txt`, la fuente de verdad
+ *   para sembrarla, y que las dos no divergan;
+ * - que la validación del documento sea **de todo o nada**: un array vacío, un
+ *   elemento que no es texto o un país repetido se descartan enteros, no a medias;
+ * - que `parseCountry()` resuelva el valor escrito al rótulo canónico, incluidos
+ *   los casos en los que está escrito de otra manera (sin tilde, con espacios).
+ *
+ * Lo que sí necesita la base es que la lista **publicada** sea la que se está
+ * usando, y eso lo comprueba `--db`.
+ */
+async function checkRegistrationCountries(): Promise<void> {
+  console.log("Países de la inscripción");
+
+  const { DEFAULT_COUNTRIES, REGISTRATION_COUNTRIES_KEY, mergeCountries } = await import(
+    "@/lib/countries"
+  );
+  const { parseCountry } = await import("@/lib/player-input");
+
+  await check(
+    `la lista por defecto son los ${EXPECTED_COUNTRIES.length} países de paises.txt, en su orden`,
+    () => {
+      assert.deepEqual([...DEFAULT_COUNTRIES], EXPECTED_COUNTRIES);
+      assert.equal(
+        REGISTRATION_COUNTRIES_KEY,
+        "registration.countries",
+        "la clave de `Setting` es la que leen la inscripción y el panel",
+      );
+    },
+  );
+
+  await check("paises.txt y la lista por defecto del código no divergen", () => {
+    // El fichero es lo que se versiona y lo que siembra `npm run countries:seed`;
+    // la constante es lo que se usa antes de que haya lista publicada. Si divergen,
+    // el primer despliegue sin sembrar ofrecería una lista que no es la del
+    // repositorio, y nadie se enteraría hasta que alguien mirara el desplegable.
+    const delFichero = readFileSync(PAISES_FILE, "utf8")
+      .replace(/^\uFEFF/, "")
+      .split(/\r?\n/)
+      .map((linea) => linea.trim())
+      .filter((linea) => linea !== "");
+
+    assert.deepEqual(delFichero, [...DEFAULT_COUNTRIES]);
+  });
+
+  await check("la lista por defecto pasa su propia validación", () => {
+    const propia = mergeCountries(DEFAULT_COUNTRIES);
+
+    assert.deepEqual(propia.warnings, [], "si avisara, el respaldo se descartaría a sí mismo");
+    assert.deepEqual(propia.countries, [...DEFAULT_COUNTRIES]);
+  });
+
+  await check("una lista publicada válida se respeta tal cual, con sus espacios", () => {
+    const buena = mergeCountries(["España", "Colombia", "República Dominicana"]);
+
+    assert.deepEqual(buena.countries, ["España", "Colombia", "República Dominicana"]);
+    assert.deepEqual(buena.warnings, []);
+
+    // Los espacios de fuera se recortan en vez de invalidar el documento: es lo que
+    // hace falta para tolerar que alguien edite el JSON a mano en el panel de
+    // Supabase. El **rótulo** que sale es el recortado, que es el que se guarda.
+    const conEspacios = mergeCountries([" España ", "  Colombia"]);
+
+    assert.deepEqual(conEspacios.countries, ["España", "Colombia"]);
+    assert.deepEqual(conEspacios.warnings, []);
+  });
+
+  await check("un documento que no se entiende se descarta entero, no a medias", () => {
+    const porDefecto = [...DEFAULT_COUNTRIES];
+    const invalidos: Array<{ valor: unknown; motivo: string }> = [
+      { valor: "España", motivo: "un texto suelto" },
+      { valor: { paises: ["España"] }, motivo: "un objeto" },
+      { valor: [], motivo: "una lista vacía" },
+      { valor: ["España", 42], motivo: "un elemento que no es texto" },
+      { valor: ["España", null], motivo: "un elemento nulo" },
+      { valor: ["España", "   "], motivo: "un elemento en blanco" },
+      { valor: ["España", "España"], motivo: "un país repetido" },
+      {
+        valor: ["España", "  España  "],
+        motivo: "un repetido que solo cambia en el espaciado",
+      },
+      { valor: ["España", " españa"], motivo: "un repetido que solo cambia en la tilde" },
+      {
+        valor: ["España", " ESPANA".normalize("NFD")],
+        motivo: "un repetido con la ñ descompuesta",
+      },
+    ];
+
+    for (const { valor, motivo } of invalidos) {
+      const resultado = mergeCountries(valor);
+
+      assert.deepEqual(
+        resultado.countries,
+        porDefecto,
+        `${motivo} debería caer a la lista por defecto entera`,
+      );
+      assert.equal(
+        resultado.warnings.length > 0,
+        true,
+        `${motivo} debería avisar, y el aviso es lo único que avisa de que la lista publicada no sirve`,
+      );
+    }
+  });
+
+  await check("parseCountry devuelve el rótulo canónico de la lista", () => {
+    assert.equal(parseCountry("España", DEFAULT_COUNTRIES), "España");
+    assert.equal(parseCountry("Colombia", DEFAULT_COUNTRIES), "Colombia");
+    assert.equal(parseCountry("Puerto Rico", DEFAULT_COUNTRIES), "Puerto Rico");
+
+    // Elegido bien y escrito de otra manera: no está mal, está escrito distinto, y
+    // guardarlo tal cual haría que el mismo país tuviera dos formas en la tabla.
+    assert.equal(parseCountry("Republica Dominicana", DEFAULT_COUNTRIES), "República Dominicana");
+    assert.equal(parseCountry(" PUERTO RICO ", DEFAULT_COUNTRIES), "Puerto Rico");
+    assert.equal(parseCountry("  españa  ", DEFAULT_COUNTRIES), "España");
+    assert.equal(parseCountry("guinea ecuatorial", DEFAULT_COUNTRIES), "Guinea Ecuatorial");
+
+    // La `ñ` se dobla como cualquier otro diacrítico (en Unicode es una `n` con
+    // tilde), y da igual si el texto la traía compuesta o descompuesta: sin el
+    // `NFC` previo de `foldCountryName`, "ESPANA" descompuesta no se reconocería
+    // como "España" y el mismo país dependería de quién lo escribió.
+    assert.equal(parseCountry("Espana", DEFAULT_COUNTRIES), "España");
+    assert.equal(parseCountry("Panama", DEFAULT_COUNTRIES), "Panamá");
+    assert.equal(
+      parseCountry("Espan\u0303a", DEFAULT_COUNTRIES),
+      "España",
+      "la ñ descompuesta resuelve al mismo rótulo",
+    );
+
+    // Lo que no está en la lista no se admite, por escrito parecido que sea: un
+    // desplegable de 22 países no puede convertirse en "cualquier texto que se
+    // parezca a uno de ellos".
+    assert.equal(parseCountry("Estados Unidos", DEFAULT_COUNTRIES), null);
+    assert.equal(parseCountry("Espana", ["Colombia", "España"]), "España");
+    assert.equal(parseCountry("España", []), null, "sin lista no se admite nada");
+
+    // Vacío y no admitido devuelven ambos `null`, y quien llama los distingue
+    // mirando el valor crudo: el campo es opcional en el alta de admin.
+    assert.equal(parseCountry("", DEFAULT_COUNTRIES), null);
+    assert.equal(parseCountry("   ", DEFAULT_COUNTRIES), null);
+    assert.equal(parseCountry(null, DEFAULT_COUNTRIES), null);
+  });
+}
+
+/**
+ * Los canales de YouTube y de Kick, sin base de datos y sin red.
+ *
+ * Son los parsers que comparten los dos formularios (el alta de admin y la
+ * inscripción pública) y los normalizadores que usa el DAL, así que lo que se
+ * comprueba aquí son dos cosas distintas que tienen que seguir de acuerdo:
+ *
+ * - **Lo que acepta un parser**: las tres formas que la gente pega de verdad (el
+ *   `@nombre`, la URL del canal y la URL de un directo), con y sin esquema, con
+ *   `www.`, con parámetros y con barra final, y siempre saliendo en la misma forma
+ *   canónica. Y lo que **no** acepta: las URL `/c/…` y `/user/…` de YouTube, que
+ *   no llevan el handle dentro, y el slug que se sale del rango de cada plataforma.
+ * - **Que un `null` sea siempre un `null`**: los tres parsers reciben
+ *   `FormDataEntryValue | null`, que también puede ser un `File` (`formData.get()`
+ *   nunca garantiza un texto) y no a un `undefined` en un `FormData` hecho a mano.
+ *   Si alguno de ellos lancera con un `File`, un envío manipulado tiraría el
+ *   formulario con un 500 en lugar de un error de campo.
+ *
+ * Y una tercera, que es la que importa de verdad para la clasificación: el DAL
+ * normaliza con `normalizeYoutubeChannel()` / `normalizeKickChannel()`, así que si
+ * el parser guardara una forma que el normalizador no reconoce, el canal aparecería
+ * como `null` en la tabla y el enlace no se podría componer. Aquí se comprueba que
+ * **todo lo que los parsers aceptan también lo aceptan los normalizadores**.
+ */
+async function checkStreamChannels(): Promise<void> {
+  console.log("Canales de YouTube y Kick");
+
+  const {
+    isLegacyYoutubeUrl,
+    parseKickChannel,
+    parseTwitchChannel,
+    parseYoutubeChannel,
+  } = await import("@/lib/player-input");
+  const {
+    normalizeKickChannel,
+    normalizeTwitchChannel,
+    normalizeYoutubeChannel,
+  } = await import("@/lib/stream-channels");
+  const { kickChannelUrl, twitchChannelUrl, youtubeChannelUrl } = await import("@/lib/format");
+
+  await check("el handle de YouTube sale canónico, sin arroba y en minúsculas", () => {
+    assert.equal(parseYoutubeChannel("@Beastyqt"), "beastyqt", "el @nombre de siempre");
+    assert.equal(parseYoutubeChannel("  @BeastyQT  "), "beastyqt", "espacios de los dos lados");
+    assert.equal(parseYoutubeChannel("beastyqt"), "beastyqt", "sin arroba también vale");
+    assert.equal(parseYoutubeChannel("@canal.con.guion_bajo-1"), "canal.con.guion_bajo-1");
+  });
+
+  await check("la URL de YouTube se recorta a handle, con esquema o sin él", () => {
+    assert.equal(parseYoutubeChannel("https://www.youtube.com/@Beastyqt"), "beastyqt");
+    assert.equal(parseYoutubeChannel("http://youtube.com/@Beastyqt"), "beastyqt");
+    assert.equal(parseYoutubeChannel("youtube.com/@Beastyqt"), "beastyqt", "sin esquema");
+    assert.equal(parseYoutubeChannel("www.youtube.com/@Beastyqt"), "beastyqt", "con www.");
+    assert.equal(parseYoutubeChannel("m.youtube.com/@Beastyqt"), "beastyqt", "con m.");
+    assert.equal(
+      parseYoutubeChannel("https://www.youtube.com/@Beastyqt/live"),
+      "beastyqt",
+      "la URL de un directo",
+    );
+    assert.equal(
+      parseYoutubeChannel("https://www.youtube.com/@Beastyqt/streams?view=0&sort=d&flow=grid"),
+      "beastyqt",
+      "con pestaña y parámetros",
+    );
+    assert.equal(
+      parseYoutubeChannel("https://www.youtube.com/@Beastyqt/"),
+      "beastyqt",
+      "con barra final",
+    );
+  });
+
+  await check("las URL /c/ y /user/ de YouTube se rechazan con motivo explícito", () => {
+    // No son derivables a un handle: el identificador del canal es un `UC…` que no
+    // lo contiene, así que aceptarlas produciría un canal que no existe.
+    const antiguas = [
+      "https://www.youtube.com/c/Beastyqt",
+      "youtube.com/user/Beastyqt",
+      "https://youtube.com/user/Beastyqt/videos",
+    ];
+
+    for (const url of antiguas) {
+      assert.equal(parseYoutubeChannel(url), null, `${url} no es un canal`);
+      assert.equal(isLegacyYoutubeUrl(url), true, `${url} debe decir por qué`);
+    }
+
+    // Y una URL normal **no** se confunde con una antigua: si lo hiciera, el
+    // formulario pediría el @nombre a quien ya lo había escrito.
+    assert.equal(isLegacyYoutubeUrl("https://www.youtube.com/@beastyqt"), false);
+    assert.equal(isLegacyYoutubeUrl("@beastyqt"), false);
+    assert.equal(isLegacyYoutubeUrl("beastyqt"), false);
+    assert.equal(isLegacyYoutubeUrl(""), false);
+    assert.equal(isLegacyYoutubeUrl(null), false);
+  });
+
+  await check("lo que no es un handle de YouTube se rechaza", () => {
+    const invalidos = [
+      "@ab",
+      `@${"a".repeat(31)}`,
+      "@con espacio",
+      "@con/barra",
+      "https://www.youtube.com/live/abcdefgh",
+      "https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv",
+      "canal?t=123",
+    ];
+
+    for (const valor of invalidos) {
+      assert.equal(parseYoutubeChannel(valor), null, `"${valor}" no es un handle`);
+    }
+  });
+
+  await check("el slug de Kick sale canónico, con o sin URL", () => {
+    assert.equal(parseKickChannel("beastyqt"), "beastyqt");
+    assert.equal(parseKickChannel("  BEASTYQT "), "beastyqt", "en minúsculas");
+    assert.equal(parseKickChannel("@beastyqt"), null, "Kick no lleva arroba");
+    assert.equal(parseKickChannel("canal.con.guion_bajo-1"), "canal.con.guion_bajo-1");
+    assert.equal(parseKickChannel("https://www.kick.com/Beastyqt"), "beastyqt");
+    assert.equal(parseKickChannel("http://kick.com/beastyqt"), "beastyqt");
+    assert.equal(parseKickChannel("kick.com/beastyqt"), "beastyqt", "sin esquema");
+    assert.equal(parseKickChannel("www.kick.com/beastyqt"), "beastyqt", "con www.");
+    assert.equal(
+      parseKickChannel("https://www.kick.com/beastyqt?lang=es"),
+      "beastyqt",
+      "con parámetros",
+    );
+    assert.equal(parseKickChannel("https://www.kick.com/beastyqt/"), "beastyqt", "con barra final");
+  });
+
+  await check("lo que no es un slug de Kick se rechaza", () => {
+    const invalidos = [
+      "ab",
+      "a".repeat(26),
+      "canal con espacio",
+      "canal/barra",
+      "https://kick.com/",
+      "otro-sitio.com/beastyqt",
+    ];
+
+    for (const valor of invalidos) {
+      assert.equal(parseKickChannel(valor), null, `"${valor}" no es un slug`);
+    }
+  });
+
+  await check("los tres canales devuelven null ante vacío, null y valores raros", () => {
+    // Un `File` es un `FormDataEntryValue` perfectamente legal: `String(file)` vale
+    // `"[object File]"`, que ningún patrón acepta, así que el resultado es `null` y
+    // no una excepción. Es el caso que separa "un parser que lanza" de uno que no.
+    // `null` va aparte porque es lo que devuelve `formData.get()` cuando el campo
+    // no está en el formulario.
+    const raros: FormDataEntryValue[] = ["", "   ", new File(["contenido"], "canal.txt")];
+
+    for (const valor of raros) {
+      assert.equal(parseYoutubeChannel(valor), null, "YouTube con un valor raro");
+      assert.equal(parseKickChannel(valor), null, "Kick con un valor raro");
+      assert.equal(parseTwitchChannel(valor), null, "Twitch con un valor raro");
+    }
+
+    for (const parser of [parseYoutubeChannel, parseKickChannel, parseTwitchChannel]) {
+      assert.equal(parser(null), null, "campo ausente");
+    }
+  });
+
+  await check("los normalizadores del DAL aceptan lo que los parsers guardan", () => {
+    // Es el contrato entre las dos capas: lo que el parser escribe en la columna
+    // tiene que ser algo que el DAL sepa convertir en un enlace, o el canal
+    // desaparecería de la clasificación sin que nada fallara.
+    const guardados = [
+      parseYoutubeChannel("@Beastyqt"),
+      parseYoutubeChannel("https://www.youtube.com/@Beastyqt/live"),
+      parseKickChannel("Beastyqt"),
+      parseKickChannel("https://www.kick.com/Beastyqt"),
+      parseTwitchChannel("@Beastyqt"),
+    ];
+
+    for (const canal of guardados) {
+      assert.ok(canal !== null, "el parser debería devolver un canal");
+
+      assert.equal(normalizeYoutubeChannel(canal), canal, `YouTube: "${canal}"`);
+      assert.equal(normalizeKickChannel(canal), canal, `Kick: "${canal}"`);
+      assert.equal(normalizeTwitchChannel(canal), canal, `Twitch: "${canal}"`);
+    }
+
+    assert.equal(normalizeYoutubeChannel(null), null);
+    assert.equal(normalizeKickChannel(null), null);
+    assert.equal(normalizeTwitchChannel(null), null);
+    assert.equal(normalizeTwitchChannel(undefined), null);
+    assert.equal(normalizeYoutubeChannel(""), null);
+    assert.equal(normalizeKickChannel("  "), null);
+  });
+
+  await check("el DAL acepta una URL guardada a mano, y una antigua de YouTube no", () => {
+    // Una fila puede traer una URL si alguien la escribió directamente en la base o
+    // desde una versión anterior del panel. El normalizador la recorta, igual que
+    // el parser; y la `/c/` se queda en `null`, por el motivo de siempre.
+    assert.equal(normalizeYoutubeChannel("https://www.youtube.com/@Beastyqt/streams"), "beastyqt");
+    assert.equal(normalizeKickChannel("https://kick.com/Beastyqt"), "beastyqt");
+    assert.equal(normalizeTwitchChannel("https://www.twitch.tv/Beastyqt"), "beastyqt");
+    assert.equal(normalizeYoutubeChannel("https://www.youtube.com/c/Beastyqt"), null);
+    assert.equal(normalizeYoutubeChannel("https://www.youtube.com/user/Beastyqt"), null);
+  });
+
+  await check("las tres plataformas componen su URL con el mismo criterio", () => {
+    assert.equal(twitchChannelUrl("beastyqt"), "https://twitch.tv/beastyqt");
+    assert.equal(youtubeChannelUrl("beastyqt"), "https://www.youtube.com/@beastyqt");
+    assert.equal(kickChannelUrl("beastyqt"), "https://www.kick.com/beastyqt");
+
+    // La única diferencia entre las tres es dónde va la arroba, y por eso la URL
+    // se compone en un sitio y no repetida en cada componente.
+    for (const url of [twitchChannelUrl("x"), youtubeChannelUrl("x"), kickChannelUrl("x")]) {
+      assert.equal(url.startsWith("https://"), true, "todas por https");
+      assert.equal(url.includes(" "), false, "ninguna lleva espacios que puedan romper el href");
+    }
+  });
+}
+
+/**
+ * La lectura de las respuestas de YouTube y de Kick, con un cliente HTTP falso.
+ *
+ * Son las dos piezas más frágiles de la integración y las dos que no se pueden
+ * comprobar de otra manera:
+ *
+ * - **Kick** usa un endpoint no documentado, así que su payload no tiene contrato
+ *   ninguno: lo que se comprueba aquí es que se lee lo que se ve hoy y que lo que no
+ *   se entiende se convierte en `null` (no se comprobará) en lugar de interpretar a
+ *   medias. Un `404` sí es una respuesta —el canal no existe— y un `false`.
+ * - **YouTube** con `eventType=live` devuelve también las emisiones ya terminadas, así
+ *   que decidir por el `liveBroadcastContent` del `snippet` es lo que separa "está
+ *   emitiendo" de "emitió hace un rato". Sin ese campo se cae al criterio de la
+ *   llamada, que es lo que hay que decidir explícitamente y no por descuido.
+ *
+ * Con un cliente falso no sale nada a la red: la clave que se le pasa es de mentira
+ * y solo se comprueba que viaja en la `key` de la URL.
+ */
+async function checkStreamPayloads(): Promise<void> {
+  console.log("Respuestas de YouTube y Kick");
+
+  const { isKickChannelLive } = await import("@/lib/streams/kick");
+  const { isYoutubeStreamLive } = await import("@/lib/streams/youtube");
+  const { getStreamsConfig } = await import("@/lib/streams/env");
+  const { StreamsError } = await import("@/lib/streams/http");
+
+  const config = {
+    ...getStreamsConfig(),
+    youtubeApiKey: "clave-de-prueba",
+    timeoutMs: 1,
+    minRequestIntervalMs: 0,
+    maxRetries: 0,
+  };
+
+  /**
+   * Cliente falso: responde con el payload que le pasen y anota la URL que le
+   * pidieron, para poder comprobar los parámetros de la llamada. `stats` y `drain`
+   * están porque son parte del tipo: el cliente real los lleva y las funciones de
+   * plataforma no los usan, así que aquí solo tienen que existir.
+   */
+  const cliente = (
+    payload: unknown,
+    error?: unknown,
+  ): {
+    fetchJson: (url: URL, options?: { signal?: AbortSignal }) => Promise<unknown>;
+    pedidos: URL[];
+    stats: { requests: number; retries: number; rateLimitResponses: number; rateLimitPausesMs: number };
+    drain: () => Promise<void>;
+  } => {
+    const pedidos: URL[] = [];
+
+    return {
+      pedidos,
+      stats: { requests: 0, retries: 0, rateLimitResponses: 0, rateLimitPausesMs: 0 },
+      drain: async () => undefined,
+      fetchJson: (url: URL) => {
+        pedidos.push(url);
+
+        return error === undefined
+          ? Promise.resolve(payload)
+          : Promise.reject(error);
+      },
+    };
+  };
+
+  await check("YouTube: hay items con liveBroadcastContent=live, está en directo", async () => {
+    const falso = cliente({
+      items: [{ id: { videoId: "abc" }, snippet: { liveBroadcastContent: "live" } }],
+    });
+
+    assert.equal(
+      await isYoutubeStreamLive("UC123", falso, config, {}),
+      true,
+    );
+    assert.equal(falso.pedidos[0]?.hostname, "www.googleapis.com", "va a la Data API");
+    assert.equal(falso.pedidos[0]?.searchParams.get("channelId"), "UC123");
+    assert.equal(falso.pedidos[0]?.searchParams.get("eventType"), "live");
+    assert.equal(falso.pedidos[0]?.searchParams.get("type"), "video");
+    assert.equal(falso.pedidos[0]?.searchParams.get("maxResults"), "1");
+    assert.equal(falso.pedidos[0]?.searchParams.get("key"), "clave-de-prueba");
+  });
+
+  await check("YouTube: una emisión ya terminada no se pinta como directo", async () => {
+    // El caso que justifica mirar el `snippet`: `eventType=live` la devuelve igual.
+    for (const estado of ["completed", "upcoming", "none"]) {
+      const falso = cliente({ items: [{ snippet: { liveBroadcastContent: estado } }] });
+
+      assert.equal(
+        await isYoutubeStreamLive("UC123", falso, config, {}),
+        false,
+        `liveBroadcastContent=${estado} no es un directo en curso`,
+      );
+    }
+  });
+
+  await check("YouTube: sin items no hay directo, y un payload raro avisa", async () => {
+    assert.equal(await isYoutubeStreamLive("UC123", cliente({ items: [] }), config, {}), false);
+
+    // Sin `liveBroadcastContent` se cae al criterio de la llamada: hay resultado,
+    // luego hay directo. Es una decisión explícita, no un descuido.
+    assert.equal(
+      await isYoutubeStreamLive("UC123", cliente({ items: [{ snippet: {} }] }), config, {}),
+      true,
+      "sin el campo se usa el criterio de la llamada",
+    );
+    assert.equal(
+      await isYoutubeStreamLive("UC123", cliente({ items: [{}] }), config, {}),
+      true,
+      "un item sin snippet tampoco invalida la respuesta",
+    );
+
+    // Un payload que no tiene la forma de `search.list` sí es un fallo: no se puede
+    // distinguir "no hay items" de "esto no es la respuesta que esperaba".
+    await assert.rejects(
+      isYoutubeStreamLive("UC123", cliente({ error: "nada" }), config, {}),
+      (error: unknown) => error instanceof StreamsError,
+      "un payload sin `items` se avisa, no se lee como que no hay directo",
+    );
+  });
+
+  await check("Kick: el estado sale de livestream.is_live", async () => {
+    assert.equal(
+      await isKickChannelLive("canal", cliente({ livestream: { is_live: true } }), config, {}),
+      true,
+    );
+    assert.equal(
+      await isKickChannelLive("canal", cliente({ livestream: { is_live: false } }), config, {}),
+      false,
+    );
+    assert.equal(
+      await isKickChannelLive("canal", cliente({ livestream: null }), config, {}),
+      null,
+      "un canal sin emisión es null, no false",
+    );
+    assert.equal(
+      await isKickChannelLive("canal", cliente({ is_live: true }), config, {}),
+      true,
+      "el campo también se acepta en la raíz",
+    );
+  });
+
+  await check("Kick: lo que no se entiende es null y un 404 es un canal que no existe", async () => {
+    for (const raro of [{}, { livestream: "sí" }, { livestream: { is_live: "sí" } }, null]) {
+      assert.equal(
+        await isKickChannelLive("canal", cliente(raro), config, {}),
+        null,
+        `un payload raro (${JSON.stringify(raro)}) no se interpreta`,
+      );
+    }
+
+    const falso = cliente(null, new StreamsError("no existe", { status: 404 }));
+
+    assert.equal(
+      await isKickChannelLive("canal", falso, config, {}),
+      false,
+      "un 404 es una respuesta, no un fallo",
+    );
+    assert.equal(
+      falso.pedidos[0]?.pathname,
+      "/api/v2/channels/canal",
+      "la ruta es la del endpoint no documentado",
+    );
+
+    // Cualquier otro error sí se propaga: el llamante lo registra y no escribe nada.
+    const roto = cliente(null, new StreamsError("se cayó la red", { retryable: true }));
+
+    await assert.rejects(
+      isKickChannelLive("canal", roto, config, {}),
+      (error: unknown) => error instanceof StreamsError,
+      "un fallo de red no se convierte en un `false`",
+    );
+  });
+}
+
+/**
+ * Parámetros de la URL del panel: los filtros y el orden de las tres listas paginadas.
+ *
+ * Sin base de datos, y sin tocar ninguna: son funciones puras del DAL, y lo que se
+ * comprueba es la parte del contrato que decide **qué hace una URL manipulada**. El
+ * criterio es el del DAL —un valor que no se entiende es ausencia, nunca error ni "cero
+ * resultados"—, y estas comprobaciones son las que lo fijan para que no se pueda relajar
+ * sin que se note.
+ *
+ * El script corre con `--conditions=react-server` (ver `package.json`) porque el DAL es
+ * `server-only`. Importarlo no toca la base de datos: el cliente de Prisma es perezoso y
+ * solo se crea en la primera consulta.
+ */
+async function checkAdminQueryParams(): Promise<void> {
+  console.log("Parámetros del panel: filtros y orden");
+
+  await check("sin parámetros, las tres listas salen por fecha descendente", () => {
+    assert.deepEqual(readAlertsSort({}), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readHistorySort({}), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readActionsSort({}), { key: "fecha", dir: "desc" });
+  });
+
+  await check("toda columna admitida, en los dos sentidos", () => {
+    for (const key of ["fecha", "jugador", "regla", "sujeto", "conteo"] as const) {
+      assert.deepEqual(readAlertsSort({ sort: key, dir: "asc" }), { key, dir: "asc" });
+      assert.deepEqual(readAlertsSort({ sort: key, dir: "desc" }), { key, dir: "desc" });
+    }
+
+    for (const key of ["fecha", "resultado"] as const) {
+      assert.deepEqual(readHistorySort({ sort: key, dir: "asc" }), { key, dir: "asc" });
+      assert.deepEqual(readHistorySort({ sort: key, dir: "desc" }), { key, dir: "desc" });
+    }
+
+    for (const key of ["fecha", "tipo", "admin"] as const) {
+      assert.deepEqual(readActionsSort({ sort: key, dir: "asc" }), { key, dir: "asc" });
+      assert.deepEqual(readActionsSort({ sort: key, dir: "desc" }), { key, dir: "desc" });
+    }
+  });
+
+  await check("una columna que no es de esa lista cae al orden por defecto", () => {
+    // El nombre técnico de la columna, una columna de otra lista y una inventada.
+    assert.deepEqual(readAlertsSort({ sort: "subjectName" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "resultado" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "admin" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readHistorySort({ sort: "conteo" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readHistorySort({ sort: "jugador" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readActionsSort({ sort: "jugador" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "" }), { key: "fecha", dir: "desc" });
+  });
+
+  await check("mayúsculas y acentos no son la misma columna", () => {
+    // Los valores de `sort` los escriben los enlaces de la propia tabla, así que la
+    // comparación es literal: aquí no se resuelve el texto como en `parseCountry()`.
+    assert.deepEqual(readAlertsSort({ sort: "FECHA" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "Jugador" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readActionsSort({ sort: "Ádmin" }), { key: "fecha", dir: "desc" });
+  });
+
+  await check("un `dir` que no vale es el sentido por defecto", () => {
+    assert.deepEqual(readAlertsSort({ sort: "conteo", dir: "arriba" }), {
+      key: "conteo",
+      dir: "desc",
+    });
+    assert.deepEqual(readAlertsSort({ sort: "conteo", dir: "ASC" }), {
+      key: "conteo",
+      dir: "desc",
+    });
+    assert.deepEqual(readAlertsSort({ sort: "conteo", dir: "" }), { key: "conteo", dir: "desc" });
+    assert.deepEqual(readAlertsSort({ sort: "conteo", dir: "1" }), { key: "conteo", dir: "desc" });
+  });
+
+  await check("`dir` sin `sort` es la columna por defecto en ese sentido", () => {
+    // Los dos parámetros son independientes: un enlace de "quitar orden" puede borrar
+    // solo `sort` y dejar `dir=desc` sin que eso sea un estado imposible.
+    assert.deepEqual(readAlertsSort({ dir: "asc" }), { key: "fecha", dir: "asc" });
+    assert.deepEqual(readHistorySort({ dir: "asc" }), { key: "fecha", dir: "asc" });
+    assert.deepEqual(readActionsSort({ dir: "asc" }), { key: "fecha", dir: "asc" });
+  });
+
+  await check("un parámetro repetido se queda con el primero", () => {
+    assert.deepEqual(readAlertsSort({ sort: ["conteo", "regla"], dir: "asc" }), {
+      key: "conteo",
+      dir: "asc",
+    });
+    assert.deepEqual(readHistorySort({ sort: ["resultado", "inventada"] }), {
+      key: "resultado",
+      dir: "desc",
+    });
+  });
+
+  await check("filtro de jugador: un `Player.id` con forma, o nada", () => {
+    assert.equal(readPlayerIdFilter("clx123abc"), "clx123abc");
+    assert.equal(readPlayerIdFilter("noSoyUnCuid"), null);
+    assert.equal(readPlayerIdFilter("CLX123ABC"), null);
+    assert.equal(readPlayerIdFilter("clx-123"), null);
+    assert.equal(readPlayerIdFilter(""), null);
+    assert.equal(readPlayerIdFilter(undefined), null);
+    assert.equal(readPlayerIdFilter(["clx1", "clx2"]), "clx1");
+  });
+
+  await check("filtro de regla: allowlist de los ocho `AlertRule`", () => {
+    for (const regla of Object.values(AlertRule)) {
+      assert.equal(readAlertsFilters({ regla }).regla, regla, `la regla ${regla} se admite`);
+    }
+
+    assert.equal(readAlertsFilters({}).regla, null);
+    assert.equal(readAlertsFilters({ regla: "" }).regla, null);
+    assert.equal(readAlertsFilters({ regla: "short_match_streak" }).regla, null);
+    assert.equal(readAlertsFilters({ regla: "INVENTADA" }).regla, null);
+    assert.equal(readAlertsFilters({ regla: "TEAMMATE_ELO_GAP " }).regla, "TEAMMATE_ELO_GAP");
+  });
+
+  await check("filtro de tipo: allowlist de los tres `AlertKind`", () => {
+    for (const tipo of Object.values(AlertKind)) {
+      assert.equal(readAlertsFilters({ tipo }).kind, tipo, `el tipo ${tipo} se admite`);
+    }
+
+    assert.equal(readAlertsFilters({}).kind, null);
+    assert.equal(readAlertsFilters({ tipo: "streak_closed" }).kind, null);
+    assert.equal(readAlertsFilters({ tipo: "GANADOR" }).kind, null);
+  });
+
+  await check("rango de fechas: `from` inclusivo y `to` con el día entero dentro", () => {
+    const desde = readAlertsFilters({ from: "2026-09-01" }).rango;
+    const hasta = readAlertsFilters({ to: "2026-09-30" }).rango;
+
+    assert.equal(desde.gte?.toISOString(), "2026-09-01T00:00:00.000Z");
+    assert.equal(desde.lt, undefined);
+    assert.equal(hasta.lt?.toISOString(), "2026-10-01T00:00:00.000Z");
+    assert.equal(hasta.gte, undefined);
+  });
+
+  await check("una fecha imposible es ausencia de filtro, no un rango desplazado", () => {
+    assert.deepEqual(readAlertsFilters({ from: "2026-02-31" }).rango, {});
+    assert.deepEqual(readAlertsFilters({ to: "2026-13-01" }).rango, {});
+    assert.deepEqual(readAlertsFilters({ from: "ayer" }).rango, {});
+    // Un instante sin zona no se admite: se interpretaría en hora local.
+    assert.deepEqual(readAlertsFilters({ from: "2026-09-01T10:00:00" }).rango, {});
+    // Con zona explícita se usa tal cual, sin desplazarlo.
+    assert.equal(
+      readAlertsFilters({ from: "2026-09-01T10:00:00Z" }).rango.gte?.toISOString(),
+      "2026-09-01T10:00:00.000Z",
+    );
+  });
+
+  await check("los cuatro filtros de alertas se combinan y no se pisan", () => {
+    const filtros = readAlertsFilters({
+      playerId: "clx1",
+      from: "2026-09-01",
+      to: "2026-09-30",
+      regla: AlertRule.REPEATED_OPPONENT_STREAK,
+      tipo: AlertKind.STREAK_CLOSED,
+    });
+
+    assert.equal(filtros.playerId, "clx1");
+    assert.equal(filtros.rango.gte?.toISOString(), "2026-09-01T00:00:00.000Z");
+    assert.equal(filtros.rango.lt?.toISOString(), "2026-10-01T00:00:00.000Z");
+    assert.equal(filtros.regla, "REPEATED_OPPONENT_STREAK");
+    assert.equal(filtros.kind, "STREAK_CLOSED");
+  });
+
+  await check("el filtro de resultado del historial y su orden no se pisan", () => {
+    // `?resultado=WIN` recorta filas (y deja fuera los objetivos) y `?sort=resultado`
+    // las ordena: dos parámetros distintos que pueden ir a la vez.
+    assert.equal(readHistoryFilters({ resultado: "WIN" }).resultado, "WIN");
+    assert.deepEqual(readHistorySort({ sort: "resultado", dir: "asc" }), {
+      key: "resultado",
+      dir: "asc",
+    });
+    assert.equal(readHistoryFilters({ resultado: "WIN", sort: "resultado" }).resultado, "WIN");
+
+    assert.equal(readHistoryFilters({ resultado: "VICTORIA" }).resultado, null);
+    assert.equal(readHistoryFilters({ resultado: "win" }).resultado, null);
+    assert.equal(readHistoryFilters({}).resultado, null);
+
+    // Y los otros filtros del historial son los mismos criterios, con los mismos bordes.
+    const conTodo = readHistoryFilters({ playerId: "clx1", from: "2026-09-01", resultado: "LOSS" });
+
+    assert.equal(conTodo.playerId, "clx1");
+    assert.equal(conTodo.rango.gte?.toISOString(), "2026-09-01T00:00:00.000Z");
+    assert.equal(conTodo.resultado, "LOSS");
+  });
+}
+
+/**
+ * Una fila del feed mezclado del historial, con lo mínimo para poder compararla.
+ *
+ * Solo el `resultado` o el `objetivo` la convierten en una cosa u otra: el feed real ya
+ * viene de `partidaEnFila()` y de `eventosDeObjetivo()`, y aquí solo hace falta que el
+ * comparador tenga filas de las dos clases con instantes repetidos, que es donde se
+ * comprueba que el orden es total.
+ */
+function filaHistorial(row: {
+  id: string;
+  fecha: string;
+  resultado?: "WIN" | "LOSS" | null;
+  objetivo?: string;
+}): AdminMatchHistoryRow {
+  return {
+    id: row.id,
+    startedAt: new Date(row.fecha),
+    playerId: "clx1",
+    playerName: "Jugador",
+    playerProfileId: 9_000_001,
+    points: 0,
+    objective:
+      row.objetivo === undefined
+        ? null
+        : {
+            id: row.objetivo,
+            label: row.objetivo,
+            group: "actividad",
+            metric: "partidas",
+            points: 40,
+          },
+    gameId: row.objetivo === undefined ? "9000001" : null,
+    opponentName: null,
+    opponentProfileId: null,
+    result: row.objetivo === undefined ? (row.resultado ?? "WIN") : null,
+    teamSize: row.objetivo === undefined ? "1vs1" : null,
+    mode: row.objetivo === undefined ? "rm_solo" : null,
+    leaderboard: row.objetivo === undefined ? "rm_solo" : null,
+    map: null,
+    revertedAt: null,
+  };
+}
+
+/** Fechas de las filas sintéticas: tres días, con instantes repetidos a propósito. */
+const H1 = "2026-09-01T10:00:00.000Z";
+const H2 = "2026-09-02T10:00:00.000Z";
+const H3 = "2026-09-03T10:00:00.000Z";
+
+/**
+ * Orden del feed mezclado del historial: el comparador que sostiene la paginación.
+ *
+ * Sin base de datos, porque las tres propiedades de las que depende que una página sea
+ * una ventana real del feed son de comparación de filas y se pueden comprobar con filas
+ * sintéticas. Son exactamente las que seonthrow: **totalidad** (sin desempate, dos filas
+ * del mismo instante podrían salir en cualquier orden entre sí y una página podría
+ * repetir o perder filas), **inversión** (`asc` es el reverso exacto de `desc`) y
+ * **consistencia con las consultas** (el merge solo es correcto si las dos mitadas
+ * llegan ya ordenadas como el comparador las ordena).
+ */
+/**
+ * Paginar el feed mezclado con la aritmética de `historyHole()`, sin base de datos.
+ *
+ * Reproduce lo que hace `getAdminMatchHistory()` —traer los objetivos enteros, acotar las
+ * partidas con el hueco, mezclar con el comparador y recortar la página— y comprueba que
+ * recorriendo **todas** las páginas salen exactamente las filas del feed, en su orden y
+ * sin repeticiones. Es la comprobación que respalda que el orden por resultado puede
+ * reutilizar el hueco del orden por fecha: si la aritmética dependiera del eje, aquí se
+ * vería con solo cambiar `sort`.
+ */
+async function checkHistoryPaging(): Promise<void> {
+  // Doce partidas y cinco objetivos repartidos por tres días, con empates de fecha y con
+  // hitos intercalados, que es la forma de que el hueco tenga que trabajar de verdad.
+  const instantes = [
+    "2026-09-01T09:00:00.000Z",
+    "2026-09-01T15:00:00.000Z",
+    "2026-09-02T09:00:00.000Z",
+    "2026-09-02T15:00:00.000Z",
+    "2026-09-03T09:00:00.000Z",
+    "2026-09-03T15:00:00.000Z",
+  ];
+
+  const partidas = instantes.flatMap((fecha, i) => [
+    filaHistorial({ id: `m${i}a`, fecha, resultado: i % 3 === 0 ? "LOSS" : "WIN" }),
+    filaHistorial({ id: `m${i}b`, fecha, resultado: i % 3 === 0 ? "WIN" : "LOSS" }),
+  ]);
+
+  const objetivos = [0, 1, 2, 3, 4].map((i) =>
+    filaHistorial({
+      id: `o${i}`,
+      fecha: instantes[i % instantes.length],
+      objetivo: `objetivo-${i}`,
+    }),
+  );
+
+  const total = partidas.length + objetivos.length;
+
+  await check(
+    "paginar el feed no repite ni pierde filas, en los dos ejes de orden",
+    () => {
+      for (const sort of [
+        { key: "fecha", dir: "desc" },
+        { key: "fecha", dir: "asc" },
+        { key: "resultado", dir: "desc" },
+        { key: "resultado", dir: "asc" },
+      ] satisfies AdminHistorySort[]) {
+        for (const pageSize of [1, 2, 5, 25]) {
+          // El feed entero, que es contra lo que se compara lo que sale de paginar.
+          const feed = [...partidas, ...objetivos]
+            .sort(historyComparator(sort))
+            .map((row) => row.id);
+
+          const recorrido: string[] = [];
+          const pageCount = Math.ceil(total / pageSize);
+          const signo = sort.dir === "desc" ? -1 : 1;
+
+          for (let page = 1; page <= pageCount; page += 1) {
+            const skip = (page - 1) * pageSize;
+            const eventos = [...objetivos].sort(historyComparator(sort));
+            const { skipPartidas, takePartidas, desde } = historyHole(
+              skip,
+              pageSize,
+              eventos.length,
+            );
+
+            // Lo que devolverían las dos consultas con ese `orderBy`: las partidas acotadas
+            // por el hueco y todos los objetivos.
+            const ventanaPartidas = [...partidas]
+              .sort((a, b) => {
+                if (sort.key === "resultado") {
+                  const rango = (row: AdminMatchHistoryRow) => (row.result === "WIN" ? 1 : 2);
+                  const diferencia = rango(a) - rango(b);
+
+                  if (diferencia !== 0) {
+                    return diferencia * signo;
+                  }
+                }
+
+                const porFecha = (a.startedAt.getTime() - b.startedAt.getTime()) * signo;
+
+                return porFecha !== 0 ? porFecha : (a.id < b.id ? -1 : 1) * signo;
+              })
+              .slice(skipPartidas, skipPartidas + takePartidas);
+
+            const pagina = [...ventanaPartidas, ...eventos]
+              .sort(historyComparator(sort))
+              .slice(desde, desde + pageSize)
+              .map((row) => row.id);
+
+            const etiqueta = `sort=${sort.key}&dir=${sort.dir}&pageSize=${pageSize}&pagina=${page}`;
+
+            assert.deepEqual(
+              pagina,
+              feed.slice(skip, skip + pageSize),
+              `${etiqueta}: la página no es una ventana del feed`,
+            );
+            recorrido.push(...pagina);
+          }
+
+          assert.deepEqual(
+            recorrido,
+            feed,
+            `sort=${sort.key}&dir=${sort.dir}&pageSize=${pageSize}: recorrido con huecos o repeticiones`,
+          );
+          assert.equal(new Set(recorrido).size, total, "alguna fila sale repetida");
+        }
+      }
+    },
+  );
+}
+
+async function checkHistoryOrder(): Promise<void> {
+  console.log("Orden del feed mezclado del historial");
+
+  await checkHistoryPaging();
+
+  // Dos días con empates de fecha, las dos clases de fila y los tres rangos de resultado,
+  // que es la peor combinación posible para el comparador.
+  const partidas = [
+    filaHistorial({ id: "m1", fecha: H3, resultado: "WIN" }),
+    filaHistorial({ id: "m2", fecha: H3, resultado: "LOSS" }),
+    filaHistorial({ id: "m3", fecha: H2, resultado: "LOSS" }),
+    filaHistorial({ id: "m4", fecha: H1, resultado: "WIN" }),
+  ];
+
+  const objetivos = [
+    filaHistorial({ id: "o1", fecha: H3, objetivo: "loco-por-ganar" }),
+    filaHistorial({ id: "o2", fecha: H2, objetivo: "otp" }),
+  ];
+
+  const todas = [...partidas, ...objetivos];
+
+  const orden = (sort: AdminHistorySort, filas: AdminMatchHistoryRow[]) =>
+    [...filas].sort(historyComparator(sort));
+
+  await check("el comparador no deja dos filas empatadas", () => {
+    for (const key of ["fecha", "resultado"] as const) {
+      for (const dir of ["asc", "desc"] as const) {
+        const comparar = historyComparator({ key, dir });
+
+        for (const a of todas) {
+          for (const b of todas) {
+            if (a.id === b.id) {
+              continue;
+            }
+
+            assert.notEqual(
+              comparar(a, b),
+              0,
+              `${a.id} y ${b.id} empatan con sort=${key}&dir=${dir}`,
+            );
+            assert.equal(
+              comparar(a, b),
+              -comparar(b, a),
+              `${a.id} y ${b.id} no son simétricos con sort=${key}&dir=${dir}`,
+            );
+          }
+        }
+      }
+    }
+  });
+
+  await check("asc es el inverso exacto de desc", () => {
+    for (const key of ["fecha", "resultado"] as const) {
+      const asc = orden({ key, dir: "asc" }, todas).map((row) => row.id);
+      const desc = orden({ key, dir: "desc" }, todas).map((row) => row.id);
+
+      assert.deepEqual(asc, [...desc].reverse(), `sort=${key} no se invierte entero`);
+    }
+  });
+
+  await check("por fecha, la partida va delante del objetivo del mismo instante", () => {
+    // Descendente y con la clave de desempate también descendente: en H3 son `m2`, `m1` y
+    // `o1`, y la partida que explica el hito va delante de él.
+    assert.deepEqual(
+      orden({ key: "fecha", dir: "desc" }, todas).map((row) => row.id),
+      ["m2", "m1", "o1", "m3", "o2", "m4"],
+    );
+  });
+
+  await check("por resultado, los objetivos van delante de victorias y derrotas", () => {
+    const asc = orden({ key: "resultado", dir: "asc" }, todas);
+    const rangos = asc.map((row) => (row.objective !== null ? 0 : row.result === "WIN" ? 1 : 2));
+
+    assert.deepEqual(rangos, [...rangos].sort((a, b) => a - b), "los rangos no salen agrupados");
+    assert.equal(rangos[0], 0, "el primer rango de ascendente es el de objetivo");
+    assert.equal(rangos[rangos.length - 1], 2, "el último rango de ascendente es el de derrota");
+
+    // Dentro de cada rango se ordena por fecha **en el sentido del orden**, y `asc` es el
+    // inverso entero de `desc`: o2 (2-sep) antes que o1 (3-sep), y al revés en `desc`.
+    assert.deepEqual(
+      asc.map((row) => row.id),
+      ["o2", "o1", "m4", "m1", "m3", "m2"],
+    );
+  });
+
+  await check("comparar no reordena las mitadas que ya llegan ordenadas", () => {
+    // Es la condición del merge: las dos consultas traen sus filas en el orden del
+    // comparador, así que mezclar las dos mitadas solo puede **intercalar** filas, nunca
+    // cambiar el orden dentro de una de ellas. Si el comparador contradijera al `orderBy`
+    // de alguna consulta, la página dejaría de ser una ventana del feed real.
+    for (const sort of [
+      { key: "fecha", dir: "desc" },
+      { key: "fecha", dir: "asc" },
+      { key: "resultado", dir: "desc" },
+      { key: "resultado", dir: "asc" },
+    ] satisfies AdminHistorySort[]) {
+      // Cada mitad, ordenada como su consulta. Es una copia de los `orderBy` de
+      // `admin.ts` a propósito, porque es lo que hay que comprobar que no se contradiga:
+      // en `resultado` el `result` va primero, y las dos mitadas terminan en su clave,
+      // ambas en el sentido del orden.
+      // `signo` aquí es el del `orderBy` escrito al revés: estas diferencias van en
+      // ascendente, así que `desc` es el que multiplica por `-1`.
+      const signo = sort.dir === "desc" ? -1 : 1;
+
+      const mitadPartidas = [...partidas].sort((a, b) => {
+        if (sort.key === "resultado") {
+          const rango = (row: AdminMatchHistoryRow) => (row.result === "WIN" ? 1 : 2);
+          const diferencia = rango(a) - rango(b);
+
+          if (diferencia !== 0) {
+            return diferencia * signo;
+          }
+        }
+
+        const porFecha = (a.startedAt.getTime() - b.startedAt.getTime()) * signo;
+
+        return porFecha !== 0 ? porFecha : (a.id < b.id ? -1 : 1) * signo;
+      });
+
+      const mitadObjetivos = [...objetivos].sort(
+        (a, b) =>
+          (a.startedAt.getTime() - b.startedAt.getTime()) * signo ||
+          (a.id < b.id ? -1 : 1) * signo,
+      );
+
+      const mezcladas = orden(sort, [...mitadPartidas, ...mitadObjetivos]);
+      const ids = (filas: AdminMatchHistoryRow[]) => filas.map((row) => row.id);
+
+      assert.deepEqual(
+        ids(mezcladas.filter((row) => row.objective === null)),
+        ids(mitadPartidas),
+        `sort=${sort.key}&dir=${sort.dir} reordena las partidas`,
+      );
+      assert.deepEqual(
+        ids(mezcladas.filter((row) => row.objective !== null)),
+        ids(mitadObjetivos),
+        `sort=${sort.key}&dir=${sort.dir} reordena los objetivos`,
+      );
+
+      // Y ninguna fila se pierde ni se repite en el merge, que es lo que la paginación
+      // necesita para que dos páginas no se solapen.
+      assert.equal(mezcladas.length, todas.length, "el merge pierde o repite filas");
+      assert.equal(new Set(ids(mezcladas)).size, todas.length, "el merge repite una fila");
+    }
+  });
+}
+
 async function main(): Promise<void> {
   await checkNormalization();
   console.log("");
   await checkObjectiveCatalogue();
+  console.log("");
+  await checkRegistrationCountries();
+  console.log("");
+  await checkStreamChannels();
+  console.log("");
+  await checkStreamPayloads();
+  console.log("");
+  await checkAdminQueryParams();
+  console.log("");
+  await checkHistoryOrder();
   console.log("");
 
   if (process.argv.includes("--db")) {

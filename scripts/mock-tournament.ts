@@ -36,6 +36,17 @@ import { playerSyncKey } from "@/lib/settings";
 
 process.env.AOE4WORLD_MOCK = "1";
 
+/**
+ * Crea o actualiza los diez participantes del torneo simulado.
+ *
+ * Los canales y el estado de directo de **YouTube y Kick** se escriben aquí, y no
+ * los deja el refresco del worker, porque la simulación **no toca ninguna API
+ * externa**: eso lo garantiza el `AOE4WORLD_MOCK` de AoE4World y, para estas dos
+ * plataformas, el flag `streams` de la llamada al sincronizador (que se apaga justo
+ * aquí). Un `false` escrito por el refresco borraría el "en directo" que la
+ * simulación acaba de plantar, y un `true` real exigiría llamar a YouTube desde un
+ * script de desarrollo.
+ */
 async function ensureMockPlayers(): Promise<void> {
   for (const player of MOCK_TOURNAMENT_PLAYERS) {
     await db.player.upsert({
@@ -44,11 +55,19 @@ async function ensureMockPlayers(): Promise<void> {
         profileId: player.profileId,
         name: player.name,
         twitchChannel: player.twitchChannel,
+        youtubeChannel: player.youtubeChannel,
+        kickChannel: player.kickChannel,
+        youtubeIsLive: player.youtubeIsLive,
+        kickIsLive: player.kickIsLive,
         status: "APPROVED",
       },
       update: {
         name: player.name,
         twitchChannel: player.twitchChannel,
+        youtubeChannel: player.youtubeChannel,
+        kickChannel: player.kickChannel,
+        youtubeIsLive: player.youtubeIsLive,
+        kickIsLive: player.kickIsLive,
         status: "APPROVED",
       },
     });
@@ -61,13 +80,19 @@ async function ensureMockPlayers(): Promise<void> {
  * El borrado va por `profileId`, que es un rango reservado, pero un rango por sí
  * solo no es una prueba: si algún día se colara un jugador real con uno de esos
  * ids, `mock:clean` se lo llevaría por delante sin decirlo. Por eso se compara
- * también el nombre (y el canal) con la lista del mock, que es su única fuente de
- * verdad. Si algo no cuadra, no se borra nada.
+ * también el nombre (y los tres canales) con la lista del mock, que es su única
+ * fuente de verdad. Si algo no cuadra, no se borra nada.
  */
 async function assertRowsAreMock(): Promise<void> {
   const rows = await db.player.findMany({
     where: { profileId: { in: MOCK_PROFILE_IDS } },
-    select: { profileId: true, name: true, twitchChannel: true },
+    select: {
+      profileId: true,
+      name: true,
+      twitchChannel: true,
+      youtubeChannel: true,
+      kickChannel: true,
+    },
     orderBy: { profileId: "asc" },
   });
 
@@ -104,6 +129,18 @@ async function assertRowsAreMock(): Promise<void> {
     if ((esperado.twitchChannel ?? null) !== (row.twitchChannel ?? null)) {
       problemas.push(
         `${row.profileId} (${esperado.name}): el canal "${row.twitchChannel ?? "null"}" no es el del mock ("${esperado.twitchChannel ?? "null"}")`,
+      );
+    }
+
+    if ((esperado.youtubeChannel ?? null) !== (row.youtubeChannel ?? null)) {
+      problemas.push(
+        `${row.profileId} (${esperado.name}): el canal de YouTube "${row.youtubeChannel ?? "null"}" no es el del mock ("${esperado.youtubeChannel ?? "null"}")`,
+      );
+    }
+
+    if ((esperado.kickChannel ?? null) !== (row.kickChannel ?? null)) {
+      problemas.push(
+        `${row.profileId} (${esperado.name}): el canal de Kick "${row.kickChannel ?? "null"}" no es el del mock ("${esperado.kickChannel ?? "null"}")`,
       );
     }
   }
@@ -155,8 +192,10 @@ async function runMockTournament(): Promise<void> {
   await ensureMockPlayers();
 
   // Solo los participantes simulados: una base con otros jugadores aprobados
-  // no se toca ni se les pide nada al mock.
-  const summary = await syncApprovedPlayers({ profileIds: MOCK_PROFILE_IDS });
+  // no se toca ni se les pide nada al mock. `streams: false` por lo que dice el
+  // docblock de `ensureMockPlayers()`: la detección de YouTube y Kick queda apagada
+  // y sus canales se quedan como los que ha plantado este script.
+  const summary = await syncApprovedPlayers({ profileIds: MOCK_PROFILE_IDS, streams: false });
 
   // "Partidas en directo" se cuenta por `gameId` distinto, igual que hace la
   // web: una 1v1 entre participantes genera dos filas `Match` (una por jugador)
@@ -263,16 +302,27 @@ async function runMockTournament(): Promise<void> {
   for (const row of standings) {
     const flags = [
       row.isPlaying ? "jugando" : null,
-      row.twitchIsLive ? "en directo" : null,
+      row.twitchIsLive ? "en directo en Twitch" : null,
+      row.youtubeIsLive ? "en directo en YouTube" : null,
+      row.kickIsLive ? "en directo en Kick" : null,
     ]
       .filter((value): value is string => value !== null)
       .join(", ");
+
+    const canales = [
+      row.twitchChannel === null ? null : `twitch:${row.twitchChannel}`,
+      row.youtubeChannel === null ? null : `youtube:${row.youtubeChannel}`,
+      row.kickChannel === null ? null : `kick:${row.kickChannel}`,
+    ]
+      .filter((value): value is string => value !== null)
+      .join(" ");
 
     console.log(
       `  ${row.rank}. ${row.name} — ${row.points} ${row.points === 1 ? "punto" : "puntos"} ` +
         `(${row.wins}V/${row.losses}D) | elo ${row.elo ?? "s/l"} ` +
         `| ${row.division ?? "sin división"} (${row.rankLevel ?? "-"}) ` +
-        `| racha ${row.streak ?? "n/a"} | ${flags === "" ? "sin indicadores" : flags}`,
+        `| racha ${row.streak ?? "n/a"} | ${flags === "" ? "sin indicadores" : flags} ` +
+        `| ${canales === "" ? "sin canales" : canales}`,
     );
   }
 
@@ -411,6 +461,36 @@ async function runMockTournament(): Promise<void> {
 
   if (!standings.some((row) => row.twitchIsLive)) {
     problems.push("ningún participante sale como en directo en Twitch");
+  }
+
+  // Los canales de las dos plataformas nuevas, y su estado de directo. Se comprueba
+  // contra lo publicado por el DAL, no contra la lista del mock: lo que importa es
+  // que lo que el script plantó llega entero a la clasificación, con el handle
+  // canónico y con el icono de directo donde toca.
+  for (const plataforma of ["youtube", "kick"] as const) {
+    const conCanal = standings.filter((row) => row[`${plataforma}Channel`] !== null);
+
+    if (conCanal.length === 0) {
+      problems.push(`ningún participante tiene canal de ${plataforma}`);
+    }
+
+    if (!standings.some((row) => row[`${plataforma}IsLive`])) {
+      problems.push(`ningún participante sale como en directo en ${plataforma}`);
+    }
+
+    const desajustados = conCanal.filter(
+      (row) => row[`${plataforma}Channel`] !== MOCK_TOURNAMENT_PLAYERS.find(
+        (player) => player.profileId === row.profileId,
+      )?.[`${plataforma}Channel`],
+    );
+
+    if (desajustados.length > 0) {
+      problems.push(
+        `el canal de ${plataforma} no llega a la clasificación como lo plantó el mock: ${desajustados
+          .map((row) => row.profileId)
+          .join(", ")}`,
+      );
+    }
   }
 
   if (!standings.some((row) => row.avatarUrl !== null)) {

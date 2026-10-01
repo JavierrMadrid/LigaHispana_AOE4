@@ -11,7 +11,7 @@ import {
   type Aoe4WorldLadderPage,
 } from "@/lib/aoe4world/types";
 import { DIVISIONS, divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
-import { normalizeTwitchChannel } from "@/lib/twitch";
+import { normalizeTwitchChannel } from "@/lib/stream-channels";
 
 /**
  * ElecciÃ³n de un participante real por divisiÃ³n, para la simulaciÃ³n del torneo.

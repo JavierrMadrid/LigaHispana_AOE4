@@ -3,7 +3,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import type { DivisionId } from "@/lib/divisions";
 import { isRecord } from "@/lib/json";
-import { normalizeTwitchChannel } from "@/lib/twitch";
+import { normalizeTwitchChannel } from "@/lib/stream-channels";
 import { playerSyncKey, writePlayerSyncState } from "@/lib/settings";
 
 /**

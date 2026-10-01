@@ -223,6 +223,21 @@ export type SyncRunTrace = {
    * 10:00" por un fallo que no ha parado nada.
    */
   alertsError: string | null;
+  /**
+   * Por qué no se pudo comprobar el estado de directo de YouTube o de Kick, si no se
+   * pudo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, y por la misma razón que
+   * `alertsError`: no saber si alguien está emitiendo **no ha parado ni una
+   * partida**. Las partidas están sincronizadas, la clasificación está recalculada y
+   * el cron va bien; lo único que falta es un icono. Un rastro que mezclara las dos
+   * cosas diría "el torneo lleva roto desde las 10:00" por un 429 de una API de
+   * terceros, que es justo la confusión que `lastSuccessAt` existe para evitar.
+   *
+   * Es también el sitio donde se ve que **no hay `YOUTUBE_API_KEY`**: en ese caso
+   * hay texto de aviso aunque no haya fallo, y sigue sin mover el marcador.
+   */
+  streamsError: string | null;
   /** Jugadores que no se pudieron sincronizar, con su motivo. */
   failures: SyncRunFailure[];
   /**
@@ -305,6 +320,7 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     ladderError: readText(value["ladderError"]),
     scoringError: readText(value["scoringError"]),
     alertsError: readText(value["alertsError"]),
+    streamsError: readText(value["streamsError"]),
     failures: readFailures(value["failures"]),
     lastSuccessAt: readText(value["lastSuccessAt"]),
   };
@@ -341,6 +357,8 @@ export async function writeSyncRunTrace(
   // última vez" responde a «¿desde cuándo está roto el sincronizador?», y un fallo
   // del motor de alertas no ha parado ni una partida. Meterlo haría que el panel
   // dijera que el torneo lleva horas roto cuando lo que se ha caído es un informe.
+  // Lo mismo con `streamsError`: no saber si un canal está emitiendo tampoco para
+  // nada del torneo.
 
   const value = {
     ...trace,

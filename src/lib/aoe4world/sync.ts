@@ -11,6 +11,11 @@ import {
   type SyncRunTrace,
 } from "@/lib/settings";
 import { recomputeScores, type RecomputeScoresResult } from "@/lib/scoring";
+import {
+  describeStreamRefresh,
+  refreshStreamLiveStatus,
+  type StreamRefreshResult,
+} from "@/lib/streams/refresh";
 import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
 import { Aoe4WorldError, Aoe4WorldNotFoundError } from "./http";
@@ -36,6 +41,12 @@ import type { Aoe4WorldGame } from "./types";
  * que cumple el requisito de "siempre actualizada" sin que nadie tenga que
  * recargar: cada pasada del worker deja la tabla de puntos al día y el historial
  * de alertas al día.
+ *
+ * Y en el último sitio, y con la misma tolerancia, se comprueba el estado de
+ * directo de **YouTube y Kick** (`src/lib/streams/`): al final porque no depende de
+ * nada de lo anterior y porque, si falla, lo único que se pierde es un icono. Vive
+ * aquí y no en el DAL porque son peticiones salientes a dos APIs externas y en el
+ * plan Free de Cloudflare eso solo cabe una vez por pasada.
  */
 
 /**
@@ -126,6 +137,22 @@ export type SyncSummary = {
   alerts: EvaluateAlertsResult | null;
   /** Por qué no se pudieron evaluar las alertas, si no se pudieron. */
   alertsError: string | null;
+  /**
+ * Estado de directo de YouTube y Kick para los participantes con canal. `null`
+   * cuando la detección estaba apagada en esta pasada (`streams: false`) o no había
+   * nadie con canal, que es lo que hace que una pasada sin nada que hacer no salga a
+   * la red.
+   */
+  streams: StreamRefreshResult | null;
+  /**
+   * Lo que hay que saber del paso de directos y no es un éxito limpio: fallos,
+   * comprobaciones que no se han hecho, o la detección de YouTube apagada por falta
+   * de clave. `null` cuando todo fue bien.
+   *
+   * **No** mueve `lastSuccessAt` del rastro, igual que `alertsError`: es información
+   * sobre un icono, no salud del sincronizador.
+   */
+  streamsError: string | null;
   players: SyncPlayerResult[];
 };
 
@@ -136,6 +163,16 @@ export type SyncOptions = {
   client?: Aoe4WorldClient;
   /** Cancela la pasada; los jugadores pendientes se marcan como cancelados. */
   signal?: AbortSignal;
+  /**
+   * Comprueba el estado de directo de YouTube y Kick. Por defecto `true`.
+   *
+   * Existe para `npm run mock:tournament`, que **no debe tocar ninguna API
+   * externa** (ni AoE4World, con `AOE4WORLD_MOCK`, ni estas dos): el script planta
+   * los canales y el estado de directo del torneo simulado por su cuenta, así que
+   * aquí no se pregunta a nadie. Apagado, `streams` sale a `null` en el resumen y no
+   * se lee ni se escribe nada.
+   */
+  streams?: boolean;
 };
 
 type SyncConfig = {
@@ -678,6 +715,39 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se han podido evaluar las alertas: ${alertsError}`);
   }
 
+  // El estado de directo de YouTube y Kick va **último**, con el mismo tratamiento
+  // que las alertas: tolerante a fallos, con el motivo en el rastro, y sin que un
+  // fallo suyo pueda parar la pasada. Y por el mismo motivo que las alertas, se
+  // ejecuta aquí y no en el DAL: son peticiones salientes a dos APIs externas, y en
+  // el plan Free de Cloudflare eso solo cabe una vez por pasada (README, "El límite
+  // de CPU del plan Free"), no en cada visita a la web.
+  //
+  // La llamada se hace siempre, salvo que quien la llama la apague (el mock del
+  // torneo, que no toca APIs externas), y `refreshStreamLiveStatus()` sale antes de
+  // crear el cliente HTTP si no hay ningún participante aprobado con canal: así una
+  // pasada sin nada que hacer no gasta ni una petición.
+  let streams: StreamRefreshResult | null = null;
+  let streamsError: string | null = null;
+
+  try {
+    if (options.streams !== false) {
+      streams = await refreshStreamLiveStatus({ signal });
+
+      // Lo que devuelve `describeStreamRefresh()` va al rastro tal cual, avisos
+      // incluidos: es el sitio donde se ve que la detección está apagada por falta de
+      // `YOUTUBE_API_KEY` o que una plataforma lleva fallando. Va también al log, con
+      // `warn` y no con `error`, porque no es un fallo del sincronizador.
+      streamsError = describeStreamRefresh(streams);
+
+      if (streamsError !== null) {
+        console.warn(`[sync] ${streamsError}`);
+      }
+    }
+  } catch (error) {
+    streamsError = toErrorMessage(error);
+    console.error(`[sync] No se ha podido comprobar el estado de directo: ${streamsError}`);
+  }
+
   const finishedAtMs = Date.now();
 
   const summary: SyncSummary = {
@@ -703,6 +773,8 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     scoringError,
     alerts,
     alertsError,
+    streams,
+    streamsError,
     players: settled,
   };
 
@@ -753,6 +825,7 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       ladderError: summary.ladder.error,
       scoringError: summary.scoringError,
       alertsError: summary.alertsError,
+      streamsError: summary.streamsError,
       failures: summary.players
         .filter((result) => result.status !== "ok")
         .map((result) => ({

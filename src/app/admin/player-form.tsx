@@ -17,7 +17,7 @@ const initialState: PlayerFormState = { error: null, message: null };
  * la clasificación. Son varios segundos contra una API externa, y un "Guardando…"
  * sin más invites a pensar que se ha colgado.
  */
-export function PlayerForm() {
+export function PlayerForm({ countries }: { countries: string[] }) {
   const [state, formAction, pending] = useActionState(createPlayer, initialState);
 
   return (
@@ -50,11 +50,49 @@ export function PlayerForm() {
       </label>
 
       <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted">País (opcional)</span>
+        <select
+          name="country"
+          defaultValue=""
+          className="h-10 rounded-md border border-line bg-background px-3 text-foreground"
+        >
+          <option value="">Sin especificar</option>
+          {countries.map((country) => (
+            <option key={country} value={country}>
+              {country}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
         <span className="text-muted">Canal de Twitch (opcional)</span>
         <input
           name="twitchChannel"
           placeholder="beastyqt"
           maxLength={25}
+          autoComplete="off"
+          className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted">Canal de YouTube (opcional)</span>
+        <input
+          name="youtubeChannel"
+          placeholder="@canal"
+          maxLength={100}
+          autoComplete="off"
+          className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted">Canal de Kick (opcional)</span>
+        <input
+          name="kickChannel"
+          placeholder="canal"
+          maxLength={100}
           autoComplete="off"
           className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
         />

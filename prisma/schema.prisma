@@ -10,8 +10,8 @@ generator client {
   // `workerd` prohibe por ser generacion de codigo: todo lo que lee de la base
   // revienta con "Wasm code generation disallowed by embedder"
   // (prisma/prisma#28657). Con `workerd` el `.wasm` se importa como modulo y lo
-  // enlaza el empaquetador, sin generacion de codigo en runtime. Detalle en el
-  // README, seccion "Prisma 7 necesita `runtime = \"workerd\"`".
+  // enlaza el empaquetador, sin generacion de codigo en runtime. Detalle en
+  // docs/DESPLIEGUE.md, seccion "Prisma 7 necesita `runtime = \"workerd\"`".
   // El precio es que `?module` solo lo entienden los empaquetadores: los scripts
   // de `scripts/` (Node con tsx) cargan el WASM con
   // `scripts/prisma-wasm-node.mjs`, que se pasa con `--import`. No es un valor
@@ -97,6 +97,17 @@ model Player {
   // Canal registrado en el panel (lo escribe el admin). No es lo mismo que
   // `twitchUrl`, que es lo que AoE4World publica en el perfil del jugador.
   twitchChannel String?
+  // Canal de **YouTube** y de **Kick**, con el mismo sentido y las mismas reglas
+  // que `twitchChannel`: lo escribe quien se inscribe o el admin, en minúsculas y
+  // ya canónico, y **AoE4World no publica ninguno de los dos**, así que aquí no
+  // hay respaldo desde el perfil ni nada que el worker pueda refrescar: son
+  // columnas de la persona, no de la API. Por eso no son `String` con el mismo
+  // tratamiento que el nombre de canal de Twitch: el handle de YouTube se guarda
+  // **sin la arroba** (la forma que consume `forHandle` de la API y la que se
+  // usa para componer la URL) y el de Kick es su slug, también sin arroba ni
+  // https.
+  youtubeChannel String?
+  kickChannel     String?
   // Correo de contacto: lo **exige** el formulario público de `/participar` para
   // que la organización pueda responder dudas. Es nullable a propósito, y no por
   // descuido: el alta manual de admin no tiene por qué traerlo (se puede dar de
@@ -104,6 +115,22 @@ model Player {
   // no lo tienen. El motor de puntos no lo lee nunca: es un dato de contacto, no
   // de juego, así que no entra en la clasificación ni en ningún desglose.
   contactEmail  String?
+  // País del participante, guardado con el **rótulo canónico** de la lista que
+  // admite el torneo (`Setting["registration.countries"]`, sembrada desde
+  // `paises.txt` con `npm run countries:seed`): "República Dominicana", no "RD" ni
+  // "Republica Dominicana". Es un `String` y no un enum porque la lista la cambia
+  // la organización sin desplegar, y un enum obligaría a una migración cada vez que
+  // entra o sale un país —que es justo lo que este proyecto no puede hacer, porque
+  // la base de datos es la de producción y no hay *staging*.
+  //
+  // Nullable a propósito, y por el mismo motivo que `contactEmail`: el formulario
+  // público de `/participar` lo **exige** (es de los datos con los que la
+  // organización organiza el torneo), pero el alta manual de admin no tiene por qué
+  // traerlo y las filas que ya estaban guardadas no lo tienen. La columna existe
+  // para todas las filas y eso que unas no la informen es información —"no lo
+  // sabemos"— y no una fila a medias. Como el correo, el motor de puntos no lo lee:
+  // no entra en la clasificación ni en ningún desglose.
+  country       String?
   status        PlayerStatus @default(PENDING)
 
   // Lo siguiente se rellena con `GET /leaderboards/rm_solo`, una sola vez por
@@ -123,6 +150,19 @@ model Player {
   // "En directo en Twitch" leído de `twitch_is_live` del mismo endpoint que el
   // elo, así F5 no necesita la API de Helix para el indicador de la clasificación.
   twitchIsLive    Boolean   @default(false)
+  // "En directo" en YouTube y en Kick, con el mismo significado que
+  // `twitchIsLive`, pero de otra manera: **AoE4World no publica nada de esto**,
+  // así que quien lo escribe es el propio worker llamando a cada plataforma
+  // (`src/lib/streams/`), y solo para los participantes aprobados que tengan canal.
+  //
+  // `false` es el estado por defecto y también el degradado: sin `YOUTUBE_API_KEY`
+  // la detección de YouTube no se hace, y si el endpoint de Kick deja de
+  // responder el valor se queda en `false` con un aviso en el rastro de la pasada.
+  // Un `false` aquí significa "no se ha comprobado que esté en directo", que es lo
+  // único que se puede decir sin mentir; por eso **no** se escribe cuando el
+  // refresco falla, solo cuando la plataforma ha dicho que sí o que no.
+  youtubeIsLive  Boolean   @default(false)
+  kickIsLive     Boolean   @default(false)
   // Respaldo del canal: si el jugador no tiene `twitchChannel` registrado, la
   // tabla enlaza el que declara en AoE4World.
   twitchUrl       String?

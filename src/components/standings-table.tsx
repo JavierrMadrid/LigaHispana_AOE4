@@ -8,6 +8,7 @@ import type {
   StandingObjective,
   StandingRow,
 } from "@/lib/public";
+import { ChannelLinks } from "@/components/channel-links";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
 import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
@@ -15,7 +16,12 @@ import { LiveDot } from "@/components/live-dot";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { StandingsFilters } from "@/components/standings-filters";
-import { TwitchIcon } from "@/components/twitch-icon";
+import {
+  SortIndicator,
+  nextSortState,
+  sortHint,
+  type ActiveSort,
+} from "@/components/sortable-header";
 
 const HEADING = "px-3 pb-2 text-xs font-medium text-muted";
 const CELL = "bg-surface px-3 py-2.5 transition-colors group-hover:bg-surface-raised";
@@ -60,7 +66,7 @@ type SortKey =
   | "elo"
   | "record"
   | "streak";
-type SortState = { key: SortKey; direction: "asc" | "desc" } | null;
+type SortState = ActiveSort<SortKey>;
 
 /** "V - D" en color: comparte forma entre cabecera y control de orden de móvil. */
 const RECORD_VISUAL = (
@@ -88,23 +94,6 @@ const SORT_FIELDS: { key: SortKey; label: string; visual?: ReactNode }[] = [
 ];
 
 /**
- * Texto accesible del control de orden. El ciclo tiene tres estados (ascendente,
- * descendente y sin orden), así que el `aria-label` tiene que anticipar el
- * siguiente, no solo describir el actual.
- */
-function sortHint(label: string, state: "none" | "asc" | "desc"): string {
-  if (state === "asc") {
-    return `${label}: orden ascendente. Pulsar para descendente`;
-  }
-
-  if (state === "desc") {
-    return `${label}: orden descendente. Pulsar para quitar la ordenación`;
-  }
-
-  return `Ordenar por ${label}`;
-}
-
-/**
  * Los nulos nunca participan del sentido de la ordenación: van al final tanto en
  * ascendente como en descendente. Así un jugador sin clasificar no encabeza la
  * tabla al ordenar por elo o racha en un sentido o en el otro.
@@ -112,7 +101,7 @@ function sortHint(label: string, state: "none" | "asc" | "desc"): string {
 function compareNullable(
   a: number | null,
   b: number | null,
-  direction: 1 | -1,
+  dir: 1 | -1,
 ): number {
   if (a === null && b === null) {
     return 0;
@@ -126,7 +115,7 @@ function compareNullable(
     return -1;
   }
 
-  return (a - b) * direction;
+  return (a - b) * dir;
 }
 
 /**
@@ -137,33 +126,33 @@ function compareNullable(
 function compareRows(
   a: StandingRow,
   b: StandingRow,
-  sort: { key: SortKey; direction: "asc" | "desc" },
+  sort: { key: SortKey; dir: "asc" | "desc" },
 ): number {
-  const direction = sort.direction === "asc" ? 1 : -1;
+  const dir = sort.dir === "asc" ? 1 : -1;
 
   switch (sort.key) {
     case "rank":
-      return (a.rank - b.rank) * direction;
+      return (a.rank - b.rank) * dir;
     case "matches":
-      return (a.wins + a.losses - (b.wins + b.losses)) * direction;
+      return (a.wins + a.losses - (b.wins + b.losses)) * dir;
     case "points":
-      return (a.points - b.points) * direction;
+      return (a.points - b.points) * dir;
     case "elo":
-      return compareNullable(a.elo, b.elo, direction);
+      return compareNullable(a.elo, b.elo, dir);
     case "streak":
-      return compareNullable(a.streak, b.streak, direction);
+      return compareNullable(a.streak, b.streak, dir);
     case "record": {
       const diffA = a.wins - a.losses;
       const diffB = b.wins - b.losses;
 
       if (diffA !== diffB) {
-        return (diffA - diffB) * direction;
+        return (diffA - diffB) * dir;
       }
 
-      return (a.wins - b.wins) * direction;
+      return (a.wins - b.wins) * dir;
     }
     case "name":
-      return normalize(a.name).localeCompare(normalize(b.name), "es") * direction;
+      return normalize(a.name).localeCompare(normalize(b.name), "es") * dir;
   }
 }
 
@@ -194,7 +183,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
         return false;
       }
 
-      if (liveOnly && !row.twitchIsLive) {
+      if (liveOnly && !row.twitchIsLive && !row.youtubeIsLive && !row.kickIsLive) {
         return false;
       }
 
@@ -204,7 +193,9 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
 
       if (needle !== "") {
         const haystack = normalize(
-          `${row.name} ${row.aoe4WorldName ?? ""} ${row.twitchChannel ?? ""}`,
+          `${row.name} ${row.aoe4WorldName ?? ""} ${row.twitchChannel ?? ""} ${
+            row.youtubeChannel ?? ""
+          } ${row.kickChannel ?? ""}`,
         );
 
         if (!haystack.includes(needle)) {
@@ -238,13 +229,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
   // Un clic ordena ascendente, el segundo descendente y el tercero devuelve el
   // orden original del servidor (puesto ascendente).
   function toggleSort(key: SortKey) {
-    setSort((current) => {
-      if (current === null || current.key !== key) {
-        return { key, direction: "asc" };
-      }
-
-      return current.direction === "asc" ? { key, direction: "desc" } : null;
-    });
+    setSort((current) => nextSortState(current, key));
   }
 
   function toggleObjectives(profileId: number) {
@@ -464,7 +449,7 @@ function SortableHeader({
   className?: string;
 }) {
   const state: "none" | "asc" | "desc" =
-    sort?.key === sortKey ? sort.direction : "none";
+    sort?.key === sortKey ? sort.dir : "none";
 
   const ariaSort =
     state === "asc" ? "ascending" : state === "desc" ? "descending" : "none";
@@ -520,7 +505,7 @@ function SortControls({
       </span>
       {SORT_FIELDS.map((field) => {
         const state: "none" | "asc" | "desc" =
-          sort?.key === field.key ? sort.direction : "none";
+          sort?.key === field.key ? sort.dir : "none";
 
         return (
           <button
@@ -540,57 +525,6 @@ function SortControls({
         );
       })}
     </div>
-  );
-}
-
-/**
- * Indicador de orden: la forma distingue el sentido, no solo el color. Sin
- * ordenar se ven dos chevrones apagados como pista de que la columna se puede
- * pulsar; ascendente y descendente muestran uno solo, orientado.
- */
-function SortIndicator({ state }: { state: "none" | "asc" | "desc" }) {
-  if (state === "none") {
-    return (
-      <svg
-        viewBox="0 0 12 12"
-        aria-hidden="true"
-        className="size-3 shrink-0 text-muted/40 transition-colors group-hover/header:text-muted"
-      >
-        <path
-          d="M3 6.25 6 3.25l3 3"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M3 5.75 6 8.75l3-3"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-
-  return (
-    <svg
-      viewBox="0 0 12 12"
-      aria-hidden="true"
-      className="size-3 shrink-0 text-accent"
-    >
-      <path
-        d={state === "asc" ? "M2.5 7.25 6 3.75l3.5 3.5" : "M2.5 4.75 6 8.25l3.5-3.5"}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
 
@@ -780,10 +714,18 @@ function StandingsCard({
 }
 
 /**
- * Señales de estado del jugador en la fila: en partida, canal de Twitch, en
- * directo y el desplegable de objetivos. Vive aparte porque la fila de la tabla
- * y la tarjeta de móvil comparten exactamente los mismos distintivos; solo cambia
- * a qué panel de objetivos apunta el botón.
+ * Señales de estado del jugador en la fila: en partida, los canales de directo y
+ * el desplegable de objetivos.
+ *
+ * Las tres plataformas se pintan con `ChannelLinks`, que resuelve el icono, la URL
+ * y el color de cada una, y solo aparece la plataforma que tiene canal. El
+ * distintivo "En directo" lo pinta el propio componente **junto a la plataforma que
+ * está emitiendo**, con su color: si alguien emite a la vez por dos, se ven los dos
+ * distintivos, que es lo que está pasando.
+ *
+ * Vive aparte porque la fila de la tabla y la tarjeta de móvil comparten
+ * exactamente los mismos distintivos; solo cambia a qué panel de objetivos apunta el
+ * botón.
  */
 function PlayerChips({
   row,
@@ -804,12 +746,25 @@ function PlayerChips({
           <span className="sr-only">En partida ahora mismo</span>
         </span>
       ) : null}
-      {row.twitchChannel !== null ? <TwitchLink row={row} /> : null}
-      {row.twitchIsLive ? (
-        <span className="inline-flex shrink-0 items-center rounded-full bg-twitch/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-twitch-soft">
-          En directo
-        </span>
-      ) : null}
+      <ChannelLinks
+        name={row.name}
+        twitch={
+          row.twitchChannel === null
+            ? null
+            : { channel: row.twitchChannel, isLive: row.twitchIsLive }
+        }
+        youtube={
+          row.youtubeChannel === null
+            ? null
+            : { channel: row.youtubeChannel, isLive: row.youtubeIsLive }
+        }
+        kick={
+          row.kickChannel === null
+            ? null
+            : { channel: row.kickChannel, isLive: row.kickIsLive }
+        }
+        showLive
+      />
       {row.objectives.length > 0 ? (
         <ObjectivesToggle
           count={row.objectives.length}
@@ -1031,26 +986,6 @@ function RankBadge({ rank }: { rank: number }) {
       <span className="sr-only">Puesto </span>
       {rank}
     </span>
-  );
-}
-
-function TwitchLink({ row }: { row: StandingRow }) {
-  const live = row.twitchIsLive;
-
-  return (
-    <a
-      href={`https://twitch.tv/${row.twitchChannel}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label={`Canal de Twitch de ${row.name}${
-        live ? ", en directo ahora mismo" : ""
-      } (se abre en una pestaña nueva)`}
-      className={`-m-1 inline-flex shrink-0 items-center justify-center p-1 transition-colors ${
-        live ? "text-twitch hover:opacity-80" : "text-muted/70 hover:text-muted"
-      }`}
-    >
-      <TwitchIcon className="size-3.5" />
-    </a>
   );
 }
 

@@ -53,14 +53,15 @@
   // en `env.HYPERDRIVE.connectionString`, y `src/lib/db.ts` la lee con
   // `readHyperdriveConnectionString()` de `src/lib/runtime-env.ts`. Si el binding
   // no esta, cae a `DATABASE_URL`, que es lo que usan `next dev` y los scripts de
-  // `scripts/`. Ver README.md, "La base de datos en el Worker".
+  // `scripts/`. Ver docs/DESPLIEGUE.md, "La base de datos en el Worker: Hyperdrive".
   //
   // La configuracion de Hyperdrive esta creada y el binding **activo** (septiembre
   // de 2026). Antes el bloque iba comentado y el Worker resolvia la base por el
   // `DATABASE_URL` del panel, que apunta al *Session pooler* de Supabase: ahi se le
   // cortaban las conexiones y el worker de sync se caia con
   // "Connection terminated unexpectedly" / "db/pool: Network connection lost", sin
-  // que nada lo reflejara (ver README.md, "La base de datos en el Worker").
+  // que nada lo reflejara (ver docs/DESPLIEGUE.md, "La base de datos en el Worker:
+  // Hyperdrive").
   //
   // El paso que no se puede saltar es la emulacion: `opennextjs-cloudflare deploy`
   // llama a `getPlatformProxy()` de wrangler para leer el entorno, y esa emulacion
@@ -118,4 +119,41 @@
       "persist": true
     }
   },
+  // Previews: el despliegue que hace Workers Builds en las ramas que no son la de
+  // produccion.
+  //
+  // Workers Builds no repite el despliegue: en la rama de produccion ejecuta
+  // `wrangler deploy`, y en cualquier otra `wrangler preview`, que crea un entorno
+  // aislado del mismo Worker. Y el bloque `previews` **no es opcional** desde wrangler
+  // 4.135: sin el, el build muere con "Your Wrangler configuration is missing a
+  // `previews` block". Es error, no aviso, y en CI no hay quien conteste al prompt que
+  // wrangler ofrece en local para escribir el bloque por ti.
+  //
+  // Los bindings **no se heredan** del nivel superior, asi que se declaran aqui.
+  // `assets`, `compatibility_*` y `migrations` se quedan arriba, y los Cron Triggers no
+  // se replican: apuntan a produccion, luego un Preview no puede disparar el sync.
+  //
+  // `HYPERDRIVE` apunta a la misma base de produccion, y a proposito: el Preview sirve
+  // para mirar la interfaz de una rama (streams, clasificaciones) y sin base no hay nada
+  // que ver. Es trafico de lectura; las escrituras se quedan sin autenticacion porque los
+  // secretos del panel no se heredan, y `WORKER_SELF_REFERENCE` sigue llamando al
+  // despliegue de produccion. Para aislarlo de verdad: crear otro config de Hyperdrive
+  // sobre una base de pruebas y cambiar el `id` de aqui. En plan Free no se cobra por
+  // config, el limite es el mismo (100.000 consultas al dia).
+  //
+  // Ojo con el despliegue automatico: la emulacion de wrangler tambien exige
+  // `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` en *Build variables and
+  // secrets* del Worker, o el build falla al emular el binding (ver
+  // docs/DESPLIEGUE.md, "La base de datos en el Worker: Hyperdrive").
+  "previews": {
+    "hyperdrive": [
+      {
+        "binding": "HYPERDRIVE",
+        "id": "04fab935a8f34fce814ccebfc4301042"
+      }
+    ],
+    "images": {
+      "binding": "IMAGES"
+    }
+  }
 }

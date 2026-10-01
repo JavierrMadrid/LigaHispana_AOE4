@@ -3,8 +3,10 @@
 import type { ReactNode } from "react";
 import type { DivisionId } from "@/lib/public";
 import { DIVISION_UI } from "@/components/division-icon";
+import { KickIcon } from "@/components/kick-icon";
 import { LeagueIcon, leagueFilterRank } from "@/components/league-icon";
 import { TwitchIcon } from "@/components/twitch-icon";
+import { YoutubeIcon } from "@/components/youtube-icon";
 
 type StandingsFiltersProps = {
   query: string;
@@ -67,14 +69,19 @@ export function StandingsFilters({
           >
             En partida
           </FilterPill>
+          {/* El filtro cubre las tres plataformas, así que su marca son los tres
+              iconos (no solo el de Twitch): un directo puede estar en cualquiera de
+              ellas y el icono único diría que solo se busca en esa. */}
           <FilterPill
             active={liveOnly}
             onClick={() => onLiveOnlyChange(!liveOnly)}
-            activeClass="border-twitch/50 bg-twitch/10 text-twitch-soft"
+            activeClass="border-live/50 bg-live/10 text-live-soft"
             mark={
-              <TwitchIcon
-                className={`size-3.5 ${liveOnly ? "" : "opacity-50"}`}
-              />
+              <span className="flex items-center gap-0.5">
+                <TwitchIcon className={`size-3 ${liveOnly ? "text-twitch" : "text-muted/60"}`} />
+                <YoutubeIcon className={`size-3 ${liveOnly ? "text-youtube" : "text-muted/60"}`} />
+                <KickIcon className={`size-3 ${liveOnly ? "text-kick" : "text-muted/60"}`} />
+              </span>
             }
           >
             En directo
@@ -151,7 +158,7 @@ function FilterPill({
           : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
       }`}
     >
-      <span aria-hidden="true" className="flex size-3.5 shrink-0 items-center justify-center">
+      <span aria-hidden="true" className="flex h-3.5 shrink-0 items-center justify-center">
         {mark}
       </span>
       {children}

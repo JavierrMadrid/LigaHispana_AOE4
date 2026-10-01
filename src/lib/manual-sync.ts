@@ -32,8 +32,8 @@ import { consumeRateLimit } from "@/lib/rate-limit";
  * Es el **plan Free de Cloudflare**, no una manía: cada invocación tiene 10 ms de CPU
  * y una pasada del sync gasta ~500 ms, así que el *isolate* solo lo tolera si es
  * esporádico. Insistir es justo lo que hace que Cloudflare empiece a matar pasadas con
- * `Worker exceeded CPU time limit` (error 1102). Ver README, "El límite de CPU del plan
- * Free".
+ * `Worker exceeded CPU time limit` (error 1102). Ver docs/OPERACION.md, "El límite de CPU del
+ * plan Free".
  *
  * De ahí que el cron de Supabase reutilice este mismo candado en vez de tener el suyo:
  * es el precio de no llevar un secreto en la base de datos, y significa que la cadencia

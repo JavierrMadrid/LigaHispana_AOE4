@@ -157,7 +157,7 @@ esta tabla: está hecho, versionado en `scripts/db-security.ts` y se comprueba c
 | `npm run verify:sync -- --db` | Comprueba normalización, guardado, motor de puntuación y lecturas públicas contra la base de datos de verdad, con datos de ejemplo que limpia al terminar. |
 | `npm run verify:alerts` | Las 53 comprobaciones del motor de alertas (F9) sobre secuencias sintéticas. **Sin base de datos**: todo lo que decide el motor es una función pura, y eso es justo lo que permite comprobarlo sin preparar nada ni dejar nada limpio. |
 | `npm run simulate:tournament` | Torneo simulado con **jugadores reales** de AoE4World: elige 1 por división, da de alta, importa la ventana del torneo y recalcula. Escribe su manifiesto en `Setting["simulation.roster"]`. Idempotente. Con `-- --select-only` solo elige e informa, sin tocar la base de datos. |
-| `npm run simulate:clean` | Deshace esa simulación. **Verifica la identidad de cada fila contra el manifiesto antes de borrar y aborta si no cuadra**; con `-- --dry-run` comprueba y no borra. Detalle en [`PLAN.md`](./PLAN.md) y en el [`README`](../README.md). |
+| `npm run simulate:clean` | Deshace esa simulación. **Verifica la identidad de cada fila contra el manifiesto antes de borrar y aborta si no cuadra**; con `-- --dry-run` comprueba y no borra. Detalle en [`PLAN.md`](./PLAN.md) y en [`docs/OPERACION.md`](./OPERACION.md#torneo-simulado-con-jugadores-reales-api-de-verdad). |
 
 ## 1. El modelo actual
 

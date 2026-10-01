@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/empty-state";
 import { PendingButton } from "@/components/pending-button";
 import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
+import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 
 export const metadata: Metadata = {
@@ -37,6 +38,17 @@ export default async function AdminPage() {
   const participantsRead = await getAdminParticipants();
   const participants = participantsRead.status === "ok" ? participantsRead.data : [];
   const pending = participants.filter((player) => player.status === "PENDING");
+
+  // El país del alta se elige de la lista viva (`Setting["registration.countries"]`).
+  // Si la lectura falla, el desplegable cae a la lista por defecto y el formulario
+  // sigue siendo usable; la acción vuelve a leer la lista viva al guardar.
+  let countries: string[];
+
+  try {
+    countries = await readCountries();
+  } catch {
+    countries = [...DEFAULT_COUNTRIES];
+  }
 
   // `syncHealth` es un `PublicRead`: `status` distingue "no se ha podido leer" de
   // "leído", y `data.degraded`/`data.stale` son el estado del sincronizador. Son
@@ -180,7 +192,7 @@ export default async function AdminPage() {
 
       <section>
         <h2 className="mb-3 text-lg font-medium">Añadir jugador</h2>
-        <PlayerForm />
+        <PlayerForm countries={countries} />
       </section>
 
       <section>

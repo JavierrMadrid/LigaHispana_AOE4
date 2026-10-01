@@ -24,7 +24,7 @@ De ella se derivan los requisitos que ya estructuran las fases: clasificación s
 | BBDD | **PostgreSQL** vía **Supabase** (cloud) | Relacional, encaja con el modelo; Supabase gratis + auth integrada |
 | ORM | **Prisma 7** (`prisma-client`) | Tipado, migraciones; schema en `prisma/schema.prisma` |
 | Auth | **Supabase Auth** (solo admin) | Ya tenemos proyecto Supabase; `@supabase/ssr` para sesiones en Next |
-| Tareas en segundo plano | **Supabase Cron** (`pg_cron` + `pg_net`) que llama por HTTP al Worker; workflow de GitHub como red de seguridad | El reloj vive en la base de datos, no en el Worker: en el plan Free de Cloudflare el sync no cabe en el presupuesto de CPU (ver README, "El límite de CPU del plan Free") |
+| Tareas en segundo plano | **Supabase Cron** (`pg_cron` + `pg_net`) que llama por HTTP al Worker; workflow de GitHub como red de seguridad | El reloj vive en la base de datos, no en el Worker: en el plan Free de Cloudflare el sync no cabe en el presupuesto de CPU (ver [`docs/OPERACION.md`](./OPERACION.md#el-límite-de-cpu-del-plan-free)) |
 | Twitch | Helix API (requiere app registrada) | Detectar streamers en directo |
 
 ## Estado actual
@@ -453,6 +453,38 @@ Pendiente de F4:
       Twitch, email, `aoe4WorldName`, avatar) y la devuelve a `PENDING`, con el `UPDATE` filtrado
       por estado para no pisar una aprobación concurrente. `APPROVED` y `PENDING` siguen
       bloqueando.
+- [x] **País del participante** (`Player.country`, nullable en BD por lo mismo que el correo):
+      **obligatorio** en la inscripción pública y **opcional** en el alta de admin, que es donde se
+      gestiona y donde sale en los listados. Es un `String` con el **rótulo canónico** ("República
+      Dominicana") y no un enum, porque la lista admitida la cambia la organización y un enum
+      obligaría a una migración sobre la base de producción.
+  - **La lista admitida vive en `Setting["registration.countries"]`** (`src/lib/countries.ts`), no
+      en el código: `DEFAULT_COUNTRIES` es el respaldo para cuando aún no se ha publicado nada, y
+      `paises.txt` en la raíz del repositorio es la fuente de verdad para **sembrarla** (22 países,
+      en el orden en que los ve quien se inscribe). `readCountries()` nunca lanza y aplica el mismo
+      criterio de los rulesets, con una decisión que es propia de este documento: lo que no se
+      entiende **se descarta entero**. Una lista a medias admitiría países que la organización ya
+      no admite y rechazaría los que sí, sin error ni aviso más allá del log; quedarse con 20 de 22
+      es peor que quedarse con la lista del código. Un fallo de la base de datos sí se propaga, y
+      quien valida un formulario responde con el mensaje de "no hemos podido registrar" en vez de
+      validar en silencio contra el respaldo.
+  - **`parseCountry()`** vive en `src/lib/player-input.ts`, el módulo puro que ya comparten los dos
+      formularios: recibe la lista viva y devuelve el rótulo canónico o `null`, resolviendo el valor
+      escrito **insensible a acentos y mayúsculas** ("Republica Dominicana", " PUERTO RICO "), que
+      evita que un `FormData` hecho a mano rechace a alguien que eligió bien. En el alta de admin un
+      país escrito mal es un error y vacío es `null`: guardar `null` en lo primero diría "no lo
+      sabemos" de algo que en realidad está mal escrito.
+  - **Interfaz**: `/participar` lo pide con un desplegable **obligatorio** cuyo primer `option`
+      es "Elige tu país", deshabilitado; la lista se lee en el servidor con `readCountries()` y se
+      pasa al formulario cliente, y la página declara `force-dynamic` por esa lectura. El alta de
+      admin lo pide **opcional**, con "Sin especificar". El listado de participantes gana su
+      columna de **País** (se pliega bajo el nombre por debajo de `lg`, como las demás
+      secundarias) y el buscador encuentra por país, no solo por nombre, perfil o canal.
+  - **Requisito operativo, al desplegar**: `npm run db:push` (añade `Player.country`) y después
+      `npm run countries:seed`, que publica en `Setting` la lista de `paises.txt` (con `--show`
+      para ver la vigente y `--dry-run` para ver el cambio sin escribir). Hasta que se siembre, todo
+      funciona con `DEFAULT_COUNTRIES`. **No** hace falta `npm run db:security`: no se crea ninguna
+      tabla.
 
 ### F7 — Reglas reales + pulido
 - [x] **Objetivos y reglas del torneo definidos y conectados al motor** (versión 2, ver F3 y
@@ -475,7 +507,7 @@ Pendiente de F4:
         (recuento por grupo, pills a 40px), `/login` y `/admin` migrados al mismo dialecto
         (fuera `neutral-*`/`amber-*`, sin doble foco). Copy normativo de `/reglas` intacto.
       - Terminología unificada: **en partida** = estado del jugador, **en juego** = partidas que
-        se juegan, **en directo** = solo Twitch.
+        se juegan, **en directo** = emisión (en cualquiera de las plataformas de F10).
       - `eslint.config.mjs` ignora `.agents/**` y `.opencode/**` (el binario de la skill generaba
         94 warnings); lint 0/0 y build OK.
 - [x] **Pulido responsive (móvil)**: revisión completa con las skills de diseño. La clasificación
@@ -528,6 +560,16 @@ cuando hay pendientes.
 - [x] **Historial de acciones** (`AdminAction`): altas, bajas y cambios de puntos, con la
   quien los hizo y cuándo. Se registra en la **misma transacción** que el cambio, así que o hay
   las dos cosas o no hay ninguna.
+- [x] **Ordenación por columna en el panel**: `/admin/historial` ordena por **Fecha** y
+  **Resultado** (por defecto Fecha, descendente) y `/admin/acciones` por **Fecha**, **Acción**
+  (por el tipo) y **Admin**. La Descripción del historial es la frase del feed y las Acciones no
+  son un dato ordenable, así que van sin chevron. El orden vive en la URL (`sort`/`dir`), viaja
+  con la paginación y el `aria-sort` se pinta desde el orden **efectivo** que publica el DAL
+  (`data.sort`), no deduciéndolo de `searchParams`: con un valor inválido, la cabecera enseña el
+  orden por defecto real. La cabecera se extrajo a `src/components/sortable-header.tsx`
+  (`SortableHeaderLink` para las listas de servidor, con enlace, y `SortableHeaderButton` para
+  el listado de participantes, con estado de cliente) y resuelve el ciclo de tres estados, el
+  `aria-sort` y el chevron una sola vez para las cuatro tablas.
 - [x] **Todas las acciones destructivas piden confirmación**: `deletePlayer` (que antes borraba
   de un clic), `revertMatchPoints` y `restoreMatchPoints`. Diálogo propio sobre el `<dialog>`
   nativo (no hay librería de primitivas en el proyecto): foco al abrir y devuelto al cerrar,
@@ -697,12 +739,154 @@ sin ellos, el copy de las reglas escrito en la interfaz mentiría en cuanto se r
 etiquetas de regla y de tipo (`ALERT_RULE_LABELS`, `ALERT_KIND_LABELS`) viven en el dominio y las
 comparten la pestaña y el CSV, para que no puedan divergir en cómo llaman a la misma regla.
 
+**Filtros y orden de la pestaña.** La tabla ya no es fija: acepta `playerId`, `from`/`to`, `regla`
+(los ocho valores de `AlertRule`) y `tipo` (los tres de `AlertKind`), y orden por `fecha` (por
+defecto, descendente), `jugador`, `regla`, `sujeto` o `conteo`. Las etiquetas de los desplegables
+salen de `ALERT_RULE_LABELS` / `ALERT_KIND_LABELS` y el valor que viaja en la URL es el literal
+del enum, que se compara literal. **No** hay filtro por **sujeto**, **detalle** ni **conteo**, y
+es una decisión y no un hueco: el sujeto es un rival o compañero que puede no estar en la liga y
+no hay lista de la que elegir; el detalle es una frase redactada por el motor (filtrar por un
+trozo de texto libre es un buscador, no un filtro); y el conteo se escanea con la vista. Por el
+mismo motivo la columna **Detalle** y el distintivo de tipo tampoco son ordenables —el orden por
+regla agrupa por familia, y el tipo se recorta con `?tipo=`. El informe descargable y las reglas
+siguen en la cabecera aunque la tabla degrade (son acciones independientes de la lectura), y el
+estado vacío con filtros dice que hay filtros en vez de "todavía no hay alertas".
+
 **Verificación**: `npm run verify:alerts` son 53 comprobaciones puras, sin base de datos, sobre
 secuencias sintéticas: rachas y su ruptura, los múltiplos de 5 y de 10, R3 por pareja, el borde
 499/500 de R4, el borde de escalones de R5 y su omisión sin cortes, el cierre de torneo, la
 idempotencia de las claves de dedupe y la validación del ruleset. `npm run alerts:check` es la
 comprobación contra la base de verdad, y es idempotente: la segunda pasada con los mismos datos
 inserta 0 filas.
+
+### F10 — YouTube y Kick en el tratamiento de canales de directo ✅ / por desplegar
+
+Hasta aquí el "treatment" de canales era solo de Twitch, y con una comodidad que no
+se puede repetir: `twitch_is_live` viene en la **ladder de AoE4World**, así que el
+indicador de "en directo" no costaba una sola llamada. Aquí se añaden **YouTube y
+Kick**, y la diferencia de contexto es justo lo que decide el diseño: **para estas
+dos plataformas el directo hay que preguntarlo fuera**, porque AoE4World no publica
+ni los canales ni si están emitiendo.
+
+**Lo que se decide.**
+
+- **El canal lo escribe la persona o el admin, y AoE4World no lo respalda.** A
+  diferencia de Twitch, donde `Player.twitchUrl` da un plan B cuando el panel no
+  tiene canal, aquí las columnas `Player.youtubeChannel` y `Player.kickChannel` son
+  la única fuente. Se piden en el alta de admin **y** en la inscripción pública, con
+  los mismos parsers (`src/lib/player-input.ts`) y el mismo criterio de "valor
+  inválido = error": como no hay respaldo, un canal mal escrito no lo arregla nadie en
+  la siguiente pasada, así que guardarlo como `null` en silencio mentiría.
+- **Formas canónicas**: el handle de YouTube **sin arroba** (es la forma que consume
+  `forHandle` de la Data API y la que se compone en la URL) y el slug de Kick en
+  minúsculas. Los dos parsers aceptan el `@nombre` y la URL con o sin esquema, con o
+  sin `www.`, con parámetros y con barra final.
+- **Las URL `/c/…` y `/user/…` de YouTube se rechazan con motivo explícito.** No son
+  derivables a un handle (el identificador del canal es un `UC…` que no lo contiene)
+  y adivinarlas sería guardar un canal que no existe; el formulario dice "usa el
+  @nombre del canal", que es la información que le sirve a quien escribe.
+- **La detección va en el worker de sincronización, no en el DAL ni en la web.** El
+  despliegue es un Worker del plan **Free** (10 ms de CPU por invocación, ~500 ms por
+  pasada, ver [`docs/OPERACION.md`](./OPERACION.md#el-límite-de-cpu-del-plan-free)), así que preguntar a dos APIs externas en cada visita a la web
+  sería una petición saliente por lectura de página, con la cuota de YouTube expuesta
+  a cualquier visitante. Va **una vez por pasada**, en `syncApprovedPlayers()`, después
+  del recálculo y de las alertas, y con la misma tolerancia: si falla, la pasada
+  sigue y el motivo va al rastro.
+- **Un único punto de salida HTTP** (`src/lib/streams/http.ts`), con timeout corto,
+  separación mínima entre peticiones y *backoff* con jitter ante 429/5xx. Es un
+  módulo aparte y no una ampliación del cliente de AoE4World: son APIs distintas, con
+  su propia autenticación y sus propios límites, y un 429 de una frenaría a la otra.
+- **El `channelId` de YouTube se resuelve una vez y se cachea** en
+  `Setting["streams.youtube.channel.<handle>"]` (con la fecha de resolución y 30 días
+  de margen). `channels.list?forHandle=@…` es la llamada cara y `search.list` exige un
+  `channelId`, así que sin caché serían dos unidades de cuota por participante y por
+  pasada para aprender cada cinco minutos algo que **no cambia**. También se cachea
+  el "no existe", que es lo más probable: repetirlo cada pasada sería la forma más
+  rápida de vaciar la cuota.
+- **Se escribe solo lo que cambia.** Una pasada sin novedades (288 al día) no toca ni
+  una fila de `Player`, y lo que no se ha podido comprobar **no se escribe**: un
+  `false` puesto por un fallo publicaría "no está en directo", que es una afirmación
+  que no se sabe.
+
+**Coste por pasada, con N participantes con canal.**
+
+| | Peticiones | Notas |
+|---|---|---|
+| Sin ningún participante con canal | **0** | Se sale antes de crear el cliente HTTP: ni red, ni `Setting`, ni escrituras |
+| Por participante con una sola plataforma | 1 | `search.list` de YouTube o `GET /api/v2/channels/<slug>` de Kick |
+| Por participante con las dos | 2 | Con el `channelId` ya cacheado, que es el caso normal a partir de la segunda pasada |
+| Resoluciones de handle nuevas | +1 cada una | `channels.list`, una vez por canal y de nuevo pasado el mes |
+| Separación entre peticiones | `STREAMS_MIN_REQUEST_INTERVAL_MS` (200 ms) | El coste dominante es la espera, que no es CPU |
+
+Con el tope de `STREAMS_MAX_CHECKS_PER_RUN` (24 comprobaciones = 12 participantes con
+las dos plataformas) el máximo absoluto por pasada son 24 peticiones, y los que se
+quedan fuera salen como `skipped` en el resumen, nunca como un error. Con el torneo
+actual el tope no muerde. La CPU añadida es de parsear unas decenas de respuestas
+JSON pequeñas, frente a los ~500 ms que ya gasta la pasada: es ruido al lado del
+presupuesto que manda.
+
+**Degradación sin credenciales.** `YOUTUBE_API_KEY` es la **única** credencial nueva
+y es **opcional**, en el mismo sentido que el captcha: sin ella la detección de
+YouTube **no se hace** (ni una petición), `Player.youtubeIsLive` se queda en `false`
+y sale un aviso en el rastro de la pasada. El proyecto arranca y funciona sin
+configurar nada. Kick **no necesita clave**: si su endpoint no responde, el estado se
+queda en su valor anterior y el motivo va al aviso, nunca un error que tumbe la
+pasada.
+
+**El riesgo del endpoint de Kick.** `https://kick.com/api/v2/channels/<slug>` es un
+endpoint **no documentado**: no hay developer portal, ni documentación, ni registro,
+ni cuota declarada. Se usa porque es lo único que hay sin clave ni registro (la
+alternativa sería no detectar nada en Kick, o hacer *scraping* del HTML, que es
+frágil y bastante menos honesto), y porque devuelve exactamente el dato que se busca.
+Si algún día deja de funcionar, cambia de forma o pasa a pedir credenciales, el
+resultado es que **el estado se queda en `false` y aparece un aviso**: la respuesta
+que no se entiende se convierte en `null`, no se escribe nada y la pasada continúa.
+Por eso el módulo está tratado como degradable y no como fuente fiable, y por eso su
+docblock dice qué hacer cuando eso ocurra (no tocar el archivo: aceptar que Kick se
+quede sin detectar y que la organización decida si merece otra vía). El riesgo
+aceptado es, en el peor caso, **que la web no muestre el directo de un canal de
+Kick**, nunca que el torneo se quede sin sincronizar.
+
+**Requisito operativo, al desplegar**:
+
+1. `npm run db:push` (añade `Player.youtubeChannel`, `Player.kickChannel`,
+   `Player.youtubeIsLive` y `Player.kickIsLive`). **No** hace falta
+   `npm run db:security`: no se crea ninguna tabla y las columnas nuevas heredan la
+   postura de `Player`.
+2. Definir `YOUTUBE_API_KEY` en el panel del Worker (Settings → Variables and
+   Secrets), como secreto. **Sin ella no pasa nada**, pero tampoco se detecta ningún
+   directo de YouTube; con ella definida se detecta.
+
+**La interfaz de los tres canales** (`@design-ux`, ya hecha). La capa de datos
+publica los cuatro campos por participante (`StandingRow` y `AdminParticipant`) y el
+enlace sale de `twitchChannelUrl()` / `youtubeChannelUrl()` / `kickChannelUrl()`; la
+interfaz solo pinta:
+
+- Los tres canales se piden en `/participar` y en el alta de admin
+  (`name="youtubeChannel"` y `name="kickChannel"`, opcionales, con la pista de la
+  forma canónica de cada uno: el `@nombre` de YouTube, el slug de Kick).
+- En la clasificación pública se muestran como **icono-enlace junto al nombre**, cada
+  uno con su glifo (`youtube-icon.tsx`, `kick-icon.tsx`, originales y a
+  `currentColor`, como el de Twitch). El distintivo "En directo" se pinta **solo en
+  la plataforma que emite y con su color**; una plataforma sin canal no pinta nada.
+- El filtro "En directo" de la clasificación cubre **las tres plataformas** (basta con
+  que emita en una) y su marca son los tres iconos, no solo el de Twitch.
+- El listado de participantes cambia la antigua columna de texto de Twitch por una de
+  **Canales** con los tres icono-enlace (no ordenable: son enlaces), y su buscador
+  encuentra también por canal de YouTube y de Kick.
+
+La detección de directo en **Twitch** por Helix sigue siendo F5, y no se toca aquí.
+
+**Verificación**: `npm run verify:sync` incorpora dos bloques de comprobaciones puras,
+sin base de datos y sin red. Uno de **los parsers y los normalizadores** (las tres
+formas de escribir un canal, los dos formatos rechazados de YouTube, los rangos de
+cada plataforma, el `File` que no debe lanzar, que todo lo que un parser guarda lo
+acepta el normalizador del DAL, y las tres URLs). Y otro de **la lectura de las
+respuestas de las dos plataformas**, con un cliente HTTP falso: que
+`liveBroadcastContent` distingue una emisión en curso de una ya terminada (el caso
+que separa pintar el icono de no pintarlo), que un payload raro de YouTube avisa en
+vez de leerse como "no hay directo", y que en Kick lo que no se entiende es `null`,
+un `404` es un canal que no existe y un fallo de red no se convierte en un `false`.
 
 ## Requisitos del cliente (frozen)
 
@@ -732,7 +916,7 @@ Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes d
   pasada cada 4-6 h. El reloj **no** puede ser un Cron Trigger de Cloudflare: en el plan Free cada
   invocación tiene 10 ms de CPU y una pasada del sync gasta ~500 ms, así que un cron nativo cada
   5 minutos acaba matando el *isolate* con el error 1102. Se probó y se retiró (commit `459ed27`);
-  el detalle medido está en el README, "El límite de CPU del plan Free".
+  el detalle medido está en [`docs/OPERACION.md`](./OPERACION.md#el-límite-de-cpu-del-plan-free).
 - [ ] Rival en partidas por equipos: el schema tiene un único par de campos, así que en
   `rm_2v2` y superiores se guarda solo el primer jugador del equipo contrario (el equipo
   completo está en `rawJson`). Si las reglas necesitaran "partida contra dos rivales", habría

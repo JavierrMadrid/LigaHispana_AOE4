@@ -1,16 +1,29 @@
 import type { Metadata } from "next";
+import { AlertKind, AlertRule } from "@/generated/prisma/enums";
 import { EmptyState } from "@/components/empty-state";
 import { PageSizeSelect } from "@/components/page-size-select";
-import { getAdminAlertRules, getAdminAlerts, type AdminAlertRow } from "@/lib/admin";
-import { ALERT_KIND_LABELS, DEFAULT_ALERTS_RULESET } from "@/lib/alerts";
+import { SortableHeaderLink } from "@/components/sortable-header";
+import {
+  getAdminAlertRules,
+  getAdminAlerts,
+  getAdminParticipants,
+  type AdminAlertRow,
+} from "@/lib/admin";
+import { ALERT_KIND_LABELS, ALERT_RULE_LABELS, DEFAULT_ALERTS_RULESET } from "@/lib/alerts";
 import { requireAdmin } from "@/lib/auth";
 import { aoe4WorldProfileUrl, formatAbsoluteTime } from "@/lib/format";
+import { AlertFilters } from "./alert-filters";
 import { AlertRulesDialog } from "./alert-rules-dialog";
 import { Pagination } from "../pagination";
 
 export const metadata: Metadata = {
   title: { absolute: "Alertas · Admin" },
 };
+
+/** Un valor de `searchParams` reducido a texto, para los enlaces de paginación. */
+function single(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 /**
  * Pestaña de alertas: avisos de comportamiento de los participantes.
@@ -20,6 +33,16 @@ export const metadata: Metadata = {
  * como el resto del panel. Las cifras de las reglas no se escriben a mano: la ventana
  * "Reglas" las toma de los umbrales vivos, para que el copy no mienta si la organización
  * retoca `Setting["alerts.ruleset"]`.
+ *
+ * ## Filtros y orden
+ *
+ * La tabla tiene los mismos filtros que el historial —jugador, rango de fechas— más los
+ * dos propios de las alertas: **regla** (las ocho del enum) y **tipo** (las tres clases
+ * de hallazgo). Todos viven en la URL, junto con el orden por columna
+ * (`fecha`, `jugador`, `regla`, `sujeto`, `conteo`). No hay filtro por sujeto, detalle ni
+ * conteo: el sujeto es un rival que puede no estar en la liga (no hay lista de la que
+ * elegir), el detalle es una frase del motor y el conteo se escanea con la vista. Detalle
+ * y distintivo de tipo tampoco son columnas ordenables, por el mismo motivo.
  *
  * El estado del sincronizador **no** está aquí: es salud del sistema y no una anomalía
  * de un jugador, y vive en `getSyncHealth()` y en el aviso de `/admin` (ver
@@ -36,9 +59,10 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
 
   const params = await searchParams;
 
-  const [alerts, rulesRead] = await Promise.all([
+  const [alerts, rulesRead, participantsRead] = await Promise.all([
     getAdminAlerts(params),
     getAdminAlertRules(),
+    getAdminParticipants(),
   ]);
 
   // Si los umbrales vivos no se pueden leer, la ventana de reglas cae a los valores del
@@ -47,7 +71,38 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
   const thresholds =
     rulesRead.status === "ok" ? rulesRead.data.thresholds : DEFAULT_ALERTS_RULESET.thresholds;
 
-  const pageSize = Array.isArray(params.pageSize) ? params.pageSize[0] : params.pageSize;
+  const players =
+    participantsRead.status === "ok"
+      ? participantsRead.data.map((player) => ({ id: player.id, name: player.name }))
+      : [];
+
+  // Las etiquetas salen del dominio de alertas (`ALERT_RULE_LABELS`, `ALERT_KIND_LABELS`) y
+  // el valor que viaja a la URL es el literal del enum: se comparan literales, no etiquetas.
+  const ruleOptions = Object.values(AlertRule).map((value) => ({
+    value,
+    label: ALERT_RULE_LABELS[value],
+  }));
+  const kindOptions = Object.values(AlertKind).map((value) => ({
+    value,
+    label: ALERT_KIND_LABELS[value],
+  }));
+
+  const query = {
+    playerId: single(params.playerId),
+    regla: single(params.regla),
+    tipo: single(params.tipo),
+    from: single(params.from),
+    to: single(params.to),
+    sort: single(params.sort),
+    dir: single(params.dir),
+    pageSize: single(params.pageSize),
+  };
+  const hasFilters =
+    query.playerId !== undefined ||
+    query.regla !== undefined ||
+    query.tipo !== undefined ||
+    query.from !== undefined ||
+    query.to !== undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -78,63 +133,109 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
           title="No se han podido leer las alertas"
           body="La base de datos no ha respondido. Vuelve a intentarlo en unos minutos."
         />
-      ) : alerts.data.rows.length === 0 ? (
-        <EmptyState
-          title="Todavía no hay alertas"
-          body="El motor crea un aviso cuando una racha se rompe o se alcanza un umbral. Aquí aparecerán, de lo más reciente a lo más antiguo."
-        />
       ) : (
-        <>
-          <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">
-                Alertas de comportamiento: fecha, jugador, regla, sujeto de la alerta
-                (rival o compañero), detalle del hallazgo y número de partidas. Por
-                debajo de la pantalla grande la fecha, el jugador, la regla y el sujeto
-                se leen bajo el detalle.
-              </caption>
-              <thead className="bg-surface text-muted">
-                <tr>
-                  <th scope="col" className="hidden w-44 px-4 py-3 font-medium md:table-cell">
-                    Fecha
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                    Jugador
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                    Regla
-                  </th>
-                  <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
-                    Sujeto
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-medium">
-                    Detalle
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-right font-medium">
-                    Conteo
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {alerts.data.rows.map((alert) => (
-                  <AlertRow key={alert.id} alert={alert} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <div className="flex flex-col gap-4">
+          <AlertFilters
+            players={players}
+            ruleOptions={ruleOptions}
+            kindOptions={kindOptions}
+          />
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <PageSizeSelect />
-            <Pagination
-              page={alerts.data.page}
-              pageCount={alerts.data.pageCount}
-              shown={alerts.data.rows.length}
-              total={alerts.data.total}
-              basePath="/admin/alertas"
-              query={{ pageSize }}
+          {alerts.data.rows.length === 0 ? (
+            <EmptyState
+              title={
+                hasFilters
+                  ? "Ninguna alerta coincide con los filtros"
+                  : "Todavía no hay alertas"
+              }
+              body={
+                hasFilters
+                  ? "Prueba con otro jugador, otra regla o amplía el rango de fechas. El filtro de fechas incluye el día final completo."
+                  : "El motor crea un aviso cuando una racha se rompe o se alcanza un umbral. Aquí aparecerán, de lo más reciente a lo más antiguo."
+              }
             />
-          </div>
-        </>
+          ) : (
+            <>
+              <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
+                <table className="w-full text-left text-sm">
+                  <caption className="sr-only">
+                    Alertas de comportamiento: fecha, jugador, regla, sujeto de la alerta
+                    (rival o compañero), detalle del hallazgo y número de partidas. Por
+                    debajo de la pantalla grande la fecha, el jugador, la regla y el sujeto
+                    se leen bajo el detalle.
+                  </caption>
+                  <thead className="bg-surface text-muted">
+                    <tr>
+                      <SortableHeaderLink
+                        column="fecha"
+                        label="Fecha"
+                        sort={alerts.data.sort}
+                        basePath="/admin/alertas"
+                        query={query}
+                        className="hidden w-44 px-4 py-3 font-medium md:table-cell"
+                      />
+                      <SortableHeaderLink
+                        column="jugador"
+                        label="Jugador"
+                        sort={alerts.data.sort}
+                        basePath="/admin/alertas"
+                        query={query}
+                        className="hidden px-4 py-3 font-medium lg:table-cell"
+                      />
+                      <SortableHeaderLink
+                        column="regla"
+                        label="Regla"
+                        sort={alerts.data.sort}
+                        basePath="/admin/alertas"
+                        query={query}
+                        className="hidden px-4 py-3 font-medium lg:table-cell"
+                      />
+                      <SortableHeaderLink
+                        column="sujeto"
+                        label="Sujeto"
+                        sort={alerts.data.sort}
+                        basePath="/admin/alertas"
+                        query={query}
+                        className="hidden px-4 py-3 font-medium lg:table-cell"
+                      />
+                      {/* El detalle es la frase del motor y el distintivo de tipo no es
+                          una columna: no se ordenan. */}
+                      <th scope="col" className="px-4 py-3 font-medium">
+                        Detalle
+                      </th>
+                      <SortableHeaderLink
+                        column="conteo"
+                        label="Conteo"
+                        sort={alerts.data.sort}
+                        basePath="/admin/alertas"
+                        query={query}
+                        align="right"
+                        className="px-4 py-3 font-medium"
+                      />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {alerts.data.rows.map((alert) => (
+                      <AlertRow key={alert.id} alert={alert} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <PageSizeSelect />
+                <Pagination
+                  page={alerts.data.page}
+                  pageCount={alerts.data.pageCount}
+                  shown={alerts.data.rows.length}
+                  total={alerts.data.total}
+                  basePath="/admin/alertas"
+                  query={query}
+                />
+              </div>
+            </>
+          )}
+        </div>
       )}
     </div>
   );
