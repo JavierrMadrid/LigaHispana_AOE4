@@ -490,7 +490,7 @@ versiona: lleva la contraseña) y [`scripts/deploy-worker.mjs`](../scripts/deplo
 exporta antes de lanzar el CLI, que es el paso `deploy` de `npm run deploy`. (No vale hacerlo con
 `node --import`: `opennextjs-cloudflare` es un *shim* de `node_modules/.bin`, no un módulo, y `node`
 lo resuelve con `ERR_MODULE_NOT_FOUND`.) Con Workers Builds ya conectado (ver
-[Workers Builds: `main` despliega y los previews están desactivados](#workers-builds-main-despliega-y-los-previews-están-desactivados)),
+[Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)),
 esa misma variable hay que ponerla en *Build variables and secrets* del trigger, o el build falla al
 ver el binding. No es la única: ese sitio del panel tiene su propia lista y no es el mismo que el
 de los secretos del Worker. Está en
@@ -504,12 +504,17 @@ esté puesta y aun así falte:
 | Sitio del panel | Quién la lee | Cuándo existe |
 |---|---|---|
 | **Settings → Variables and Secrets** (secretos y *vars* del Worker) | El **Worker en runtime**: son los *bindings* que llegan en `ctx.env`. | Mientras el Worker esté desplegado. |
-| **Build variables and secrets** (del *trigger* de Workers Builds) | El **proceso de build**: el `next build` y el `npx wrangler deploy` que ejecuta el pipeline. | Solo mientras dura el build de ese trigger. |
+| **Build variables and secrets** (de la configuración de build de Workers Builds) | El **proceso de build**: el `next build` y el `npx wrangler deploy` que ejecuta el pipeline. | Solo mientras dura el build de esa configuración. |
 
 El síntoma de tenerla en el sitio equivocado es que **nada avisa hasta que algo la lee**. El build de
 Next compila entero y bien, el Worker desplegado arranca, y el fallo aparece en el primer módulo que
 la necesita, que puede ser el paso de deploy del pipeline o una petición de una sola página días
 después.
+
+Y hay un matiz que solo se ve cuando hay previews: **las build variables no llegan al runtime**, ni
+siquiera en un Worker normal, y un Preview tampoco hereda los secretos del Worker. Las dos listas de
+arriba son las de producción; un Preview tiene su propio par, en *Previews Base* (ver
+[Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)).
 
 ### Qué tiene que estar en las build variables
 
@@ -529,7 +534,9 @@ después.
 
 Las dos listas se revisaron y quedaron completas el **1 de octubre de 2026**, el mismo día que el
 build dejó de fallar. En la de build variables faltaban la de Hyperdrive (la que rompía el
-despliegue, cuatro pushes seguidos) y `YOUTUBE_API_KEY`.
+despliegue, cuatro pushes seguidos) y `YOUTUBE_API_KEY`. La de *Previews Base* se creó el **2 de
+octubre de 2026** con esa misma lista, porque `npx wrangler preview` emula Hyperdrive igual que
+`npx wrangler deploy` y sin esa variable el build de una rama moría en el paso de deploy.
 
 ### El mensaje que sale es engañoso
 
@@ -555,16 +562,18 @@ Lo caro no es el mensaje, es lo que pasa mientras el build falla: **`main` no de
 se queda sirviendo la versión anterior**. Pasó dos días así, con el repositorio en `main` y el
 Worker en un número de versión anterior, sin que nada en la web lo dijera.
 
-### Las build variables son por trigger, y el de `main` es el único
+### Las build variables son por configuración de build, y no heredan de nada
 
-Las *build variables and secrets* cuelgan del **trigger** de Workers Builds, no del Worker. El
-trigger único tiene `branch_includes: ["main"]`, así que **`main` es la única rama que construye y
-despliega, y es el único sitio donde hay que ponerlas**. Consecuencia que conviene tener delante: el
-bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc) está escrito y es correcto, pero **hoy
-no lo ejecuta ningún build de Cloudflare**, porque los previews están desactivados (ver
-[Workers Builds: `main` despliega y los previews están desactivados](#workers-builds-main-despliega-y-los-previews-están-desactivados)).
-Solo lo usa `npm run preview` en local. Si algún día se vuelven a activar, ese trigger necesita
-**sus propias** build variables y sus propios secretos, porque de un trigger no se hereda nada.
+Las *build variables and secrets* cuelgan de la **configuración de build**, no del Worker, y hay
+**dos**: la del *trigger* de `main` y la de *Previews Base*. De ninguna a la otra se hereda nada, así
+que lo que va en una hay que ponerlo también en la otra. Las dos tienen hoy la misma lista, que es la
+que necesita el build (ver
+[Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)).
+
+Y hay una tercera lista que no es ninguna de las dos: **Variables and Secrets** del Worker, que es lo
+único que llega a runtime, y de la que los previews no heredan nada. Esa es la que un Preview no
+tiene. Las tres están en
+[Los dos sitios del panel: secretos del Worker y build variables](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
 
 ### Ruido conocido del log: `ERROR Failed to copy node_modules/...`
 
@@ -647,7 +656,7 @@ npm run preview    # build + preview local del Worker
 
 Este camino es el de **una máquina con el repositorio**. En producción despliega el *trigger* de
 Workers Builds (ver
-[Workers Builds: `main` despliega y los previews están desactivados](#workers-builds-main-despliega-y-los-previews-están-desactivados)),
+[Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)),
 y ahí el envoltorio no se ejecuta: es el *pipeline* el que pone la variable de Hyperdrive, desde
 *Build variables and secrets*. El detalle de las dos listas del panel está en
 [Los dos sitios del panel: secretos del Worker y build variables](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
@@ -668,53 +677,83 @@ y ahí el envoltorio no se ejecuta: es el *pipeline* el que pone la variable de 
 Lo que hay que hacer en la base de datos antes o después de esto, en
 [`docs/OPERACION.md`](./OPERACION.md#requisitos-operativos-de-un-despliegue).
 
-## Workers Builds: `main` despliega y los previews están desactivados
+## Workers Builds: `main` despliega y las ramas hacen Preview
 
 El repositorio está conectado a **Workers Builds**, así que el despliegue es automático. Pero Workers
 Builds no repite el mismo despliegue en todas las ramas: en la rama de producción (`main`) ejecuta
 `npx opennextjs-cloudflare build` y a continuación `npx wrangler deploy`, y en **cualquier otra**
-ejecutaría `npx wrangler preview`, que crea un *Preview*: un entorno aislado del mismo Worker, con
-URL propia (`<preview>-ligahispana-aoe4.<subdominio>.workers.dev`, con `X-Robots-Tag: noindex`) y
-con sus propias variables, secretos y bindings.
+ejecuta `npx opennextjs-cloudflare build` y `npx wrangler preview`, que crea un *Preview*: un
+entorno aislado del mismo Worker, con URL propia
+(`<rama>-ligahispana-aoe4.javierr-ma93.workers.dev`, con `X-Robots-Tag: noindex`), con sus propios
+logs y sus propios bindings.
 
-**Ese segundo camino está desactivado a propósito** (`previews_enabled: false`, 2 de octubre de
-2026). El motivo no es el precio ni el límite del plan, que en plan Free aguantaría de sobra: es que
-**ningún build de rama llegó a funcionar jamás**. El trigger de previews traía
-`build_command: npm run build`, que es solo `next build` y no genera el bundle de OpenNext, así que
-el `npx wrangler preview` que venía detrás moría siempre en el paso de deploy:
+De ahí sale el modelo completo, y no hace falta configurar nada más: **todo push a una rama que no sea
+`main` reconstruye el Preview de esa rama**, así que un push nuevo dentro de una pull request
+actualiza la URL que ya se estaba mirando, y un merge actualiza el Preview de la rama destino (o
+despliega a producción si el destino es `main`). El nombre del Preview lo pone el nombre de la rama,
+así que hay uno por rama y se acumulan: el límite es de 100 Previews por Worker en plan Free (y 100
+despliegues por Preview), y Cloudflare va borrando los más antiguos cuando se llega.
+
+### Los dos comandos, y por qué el build es el mismo
+
+Un Preview no es un despliegue: es el mismo Worker en otro sitio. Lo que cambia es el paso de deploy,
+`npx wrangler preview` en vez de `npx wrangler deploy`. El **build command tiene que ser el mismo que
+en producción**, `npx opennextjs-cloudflare build`, porque `wrangler preview` sube `.open-next/worker.js`
+y ese fichero solo lo genera OpenNext.
+
+Ahí estuvo el error que hizo que los previews estuvieran **desactivados** entre el 28 y el 2 de octubre
+de 2026: la configuración de previews traía `build_command: npm run build`, que es solo `next build`,
+así que el `wrangler preview` que venía detrás moría en todas las pull requests con:
 
 ```txt
 ✘ [ERROR] The entry-point file at ".open-next/worker.js" was not found.
 ```
 
-Ese es el error que salía en rojo en cada pull request. Poner `npx opennextjs-cloudflare build` en
-el trigger de previews lo habría arreglado, pero los previews no hacen falta para nada, y su trigger
-además arrastra una configuración de build propia (tenía **cero** variables de build, y
-`wrangler preview` emula Hyperdrive igual que `deploy`, así que también habría hecho falta
-`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`).
+El mensaje apunta al síntoma y no a la causa: el build de Next acababa bien (`Compiled successfully`) y
+que faltaba era el bundle de OpenNext. Arreglado, el 2 de octubre de 2026: `previews_enabled: true` y
+`previews_base_config.build_command` con el comando de OpenNext.
 
-**Las pull requests las verifica ahora GitHub Actions**, en
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml): `npm ci`, `npm run lint` y
-`npm run build`, en un push a cualquier rama. No se dispara en `main`, porque ese despliegue ya lo
-hace el trigger de Workers Builds, que es el único que construye el bundle de OpenNext. El
-repositorio es público, así que los minutos de Actions no se cobran.
+### Las build variables de los previews, y lo que **no** llega a runtime
 
-Lo que queda de todo esto es el bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc), que
-sigue escrito y sigue haciendo falta, pero **para un solo uso: `npm run preview` en local**. Ningún
-build de Cloudflare lo ejecuta ya. Y sigue siendo obligatorio para ese comando, que lo exige desde
-`wrangler` 4.135 y sin él muere con:
+Workers Builds tiene **dos configuraciones de build** con listas propias, y no heredan nada entre
+ellas: la del *trigger* de `main` y la de *Previews Base*. Las dos tienen hoy la misma lista, la que
+necesita el build:
+
+| Variable | Por qué la necesita el build |
+|---|---|
+| `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` | `wrangler preview` emula Hyperdrive igual que `deploy`, y sin ella el build muere al ver el binding |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Next las sustituye por un literal al compilar, y en runtime ningún binding puede llegar al bundle del navegador |
+| `CRON_SECRET`, `DATABASE_URL`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `YOUTUBE_API_KEY` | No las necesita el build: están por si algún día un módulo de servidor las lee al importar. Ver [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables) |
+
+**Las build variables no están en runtime**, solo en el proceso de build (eso dice la documentación de
+Cloudflare, sin excepciones). Lo que un Preview tiene en runtime sale de su *Preview settings*, que en
+el panel es **Workers → Previews → Base configuration → Variables and Secrets**, y está **vacío**. La
+consecuencia es que un Preview funciona, pero sin dos cosas:
+
+- **Sin `YOUTUBE_API_KEY`** no se comprueba el directo de YouTube: los canales salen como no
+  estar en directo. Es la única degradación visible.
+- **Sin `TURNSTILE_SECRET_KEY`** el captcha se desactiva solo, y **sin `CRON_SECRET`** (o
+  `RATE_LIMIT_SALT`) el [`/api/cron/sync`](../src/app/api/cron/sync/route.ts) nunca se autoriza. Lo
+  segundo es lo que conviene: un Preview no puede disparar el sync.
+
+Las `NEXT_PUBLIC_*` sí llegan al navegador de un Preview, porque Next las compila dentro del bundle en
+el build. Por eso **quien se autentique en un Preview escribe en la base de producción**: es el punto
+que hay que tener presente al revisar una pull request en su URL.
+
+### Lo que resuelve el bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc)
+
+Es **obligatorio** para `npx wrangler preview`, y desde `wrangler` 4.135 es un error, no un aviso:
 
 ```txt
 ✘ [ERROR] Your Wrangler configuration is missing a `previews` block. Add the following to your configuration file:
 ```
 
-Es error, no aviso. En local el prompt que wrangler ofrece para escribir el bloque por ti (con los
-valores propuestos marcados como `<REPLACE_ME>`) sí sirve; lo que no salvaba era depender de él desde
-un proceso no interactivo como el de un build. El bloque apareció en `wrangler` 4.135 y el proyecto
-ya va por 4.143, así que salta sin avisar.
+El bloque apareció en `wrangler` 4.135 y el proyecto ya va por 4.143, así que salta sin avisar. En
+local el prompt que wrangler ofrece para escribirlo (con los valores propuestos marcados como
+`<REPLACE_ME>`) sí sirve; lo que no salva es depender de él desde un proceso no interactivo como el de
+un build.
 
-Lo que resuelve el bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc), y son las tres cosas
-que hacen falta en el preview local:
+Y resuelve tres cosas:
 
 - **Los bindings no se heredan del nivel superior.** Hay que declararlos dentro: `HYPERDRIVE` e
   `IMAGES`. Sin `HYPERDRIVE` el build pasa, pero el Preview sale entero en
@@ -722,16 +761,32 @@ que hacen falta en el preview local:
   cuyas páginas leen de Postgres no sirve para mirar nada.
 - **`assets`, `compatibility_*` y las migraciones se quedan arriba**, y los Cron Triggers **no se
   replican**: apuntan a producción, así que un Preview no puede disparar el sync.
-- **Los secretos tampoco se heredan.** Los del panel son solo de producción; en un Preview hay que
-  ponerlos a mano (`npx wrangler preview secret put <NOMBRE> --name <preview>`). Las `NEXT_PUBLIC_*`
-  sí llegan, porque van en *Build variables and secrets* y Next las compila dentro del bundle.
+- **Los secretos tampoco se heredan** (y no se pueden escribir en el fichero, que está versionado):
+  van en *Preview settings*, como se ha visto arriba.
 
 **Que el `HYPERDRIVE` del bloque `previews` apunte a la base de producción es una decisión, no un
-descuido.** Es lo que hace que `npm run preview` en local sirva para mirar la interfaz de verdad
-(streams, clasificaciones): sin base no hay nada que ver. El riesgo está acotado, porque un preview no
-dispara los Cron Triggers y las rutas que escriben piden `CRON_SECRET`, que un entorno de preview no
-tiene, así que ni siquiera llegan a autenticarse. Lo que sí conviene tener presente es que
-`WORKER_SELF_REFERENCE` sigue llamando al **despliegue de producción**, y que quien se autentique en
-el preview local escribe en la base de producción. Para aislarlo del todo: crear otro config de
-Hyperdrive sobre una base de pruebas y cambiar el `id` de `previews.hyperdrive` (en plan Free no se
-cobra por config; el límite son las mismas 100.000 consultas al día).
+descuido.** Es lo que hace que un Preview sirva para mirar la interfaz de verdad (streams,
+clasificaciones): sin base no hay nada que ver. El riesgo está acotado, porque un Preview no dispara
+los Cron Triggers y las rutas de sincronización piden `CRON_SECRET`, que un Preview no tiene, así que
+ni siquiera llegan a autenticarse. Lo que sí conviene tener presente es que `WORKER_SELF_REFERENCE`
+sigue llamando al **despliegue de producción**, y que quien se autentique en el Preview escribe en la
+base de producción. Para aislarlo del todo: crear otro config de Hyperdrive sobre una base de pruebas
+y cambiar el `id` de `previews.hyperdrive` (en plan Free no se cobra por config; el límite son las
+mismas 100.000 consultas al día).
+
+### Qué sigue haciendo GitHub Actions
+
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) sigue ahí, y no es un paso que
+Workers Builds sustituya: un Preview **despliega**, y eso tarda bastante más que `npm ci && npm run
+lint`. El workflow da el veredicto en un par de minutos y sin gastar un despliegue, y el Preview da
+la URL. Los dos se disparan en el mismo push, y en un repositorio público ninguno de los dos cobra
+minutos.
+
+### Lo que hay que hacer en el panel
+
+Solo si se quiere un Preview con la misma paridad que producción: **Workers → Previews → Base
+configuration → Variables and Secrets**, y ahí `YOUTUBE_API_KEY` (el directo de YouTube),
+`RATE_LIMIT_SALT` y `TURNSTILE_SECRET_KEY`. Se pueden poner a mano en el panel o con
+`npx wrangler preview base-config secret put <NOMBRE>`, que las deja en la configuración base y las
+copia a cada Preview nuevo. `CRON_SECRET` no está en la lista a propósito: autorizar el sync en un
+Preview no aporta nada y quita una barrera.

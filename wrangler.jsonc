@@ -101,11 +101,11 @@
   // envoltorio, sino `npx wrangler deploy`. La variable tiene que estar en *Build
   // variables and secrets* del **trigger**, con el nombre exacto
   // `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`, o el build falla al
-  // emular el binding. Las build variables son **por trigger** y no heredan de nada:
-  // hoy solo hay un trigger y escucha `main` (`branch_includes: ["main"]`), asi que
-  // ese es el unico sitio donde hay que ponerlas. Las demas variables de las que
-  // lee el build van ahi tambien, en la misma lista: ver docs/DESPLIEGUE.md, "Los dos
-  // sitios del panel: secretos del Worker y build variables".
+  // emular el binding. Las build variables son **por configuracion de build** y no
+  // heredan de nada: hay dos, la del trigger de `main` y la de *Previews Base*, y
+  // cada una tiene su propia lista. Las demas variables de las que lee el build van
+  // ahi tambien, en la misma lista: ver docs/DESPLIEGUE.md, "Los dos sitios del panel:
+  // secretos del Worker y build variables".
   //
   // La cadena que se le da a Hyperdrive en el panel es la DIRECTA
   // (`db.<ref>.supabase.co`, puerto 5432, sin `?sslmode=require`: el TLS lo
@@ -144,34 +144,28 @@
       "persist": true
     }
   },
-  // Previews: el despliegue aislado de una rama. Hoy **ningun build de Cloudflare lo
-  // ejecuta**: los previews de Workers Builds estan desactivados a proposito
-  // (`previews_enabled: false`), asi que este bloque solo sirve para `npm run preview` en
-  // local.
-  //
-  // El motivo de desactivarlos: el trigger de previews traia
-  // `build_command: npm run build`, que es solo `next build` y no genera el bundle de
-  // OpenNext, asi que el `npx wrangler preview` que venia detras moria en todas las pull
-  // requests con `The entry-point file at ".open-next/worker.js" was not found`. Las
-  // verifican GitHub Actions (lint y build) en .github/workflows/ci.yml. Ver
-  // docs/DESPLIEGUE.md, "Workers Builds: `main` despliega y los previews estan
-  // desactivados".
+  // Previews: el despliegue aislado de una rama. Lo ejecuta Workers Builds en cada push a
+  // una rama que no sea `main` (`previews_enabled: true`), con `npx opennextjs-cloudflare
+  // build` y despues `npx wrangler preview`. Ver docs/DESPLIEGUE.md, "Workers Builds:
+  // `main` despliega y las ramas hacen Preview".
   //
   // El bloque se conserva porque `wrangler preview` **lo exige**: sin el, desde wrangler
   // 4.135 el comando muere con "Your Wrangler configuration is missing a `previews` block".
-  // Es error, no aviso.
+  // Es error, no aviso, y en CI no hay quien conteste al prompt que wrangler ofrece en
+  // local para escribirlo.
   //
   // Los bindings **no se heredan** del nivel superior, asi que se declaran aqui.
   // `assets`, `compatibility_*` y `migrations` se quedan arriba, y los Cron Triggers no
   // se replican: apuntan a produccion, luego un Preview no puede disparar el sync.
   //
-  // `HYPERDRIVE` apunta a la misma base de produccion, y a proposito: el preview local sirve
-  // para mirar la interfaz de verdad (streams, clasificaciones) y sin base no hay nada que
-  // ver. Es trafico de lectura; las escrituras se quedan sin autenticacion porque los
-  // secretos del panel no se heredan, y `WORKER_SELF_REFERENCE` sigue llamando al
-  // despliegue de produccion. Para aislarlo de verdad: crear otro config de Hyperdrive
-  // sobre una base de pruebas y cambiar el `id` de aqui. En plan Free no se cobra por
-  // config, el limite es el mismo (100.000 consultas al dia).
+  // `HYPERDRIVE` apunta a la misma base de produccion, y a proposito: el Preview sirve
+  // para mirar la interfaz de verdad (streams, clasificaciones) y sin base no hay nada
+  // que ver. Es trafico de lectura en su mayor parte; las escrituras se quedan sin
+  // autenticacion porque los secretos del panel no se heredan, y
+  // `WORKER_SELF_REFERENCE` sigue llamando al despliegue de produccion. Para aislarlo de
+  // verdad: crear otro config de Hyperdrive sobre una base de pruebas y cambiar el `id`
+  // de aqui. En plan Free no se cobra por config, el limite es el mismo (100.000
+  // consultas al dia).
   "previews": {
     "hyperdrive": [
       {

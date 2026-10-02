@@ -7,12 +7,11 @@ name: Verificación de pull requests
 # verdad el bundle de OpenNext y el Worker. Aquí no hay nada que desplegar, solo
 # que comprobar que el código compila y pasa el linter.
 #
-# Los previews de Workers Builds están desactivados a propósito (su build usaba
-# `npm run build` en vez de `npx opennextjs-cloudflare build`, así que
-# `wrangler preview` moría buscando `.open-next/worker.js`), de modo que este
-# workflow es la única verificación automática de una pull request. Ver
-# docs/DESPLIEGUE.md, "Workers Builds: `main` despliega y los previews están
-# desactivados".
+# Convive con los previews de Workers Builds, que también se disparan en un push
+# a una rama y también despliegan, pero no lo sustituyen: un Preview tarda bastante
+# más que `npm ci && npm run lint`, así que este workflow es el que da el veredicto
+# en un par de minutos. Ver docs/DESPLIEGUE.md, "Workers Builds: `main` despliega y
+# las ramas hacen Preview".
 
 on:
   pull_request:
