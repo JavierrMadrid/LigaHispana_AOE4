@@ -6,6 +6,10 @@
  *
  * (En los scripts de `package.json` viene detrás de `tsx`.)
  *
+ * Este fichero es solo el **arranque**: comprueba la versión de Node y registra
+ * los ganchos de carga, que viven en `prisma-wasm-node-hooks.mjs` porque
+ * `module.register()` exige que estén en otro módulo (ver "La solución").
+ *
  * ## El problema
  *
  * `prisma/schema.prisma` genera el cliente con `runtime = "workerd"` porque el
@@ -38,17 +42,51 @@
  *
  * ## La solución
  *
- * `module.registerHooks()` (síncronos, en el hilo principal) sustituyen
- * `"./x.wasm?module"` por un módulo CommonJS que lee el `.wasm` del disco y lo
- * compila, y lo publica como `default`. Es el mismo `WebAssembly.Module` que
- * recibe `workerd`, así que Prisma no necesita enterarse de nada más.
+ * Ganchos de carga de módulos que sustituyen `"./x.wasm?module"` por un módulo
+ * CommonJS que lee el `.wasm` del disco y lo compila, y lo publica como
+ * `default`. Es el mismo `WebAssembly.Module` que recibe `workerd`, así que
+ * Prisma no necesita enterarse de nada más.
  *
- * Los síncronos y no `module.register()` a propósito: los síncronos atienden a
- * la vez a `import()` de ESM y a `require()` de CommonJS, y no dependen de si tsx
- * deja la instrucción dinámica como `import()` o la compila a `require`. Eso
- * importa porque el cliente generado es TypeScript y tsx decide el formato; con
- * la API asíncrona (que solo cubre ESM) el arreglo se rompía en cuanto tsx
- * compilaba a CommonJS.
+ * Se registran con **`module.register()`**, los ganchos asíncronos, y por eso
+ * van en `prisma-wasm-node-hooks.mjs`: esa API exige un módulo aparte al que se
+ * le pasa el `specifier` y el `parentURL`, y corre en su propio hilo. Es
+ * también lo que usa tsx por su cuenta, así que el shim se apoya en la misma
+ * vía y no se pelean.
+ *
+ * ## Por qué no `module.registerHooks()`
+ *
+ * Se usó `registerHooks()` (los síncronos, en el hilo principal) porque
+ * atienden a la vez a `import()` de ESM y a `require()` de CommonJS. Con Node
+ * 22.22 eso ya no compensa: **no llega a ejecutarse nada**.
+ *
+ * El primer módulo que carga cualquiera de estos scripts es el propio script,
+ * que tsx resuelve como `"commonjs"` (el `package.json` no es de tipo `module`).
+ * Al delegar en `nextLoad(url, context)` con ese formato, Node entra en su
+ * camino nativo de carga CommonJS, que **no devuelve `source`**, y la
+ * validación del gancho revienta:
+ *
+ * ```
+ * TypeError [ERR_INVALID_RETURN_PROPERTY_VALUE]: Expected a string, an
+ * ArrayBuffer, or a TypedArray to be returned for the "source" from the "load"
+ * hook but got undefined
+ * ```
+ *
+ * No es culpa de los ganchos de aquí: se reproduce igual con un
+ * `registerHooks()` de tres líneas que solo devuelve `next(url, ctx)`, y con
+ * cualquier gancho síncrono junto a tsx. Ni lo resuelve devolver el `source` de
+ * uno mismo: para un módulo CommonJS eso significa entregar un módulo vacío, y
+ * el script se ejecutaría sin hacer nada (código 0), que es peor que fallar.
+ *
+ * ## Por qué los asíncronos no pierden el `require()`
+ *
+ * La premisa que justificaba los síncronos —que atienden también a
+ * `require()`— ya no aplica: el `import()` del cliente generado **sobrevive** a
+ * la compilación de tsx (esbuild lo deja como `import()` porque el destino es
+ * Node), así que la importación del `.wasm` siempre entra por el cargador de
+ * ESM, que es lo que atienden los ganchos asíncronos. Y como el módulo que
+ * devuelve el shim es CommonJS, el valor llega igual de bien por las tres vías
+ * de consumo que leen `default` (`import()`, `require()` y el envoltorio de
+ * interoperabilidad de esbuild).
  *
  * ## Por qué no tocar el cliente generado ni `src/lib/db.ts`
  *
@@ -68,88 +106,16 @@
  * @see prisma/schema.prisma (bloque `generator`, y por qué `runtime = "workerd"`)
  */
 
-import { registerHooks } from "node:module";
-import { fileURLToPath } from "node:url";
+import { register } from "node:module";
 
-/** Sufijo con el que los empaquetadores importan WASM. */
-const WASM_MODULE_SUFFIX = "?module";
-
-/**
- * Marca que se añade a la URL resuelta.
- *
- * Hace falta porque el gancho `load` solo recibe la URL final: con el `?module`
- * ya quitado, una URL de fichero `foo.wasm` sería indistinguible de cualquier
- * otra importación de WASM legítima de Node.
- */
-const MARKER = "prisma-wasm-module";
-
-// `registerHooks` es de Node 22.15 en adelante. Es mejor esto que dejar que
-// reviente con un "registerHooks is not a function" que no dice qué hacer.
-if (typeof registerHooks !== "function") {
+// `module.register()` es de Node 20.6 en adelante, la misma versión que
+// `--import`, con el que se carga este fichero. El mínimo baja desde 22.15
+// (que era el de `registerHooks`) porque la API síncrona ya no es la que se usa.
+if (typeof register !== "function") {
   throw new Error(
-    "scripts/prisma-wasm-node.mjs necesita Node >= 22.15 (module.registerHooks). " +
+    "scripts/prisma-wasm-node.mjs necesita Node >= 20.6 (module.register). " +
       `Se está usando Node ${process.versions.node}.`,
   );
 }
 
-registerHooks({
-  /**
-   * `"./query_compiler_fast_bg.wasm?module"` → la URL del `.wasm` con la marca
-   * puesta. Se decide en `resolve` (y no en `load`) para que Node sepa desde el
-   * principio que es CommonJS con fuente propia, y para que la ruta final no se
-   * lea dos veces del disco.
-   */
-  resolve(specifier, context, nextResolve) {
-    if (!specifier.endsWith(`.wasm${WASM_MODULE_SUFFIX}`)) {
-      return nextResolve(specifier, context);
-    }
-
-    const url = new URL(specifier.slice(0, -WASM_MODULE_SUFFIX.length), context.parentURL);
-
-    return { url: `${url.href}?${MARKER}`, format: "commonjs", shortCircuit: true };
-  },
-
-  /**
-   * El módulo que Prisma recibe en lugar del WASM.
-   *
-   * Leer y compilar los bytes va dentro del `source` que se devuelve, no aquí en
-   * el gancho: el gancho solo **describe** el módulo, y el trabajo ocurre cuando
-   * Node lo evalúa, que es un paso perezoso (solo si alguien importa el WASM) y
-   * cacheado por URL. Es justo lo que espera Prisma: `loadQueryCompiler` ya
-   * memoiza por proveedor, así que el WASM se compila una vez por proceso.
-   *
-   * Se exporta el módulo **y** una autorreferencia en `default`, más
-   * `__esModule`, porque las tres formas de consumo dan cosas distintas y
-   * Prisma solo necesita una:
-   *
-   * - `require(...)` tal cual → el `WebAssembly.Module`.
-   * - El envoltorio de interoperabilidad de esbuild/tsx, que copia `module.exports`
-   *   a `default` salvo que `__esModule` lo diga → el `WebAssembly.Module`.
-   * - `import(...)` de ESM sobre un módulo CommonJS → `default` es
-   *   `module.exports` → el `WebAssembly.Module`.
-   *
-   * Con las tres, `const { default: module } = ...` recibe el módulo sea cual sea
-   * el formato en que tsx haya compilado el cliente.
-   */
-  load(url, context, nextLoad) {
-    const marker = `?${MARKER}`;
-
-    if (!url.endsWith(marker)) {
-      return nextLoad(url, context);
-    }
-
-    const path = fileURLToPath(url.slice(0, url.length - marker.length));
-
-    return {
-      shortCircuit: true,
-      format: "commonjs",
-      source: [
-        'const { readFileSync } = require("node:fs");',
-        `const wasm = new WebAssembly.Module(readFileSync(${JSON.stringify(path)}));`,
-        "module.exports = wasm;",
-        "module.exports.default = wasm;",
-        "module.exports.__esModule = true;",
-      ].join("\n"),
-    };
-  },
-});
+register("./prisma-wasm-node-hooks.mjs", import.meta.url);

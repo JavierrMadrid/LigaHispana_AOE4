@@ -299,11 +299,13 @@ moverlos dentro del Worker.
 **Sí se arregla enseñándole a Node la convención del empaquetador**, que es lo que hace
 [`scripts/prisma-wasm-node.mjs`](../scripts/prisma-wasm-node.mjs): una precarga con `--import` que
 registra ganchos de carga de módulos y sustituye `"./x.wasm?module"` por un módulo CommonJS que lee
-el `.wasm` del disco y lo publica como `default`. Es el mismo `WebAssembly.Module` que recibe
-`workerd`, así que Prisma no necesita enterarse de nada más y `runtime = "workerd"` se queda como
-está. Los ganchos van en el fichero de los scripts, no en `src/lib`, porque la diferencia real
-entre los dos entornos es **cómo se importa un módulo**: `src/lib/db.ts` lo usa también el Worker,
-donde `node:fs` no existe.
+el `.wasm` del disco y lo publica como `default`. Los ganchos viven en
+[`scripts/prisma-wasm-node-hooks.mjs`](../scripts/prisma-wasm-node-hooks.mjs) porque
+`module.register()`, que es la API con la que se registran, los exige en otro módulo. Es el mismo
+`WebAssembly.Module` que recibe `workerd`, así que Prisma no necesita enterarse de nada más y
+`runtime = "workerd"` se queda como está. Los ganchos van en el fichero de los scripts, no en
+`src/lib`, porque la diferencia real entre los dos entornos es **cómo se importa un módulo**:
+`src/lib/db.ts` lo usa también el Worker, donde `node:fs` no existe.
 
 Lo que había que arreglar son **dos** cosas, no una, y la segunda es la que más engaña:
 
@@ -315,10 +317,23 @@ Lo que había que arreglar son **dos** cosas, no una, y la segunda es la que má
    `default` más `__esModule`, para que el valor llegue bien tanto si tsx deja la instrucción
    dinámica como `import()` de ESM como si la compila a `require()`.
 
-Por eso los ganchos son los **síncronos** (`module.registerHooks()`) y no `module.register()`: los
-síncronos atienden a ESM y a CommonJS por igual y no dependen de qué formato decida tsx para el
-cliente generado (que es TypeScript). Con la API asíncrona, que solo cubre ESM, el arreglo se
-rompía en cuanto tsx compilaba a CommonJS.
+Por eso los ganchos se registran con **`module.register()`** (los asíncronos, que corren en su
+propio hilo) y no con `module.registerHooks()` (los síncronos). La razón de siempre —que los
+síncronos atienden también a `require()`— ya no compensa, porque con Node 22.22 **no llega a
+ejecutarse nada**: el primer módulo que carga cualquiera de estos scripts es el propio script, que
+tsx resuelve como `"commonjs"`, y al delegar `nextLoad(url, context)` con ese formato Node entra en
+su camino nativo de carga CommonJS, que no devuelve `source` y hace que la validación del gancho
+reviente con `ERR_INVALID_RETURN_PROPERTY_VALUE` ("Expected a string, an ArrayBuffer, or a TypedArray
+to be returned for the source from the load hook but got undefined"). No es culpa del shim: se
+reproduce igual con un `registerHooks()` de tres líneas que solo devuelve `next(url, ctx)`, y con
+cualquier gancho síncrono junto a tsx. Devolver un `source` propio tampoco vale, porque para un
+módulo CommonJS eso significa entregar un módulo vacío y el script saldría con código 0 sin hacer
+nada.
+
+Los asíncronos no pierden el `require()`: el `import()` del cliente generado **sobrevive** a la
+compilación de tsx (esbuild lo deja como `import()` porque el destino es Node), así que la
+importación del `.wasm` siempre entra por el cargador de ESM. Es además la misma vía que usa tsx por
+su cuenta, así que los dos se apoyan en ella.
 
 Se aplica en `package.json` a los scripts que **consultan** la base (`sync`, `score`,
 `backfill:model`, `verify:sync`, `verify:alerts`, `alerts:check`, `alerts:cutoffs`, `db:window`,
