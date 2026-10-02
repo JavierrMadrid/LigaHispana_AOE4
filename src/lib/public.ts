@@ -476,7 +476,7 @@ export type LiveMatch = {
   leaderboard: string;
   /**
    * Tamaño legible ("1vs1", "2vs2", "Por equipos"). Sale de los equipos de la
-   * alineación y solo si todos tienen el mismo número de jugadores; si no se
+   * alineación y solo si la partida tiene dos bandos del mismo tamaño; si no se
    * puede asegurar, de `describeMode` sobre `mode` y `leaderboard`.
    */
   format: string;
@@ -694,9 +694,9 @@ function liveRoster(
  * `describeMode` va primero a `leaderboard`, y un 2v2 puede venir publicado como
  * `rm_team`, que no dice el tamaño. Como aquí ya está la alineación completa, se
  * cuentan los jugadores de cada equipo y el tamaño sale de ahí; `describeMode`
- * queda como respaldo para lo que no se puede asegurar (equipos desiguales o
- * partida reconstruida desde las columnas, donde no se sabe de qué equipo era
- * cada jugador).
+ * queda como respaldo para lo que no se puede asegurar (equipos desiguales, más
+ * de dos bandos o partida reconstruida desde las columnas, donde no se sabe de
+ * qué equipo era cada jugador).
  */
 function matchFormat(
   participants: readonly LiveMatchParticipant[],

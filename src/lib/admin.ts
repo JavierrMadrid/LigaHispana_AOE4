@@ -900,7 +900,8 @@ export type AdminMatchHistoryRow = {
   opponentProfileId: number | null;
   result: MatchResult | null;
   /**
-   * Tamaño real del partido («1vs1», «2v2», «3v3»…), leído de `rawJson.teams`.
+   * Tamaño real del partido («1vs1», «2v2», «3v3»…), leído de `rawJson.teams`
+   * y solo si la partida tiene dos bandos del mismo tamaño.
    *
    * No se puede sacar de `mode`/`leaderboard`: un ranked por equipos llega con
    * `leaderboard: "rm_team"`, que no dice cuántos juegan. `null` cuando el payload no

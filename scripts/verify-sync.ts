@@ -10,6 +10,7 @@ import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 
 import { CIVILIZATIONS, isKnownCivilization } from "@/lib/civs";
 import { unwrapRead } from "@/lib/db-errors";
+import { describeMode, describeTeamSize, teamSizesFromRawJson } from "@/lib/format";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { AlertKind, AlertRule } from "@/generated/prisma/enums";
 import {
@@ -754,6 +755,96 @@ async function checkNormalization(): Promise<void> {
     assert.equal(parseGame({ started_at: SOLO_WIN.started_at }), null, "sin game_id no hay partida");
     assert.equal(parseGame({ game_id: 9_000_001, started_at: "no-es-una-fecha" }), null);
     assert.equal(parseGamesPage({})?.games.length, 0);
+  });
+}
+
+/**
+ * Las etiquetas de formato que ve la gente, sin tocar la base de datos.
+ *
+ * `describeMode` y `describeTeamSize` son el punto donde lo que publica la API se
+ * convierte en texto ("1vs1", "2v2", "Por equipos", "FFA") y, por lo tanto, donde
+ * una partida se puede etiquetar con algo falso: ocho equipos de uno no son un
+ * "1vs1", aunque los ocho tengan el mismo tamaño, y una FFA de quick match no
+ * puede rotularse con el literal `qm_ffa`. Son funciones puras, así que se
+ * comprueban con nombres de ladder y con números de bandos, sin filas ni consulta.
+ */
+async function checkFormatLabels(): Promise<void> {
+  console.log("Etiquetas de formato");
+
+  await check("el tamaño solo se afirma si hay dos bandos del mismo tamaño", () => {
+    assert.equal(describeTeamSize([1, 1]), "1vs1");
+    assert.equal(describeTeamSize([2, 2]), "2v2");
+    assert.equal(describeTeamSize([3, 3]), "3v3");
+    assert.equal(describeTeamSize([4, 4]), "4v4");
+
+    // El caso que motivó el arreglo: ocho bandos de uno salen con ocho nombres
+    // debajo, y "1vs1" es una etiqueta que no se puede sostener delante de ellos.
+    assert.equal(describeTeamSize([1, 1, 1, 1, 1, 1, 1, 1]), null, "ocho bandos de uno no son un 1vs1");
+    assert.equal(describeTeamSize([2, 2, 2, 2, 2, 2, 2, 2]), null, "ocho bandos de dos no son un 2v2");
+    assert.equal(describeTeamSize([1, 1, 1]), null);
+
+    // Lo que tampoco se puede asegurar: equipos desiguales por un abandono, un
+    // bando vacío o un solo bando.
+    assert.equal(describeTeamSize([1, 2]), null);
+    assert.equal(describeTeamSize([0, 0]), null);
+    assert.equal(describeTeamSize([1]), null);
+    assert.equal(describeTeamSize([]), null);
+  });
+
+  await check("la FFA se rotula por familia y no con el literal de la API", () => {
+    assert.equal(describeMode("qm_ffa", "qm_ffa"), "FFA");
+    assert.equal(describeMode("ffa_ffa", "ffa_ffa"), "FFA");
+
+    // La API nombra la FFA de más de una manera, y la variante llega cuando el
+    // único campo es `kind`: mismo formato, otro nombre.
+    assert.equal(describeMode("qm_ffa_nomad", "qm_ffa_nomad"), "FFA");
+
+    assert.equal(describeMode("qm_ffa", null), "FFA", "basta con que lo diga el mode");
+    assert.equal(describeMode(null, "qm_ffa"), "FFA", "basta con que lo diga el leaderboard");
+  });
+
+  await check("ninguna familia de ladder pasa por la rama de la FFA", () => {
+    const LADDER: readonly (readonly [name: string, etiqueta: string])[] = [
+      ["rm_solo", "1vs1"],
+      ["rm_1v1", "1vs1"],
+      ["rm_team", "Por equipos"],
+      ["rm_2v2", "2v2"],
+      ["rm_3v3", "3v3"],
+      ["rm_4v4", "4v4"],
+    ];
+
+    for (const [name, etiqueta] of LADDER) {
+      assert.equal(describeMode(name, name), etiqueta, `${name} no cambia de etiqueta`);
+    }
+  });
+
+  await check("lo que no se conoce se devuelve tal cual", () => {
+    for (const name of ["qm_1v1", "qm_2v2", "qm_3v3", "qm_4v4", "ew_1v1", "custom_8v8"]) {
+      assert.equal(
+        describeMode(name, name),
+        name,
+        "mejor un código raro que un dato que no cuadra",
+      );
+    }
+
+    assert.equal(describeMode("qm_2v2", null), "qm_2v2");
+    assert.equal(describeMode(null, "qm_2v2"), "qm_2v2");
+    assert.equal(describeMode(null, null), "", "una fila de objetivo no tiene formato que decir");
+  });
+
+  await check("una FFA de ocho en `rawJson` no acaba rotulada como 1vs1", () => {
+    const ffa = {
+      teams: Array.from({ length: 8 }, (_, index) => [
+        { player: { profile_id: SAMPLE_PROFILE_ID + index } },
+      ]),
+    };
+    const sizes = teamSizesFromRawJson(ffa);
+
+    assert.deepEqual(sizes, [1, 1, 1, 1, 1, 1, 1, 1]);
+
+    // El camino que sigue el historial del panel: el recuento de bandos no da un
+    // tamaño y la etiqueta sale de la familia, que es lo único que sí sabemos.
+    assert.equal(describeTeamSize(sizes) ?? describeMode("qm_ffa", "qm_ffa"), "FFA");
   });
 }
 
@@ -3224,6 +3315,8 @@ async function checkHistoryOrder(): Promise<void> {
 
 async function main(): Promise<void> {
   await checkNormalization();
+  console.log("");
+  await checkFormatLabels();
   console.log("");
   await checkObjectiveCatalogue();
   console.log("");
