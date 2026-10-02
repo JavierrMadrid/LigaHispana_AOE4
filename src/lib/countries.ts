@@ -2,7 +2,7 @@ import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
-import { foldCountryName } from "@/lib/player-input";
+import { foldCountryName, parseCountry } from "@/lib/player-input";
 
 /**
  * La lista de países que admite el torneo, configurable sin desplegar.
@@ -44,6 +44,16 @@ import { foldCountryName } from "@/lib/player-input";
  * (que es un estado normal y tiene su lista por defecto) porque, si la base está
  * caída, validar contra `DEFAULT_COUNTRIES` en silencio escribiría el país de una
  * lista que ya no es la vigente.
+ *
+ * ## El ISO de AoE4World, y por qué este módulo no es solo de lectura
+ *
+ * `COUNTRY_LABEL_BY_ISO` traduce el `country` que trae el perfil de AoE4World (un
+ * ISO-2 en minúsculas) al rótulo canónico, y `findCountryIsoConflict()` decide si
+ * ese país y el que eligió la persona son el mismo. Las dos cosas son de este
+ * módulo y no de otro porque las dos son sobre **la lista admitida**: el
+ * diccionario es su mitad por código, y la comparación solo tiene sentido contra la
+ * lista que se está aplicando, no contra la del código. Y porque el rótulo canónico
+ * es el dato —ver arriba—: quien compara tiene que comparar rótulos, no códigos.
  */
 
 /** Clave de `Setting` donde vive la lista de países admitidos. */
@@ -86,6 +96,133 @@ export const DEFAULT_COUNTRIES: readonly string[] = [
   "Uruguay",
   "Puerto Rico",
 ];
+
+/**
+ * Código ISO 3166-1 alfa-2 → rótulo canónico de la lista anterior.
+ *
+ * Vive aquí, junto a `DEFAULT_COUNTRIES`, porque es **la otra mitad de la misma
+ * lista**: los rótulos son los que se ofrecen y los que se guardan, y este
+ * diccionario es lo que permite traducir a ese rótulo el `country` que manda la
+ * API de AoE4World (que es un ISO-2 en minúsculas, `"co"`, `"do"`, `"pr"`…).
+ *
+ * **Al añadir un país a la lista hay que añadir aquí su ISO.** Un país sin ISO no
+ * rompe nada —la comparación simplemente no lo alcanza y se deja pasar—, pero
+ * `npm run verify:sync` comprueba que las dos mitades tienen el mismo tamaño y
+ * que ningún ISO apunta a un rótulo que no esté en `DEFAULT_COUNTRIES`.
+ *
+ * Los dos casos que confunden, y que son los que hacen que la tabla merezca un
+ * comentario: **`pr` es Puerto Rico** y **`do` es República Dominicana**. Los dos
+ * están porque son los que se parecen a un código de otro país (y porque son los dos
+ * territories que la lista admite); el resto se resuelve solo con la tabla.
+ *
+ * Es un `Map` y no un objeto porque las claves vienen de fuera —el `country` de un
+ * perfil de AoE4World lo escribe el jugador en su perfil, no la organización— y
+ * en un objeto plano `"constructor"` o `"toString"` saldrían heredados del
+ * prototipo en vez de salir `undefined`.
+ */
+const COUNTRY_LABEL_BY_ISO: ReadonlyMap<string, string> = new Map([
+  ["co", "Colombia"],
+  ["es", "España"],
+  ["ve", "Venezuela"],
+  ["pe", "Perú"],
+  ["ec", "Ecuador"],
+  ["gt", "Guatemala"],
+  ["bo", "Bolivia"],
+  ["cu", "Cuba"],
+  ["do", "República Dominicana"],
+  ["hn", "Honduras"],
+  ["py", "Paraguay"],
+  ["sv", "El Salvador"],
+  ["ni", "Nicaragua"],
+  ["cr", "Costa Rica"],
+  ["pa", "Panamá"],
+  ["gq", "Guinea Ecuatorial"],
+  ["ag", "Antigua y Barbuda"],
+  ["mx", "México"],
+  ["ar", "Argentina"],
+  ["cl", "Chile"],
+  ["uy", "Uruguay"],
+  ["pr", "Puerto Rico"],
+]);
+
+/**
+ * Los dos países no coinciden. Lleva los dos rótulos porque el mensaje que redacta
+ * quien llama los necesita: sin nombrarlos, la contradicción no se explica.
+ */
+export type CountryIsoConflict = {
+  /** Rótulo canónico de la lista admitida al que apunta el ISO de AoE4World. */
+  aoe4WorldCountry: string;
+  /** Rótulo canónico de la lista admitida que eligió la persona. */
+  selectedCountry: string;
+};
+
+/**
+ * ¿El país que AoE4World tiene en el perfil contradice el que eligió la persona?
+ *
+ * Es una función ** pura**: no lee nada y no escribe nada, así que se puede comprobar
+ * sin base de datos ni red, que es lo que hace `npm run verify:sync`. Devuelve
+ * `null` cuando no hay contradicción, y los dos rótulos cuando la hay, para que quien
+ * redacta el mensaje no tenga que volver a resolver nada.
+ *
+ * ## Por qué casi todo se deja pasar
+ *
+ * Solo hay un `null` de resultado en el que se bloquea, y es el de "los dos países
+ * se han resuelto y son distintos". Los demás `null` son deliberados, y son el
+ * mismo criterio de degradación que usa el resto del módulo —y que
+ * `checkAoe4WorldProfile()` aplica a su lado—: **no se ha podido comprobar** no es
+ * lo mismo que **está mal**.
+ *
+ * - `aoe4WorldCountry` a `null` (o vacío): el perfil no tiene país. No se afirma
+ *   nada.
+ * - El ISO no está en `COUNTRY_LABEL_BY_ISO` (por ejemplo `"gb"`, que no es uno de
+ *   los países que admite el torneo): no se puede traducir, y no se puede afirmar
+ *   una contradicción sobre un país que no se conoce. Cabría añadir su fila al
+ *   diccionario, pero entonces el mensaje afirmaría "en tu perfil pone Reino
+ *   Unido" a partir de una tabla escrita a mano, que es exactamente el tipo de dato
+ *   que este módulo no quiere inventar.
+ * - El ISO se traduce, pero ese rótulo **no está en la lista vigente**: la
+ *   organización puede haber publicado una lista más corta que la del código, y el
+ *   país elegido es de los que admite, así que solo se compara contra la lista que
+ *   de verdad se está aplicando.
+ *
+ * La comparación de los dos rótulos es **plegada** (`foldCountryName`), igual que
+ * en `parseCountry()`: una lista publicada editada a mano puede traer "españa" y no
+ * por eso hay que decirle a alguien que se equivoca.
+ */
+export function findCountryIsoConflict(params: {
+  /** `country` del perfil de AoE4World: ISO-2 en minúsculas, o `null`. */
+  aoe4WorldCountry: string | null;
+  /** Rótulo canónico ya resuelto por `parseCountry()`. */
+  selectedCountry: string;
+  /** La lista admitida vigente, la misma que se pasó a `parseCountry()`. */
+  allowed: readonly string[];
+}): CountryIsoConflict | null {
+  const iso = foldCountryName(params.aoe4WorldCountry ?? "");
+
+  if (iso === "") {
+    return null;
+  }
+
+  const etiqueta = COUNTRY_LABEL_BY_ISO.get(iso);
+
+  if (etiqueta === undefined) {
+    return null;
+  }
+
+  // Se resuelve **contra la lista vigente**, no contra `DEFAULT_COUNTRIES`: el
+  // rótulo que se guarda y el que se enseña son los de la lista publicada.
+  const canonico = parseCountry(etiqueta, params.allowed);
+
+  if (canonico === null) {
+    return null;
+  }
+
+  if (foldCountryName(canonico) === foldCountryName(params.selectedCountry)) {
+    return null;
+  }
+
+  return { aoe4WorldCountry: canonico, selectedCountry: params.selectedCountry };
+}
 
 /** Copia nueva de la lista por defecto: quien la reciba puede recortarla. */
 function defaultCountries(): string[] {

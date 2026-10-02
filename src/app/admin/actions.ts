@@ -4,7 +4,9 @@ import type { User } from "@supabase/supabase-js";
 import type { SyncSummary } from "@/lib/aoe4world/sync";
 import type { ManualSyncLock } from "@/lib/manual-sync";
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
+import type { CampoEditado } from "@/lib/admin-actions";
 import { puntos, recordAdminAction } from "@/lib/admin-actions";
 import { reevaluatePlayerAlerts } from "@/lib/alerts/evaluate";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
@@ -67,7 +69,20 @@ export type AdminActionResult = {
   message: string | null;
 };
 
-/** Estado del formulario de alta, que solo distingue "hay error" de "no hay error". */
+/**
+ * Estado de los formularios de jugador del panel, que solo distinguen "hay error" de
+ * "no hay error".
+ *
+ * Lo comparten `createPlayer` y `updatePlayer` porque son el mismo formulario con
+ * campos distintos: el alta empieza una fila y la edición reescribe cinco campos de
+ * una que ya existe. Los dos necesitan el mismo par de mensajes, y con el mismo
+ * reparto: el `error` es lo que hay que corregir y se pinta en `role="alert"`
+ * **sin perder lo escrito**, y el `message` es el aviso de que sí se ha hecho —el
+ * alta ya está, la clasificación todavía no— y va en `role="status"`, porque no
+ * avisa de un fallo.
+ *
+ * No lleva errores por campo: es un único mensaje, como el alta.
+ */
 export type PlayerFormState = {
   error: string | null;
   /**
@@ -209,7 +224,16 @@ const COUNTRY_UNKNOWN_ERROR =
  * que escribió no era un canal, y esas dos cosas son distintas para quien después
  * busca a un participante para enlazarlo. Vacío sí es `null`, que es lo que la columna
  * significa.
+ *
+ * El texto es el que ya usa la inscripción pública, y no uno propio: los tres
+ * formularios admiten el mismo conjunto de formas y un canal que uno enseña a escribir
+ * y otro acepta en silencio sería un formulario que enseña algo falso. `createPlayer`
+ * y `updatePlayer` comparten, además, la misma constante: el alta y la edición del
+ * mismo panel no pueden validar el campo de una manera y la otra de otra.
  */
+const TWITCH_INVALID_ERROR =
+  "El canal de Twitch solo admite letras, números y guion bajo, de 3 a 25 caracteres.";
+
 const YOUTUBE_INVALID_ERROR =
   "Ese canal de YouTube no vale. Se puede escribir el @nombre del canal (3 a 30 letras, números, punto, guion o guion bajo) o la dirección del canal.";
 
@@ -273,11 +297,12 @@ function actorEmail(user: User): string {
  * a propósito: traer las partidas es una llamada a AoE4World de varios segundos, y
  * meterla dentro dejaría la fila bloqueada todo ese rato.
  *
- * Los canales de YouTube y de Kick se guardan **junto al de Twitch y con su mismo
- * criterio**: opcionales, y un valor escrito que no se puede guardar es un error en
- * lugar de un `null` silencioso (ver los mensajes al principio de esta acción).
- * Que no haya respaldo desde el perfil de AoE4World es justamente lo que hace que
- * un canal mal escrito no se pueda arreglar solo en la siguiente pasada.
+ * Los tres canales de directo —Twitch, YouTube y Kick— se validan con **el mismo
+ * criterio y los mismos mensajes** que la edición (`updatePlayer`): opcionales, y
+ * un valor escrito que no se puede guardar es un error en lugar de un `null`
+ * silencioso (ver los mensajes al principio de esta acción). Que no haya respaldo
+ * desde el perfil de AoE4World es justamente lo que hace que un canal mal escrito no
+ * se pueda arreglar solo en la siguiente pasada.
  *
  * La lista de países se lee **fuera** de la transacción y solo si lo obligatorio ya
  * vale, por lo mismo que los validadores: es una lectura de `Setting` y no tiene
@@ -289,15 +314,19 @@ export async function createPlayer(
 ): Promise<PlayerFormState> {
   const admin = await requireAdmin();
 
-  const profileId = parseProfileId(formData.get("profileId"));
-  const name = parseName(formData.get("name"));
-  const twitchChannel = parseTwitchChannel(formData.get("twitchChannel"));
+  // `readField` en todos, como en la edición: `formData.get` también puede
+  // devolver un `File`, y el parser recibiría `"[object File]"`, que es un valor
+  // escrito mal con otra forma. En el nombre eso además pasaba la validación.
+  const profileId = parseProfileId(readField(formData, "profileId"));
+  const name = parseName(readField(formData, "name"));
+  const twitchRaw = readField(formData, "twitchChannel");
+  const twitchChannel = parseTwitchChannel(twitchRaw);
   const youtubeRaw = readField(formData, "youtubeChannel");
-  const youtubeChannel = parseYoutubeChannel(formData.get("youtubeChannel"));
+  const youtubeChannel = parseYoutubeChannel(youtubeRaw);
   const kickRaw = readField(formData, "kickChannel");
-  const kickChannel = parseKickChannel(formData.get("kickChannel"));
+  const kickChannel = parseKickChannel(kickRaw);
   const countryRaw = readField(formData, "country");
-  const statusRaw = String(formData.get("status") ?? "APPROVED");
+  const statusRaw = readField(formData, "status") || "APPROVED";
   const status =
     statusRaw === "PENDING" || statusRaw === "REJECTED" ? statusRaw : "APPROVED";
 
@@ -309,9 +338,14 @@ export async function createPlayer(
     return { error: "El nombre es obligatorio (máx. 64 caracteres).", message: null };
   }
 
-  // Canales de YouTube y de Kick: vacíos son `null` (son opcionales, como el de
-  // Twitch) y un valor que no se puede guardar es un error. Se comprueban aquí, antes
-  // de leer la lista de países, porque son validaciones gratis.
+  // Los tres canales, con el mismo criterio y en el mismo orden que la edición: un
+  // vacío es `null` y un valor escrito que no se puede guardar es un error de su
+  // campo, no un `null` silencioso. Se comprueban antes de leer la lista de países
+  // porque son validaciones gratis.
+  if (twitchChannel === null && twitchRaw !== "") {
+    return { error: TWITCH_INVALID_ERROR, message: null };
+  }
+
   if (youtubeChannel === null && youtubeRaw !== "") {
     return {
       error: isLegacyYoutubeUrl(youtubeRaw) ? YOUTUBE_LEGACY_URL_ERROR : YOUTUBE_INVALID_ERROR,
@@ -412,6 +446,341 @@ export async function createPlayer(
   revalidatePath("/admin");
 
   return { error: null, message };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Edición de jugador                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Los cinco campos que la edición puede cambiar, tal y como están en la fila. */
+type CamposEditables = {
+  name: string;
+  twitchChannel: string | null;
+  youtubeChannel: string | null;
+  kickChannel: string | null;
+  country: string | null;
+};
+
+/**
+ * Qué campo editable ha cambiado de valor, con su rótulo y sus dos valores.
+ *
+ * Va en el mensaje de vuelta porque "se han guardado los cambios" no dice **qué** se
+ * ha cambiado, y en una fila con cinco campos editables la diferencia entre "ha
+ * guardado" y "no había nada que guardar" es justo lo que no se ve. Además decide
+ * si hace falta escribir: si la lista sale vacía, los valores ya eran estos y no hay
+ * nada que hacer.
+ *
+ * Devuelve el campo de la columna además del rótulo porque el rastro de
+ * `AdminAction` los necesita los dos: la frase lleva el rótulo y el `details` lleva
+ * el nombre de la columna con el valor de antes y el de después.
+ */
+function camposQueCambian(antes: CamposEditables, despues: CamposEditables): CampoEditado[] {
+  const cambios: CampoEditado[] = [
+    ...campoSiCambia(antes.name, despues.name, "name", "nombre"),
+    ...campoSiCambia(
+      antes.twitchChannel,
+      despues.twitchChannel,
+      "twitchChannel",
+      "canal de Twitch",
+    ),
+    ...campoSiCambia(
+      antes.youtubeChannel,
+      despues.youtubeChannel,
+      "youtubeChannel",
+      "canal de YouTube",
+    ),
+    ...campoSiCambia(antes.kickChannel, despues.kickChannel, "kickChannel", "canal de Kick"),
+    ...campoSiCambia(antes.country, despues.country, "country", "país"),
+  ];
+
+  return cambios;
+}
+
+/**
+ * Un cambio, o nada.
+ *
+ * Va en un array porque el orden de la comparación es el del formulario y no el
+ * alfabético: es el orden en el que se leen los campos en el mensaje y en la frase
+ * del historial.
+ */
+function campoSiCambia(
+  antes: string | null,
+  despues: string | null,
+  campo: string,
+  etiqueta: string,
+): CampoEditado[] {
+  return antes === despues ? [] : [{ campo, etiqueta, antes, despues }];
+}
+
+/**
+ * ¿El fallo es que la fila ya no está?
+ *
+ * Es la carrera real de esta acción: entre que se lee la fila y se escribe, otro
+ * admin puede haberla borrado, y el `update` falla con `P2025` —"registro no
+ * encontrado"— en vez de con un fallo de la base. Sin distinguirlo, borrar a alguien
+ * saldría como "no se ha podido guardar", que no dice qué ha pasado ni que la lista
+ * de la pantalla ya no es la de antes.
+ */
+function filaInexistente(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025";
+}
+
+/**
+ * Corrige los datos de un participante que ya está en el panel.
+ *
+ * ## Qué escribe y qué no
+ *
+ * Escribe **cinco** campos —`name`, `twitchChannel`, `youtubeChannel`,
+ * `kickChannel` y `country`— y nada más. Se quedan fuera a propósito:
+ *
+ * - **El estado**, que ya tiene su aprobar/rechazar/eliminar y cuya decisión tiene
+ *   su propio recorrido en la cola de revisión.
+ * - **`profileId`**, que es la identidad del jugador en AoE4World y además único:
+ *   cambiarlo sería cambiar de persona, y todas sus partidas vienen colgadas de él.
+ * - **`aoe4WorldName`, el avatar y todo lo que escribe el worker** (elo, división,
+ *   racha, `*IsLive`): son datos de la API, y quien los trae es el sincronizador.
+ * - **Puntos y ranking**, que ni se leen.
+ *
+ * ## Por eso no recalcula ni trae partidas
+ *
+ * Al revés que el alta, que sí trae las partidas de un jugador recién aprobado.
+ * Ninguno de los cinco campos entra en el motor de puntos ni en el de alertas —
+ * `PlayerScore` y `Alert` hablan de partidas, no de cómo se llama alguien— así que
+ * no hay nada derivado que se quede viejo y ninguna llamada a AoE4World que hacer.
+ * Revalida solo `/admin`, donde vive la lista; la web pública es `force-dynamic` y
+ * relee en cada visita.
+ *
+ * ## El formulario es una foto completa de la fila
+ *
+ * Los cinco campos se **reescriben** con lo que venga y un vacío es `null`: es el
+ * mismo criterio del alta, donde un canal vacío significa "no tiene canal" y un
+ * país vacío "no lo sabemos". Aquí **no hay un "no tocado"**, y es deliberado: si
+ * faltara el campo en el `FormData` contaría como vacío, igual que en el alta.
+ *
+ * La alternativa —escribir solo los campos que vinieran— daría dos contratos para
+ * los mismos campos en el mismo panel, y el segundo tendría una trampolínea: un
+ * formulario que por un descuido no mande el campo le borraría el canal sin que
+ * nadie lo pidiera. Aquí no puede pasar: quien llama es un admin (lo comprueba
+ * `requireAdmin`) y el formulario se pinta con los valores que ya trae la fila, así
+ * que un vacío es siempre una decisión de quien edita.
+ *
+ * ## Validación
+ *
+ * Los mismos parsers y los mismos textos del alta (`createPlayer`), con el país
+ * **opcional**: vacío es `null` y un valor fuera de la lista admitida es un error,
+ * no un `null` en silencio. Ni el país ni los canales de YouTube y Kick tienen
+ * respaldo en el perfil de AoE4World, así que un valor guardado a escondidas no lo
+ * arregla nadie en la siguiente pasada; del de Twitch hay `Player.twitchUrl` como
+ * plan B, pero sale de la ladder y no de la columna que escribe el panel.
+ *
+ * Los **tres** canales, incluido el de Twitch, se rechazan aquí y en el alta con el
+ * mismo criterio y la misma constante. La asimetría que hubo —el alta guardaba el
+ * canal de Twitch inválido como `null` en silencio— era una incoherencia dentro del
+ * mismo panel: dos formularios para el mismo campo con dos reglas, y el que peor
+ * salía era el alta, que es donde el valor se escribe la primera vez y donde guardarlo
+ * mal no lo vuelve a corregir nadie.
+ *
+ * ## Concurrencia
+ *
+ * **Aprobar, rechazar y editar no se pisan**, y no hace falta ninguna
+ * coordinación: cada acción escribe un **conjunto de columnas disjunto** —el
+ * estado por un lado, los cinco campos por otro— así que el `UPDATE` de una no
+ * puede deshacer lo que escribió la otra. Es justo lo contrario del caso que sí
+ * necesita cuidado, la reinscripción de `/participar`, donde el estado **cambia** y
+ * por eso su `UPDATE` filtra por él para no pisar una aprobación.
+ *
+ * Sobre `Player.updatedAt` no se hace control de versión, y es una decisión: el
+ * worker escribe la fila de **cada** jugador aprobado en **cada** pasada
+ * (`ladder.ts`), así que ese campo se mueve solo cada cinco minutos y compararlo
+ * daría conflictos falsos que no significarían nada.
+ *
+ * Lo que sí queda es lo normal de cualquier formulario de edición: si dos admins
+ * editan la misma fila a la vez, gana el último `UPDATE`. El valor que se acaba
+ * guardando es el que se ve en la fila, y por eso el mensaje dice qué campos han
+ * cambiado.
+ *
+ * ## Qué deja en el rastro
+ *
+ * Una fila de `AdminAction` (`PLAYER_EDITED`), escrita **en la misma transacción**
+ * que el `UPDATE`: o se ven los dos o no se ve ninguno. Encaja en el criterio del
+ * enum —cambia datos que alguien más ve— porque el nombre y los canales salen en la
+ * clasificación y en `/partidas`, así que una edición no es una nota privada del
+ * panel. La frase la redacta `admin-actions.ts` (que es donde se redactan todas, para
+ * que el historial y la pantalla no puedan divergir) y lleva **qué campos** han
+ * cambiado, que es lo que se viene a mirar cuando alguien pregunta por qué un
+ * participante aparece con otro nombre.
+ *
+ * Solo cuando hay cambios de verdad: abrir el formulario y cerrarlo sin tocar nada no
+ * escribe ni el `UPDATE` ni la fila.
+ */
+export async function updatePlayer(
+  _prevState: PlayerFormState,
+  formData: FormData,
+): Promise<PlayerFormState> {
+  // Lo primero y por el motivo de siempre: esta acción es un endpoint público y el
+  // `playerId` viene del `FormData`, o sea de quien la llama. El usuario se guarda
+  // porque el rastro necesita quién editó, que es la columna `actorEmail`.
+  const admin = await requireAdmin();
+
+  const playerId = readField(formData, "playerId");
+
+  if (!playerId) {
+    return { error: "No se ha podido saber qué jugador hay que editar.", message: null };
+  }
+
+  // `readField` en todos: `FormData.get` también puede devolver un `File`, y el
+  // parser recibiría `"[object File]"`, que es un valor escrito mal con otra forma.
+  const name = parseName(readField(formData, "name"));
+  const twitchRaw = readField(formData, "twitchChannel");
+  const twitchChannel = parseTwitchChannel(twitchRaw);
+  const youtubeRaw = readField(formData, "youtubeChannel");
+  const youtubeChannel = parseYoutubeChannel(youtubeRaw);
+  const kickRaw = readField(formData, "kickChannel");
+  const kickChannel = parseKickChannel(kickRaw);
+  const countryRaw = readField(formData, "country");
+
+  if (!name) {
+    return { error: "El nombre es obligatorio (máx. 64 caracteres).", message: null };
+  }
+
+  // Los tres canales, con el criterio del alta: vacíos son `null` y un valor escrito
+  // que no se puede guardar es un error de su campo. Se comprueban antes de leer la
+  // lista de países porque son validaciones gratis.
+  if (twitchChannel === null && twitchRaw !== "") {
+    return { error: TWITCH_INVALID_ERROR, message: null };
+  }
+
+  if (youtubeChannel === null && youtubeRaw !== "") {
+    return {
+      error: isLegacyYoutubeUrl(youtubeRaw) ? YOUTUBE_LEGACY_URL_ERROR : YOUTUBE_INVALID_ERROR,
+      message: null,
+    };
+  }
+
+  if (kickChannel === null && kickRaw !== "") {
+    return { error: KICK_INVALID_ERROR, message: null };
+  }
+
+  /**
+   * El país, que es el único campo cuya validación necesita **leer** algo.
+   *
+   * Solo se lee `Setting` cuando el envío trae un país, y es a propósito: vacío es
+   * `null` sin tocar nada, así que un corte al leer la lista no debe impedir
+   * corregir el nombre o un canal. Igual que en el alta, si la lectura falla no se
+   * valida en silencio contra `DEFAULT_COUNTRIES` —esa lista la cambia la
+   * organización— sino que se pide reintentar.
+   */
+  let country: string | null = null;
+
+  if (countryRaw !== "") {
+    let countries: string[];
+
+    try {
+      countries = await readCountries();
+    } catch (error) {
+      logDatabaseFailure("admin/updatePlayer/paises", error);
+
+      return { error: COUNTRIES_UNAVAILABLE_MESSAGE, message: null };
+    }
+
+    country = parseCountry(countryRaw, countries);
+
+    if (country === null) {
+      return { error: COUNTRY_UNKNOWN_ERROR, message: null };
+    }
+  }
+
+  let actual: ({ profileId: number } & CamposEditables) | null;
+
+  try {
+    actual = await db.player.findUnique({
+      where: { id: playerId },
+      select: {
+        name: true,
+        profileId: true,
+        twitchChannel: true,
+        youtubeChannel: true,
+        kickChannel: true,
+        country: true,
+      },
+    });
+  } catch (error) {
+    logDatabaseFailure("admin/updatePlayer", error);
+
+    return { error: SAVE_FAILED_MESSAGE, message: null };
+  }
+
+  // La fila se lee antes de escribir por dos cosas: para poder decir qué campos han
+  // cambiado (y no escribir nada si no cambia ninguno) y para que un jugador que ya
+  // no está salga con su propio mensaje en vez de con el de un fallo de guardado.
+  if (actual === null) {
+    return { error: "Ese jugador ya no está en el panel.", message: null };
+  }
+
+  // `const` a propósito: se usa en el mensaje y en la comparación, y TypeScript solo
+  // estrecha un `let` si no puede haber sido reasignado entre medias.
+  const player = actual;
+
+  const despues: CamposEditables = {
+    name,
+    twitchChannel,
+    youtubeChannel,
+    kickChannel,
+    country,
+  };
+
+  const cambios = camposQueCambian(player, despues);
+
+  // Abrir el formulario y cerrarlo sin tocar nada es lo más normal del mundo —el
+  // país se elige de una lista y los canales vienen ya en su forma canónica, así que
+  // casi siempre se vuelve a enviar lo mismo—, así que sale como lo que es, un
+  // acierto, y sin escribir una fila que ya tenía esos valores. El rastro va atado a
+  // esta salida: una edición sin cambios tampoco es una fila de `AdminAction`.
+  if (cambios.length === 0) {
+    return {
+      error: null,
+      message: `No había ningún cambio que guardar en ${player.name} (AoE4World ${player.profileId}).`,
+    };
+  }
+
+  try {
+    // El `UPDATE` y el rastro van en la **misma transacción**, como en `createPlayer`
+    // y en las demás acciones: o se ven los dos o no se ve ninguno. Un historial que
+    // dice "Edición de X" sin cambio, o un cambio sin su línea, serían los dos estados
+    // que el rastro no puede describir.
+    await db.$transaction(async (tx) => {
+      // Solo los cinco campos, nunca el resto del `data` de un `Player`: lo que no se
+      // nombra aquí no lo toca esta acción.
+      await tx.player.update({ where: { id: playerId }, data: despues });
+
+      await recordAdminAction(tx, {
+        type: AdminActionType.PLAYER_EDITED,
+        actorEmail: actorEmail(admin),
+        targetId: playerId,
+        name: despues.name,
+        profileId: player.profileId,
+        cambios,
+      });
+    });
+  } catch (error) {
+    if (filaInexistente(error)) {
+      return { error: "Ese jugador ya no está en el panel.", message: null };
+    }
+
+    logDatabaseFailure("admin/updatePlayer", error);
+
+    return { error: SAVE_FAILED_MESSAGE, message: null };
+  }
+
+  revalidatePath("/admin");
+
+  return {
+    error: null,
+    message: frase(
+      `Se han guardado los cambios de ${player.name} (AoE4World ${player.profileId}).`,
+      `Campos: ${cambios.map((cambio) => cambio.etiqueta).join(", ")}.`,
+    ),
+  };
 }
 
 /* -------------------------------------------------------------------------- */

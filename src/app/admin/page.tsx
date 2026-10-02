@@ -204,7 +204,7 @@ export default async function AdminPage() {
             body="La base de datos no ha respondido. El alta sigue disponible; vuelve a intentarlo en unos minutos para ver el listado."
           />
         ) : (
-          <ParticipantsBrowser participants={participants} />
+          <ParticipantsBrowser participants={participants} countries={countries} />
         )}
       </section>
     </div>
