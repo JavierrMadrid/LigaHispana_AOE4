@@ -490,7 +490,7 @@ versiona: lleva la contraseña) y [`scripts/deploy-worker.mjs`](../scripts/deplo
 exporta antes de lanzar el CLI, que es el paso `deploy` de `npm run deploy`. (No vale hacerlo con
 `node --import`: `opennextjs-cloudflare` es un *shim* de `node_modules/.bin`, no un módulo, y `node`
 lo resuelve con `ERR_MODULE_NOT_FOUND`.) Con Workers Builds ya conectado (ver
-[Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)),
+[Workers Builds: `main` despliega y los previews están desactivados](#workers-builds-main-despliega-y-los-previews-están-desactivados)),
 esa misma variable hay que ponerla en *Build variables and secrets* del trigger, o el build falla al
 ver el binding. No es la única: ese sitio del panel tiene su propia lista y no es el mismo que el
 de los secretos del Worker. Está en
@@ -555,15 +555,16 @@ Lo caro no es el mensaje, es lo que pasa mientras el build falla: **`main` no de
 se queda sirviendo la versión anterior**. Pasó dos días así, con el repositorio en `main` y el
 Worker en un número de versión anterior, sin que nada en la web lo dijera.
 
-### Las build variables son por trigger, y hoy solo hay uno
+### Las build variables son por trigger, y el de `main` es el único
 
 Las *build variables and secrets* cuelgan del **trigger** de Workers Builds, no del Worker. El
 trigger único tiene `branch_includes: ["main"]`, así que **`main` es la única rama que construye y
 despliega, y es el único sitio donde hay que ponerlas**. Consecuencia que conviene tener delante: el
 bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc) está escrito y es correcto, pero **hoy
-no lo ejecuta ningún build**, porque no hay trigger para las ramas. Si se añade uno, ese trigger
-necesita **sus propias** build variables y sus propios secretos, porque de un trigger no se hereda
-nada.
+no lo ejecuta ningún build de Cloudflare**, porque los previews están desactivados (ver
+[Workers Builds: `main` despliega y los previews están desactivados](#workers-builds-main-despliega-y-los-previews-están-desactivados)).
+Solo lo usa `npm run preview` en local. Si algún día se vuelven a activar, ese trigger necesita
+**sus propias** build variables y sus propios secretos, porque de un trigger no se hereda nada.
 
 ### Ruido conocido del log: `ERROR Failed to copy node_modules/...`
 
@@ -646,7 +647,7 @@ npm run preview    # build + preview local del Worker
 
 Este camino es el de **una máquina con el repositorio**. En producción despliega el *trigger* de
 Workers Builds (ver
-[Workers Builds: `main` despliega y las ramas hacen Preview](#workers-builds-main-despliega-y-las-ramas-hacen-preview)),
+[Workers Builds: `main` despliega y los previews están desactivados](#workers-builds-main-despliega-y-los-previews-están-desactivados)),
 y ahí el envoltorio no se ejecuta: es el *pipeline* el que pone la variable de Hyperdrive, desde
 *Build variables and secrets*. El detalle de las dos listas del panel está en
 [Los dos sitios del panel: secretos del Worker y build variables](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
@@ -667,37 +668,53 @@ y ahí el envoltorio no se ejecuta: es el *pipeline* el que pone la variable de 
 Lo que hay que hacer en la base de datos antes o después de esto, en
 [`docs/OPERACION.md`](./OPERACION.md#requisitos-operativos-de-un-despliegue).
 
-## Workers Builds: `main` despliega y las ramas hacen Preview
+## Workers Builds: `main` despliega y los previews están desactivados
 
 El repositorio está conectado a **Workers Builds**, así que el despliegue es automático. Pero Workers
 Builds no repite el mismo despliegue en todas las ramas: en la rama de producción (`main`) ejecuta
-`npx wrangler deploy`, y en **cualquier otra** `npx wrangler preview`, que crea un *Preview*: un
-entorno aislado del mismo Worker, con URL propia (`<preview>-ligahispana-aoe4.<subdominio>.workers.dev`,
-con `X-Robots-Tag: noindex`) y con sus propias variables, secretos y bindings.
+`npx opennextjs-cloudflare build` y a continuación `npx wrangler deploy`, y en **cualquier otra**
+ejecutaría `npx wrangler preview`, que crea un *Preview*: un entorno aislado del mismo Worker, con
+URL propia (`<preview>-ligahispana-aoe4.<subdominio>.workers.dev`, con `X-Robots-Tag: noindex`) y
+con sus propias variables, secretos y bindings.
 
-**Hoy solo hay un trigger, y escucha `main`** (`branch_includes: ["main"]`). Es decir: `main` es la
-única rama que construye y despliega, y **la única para la que existen build variables**. Todo lo
-que dice este documento sobre `wrangler preview` describe cómo **sería**, no lo que está pasando: el
-bloque `previews` está escrito y correcto, pero **ningún build lo ejecuta** porque no hay trigger para
-las ramas. Si algún día se añade, ese trigger necesita sus propias build variables y sus propios
-secretos, y el comando pasa a ser `wrangler preview` (ver abajo). Las dos listas y lo que va en cada
-una están en
-[Los dos sitios del panel: secretos del Worker y build variables](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
+**Ese segundo camino está desactivado a propósito** (`previews_enabled: false`, 2 de octubre de
+2026). El motivo no es el precio ni el límite del plan, que en plan Free aguantaría de sobra: es que
+**ningún build de rama llegó a funcionar jamás**. El trigger de previews traía
+`build_command: npm run build`, que es solo `next build` y no genera el bundle de OpenNext, así que
+el `npx wrangler preview` que venía detrás moría siempre en el paso de deploy:
 
-Ese cambio de comando es la causa de un error que no tiene nada que ver con el código. **`wrangler
-preview` exige un bloque `previews` en `wrangler.jsonc`, y sin él el build muere** con:
+```txt
+✘ [ERROR] The entry-point file at ".open-next/worker.js" was not found.
+```
+
+Ese es el error que salía en rojo en cada pull request. Poner `npx opennextjs-cloudflare build` en
+el trigger de previews lo habría arreglado, pero los previews no hacen falta para nada, y su trigger
+además arrastra una configuración de build propia (tenía **cero** variables de build, y
+`wrangler preview` emula Hyperdrive igual que `deploy`, así que también habría hecho falta
+`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`).
+
+**Las pull requests las verifica ahora GitHub Actions**, en
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml): `npm ci`, `npm run lint` y
+`npm run build`, en un push a cualquier rama. No se dispara en `main`, porque ese despliegue ya lo
+hace el trigger de Workers Builds, que es el único que construye el bundle de OpenNext. El
+repositorio es público, así que los minutos de Actions no se cobran.
+
+Lo que queda de todo esto es el bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc), que
+sigue escrito y sigue haciendo falta, pero **para un solo uso: `npm run preview` en local**. Ningún
+build de Cloudflare lo ejecuta ya. Y sigue siendo obligatorio para ese comando, que lo exige desde
+`wrangler` 4.135 y sin él muere con:
 
 ```txt
 ✘ [ERROR] Your Wrangler configuration is missing a `previews` block. Add the following to your configuration file:
 ```
 
-No es un aviso, es un error, y en CI no hay quien conteste al prompt que wrangler ofrece en local
-para escribir el bloque por ti (en local te lo añade solo, con los valores propuestos marcados como
-`<REPLACE_ME>`). El bloque apareció en `wrangler` 4.135 y el proyecto ya va por 4.143, así que salta
-sin avisar.
+Es error, no aviso. En local el prompt que wrangler ofrece para escribir el bloque por ti (con los
+valores propuestos marcados como `<REPLACE_ME>`) sí sirve; lo que no salvaba era depender de él desde
+un proceso no interactivo como el de un build. El bloque apareció en `wrangler` 4.135 y el proyecto
+ya va por 4.143, así que salta sin avisar.
 
 Lo que resuelve el bloque `previews` del [`wrangler.jsonc`](../wrangler.jsonc), y son las tres cosas
-que hacen falta aquí:
+que hacen falta en el preview local:
 
 - **Los bindings no se heredan del nivel superior.** Hay que declararlos dentro: `HYPERDRIVE` e
   `IMAGES`. Sin `HYPERDRIVE` el build pasa, pero el Preview sale entero en
@@ -709,11 +726,12 @@ que hacen falta aquí:
   ponerlos a mano (`npx wrangler preview secret put <NOMBRE> --name <preview>`). Las `NEXT_PUBLIC_*`
   sí llegan, porque van en *Build variables and secrets* y Next las compila dentro del bundle.
 
-**Que el `HYPERDRIVE` del Preview apunte a la base de producción es una decisión, no un descuido.** El
-Preview sirve para mirar la interfaz de una rama (streams, clasificaciones) y sin base no hay nada
-que ver. El riesgo está acotado: el cron no corre en un Preview y las rutas que escriben piden
-`CRON_SECRET`, que un Preview no tiene, así que ni siquiera llegan a autenticarse. Lo que sí conviene
-tener presente es que `WORKER_SELF_REFERENCE` sigue llamando al **despliegue de producción**, y que
-quien se autentique en un Preview escribe en la base de producción. Para aislarlo del todo: crear
-otro config de Hyperdrive sobre una base de pruebas y cambiar el `id` de `previews.hyperdrive` (en
-plan Free no se cobra por config; el límite son las mismas 100.000 consultas al día).
+**Que el `HYPERDRIVE` del bloque `previews` apunte a la base de producción es una decisión, no un
+descuido.** Es lo que hace que `npm run preview` en local sirva para mirar la interfaz de verdad
+(streams, clasificaciones): sin base no hay nada que ver. El riesgo está acotado, porque un preview no
+dispara los Cron Triggers y las rutas que escriben piden `CRON_SECRET`, que un entorno de preview no
+tiene, así que ni siquiera llegan a autenticarse. Lo que sí conviene tener presente es que
+`WORKER_SELF_REFERENCE` sigue llamando al **despliegue de producción**, y que quien se autentique en
+el preview local escribe en la base de producción. Para aislarlo del todo: crear otro config de
+Hyperdrive sobre una base de pruebas y cambiar el `id` de `previews.hyperdrive` (en plan Free no se
+cobra por config; el límite son las mismas 100.000 consultas al día).

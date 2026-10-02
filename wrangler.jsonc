@@ -144,40 +144,34 @@
       "persist": true
     }
   },
-  // Previews: el despliegue que hace Workers Builds en las ramas que no son la de
-  // produccion.
+  // Previews: el despliegue aislado de una rama. Hoy **ningun build de Cloudflare lo
+  // ejecuta**: los previews de Workers Builds estan desactivados a proposito
+  // (`previews_enabled: false`), asi que este bloque solo sirve para `npm run preview` en
+  // local.
   //
-  // Workers Builds no repite el despliegue: en la rama de produccion ejecuta
-  // `wrangler deploy`, y en cualquier otra `wrangler preview`, que crea un entorno
-  // aislado del mismo Worker. Y el bloque `previews` **no es opcional** desde wrangler
-  // 4.135: sin el, el build muere con "Your Wrangler configuration is missing a
-  // `previews` block". Es error, no aviso, y en CI no hay quien conteste al prompt que
-  // wrangler ofrece en local para escribir el bloque por ti.
+  // El motivo de desactivarlos: el trigger de previews traia
+  // `build_command: npm run build`, que es solo `next build` y no genera el bundle de
+  // OpenNext, asi que el `npx wrangler preview` que venia detras moria en todas las pull
+  // requests con `The entry-point file at ".open-next/worker.js" was not found`. Las
+  // verifican GitHub Actions (lint y build) en .github/workflows/ci.yml. Ver
+  // docs/DESPLIEGUE.md, "Workers Builds: `main` despliega y los previews estan
+  // desactivados".
   //
-  // Este bloque esta escrito y es correcto, pero **hoy no lo ejecuta ningun build**:
-  // el unico trigger de Workers Builds escucha `main` (`branch_includes:
-  // ["main"]`) y en `main` el comando es `wrangler deploy`. Si algun dia se anade un
-  // trigger para las ramas, este bloque entra en juego y ese trigger necesita sus
-  // propias build variables y sus propios secretos.
+  // El bloque se conserva porque `wrangler preview` **lo exige**: sin el, desde wrangler
+  // 4.135 el comando muere con "Your Wrangler configuration is missing a `previews` block".
+  // Es error, no aviso.
   //
   // Los bindings **no se heredan** del nivel superior, asi que se declaran aqui.
   // `assets`, `compatibility_*` y `migrations` se quedan arriba, y los Cron Triggers no
   // se replican: apuntan a produccion, luego un Preview no puede disparar el sync.
   //
-  // `HYPERDRIVE` apunta a la misma base de produccion, y a proposito: el Preview sirve
-  // para mirar la interfaz de una rama (streams, clasificaciones) y sin base no hay nada
-  // que ver. Es trafico de lectura; las escrituras se quedan sin autenticacion porque los
+  // `HYPERDRIVE` apunta a la misma base de produccion, y a proposito: el preview local sirve
+  // para mirar la interfaz de verdad (streams, clasificaciones) y sin base no hay nada que
+  // ver. Es trafico de lectura; las escrituras se quedan sin autenticacion porque los
   // secretos del panel no se heredan, y `WORKER_SELF_REFERENCE` sigue llamando al
   // despliegue de produccion. Para aislarlo de verdad: crear otro config de Hyperdrive
   // sobre una base de pruebas y cambiar el `id` de aqui. En plan Free no se cobra por
   // config, el limite es el mismo (100.000 consultas al dia).
-  //
-  // Ojo con el despliegue automatico: la emulacion de wrangler tambien exige
-  // `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` en *Build variables and
-  // secrets* del trigger, o el build falla al emular el binding. Y las build variables
-  // son por trigger: un trigger de Preview tendria que tener las suyas, no las del de
-  // `main`. Ver docs/DESPLIEGUE.md, "Los dos sitios del panel: secretos del Worker y
-  // build variables" y "La base de datos en el Worker: Hyperdrive".
   "previews": {
     "hyperdrive": [
       {

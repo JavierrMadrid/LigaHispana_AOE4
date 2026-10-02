@@ -1,0 +1,61 @@
+name: Verificación de pull requests
+
+# Comprueba las pull requests: `npm ci`, `npm run lint` y `npm run build`.
+#
+# No se dispara en los pushes a `main` porque ese despliegue ya lo hace el
+# trigger de Workers Builds, que es además el único sitio donde se construye de
+# verdad el bundle de OpenNext y el Worker. Aquí no hay nada que desplegar, solo
+# que comprobar que el código compila y pasa el linter.
+#
+# Los previews de Workers Builds están desactivados a propósito (su build usaba
+# `npm run build` en vez de `npx opennextjs-cloudflare build`, así que
+# `wrangler preview` moría buscando `.open-next/worker.js`), de modo que este
+# workflow es la única verificación automática de una pull request. Ver
+# docs/DESPLIEGUE.md, "Workers Builds: `main` despliega y los previews están
+# desactivados".
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# El repositorio es público y este workflow solo lee el código del pull request:
+# no necesita ningún otro permiso.
+permissions:
+  contents: read
+
+# Un push nuevo en la misma pull request cancela la ejecución anterior: sus
+# minutos ya no sirven para el commit que se está comprobando.
+concurrency:
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # La 22 es la versión con la que se desarrolla y con la que se ha
+      # comprobado que este workflow pasa; el README pide 20 o superior.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # `npm ci` corre el `postinstall` del `package.json`, que es el
+      # `prisma generate` que deja el cliente en `src/generated/prisma`. Sin él
+      # el `next build` no encuentra el cliente que importan las páginas.
+      - run: npm ci
+
+      - run: npm run lint
+
+      # No se definen variables de entorno, ni `NEXT_PUBLIC_*` ni `DATABASE_URL`:
+      # `next build` pasa sin ninguna. Las páginas que leen de Postgres son
+      # dinámicas y se renderizan en la petición, y el cliente de Prisma se crea
+      # de forma perezosa, así que el build no abre ninguna conexión. Las
+      # `NEXT_PUBLIC_*` solo se necesitan para el *bundle* que se despliega, que
+      # en una pull request no hay: sin ellas `NEXT_PUBLIC_SITE_URL` cae a
+      # `http://localhost:3000` y los metadatos que se compilan aquí se
+      # descartan al terminar el job.
+      - run: npm run build
