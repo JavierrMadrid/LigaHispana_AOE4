@@ -101,6 +101,26 @@ export function kickChannelUrl(slug: string): string {
 const LADDER_SIZE = /^rm_(\d)v(\d)$/i;
 
 /**
+ * La FFA, reconocida por **familia** y no por igualdad.
+ *
+ * La API no la publica siempre con el mismo nombre: aparece como `qm_ffa`, como
+ * `ffa_ffa` y con variantes que llegan cuando solo viene `kind` (`qm_ffa_nomad`),
+ * y las tres son la misma manera de jugar. Por eso el nombre no se compara
+ * entero: `ffa` tiene que ser un segmento del valor, con guiones bajos a los
+ * lados, para no engancharse a una subcadena cualquiera.
+ *
+ * Ninguna familia de ladder lleva `ffa` en el nombre, así que esta comprobación
+ * no puede quitarle el tamaño a un ranked: `rm_*` se resuelve antes y por otras
+ * ramas.
+ */
+const FFA_FAMILY = /(^|_)ffa(_|$)/;
+
+/** ¿Es este valor el nombre de una familia FFA, con cualquiera de sus variantes? */
+function isFfaFamily(value: string | null): boolean {
+  return value !== null && FFA_FAMILY.test(value);
+}
+
+/**
  * Etiqueta del modo de una partida a partir de lo que publica AoE4World.
  *
  * `Match.mode` ya viene resuelto a familia (`rm_solo` / `rm_team`), pero
@@ -108,6 +128,12 @@ const LADDER_SIZE = /^rm_(\d)v(\d)$/i;
  * información más precisa para quien está viendo la partida. Si llega un modo
  * que no conocemos se devuelve tal cual, en vez de esconderlo: mejor un código
  * raro que un dato que no cuadra.
+ *
+ * La **FFA es la excepción**, y es la única familia no rankeada con etiqueta
+ * propia: se reconoce por familia (`FFA_FAMILY`) y se rotula "FFA" en vez de
+ * soltar el `qm_ffa` de la API, que no le dice nada a quien está leyendo la
+ * partida. Va antes del retorno del literal y solo para esa familia; el resto de
+ * lo desconocido (`qm_2v2`, `ew_1v1`, `custom_8v8`…) sigue saliendo tal cual.
  *
  * `leaderboard` admite `null` porque hay filas que no son de una partida: en el
  * historial del panel, una fila de **objetivo cumplido** no tiene ladder. Sin
@@ -130,6 +156,10 @@ export function describeMode(mode: string | null, leaderboard: string | null): s
     return "1vs1";
   }
 
+  if (isFfaFamily(mode) || isFfaFamily(leaderboard)) {
+    return "FFA";
+  }
+
   return leaderboard ?? mode ?? "";
 }
 
@@ -142,25 +172,31 @@ export function describeMode(mode: string | null, leaderboard: string | null): s
  * endpoint, así que un ranked 2v2 puede llegar con `leaderboard: "rm_team"` y
  * desde las columnas sale "Por equipos" cuando la partida es un 2v2 de verdad.
  *
- * Con la alineación a la vista no hace falta adivinar: si todos los equipos
- * tienen el mismo número de jugadores, ese es el tamaño, y la etiqueta no puede
- * contradecir los nombres que se están pintando. Si no (equipos desiguales por
- * un abandono, un solo bando) se devuelve `null` y quien llama cae en
- * `describeMode`, que en ese caso tampoco tiene nada mejor que decir.
+ * Con la alineación a la vista no hace falta adivinar: si la partida son **dos
+ * bandos del mismo tamaño**, ese es el tamaño y la etiqueta no puede contradecir
+ * los nombres que se están pintando.
+ *
+ * Que sean dos bandos es parte de la condición y no un detalle: `NvN` describe
+ * una partida de dos bandos, así que ocho equipos de uno —una FFA— no es un
+ * "1vs1" con ocho bandos, es otro formato, y llamarlo 1vs1 mentiría lo mismo
+ * que antes. Con más de dos se devuelve `null`, igual que con equipos
+ * desiguales por un abandono o con un solo bando, y quien llama cae en
+ * `describeMode`, que es donde vive la etiqueta de los formatos que no son de
+ * dos bandos.
  */
 export function describeTeamSize(teamSizes: readonly number[]): string | null {
-  if (teamSizes.length < 2) {
+  if (teamSizes.length !== 2) {
     return null;
   }
 
-  const [first, ...rest] = teamSizes;
+  const [left, right] = teamSizes;
 
-  if (first === undefined || first < 1 || !rest.every((size) => size === first)) {
+  if (left !== right || left < 1) {
     return null;
   }
 
   // Mismo criterio de etiqueta que `describeMode`: el 1v1 se escribe "1vs1".
-  return first === 1 ? "1vs1" : `${first}v${first}`;
+  return left === 1 ? "1vs1" : `${left}v${left}`;
 }
 
 /**

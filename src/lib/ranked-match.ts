@@ -41,6 +41,12 @@ import { isRecord } from "@/lib/json";
  * partidas del panel tiene que **enseñar** las revertidas, y para eso usa
  * `classificatoryWhere()`, que es la misma regla sin la marca. Esa es la única
  * función de este módulo que devuelve las condiciones sin `revertedAt`.
+ *
+ * Y hay un caso al revés, en `rankedModesWhere()`: una consulta que no puede
+ * aplicar la regla entera porque su partida **todavía no está resuelta**
+ * (`/partidas`) y solo puede quedarse con la familia. Sigue leyendo
+ * `ruleset.modes` como las otras, así que no nace una segunda lista de modos que
+ * se pueda desincronizar de la que puntúa.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -287,6 +293,25 @@ function utcTimestamp(value: Date): string {
 }
 
 /**
+ * Solo la primera de las cuatro condiciones: la familia de ladder del ruleset.
+ *
+ * Existe para las consultas que **no pueden** usar la regla entera, y hay una
+ * sola: `/partidas` lista partidas en curso, y una partida en curso nunca cumple
+ * las otras tres (por definición no tiene `result` ni `finishedAt`), así que
+ * `rankedMatchWhere()` las dejaría todas fuera — justo lo contrario de lo que
+ * quiere esa pantalla. Con esto se publica lo que el torneo considera partida,
+ * sin que el filtro tenga que mentir sobre su estado.
+ *
+ * La lista sale siempre de `ruleset.modes`, igual que en las otras tres
+ * formas: nadie filtra por `RANKED_MODES` a pelo. Y no es una quinta condición,
+ * de modo que no la deben usar las consultas del motor: para puntuar, la regla
+ * son las cuatro.
+ */
+export function rankedModesWhere(modes: readonly string[]): Prisma.MatchWhereInput {
+  return { mode: { in: [...modes] } };
+}
+
+/**
  * Las condiciones de partida clasificatoria **sin** la marca de revertida.
  *
  * Es el filtro de `rankedMatchWhere()` menos una condición, y existe para un solo
@@ -309,7 +334,7 @@ export function classificatoryWhere(
   window: ScoringWindow,
 ): Prisma.MatchWhereInput {
   return {
-    mode: { in: [...modes] },
+    ...rankedModesWhere(modes),
     result: { not: null },
     finishedAt: { not: null },
     ...windowWhere(window),
