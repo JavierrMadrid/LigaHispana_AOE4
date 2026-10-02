@@ -22,7 +22,9 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * ## Por qué hay un tipo por acción
  *
  * El enum (`AdminActionType`) es corto a propósito: registra lo que **alguien más ve**
- * —un jugador entra o sale del torneo, una partida deja de contar o vuelve a contar—.
+ * —un jugador entra o sale, una partida deja de contar o vuelve a contar—. Editar
+ * nombre, canales o país también cambia lo que ve el resto (el nombre y el canal salen
+ * en la clasificación, en `/partidas` y en el propio panel), así que también está.
  * Aprobar o rechazar una solicitud no está, y por eso tampoco hay tipo: cuando la
  * pestaña de acciones lo necesite se añade el valor al enum y el `switch` de este
  * módulo deja de ser exhaustivo solo, que es lo que evita que un tipo nuevo salga con
@@ -33,6 +35,7 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * | Tipo | Frase |
  * |---|---|
  * | `PLAYER_CREATED` | `Alta de BeastWizard (AoE4World 123456)` |
+ * | `PLAYER_EDITED` | `Edición de BeastWizard (AoE4World 123456): nombre, canal de Twitch` |
  * | `PLAYER_REMOVED` | `Baja de BeastWizard y sus 87 partidas` |
  * | `MATCH_POINTS_REVERTED` | `Revertidos 10 puntos de la partida G-12345 de BeastWizard` |
  * | `MATCH_POINTS_RESTORED` | `Restaurados 10 puntos de la partida G-12345 de BeastWizard` |
@@ -42,6 +45,13 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * de la pestaña de partidas para saber de quién era. Una partida de 0 puntos (una
  * derrota) produce "Revertidos 0 puntos…", que es la verdad: no puntuaba, y aun así
  * sale de las partidas, de los ratios y de los objetivos.
+ *
+ * `PLAYER_EDITED` lleva **qué campos** cambiaron en la frase y no solo el jugador, por
+ * la misma razón: "Edición de BeastWizard" sin más no dice qué se editó, que es justo
+ * lo que se viene a mirar cuando alguien pregunta por qué un participante aparece con
+ * otro nombre o con otro canal. Los rótulos son los mismos que usa el mensaje de la
+ * propia acción (`camposQueCambian()` en `src/app/admin/actions.ts`), así que el
+ * historial y lo que se le enseñó a quien editó no pueden divergir.
  *
  * Los tipos se escriben como literales y no como `AdminActionType.X` porque el enum
  * generado es a la vez un valor (objeto) y un tipo (unión de literales), y en una
@@ -68,6 +78,47 @@ type PlayerRemovedEntry = {
   matchCount: number;
 };
 
+/**
+ * Un campo que la edición ha cambiado.
+ *
+ * Los rótulos son los del formulario (`camposQueCambian()`), no los de la columna, en
+ * la frase; el `details` es donde van los nombres de la columna, porque es lo que
+ * sirve para investigar y lo que permite escribir una consulta sin traducir.
+ */
+export type CampoEditado = {
+  /** Columna de `Player`: `name`, `twitchChannel`… Es la clave del `details`. */
+  campo: string;
+  /** Lo que el formulario llama a esa columna, para la frase del historial. */
+  etiqueta: string;
+  /** Valor anterior, o `null` si el campo estaba vacío. */
+  antes: string | null;
+  /** Valor nuevo, o `null` si la edición lo ha dejado vacío. */
+  despues: string | null;
+};
+
+/** Edición de un jugador que ya estaba en el panel. */
+type PlayerEditedEntry = {
+  type: "PLAYER_EDITED";
+  /**
+   * `Player.name` **tal como queda** tras la edición.
+   *
+   * Es el nombre nuevo a propósito: el rastro describe el estado que se ve desde
+   * entonces, que es lo que se nota al mirar la clasificación. El anterior no se
+   * pierde, está en `details`.
+   */
+  name: string;
+  profileId: number;
+  /**
+   * Solo los campos que han cambiado, nunca los cinco, y **siempre al menos uno**.
+   *
+   * Que no esté vacío es lo que decide si hace falta escribir la fila: abrir el
+   * formulario y cerrarlo sin tocar nada es lo más normal del mundo y no deja rastro
+   * de nada. `updatePlayer()` sale antes de escribir cuando la lista viene vacía, así
+   * que una frase sin campos ("Edición de X: ") no llega a existir en la base.
+   */
+  cambios: CampoEditado[];
+};
+
 /** Cambio de los puntos de una partida, en las dos direcciones. */
 type MatchPointsEntry = {
   type: "MATCH_POINTS_REVERTED" | "MATCH_POINTS_RESTORED";
@@ -82,7 +133,11 @@ type MatchPointsEntry = {
 };
 
 /** Lo que hay que saber de una acción, según su tipo. */
-export type AdminActionEntry = PlayerCreatedEntry | PlayerRemovedEntry | MatchPointsEntry;
+export type AdminActionEntry =
+  | PlayerCreatedEntry
+  | PlayerEditedEntry
+  | PlayerRemovedEntry
+  | MatchPointsEntry;
 
 /** `1 punto` y `0 puntos`: el plural no es un detalle de estilo en un historial. */
 export function puntos(count: number): string {
@@ -105,6 +160,10 @@ export function adminActionSummary(entry: AdminActionEntry): string {
   switch (entry.type) {
     case AdminActionType.PLAYER_CREATED:
       return `Alta de ${entry.name} (AoE4World ${entry.profileId})`;
+    case AdminActionType.PLAYER_EDITED:
+      return `Edición de ${entry.name} (AoE4World ${entry.profileId}): ${entry.cambios
+        .map((cambio) => cambio.etiqueta)
+        .join(", ")}`;
     case AdminActionType.PLAYER_REMOVED:
       if (entry.matchCount === 0) {
         return `Baja de ${entry.name}, que no tenía partidas`;
@@ -131,6 +190,29 @@ export function adminActionDetails(entry: AdminActionEntry): Prisma.InputJsonObj
   switch (entry.type) {
     case AdminActionType.PLAYER_CREATED:
       return { name: entry.name, profileId: entry.profileId, status: entry.status };
+    case AdminActionType.PLAYER_EDITED: {
+      // Una clave por campo y no un objeto anidado: el DAL aplana `details` a
+      // primitivos de un nivel (`readDetails()` en `src/lib/admin.ts`), así que lo
+      // anidado se descartaría al leer y no habría rastro utilizable. El nombre se
+      // guarda aparte de los cambios porque es el estado **después**, y el `antes` de
+      // cada campo va en su propia clave.
+      //
+      // `InputJsonObject` es de solo lectura (las claves son fijas en el tipo), así
+      // que las claves por campo se montan en un objeto corriente y se devuelve al
+      // final: solo estos valores entran, todos primitivos de primer nivel.
+      const details: Record<string, string | number | null> = {
+        name: entry.name,
+        profileId: entry.profileId,
+        campos: entry.cambios.map((cambio) => cambio.campo).join(","),
+      };
+
+      for (const cambio of entry.cambios) {
+        details[`${cambio.campo}.antes`] = cambio.antes;
+        details[`${cambio.campo}.despues`] = cambio.despues;
+      }
+
+      return details;
+    }
     case AdminActionType.PLAYER_REMOVED:
       return { name: entry.name, profileId: entry.profileId, matchCount: entry.matchCount };
     case AdminActionType.MATCH_POINTS_REVERTED:

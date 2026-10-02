@@ -21,6 +21,7 @@ import {
   type ActiveSort,
 } from "@/components/sortable-header";
 import { aoe4WorldProfileUrl } from "@/lib/format";
+import { PlayerEditDialog } from "./player-edit-dialog";
 import { PLAYER_STATUS_LABELS, PLAYER_STATUS_STYLES } from "./participant-status";
 
 /** Búsqueda y estado no distinguen acentos ni mayúsculas: "josé" encuentra "Jose". */
@@ -150,7 +151,13 @@ function comparePlayers(
  * con `aria-sort` y chevron. "Quitar filtros" **no** toca el orden; cambiar filtros,
  * búsqueda u orden vuelve a la primera página.
  */
-export function ParticipantsBrowser({ participants }: { participants: AdminParticipant[] }) {
+export function ParticipantsBrowser({
+  participants,
+  countries,
+}: {
+  participants: AdminParticipant[];
+  countries: string[];
+}) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [sort, setSort] = useState<ActiveSort<SortKey>>(null);
@@ -413,7 +420,7 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
                 </thead>
                 <tbody className="divide-y divide-line">
                   {paged.map((player) => (
-                    <ParticipantRow key={player.id} player={player} />
+                    <ParticipantRow key={player.id} player={player} countries={countries} />
                   ))}
                 </tbody>
               </table>
@@ -471,7 +478,13 @@ export function ParticipantsBrowser({ participants }: { participants: AdminParti
   );
 }
 
-function ParticipantRow({ player }: { player: AdminParticipant }) {
+function ParticipantRow({
+  player,
+  countries,
+}: {
+  player: AdminParticipant;
+  countries: string[];
+}) {
   const hasChannels =
     player.twitchChannel !== null ||
     player.youtubeChannel !== null ||
@@ -576,6 +589,11 @@ function ParticipantRow({ player }: { player: AdminParticipant }) {
 
       <td className={`${CELL} text-right`}>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {/* Editar va primero y en tono neutro: es la acción que se usa a
+              diario, y el filete tenue la deja cerca del nombre sin competir con
+              aprobar, rechazar o eliminar, que sí cambian el estado o borran. */}
+          <PlayerEditDialog player={player} countries={countries} />
+
           {player.status !== "APPROVED" ? (
             <StatusForm action={approvePlayer} playerId={player.id} label="Aprobar" tone="approve" />
           ) : null}
