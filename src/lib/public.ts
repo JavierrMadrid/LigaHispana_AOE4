@@ -140,6 +140,20 @@ export type StandingRow = {
    */
   aoe4WorldName: string | null;
   /**
+   * `Player.country`: el **rótulo canónico** tal cual está en la lista admitida
+   * (`Setting["registration.countries"]`, con `DEFAULT_COUNTRIES` de respaldo),
+   * no un código ISO, para que quien lo pinte pueda resolver la bandera sin un
+   * diccionario aparte.
+   *
+   * Llega sin resolver y sin normalizar, igual que en el panel: eso ya lo hizo
+   * `parseCountry()` al validarlo. Y es `null` por dos razones que la interfaz
+   * tiene que distinguir o no distinguir según el caso: ni el alta de admin lo
+   * exige (es opcional) ni las filas anteriores a la columna lo traen. Por eso
+   * aquí no se sustituye por un rótulo inventado: `null` significa "no lo
+   * sabemos" y lo correcto es no pintar nada.
+   */
+  country: string | null;
+  /**
    * Puntos del torneo (`PlayerScore.total`), no de la ladder. Es la suma exacta
    * de las dos columnas siguientes.
    */
@@ -339,6 +353,7 @@ async function loadStandings(): Promise<StandingRow[]> {
             profileId: true,
             name: true,
             aoe4WorldName: true,
+            country: true,
             twitchChannel: true,
             twitchUrl: true,
             twitchIsLive: true,
@@ -404,6 +419,7 @@ async function loadStandings(): Promise<StandingRow[]> {
       profileId: row.player.profileId,
       name: row.player.name,
       aoe4WorldName: row.player.aoe4WorldName,
+      country: row.player.country,
       points: row.total,
       pointsByWins: row.total - pointsByObjectives,
       pointsByObjectives,
