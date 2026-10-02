@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { getAoe4WorldConfig } from "@/lib/aoe4world/env";
 import {

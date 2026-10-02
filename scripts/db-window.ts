@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";

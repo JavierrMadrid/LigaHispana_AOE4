@@ -357,6 +357,38 @@ se ha pasado a hablar con `pg` directamente. Ese script es el que aplica y compr
 RLS de la base de datos, así que perderlo habría sido perder el control de la seguridad del torneo.
 Sigue funcionando entero, con su comprobación previa y sus códigos de salida.
 
+## De dónde salen las variables en la CLI y en los scripts
+
+`next dev` y `next build` **no necesitan que nadie cargue nada**: Next lee `.env` y `.env.local` por su
+cuenta, y por eso la web no nota cuál de los dos tiene la `DATABASE_URL`. La CLI de Prisma
+(`generate`, `db:push`, `migrate`, `studio`) y los scripts de `tsx` no pasan por ahí, y para ellos
+**no hace falta exportar nada a mano**.
+
+Las dos rutas comparten el cargador [`scripts/load-env.mjs`](../scripts/load-env.mjs), importado desde
+`prisma7.config.ts` y desde la primera línea de cada script de `scripts/`. Antes cada una tenía su
+propio `import "dotenv/config"` —que es lo que Prisma y Next hacen por su cuenta— y ese solo mira
+`.env`, así que con la `DATABASE_URL` en `.env.local` los comandos de Prisma morían con
+`Environment variable not found: DATABASE_URL` y los scripts con
+`DATABASE_URL no está definida y el Worker no tiene el binding HYPERDRIVE de Hyperdrive`, que además
+señala al sitio equivocado.
+
+| Origen | Prioridad | Comentario |
+|---|---|---|
+| entorno (shell, CI, panel) | 1 | Una variable ya presente **gana siempre**. |
+| `.env.local` | 2 | Valores locales de la máquina. |
+| `.env` | 3 | Respaldo, para lo que no se quisiste pisar en local. |
+
+Que `.env.local` vaya antes que `.env` es el criterio de Next, de modo que la CLI y la web coinciden en
+qué valor manda; y `override: false` (explícito, aunque sea el valor por defecto de `dotenv`) es lo que
+garantiza que un `DATABASE_URL` exportado a mano siga mandando sobre los ficheros. Estos se resuelven
+desde la ruta del propio cargador y no desde `process.cwd()`, así que el resultado no depende del
+directorio desde el que se invoque el comando.
+
+**Cuando no hay ficheros, el cargador no hace nada y no rompe nada.** Es el caso de CI, donde no existe
+ni `.env` ni `.env.local`: por eso `npm ci` sigue haciendo su `prisma generate` sin `DATABASE_URL`. Si
+tras el cambio un comando de Prisma dice `Environment variable not found: DATABASE_URL`, el problema ya
+no está en la carga de ficheros sino en que la variable no está en ninguno de los tres sitios.
+
 ## Cómo se lee la configuración en el Worker
 
 En un Worker `process.env` **no** es el entorno del proceso. Cloudflare lo dice sin rodeos: *"In the

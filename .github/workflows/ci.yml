@@ -49,6 +49,11 @@ jobs:
 
       - run: npm run lint
 
+      # Ni `.env` ni `.env.local` existen aquí, y `prisma7.config.ts` (que es lo
+      # que lee `DATABASE_URL` para el `prisma generate` del `postinstall`) los
+      # busca precisamente para poder prescindir de ellos: que no haya ninguno es
+      # el caso normal, no un fallo del cargador. Ver scripts/load-env.mjs.
+      #
       # No se definen variables de entorno, ni `NEXT_PUBLIC_*` ni `DATABASE_URL`:
       # `next build` pasa sin ninguna. Las páginas que leen de Postgres son
       # dinámicas y se renderizan en la petición, y el cliente de Prisma se crea
