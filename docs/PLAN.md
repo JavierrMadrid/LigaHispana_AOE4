@@ -357,6 +357,23 @@ referencia ordreduwololo.fr y soloqchallenge.gg solo mandan en comportamiento, n
   - `getLiveMatches()` entrega `LiveMatch[]` (una entrada por partida): `participants` con
     `isLeaguePlayer`, `division`, `civ`, `team` (la alineación se lee de `rawJson.teams`, con
     degradado a las columnas si no es legible), `format` y `elapsedSeconds`.
+  - **Solo salen las clasificatorias**: la consulta se filtra por la **familia de ladder**
+    del ruleset vivo (`rankedModesWhere()`, en `src/lib/ranked-match.ts`, la misma lista que
+    lee el motor) y no por la regla entera, porque una partida en curso no cumple por
+    definición las otras tres condiciones —no tiene `result` ni `finishedAt`— y
+    `rankedMatchWhere()` dejaría la pantalla vacía. El filtro es de **presentación**: el
+    worker sigue importando en `Match` todo lo que juega un participante, quick match y FFA
+    incluidos, porque el histórico entero es lo que permite recalcular sin volver a pedirlo
+    todo a la API. Lo que resuelve es que `/partidas` cumpla lo que promete su copy
+    ("ladder ranked"): antes, una QM FFA en curso salía etiquetada como "1vs1".
+    - **El indicador "en partida" del home usa el mismo criterio** (`getStandings`, mismo
+      `rankedModesWhere()`), a propósito y no por parecido. El contador "N partidas en juego"
+      de la cabecera del home sale de `getLiveMatches()`, así que con dos criterios distintos
+      la misma página podía marcar a un jugador "en partida" y no enseñar su partida; y la
+      terminología de F7 sigue valiendo ("en partida" = estado del jugador, "en juego" = las
+      partidas de `/partidas`), porque las dos cosas son la misma por construcción. Por lo
+      mismo, `/partidas` y el "en partida" se degradan a la vez: si la base no responde,
+      `getStandings()` lo devuelve entero como `degraded`.
   - **Filtros en cliente** por tipo de partida (1vs1, 2vs2…) y por **división** (las 6, sin rangos
     internos): la partida pasa si alguno de sus participantes de la liga es de esa división.
   - **74 imágenes de mapa** versionadas en `public/imagenes/mapas/` (minimapas del CDN de AoE4World,
