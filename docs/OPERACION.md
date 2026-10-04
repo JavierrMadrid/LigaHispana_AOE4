@@ -100,6 +100,9 @@ select cron.schedule(
 );
 ```
 
+La URL de `url :=` es el valor por defecto de [`scripts/db-cron.ts`](../scripts/db-cron.ts), y por qué
+ese valor es el que es está en [Cuándo cambia el reloj de dominio](#cuándo-cambia-el-reloj-de-domino).
+
 Cuatro decisiones que no son obvias:
 
 - **Apunta a `/api/sync` (público), no a `/api/cron/sync` (con `CRON_SECRET`).** Para no escribir un
@@ -126,9 +129,54 @@ Cuatro decisiones que no son obvias:
 - **`pg_net` se instala en `extensions`**, no en `public`: es donde lo pone Supabase y es lo que
   evita el aviso del *Security Advisor*.
 
-`SITE_URL` sale del entorno y por defecto es
-`https://ligahispana-aoe4.javierr-ma93.workers.dev`; no hace falta definirlo mientras el dominio no
-cambie.
+### Cuándo cambia el reloj de dominio
+
+`SITE_URL` sale del entorno y, si no está, el job usa el valor por defecto de
+[`scripts/db-cron.ts`](../scripts/db-cron.ts), que **hoy sigue siendo**
+`https://ligahispana-aoe4.javierr-ma93.workers.dev`. No es que el dominio no haya cambiado: es que
+**todavía no se puede cambiar**, y el orden importa.
+
+`laligahispana.es` ya está en Cloudflare como Custom Domain del Worker, pero la zona está **`pending`**:
+los nameservers siguen siendo los del registrador, así que el dominio no resuelve y no hay certificado
+emitido. El detalle está en
+[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#el-dominio-propio-y-por-qué-no-está-en-el-archivo). Si el job
+apuntara a `https://laligahispana.es/api/sync` antes de que eso cambie:
+
+- **`cron.job_run_details` seguiría dando `200`.** `net.http_post` encola la petición y devuelve; no
+  espera al Worker ni mira lo que conteste. El fallo no se ve en el reloj.
+- **El síntoma real llega veinte minutos después**: como ninguna pasada termina,
+  `Setting["sync.lastRun"]` envejece y `/admin` enseña **pasada vieja** (`stale`) (ver
+  [Ver si el sincronizador está vivo](#ver-si-el-sincronizador-está-vivo)), con la clasificación
+  congelada y sin el dato de que la causa es el nombre del dominio.
+- **Revertirlo no es local**: hay que acordarse de que era eso y volver a lanzar el script.
+
+Mientras tanto, `workers.dev` **no** da ningún problema: es el mismo Worker en el mismo edge, y lo
+único que cambia es el nombre. Adelantarse no gana nada y arriesga el reloj del torneo, así que el
+valor por defecto se queda como está.
+
+Y ojo con que hay **dos** `SITE_URL` distintos: este (el del script, que solo se lee al programar el
+job) y el del [workflow de GitHub](.github/workflows/cron-sync.yml), que es la *variable* del
+repositorio en Settings → Secrets and variables → Actions → Variables. El segundo **no hay que
+tocarlo**: sigue siendo válido mientras `workers.dev` sirva, y ese reloj es la red de seguridad del
+primario, así que conviene que siga siendo el que no depende de la zona.
+
+**El paso, el día que la zona esté `active`** (con el certificado emitido y `curl -I
+https://laligahispana.es` ya contestando), es este y no otro:
+
+```bash
+SITE_URL=https://laligahispana.es npm run db:cron
+npm run db:cron -- --check      # el comando del job tiene que salir ya con el dominio
+```
+
+Es un **upsert** sobre `jobname_username_uniq`: reprograma `ligahispana-sync` con la URL nueva, no crea
+un segundo job, y por eso se puede repetir sin miedo. Después hay que mirar la primera respuesta de
+`pg_net` en `net._http_response`: `"status":"ok"`, y no un error de resolución de nombre.
+
+Ese mismo valor, como *build variable* en las **dos** listas del panel, es lo que hace que los
+canónicos y las tarjetas de Open Graph apunten al dominio bueno; y el `routes` del Custom Domain en
+`wrangler.jsonc`, si algún día se quiere declarar, es el último de los tres por razones que no tienen
+nada que ver con el reloj. Los tres pasos y su orden están en
+[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#qué-queda-por-hacer-cuando-la-zona-esté-activa).
 
 **Cómo se comprueba que está disparando.** `npm run db:cron -- --check` imprime las dos extensiones
 con su versión y esquema, el `jobid`, el `schedule` y el comando tal cual están grabados, el resto
@@ -504,6 +552,11 @@ npm run db:cron                  # programa el job de sincronización cada 5 min
 - `YOUTUBE_API_KEY` va **además** en *Build variables and secrets* del trigger de Workers Builds, que
   es otra lista distinta y es la única que existe durante el build. Igual que el resto de secretos que
   lee el código de servidor.
+- `NEXT_PUBLIC_SITE_URL` va **también** en *Build variables and secrets*, en las **dos**
+  configuraciones de build, y su valor cambia con el dominio del sitio: sin ella, los canónicos y las
+  rutas absolutas de las imágenes salen del `workers.dev` (y en local, de `localhost`). El día que haya
+  dominio propio hay que ponerla, y no antes. Ver
+  [El dominio propio](./DESPLIEGUE.md#el-dominio-propio-y-por-qué-no-está-en-el-archivo).
 
 Lo que hay que poner en el panel del Worker (secretos y build variables, que no son la misma cosa, y
 el paso de Hyperdrive) está en

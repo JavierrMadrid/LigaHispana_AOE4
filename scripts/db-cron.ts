@@ -87,10 +87,16 @@ import { Client } from "pg";
  *   Supabase y es lo que evita el aviso del *Security Advisor*. Si algún día
  *   estuviera en `public`, este script lo avisa en vez de moverlo (mover una
  *   extensión ya instalada es un `drop` + `create`, y eso no se decide solo).
- * - **`SITE_URL`** es la URL pública del Worker. Está declarado en
- *   `.env.example` pero no hace falta definirlo: sin él (o con la cadena vacía
- *   de ejemplo) sale el valor por defecto de más abajo. Conviene ponerlo si
- *   algún día el sitio cambia de dominio.
+ * - **`SITE_URL`** es la URL pública del Worker, y solo la lee este script (para
+ *   programar el job). Está declarado en `.env.example` y no hace falta definirlo:
+ *   sin él, o con la cadena vacía de ejemplo, sale `DEFAULT_SITE_URL`.
+ *   **Ese valor por defecto sigue siendo el `workers.dev` a propósito**, aunque el
+ *   sitio ya tenga Custom Domain en Cloudflare: la zona de `laligahispana.es` está
+ *   `pending` (los nameservers siguen siendo los del registrador) y, mientras lo
+ *   esté, apuntar aquí el job sería mandar cada pasada a un dominio que no
+ *   resuelve. El cambio va **después** de que la zona se active, y es reprogramar
+ *   este job, no crear otro. Ver `docs/OPERACION.md`, "Cuándo cambia el reloj de
+ *   dominio".
  * - **`cron.job` tiene RLS** con una política que solo deja ver los jobs del rol
  *   propio. Da igual mientras se programe y se compruebe con el mismo
  *   `DATABASE_URL` (el rol `postgres` de Supabase), que es lo normal, pero por
@@ -118,7 +124,22 @@ const JOB_NAME = "ligahispana-sync";
 
 const SCHEDULE = "*/5 * * * *";
 
-/** Si el sitio cambia de dominio, se define `SITE_URL` en `.env`. */
+/**
+ * URL pública del Worker a la que dispara el job. Es un valor por defecto, no un
+ * destino final: `SITE_URL` lo sustituye.
+ *
+ * Sigue siendo el `workers.dev` **a propósito**, aunque `laligahispana.es` ya
+ * exista como Custom Domain en el panel de Cloudflare. La zona está `pending`
+ * —los nameservers siguen siendo los del registrador—, así que ese dominio
+ * todavía no resuelve: apuntar aquí el cron sería mandar cada pasada a un sitio
+ * que no contesta, y eso no se ve en el `200` de `cron.job_run_details` sino en
+ * `net._http_response` y, veinte minutos después, como "pasada vieja" en
+ * `/admin`. Se cambia cuando la zona esté `active` y el certificado emitido, y
+ * entonces no hace falta ni tocar este fichero: `SITE_URL=https://laligahispana.es
+ * npm run db:cron` reprograma este mismo job por el `upsert` de
+ * `jobname_username_uniq`. Ver `docs/OPERACION.md`, "Cuándo cambia el reloj de
+ * dominio".
+ */
 const DEFAULT_SITE_URL = "https://ligahispana-aoe4.javierr-ma93.workers.dev";
 
 /** Timeout del cliente HTTP de `pg_net`, en ms. */

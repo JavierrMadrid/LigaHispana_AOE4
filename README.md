@@ -78,6 +78,7 @@ código de servidor: ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 | `NEXT_PUBLIC_SUPABASE_URL` | URL del proyecto Supabase (auth/API) |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Clave publicable de Supabase (auth/API) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Alternativa antigua a la clave publicable |
+| `NEXT_PUBLIC_SITE_URL` | Dominio público del sitio, con protocolo: de él salen los canónicos y las rutas absolutas de las imágenes. Variable de **build**, no de runtime, así que va en *Build variables and secrets* (hoy `https://ligahispana-aoe4.javierr-ma93.workers.dev`, hasta que la zona del dominio propio esté activa) |
 | `AOE4WORLD_API_BASE` | Base de la API de AoE4World (`https://aoe4world.com`) |
 | `AOE4WORLD_API_KEY` | Opcional, para partidas privadas; viaja en la query y nunca se escribe en los logs |
 | `AOE4WORLD_USER_AGENT` | Cómo se identifica el worker ante la API (`LigaHispanaAOE4/0.1 (sync AoE4World)`) |
@@ -91,7 +92,7 @@ código de servidor: ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 | `AOE4WORLD_SYNC_DEADLINE_MS` | Plazo global de una pasada (240000) |
 | `AOE4WORLD_MOCK` | `1` responde con las fixtures de `src/lib/aoe4world/mock/` en vez de salir a la red (`0`; imposible con `NODE_ENV=production`) |
 | `CRON_SECRET` | Secreto para llamar a `POST /api/cron/sync` sin sesión |
-| `SITE_URL` | URL pública del Worker de la que parte el job de Supabase Cron. Solo la lee `scripts/db-cron.ts` (`https://ligahispana-aoe4.javierr-ma93.workers.dev`) |
+| `SITE_URL` | URL pública del Worker de la que parte el job de Supabase Cron. Solo la lee `scripts/db-cron.ts`, y es **otra** distinta de la variable `SITE_URL` del workflow de GitHub |
 | `RATE_LIMIT_MAX_ATTEMPTS` | Envíos de inscripción permitidos por IP y ventana (5) |
 | `RATE_LIMIT_WINDOW_SECONDS` | Longitud de la ventana del límite, en segundos (3600) |
 | `RATE_LIMIT_STALE_SECONDS` | Antigüedad a partir de la cual se purga una fila de contador, en segundos (86400) |
@@ -219,8 +220,13 @@ repositorio está conectado a Workers Builds y el trigger de `main` ejecuta `npx
   llegar al bundle del navegador), los secretos que lee el código de servidor (`YOUTUBE_API_KEY`,
   `CRON_SECRET`…) y la cadena local de Hyperdrive
   `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`, que es la que aborta el paso de deploy
-  si falta. Hoy solo hay un trigger y escucha `main`, así que ese es el único sitio donde hay que
-  ponerlas. Detalle en `docs/DESPLIEGUE.md`, "Los dos sitios del panel".
+  si falta. Hay **dos** configuraciones de build —la del *trigger* de `main` y la de *Previews Base*—,
+  no heredan nada entre ellas, y lo que va en una tiene que ir también en la otra. Detalle en
+  `docs/DESPLIEGUE.md`, "Los dos sitios del panel".
+- **El dominio propio `laligahispana.es` ya está en producción como Custom Domain**, pero **no** está
+  declarado en `wrangler.jsonc` a propósito, y su zona sigue `pending` porque los nameservers aún no se
+  han cambiado en el registrador. Hasta que eso pase, la URL pública es la de `workers.dev`. Estado y
+  pasos pendientes en `docs/DESPLIEGUE.md`, "El dominio propio, y por qué no está en el archivo".
 - La conexión a la base va por el **binding de Hyperdrive**: `src/lib/db.ts` lee
   `env.HYPERDRIVE.connectionString` y, si no está, cae a `DATABASE_URL`. Ese paso, que no se puede
   saltar, en local lo hace `scripts/deploy-worker.mjs`, que exporta desde `.dev.vars` la cadena local
