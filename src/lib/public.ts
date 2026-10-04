@@ -13,6 +13,7 @@ import {
   type ObjectiveGroup,
   type ObjectiveMetric,
 } from "@/lib/objectives";
+import { rankedModesWhere } from "@/lib/ranked-match";
 import { RULESET_VERSION, readRuleset, type ScoringRuleset } from "@/lib/scoring";
 import {
   normalizeKickChannel,
@@ -199,7 +200,12 @@ export type StandingRow = {
   kickChannel: string | null;
   /** "En directo" en Kick, con la misma degradación que `youtubeIsLive`. */
   kickIsLive: boolean;
-  /** Tiene una partida con `finishedAt IS NULL` ahora mismo. */
+  /**
+   * Tiene una partida **clasificatoria** en curso ahora mismo (`finishedAt IS
+   * NULL` y familia del ruleset). Es el mismo criterio que publica
+   * `/partidas`: lo que marca aquí sale en la lista, y ni una cosa ni la otra
+   * prometen nada que la otra no cumpla.
+   */
   isPlaying: boolean;
   avatarUrl: string | null;
   profileUrl: string;
@@ -308,7 +314,10 @@ function earnedObjectivesPoints(breakdown: unknown): number {
  *
  * Tres consultas planas, ninguna por fila: la de partidas en directo sirve para
  * marcar `isPlaying` sin N+1 y la del ruleset (una clave de `Setting`) trae los
- * puntos reales de cada objetivo, por si se han retocado sin desplegar.
+ * puntos reales de cada objetivo, por si se han retocado sin desplegar. Esa misma
+ * lectura del ruleset da la lista de familias con la que se filtran las partidas
+ * en directo, así que no hay una segunda definición de qué es una partida del
+ * torneo: quien retoca `modes` sin desplegar mueve las dos pantallas a la vez.
  *
  * Con la base de datos caída devuelve `{ status: "degraded", data: null }` en vez
  * de propagar el error: la portada del torneo tiene que seguir contestando.
@@ -318,6 +327,12 @@ export async function getStandings(): Promise<PublicRead<StandingRow[]>> {
 }
 
 async function loadStandings(): Promise<StandingRow[]> {
+  // La consulta de partidas en curso necesita la lista de familias del ruleset,
+  // así que espera a esa lectura; las dos consultas grandes (clasificación y
+  // partidas) siguen yendo en paralelo entre sí, que es lo que evita un viaje
+  // extra a la base de datos.
+  const rulesetPromise = readRuleset();
+
   const [rows, liveRows, ruleset] = await Promise.all([
     db.playerScore.findMany({
       where: { ruleSetVersion: RULESET_VERSION },
@@ -354,14 +369,23 @@ async function loadStandings(): Promise<StandingRow[]> {
         },
       },
     }),
-    // Mismo criterio que `getLiveMatches`: una partida sin resolver de un
-    // jugador aprobado. Un cruce 2v2 deja dos filas con el mismo `gameId`, pero
-    // a efectos de "está jugando" basta con el conjunto de jugadores.
-    db.match.findMany({
-      where: { finishedAt: null, player: { status: PlayerStatus.APPROVED } },
-      select: { playerId: true },
-    }),
-    readRuleset(),
+    // Mismo criterio que `getLiveMatches`: una partida sin resolver de una
+    // familia que puntúa y de un jugador aprobado. Un cruce 2v2 deja dos filas
+    // con el mismo `gameId`, pero a efectos de "está jugando" basta con el
+    // conjunto de jugadores. Que sea **el mismo** criterio y no uno parecido es
+    // lo que mantiene el "en partida" del home honesto: lo que marca aquí tiene
+    // que salir en `/partidas`, cuya lista cuenta las partidas y no los jugadores.
+    rulesetPromise.then((active) =>
+      db.match.findMany({
+        where: {
+          ...rankedModesWhere(active.modes),
+          finishedAt: null,
+          player: { status: PlayerStatus.APPROVED },
+        },
+        select: { playerId: true },
+      }),
+    ),
+    rulesetPromise,
   ]);
 
   const playing = new Set(liveRows.map((row) => row.playerId));
@@ -468,7 +492,7 @@ export type LiveMatch = {
   leaderboard: string;
   /**
    * Tamaño legible ("1vs1", "2vs2", "Por equipos"). Sale de los equipos de la
-   * alineación y solo si todos tienen el mismo número de jugadores; si no se
+   * alineación y solo si la partida tiene dos bandos del mismo tamaño; si no se
    * puede asegurar, de `describeMode` sobre `mode` y `leaderboard`.
    */
   format: string;
@@ -686,9 +710,9 @@ function liveRoster(
  * `describeMode` va primero a `leaderboard`, y un 2v2 puede venir publicado como
  * `rm_team`, que no dice el tamaño. Como aquí ya está la alineación completa, se
  * cuentan los jugadores de cada equipo y el tamaño sale de ahí; `describeMode`
- * queda como respaldo para lo que no se puede asegurar (equipos desiguales o
- * partida reconstruida desde las columnas, donde no se sabe de qué equipo era
- * cada jugador).
+ * queda como respaldo para lo que no se puede asegurar (equipos desiguales, más
+ * de dos bandos o partida reconstruida desde las columnas, donde no se sabe de
+ * qué equipo era cada jugador).
  */
 function matchFormat(
   participants: readonly LiveMatchParticipant[],
@@ -709,7 +733,8 @@ function matchFormat(
 }
 
 /**
- * Partidas en directo: las que la API todavía no ha resuelto (`finishedAt IS NULL`).
+ * Partidas en directo: las clasificatorias que la API todavía no ha resuelto
+ * (`finishedAt IS NULL`).
  *
  * Sale **una entrada por partida**, no por jugador. `Match` tiene la unicidad
  * `(playerId, gameId)` porque el torneo es individual y dos participantes de la
@@ -722,8 +747,17 @@ function matchFormat(
  * jugadores aprobados, que es lo que permite marcar `isLeaguePlayer` y resolver
  * la división sin preguntar a la base de datos por cada nombre.
  *
- * No se filtra por modo a propósito: en directo interesa todo lo que esté jugando
- * alguien del torneo, tanto ranked 1v1 como partidas por equipos.
+ * Se filtra por la **familia de ladder**, con la lista que vive en el ruleset
+ * (`rankedModesWhere()`, la misma que usa el motor) y no por la regla entera: una
+ * partida en curso no cumple por definición las otras tres condiciones —no tiene
+ * `result` ni `finishedAt`—, así que `rankedMatchWhere()` dejaría la pantalla
+ * vacía. Es un filtro de **presentación**, no de importación: el worker sigue
+ * guardando en `Match` todo lo que juega un participante, quick match y FFA
+ * incluidos, porque el histórico entero es lo que permite recalcular sin volver
+ * a pedirle todo a la API. Lo que no sale es una partida que el torneo no puntúa,
+ * que es exactamente lo que promete el copy de la página. Y si esa lectura del
+ * ruleset falla, la pantalla se degrada entera como la clasificación, en vez de
+ * enseñar partidas sin filtrar.
  *
  * Si aparece una partida sin resolver dentro de más de una hora, es normal: el
  * worker borra las abandonadas de forma perezosa, en su siguiente pasada. No es
@@ -738,12 +772,23 @@ export async function getLiveMatches(): Promise<PublicRead<LiveMatch[]>> {
 async function loadLiveMatches(): Promise<LiveMatch[]> {
   const now = new Date();
 
+  // El filtro de modo sale del ruleset vivo, así que la consulta de partidas
+  // espera a esa lectura; las dos consultas de esta pantalla siguen yendo en
+  // paralelo entre sí.
+  const rulesetPromise = readRuleset();
+
   const [rows, leagueRows] = await Promise.all([
-    db.match.findMany({
-      where: { finishedAt: null, player: { status: PlayerStatus.APPROVED } },
-      orderBy: { startedAt: "desc" },
-      select: LIVE_MATCH_SELECT,
-    }),
+    rulesetPromise.then((ruleset) =>
+      db.match.findMany({
+        where: {
+          ...rankedModesWhere(ruleset.modes),
+          finishedAt: null,
+          player: { status: PlayerStatus.APPROVED },
+        },
+        orderBy: { startedAt: "desc" },
+        select: LIVE_MATCH_SELECT,
+      }),
+    ),
     db.player.findMany({
       where: { status: PlayerStatus.APPROVED },
       select: { profileId: true, name: true, rankLevel: true, avatarUrl: true },
