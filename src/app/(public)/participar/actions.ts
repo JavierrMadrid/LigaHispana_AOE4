@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { readCountries } from "@/lib/countries";
+import { findCountryIsoConflict, readCountries, type CountryIsoConflict } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { logDatabaseFailure } from "@/lib/db-errors";
 import { Prisma } from "@/generated/prisma/client";
@@ -52,6 +52,11 @@ import { readTurnstileToken, verifyTurnstile } from "@/lib/turnstile";
  * admitida vive en `Setting["registration.countries"]` (ver `src/lib/countries.ts`)
  * y se pasa a `parseCountry()`. Así el desplegable y esta validación no pueden
  * ofrecer países distintos.
+ *
+ * Y el país elegido se **contrasta además** con el que AoE4World tiene en el perfil
+ * (`country`, un ISO-2): solo se bloquea cuando los dos se resuelven a rótulos de la
+ * lista admitida y son distintos, y sale como error de ese campo. Sin país en el
+ * perfil, o con un ISO que no se sabe traducir, se deja pasar.
  */
 export type RegistrationFormState = {
   status: "idle" | "error" | "success";
@@ -136,6 +141,27 @@ const COUNTRY_REQUIRED_ERROR =
 
 const COUNTRY_UNKNOWN_ERROR =
   "Ese país no está en la lista de los que admite el torneo. Elígelo en el desplegable.";
+
+/**
+ * El país elegido y el que AoE4World tiene en el perfil no son el mismo.
+ *
+ * Nombra los dos porque sin nombrarlos el error no dice nada que se pueda
+ * corregir: quien lee "el país no coincide" sin más no sabe cuál de los dos es el
+ * que está mal, y lo único que puede hacer es probar con otro. El primero que se
+ * nombra es el de AoE4World, porque es el dato del que la organización parte para
+ * organizar el torneo y el que la persona puede consultar en su perfil.
+ *
+ * No se dice "debería ser" en imperativo sino que se corrige el desplegable: el
+ * mensaje no sabe si el error es del desplegable o de una elección equivocada, y
+ * los dos se arreglan ahí.
+ */
+function countryMismatchMessage(conflict: CountryIsoConflict): string {
+  return (
+    `En tu perfil de AoE4World el país es ${conflict.aoe4WorldCountry} y en el ` +
+    `formulario has elegido ${conflict.selectedCountry}. Corrige el desplegable para ` +
+    "que coincida con el de tu perfil."
+  );
+}
 
 /**
  * Los tres canales de directo: opcionales, y con el mismo criterio de "un valor
@@ -311,7 +337,17 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
  * 5. **Comprobación del perfil contra AoE4World** (`src/lib/registration.ts`): si
  *    el `profileId` no existe no se escribe nada, y si existe se guarda el nombre
  *    oficial en `aoe4WorldName` junto al de display, que es el que escribió
- *    quien se inscribe.
+ *    quien se inscribe. La misma respuesta trae el **país del perfil**, que es lo
+ *    que permite contrastarlo con el que eligió la persona en el desplegable: si
+ *    los dos se resuelven y no son el mismo, sale como error de campo y no se
+ *    escribe nada (ver el punto 5b).
+ *
+ * 5b. **Contraste del país** (`findCountryIsoConflict()`, en `src/lib/countries.ts`).
+ *     Es la única comprobación de la lista de campos que **no falla cerrando**: si
+ *     el perfil no trae país, o el ISO que trae no se puede traducir a un rótulo de
+ *     la lista admitida, la inscripción continúa. Bloquear ahí sería afirmar una
+ *     contradicción que no se ha podido comprobar, que es el peor error que puede
+ *     cometer un formulario de este tipo: deja fuera a alguien que sí cumple.
  *
  * Y una decisión de producto que va con la anterior: **un `REJECTED` se puede
  * reinscribir**. Si el perfil ya existe, solo se acepta el envío cuando su estado
@@ -559,6 +595,29 @@ export async function registerPlayer(
     );
 
     return { status: "error", message: PROFILE_UNAVAILABLE_MESSAGE, fieldErrors: {} };
+  }
+
+  // El país del perfil ya está y el rótulo canónico del elegido también, así que
+  // esta es la primera y la única vez que se pueden comparar. Va aquí, después de
+  // las dos capas anteriores, porque necesita las dos cosas: el rótulo de
+  // `parseCountry` y la respuesta de AoE4World.
+  //
+  // Es un error **de campo** y no un rechazo de la inscripción, y por eso solo
+  // devuelve el mensaje del desplegable: la persona puede corregirlo y volver a
+  // enviar. La lista admitida es la misma que se usó para resolver el campo, y no
+  // `DEFAULT_COUNTRIES`, porque es la que se está aplicando de verdad.
+  const countryConflict = findCountryIsoConflict({
+    aoe4WorldCountry: profile.country,
+    selectedCountry: country,
+    allowed: countries,
+  });
+
+  if (countryConflict !== null) {
+    return {
+      status: "error",
+      message: "Revisa los campos marcados para completar la inscripción.",
+      fieldErrors: { country: countryMismatchMessage(countryConflict) },
+    };
   }
 
   const outcome = await persistRegistration({

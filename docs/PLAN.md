@@ -205,7 +205,7 @@ Match      (id, [playerId, gameId] unico, playerId FK, opponentProfileId?, oppon
             startedAt, finishedAt?, durationSeconds?, points, revertedAt?, rawJson, createdAt)
 PlayerScore(playerId, ruleSetVersion) pk, rank, total, wins, matches, breakdown JSON, computedAt
 Setting    (key PK, value JSON, updatedAt)
-AdminAction(id, type: PLAYER_CREATED|PLAYER_REMOVED|MATCH_POINTS_REVERTED|MATCH_POINTS_RESTORED,
+AdminAction(id, type: PLAYER_CREATED|PLAYER_EDITED|PLAYER_REMOVED|MATCH_POINTS_REVERTED|MATCH_POINTS_RESTORED,
             actorEmail, summary, targetId?, details JSON, createdAt)
 Alert     (id, rule: AlertRule, kind: AlertKind, playerId FK cascade, subjectProfileId?, subjectName?,
             count, threshold, anchorGameId?, dedupeKey unico, summary, details JSON, createdAt)
@@ -219,7 +219,7 @@ Notas:
 - `leaderboard` es una `String` (no enum) precisamente para no tener que migrar cada vez que aparece un modo de juego nuevo en la API. `mode` es la **familia de ladder resuelta** (`rm_1v1` -> `rm_solo`, `rm_2v2`/`rm_3v3`/`rm_4v4` -> `rm_team`) y es por la que filtra el motor; `leaderboard` no se toca, porque es el registro literal de lo que dijo la API.
 - `result` admite `null`: significa que la partida aún no está resuelta por la API. El motor no puntúa esas filas.
 - `revertedAt` es la cuarta condición de "cuenta como clasificatoria" (F8): es la marca que pone el panel para que una partida deje de puntuar, y la regla la lee `src/lib/ranked-match.ts` en sus tres traducciones, así que no da ni victorias ni objetivos. **El worker no la toca**, y por eso la marca sobrevive a la reimportación.
-- `AdminAction` es el historial **append-only** de lo que hace la organización (F8). `summary` se redacta en español en el momento de escribir la fila (`src/lib/admin-actions.ts`) y la interfaz lo pinta tal cual, para que el rastro y la pantalla no puedan divergir. Aprobar o rechazar una solicitud **no** se registra: no cambia nada de lo que ve el público.
+- `AdminAction` es el historial **append-only** de lo que hace la organización (F8). `summary` se redacta en español en el momento de escribir la fila (`src/lib/admin-actions.ts`) y la interfaz lo pinta tal cual, para que el rastro y la pantalla no puedan divergir. El enum es corto a propósito —solo lo que **alguien más ve**: un jugador entra, sale o se le corrigen sus datos, una partida deja de puntuar o vuelve a puntuar—, y aprobar o rechazar una solicitud **no** se registra porque no cambia nada de lo que ve el público. Editar **sí**: el nombre y los canales salen en la clasificación y en `/partidas`.
 - `ObjectiveEvent` es un **espejo reconciliado** del cómputo de objetivos, no un log: una fila por objetivo cumplido (38 como mucho) y `achievedAt` = el instante de la hazaña en las carreras de `civilizacion` y el fin del torneo en los 14 objetivos "en caliente", que solo se registran cuando la ventana ya ha terminado. Lo escribe `recomputeScores()` dentro de su transacción (`src/lib/objective-events.ts`), y **se borra** si el objetivo deja de cumplirse: por eso no guarda etiqueta ni puntos (se resuelven al leer del catálogo y del ruleset activo) ni puede quedar apuntando a un poseedor al que ya le movieron los puntos. Detalle en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md) §1.6.
 - `PlayerScore` es el agregado **versionado** que lee la web. El modelo completo está en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md): la parte que no depende de las reglas ya está aplicada y la que depende (ruleset Wololo, snapshots, categorías) está diferida.
 - `Alert` es el registro **append-only** de los comportamientos anómalos que el motor detecta sobre
@@ -357,6 +357,23 @@ referencia ordreduwololo.fr y soloqchallenge.gg solo mandan en comportamiento, n
   - `getLiveMatches()` entrega `LiveMatch[]` (una entrada por partida): `participants` con
     `isLeaguePlayer`, `division`, `civ`, `team` (la alineación se lee de `rawJson.teams`, con
     degradado a las columnas si no es legible), `format` y `elapsedSeconds`.
+  - **Solo salen las clasificatorias**: la consulta se filtra por la **familia de ladder**
+    del ruleset vivo (`rankedModesWhere()`, en `src/lib/ranked-match.ts`, la misma lista que
+    lee el motor) y no por la regla entera, porque una partida en curso no cumple por
+    definición las otras tres condiciones —no tiene `result` ni `finishedAt`— y
+    `rankedMatchWhere()` dejaría la pantalla vacía. El filtro es de **presentación**: el
+    worker sigue importando en `Match` todo lo que juega un participante, quick match y FFA
+    incluidos, porque el histórico entero es lo que permite recalcular sin volver a pedirlo
+    todo a la API. Lo que resuelve es que `/partidas` cumpla lo que promete su copy
+    ("ladder ranked"): antes, una QM FFA en curso salía etiquetada como "1vs1".
+    - **El indicador "en partida" del home usa el mismo criterio** (`getStandings`, mismo
+      `rankedModesWhere()`), a propósito y no por parecido. El contador "N partidas en juego"
+      de la cabecera del home sale de `getLiveMatches()`, así que con dos criterios distintos
+      la misma página podía marcar a un jugador "en partida" y no enseñar su partida; y la
+      terminología de F7 sigue valiendo ("en partida" = estado del jugador, "en juego" = las
+      partidas de `/partidas`), porque las dos cosas son la misma por construcción. Por lo
+      mismo, `/partidas` y el "en partida" se degradan a la vez: si la base no responde,
+      `getStandings()` lo devuelve entero como `degraded`.
   - **Filtros en cliente** por tipo de partida (1vs1, 2vs2…) y por **división** (las 6, sin rangos
     internos): la partida pasa si alguno de sus participantes de la liga es de esa división.
   - **74 imágenes de mapa** versionadas en `public/imagenes/mapas/` (minimapas del CDN de AoE4World,
@@ -474,6 +491,23 @@ Pendiente de F4:
       evita que un `FormData` hecho a mano rechace a alguien que eligió bien. En el alta de admin un
       país escrito mal es un error y vacío es `null`: guardar `null` en lo primero diría "no lo
       sabemos" de algo que en realidad está mal escrito.
+  - **El país elegido se contrasta con el de AoE4World** (`findCountryIsoConflict()`, en
+       `src/lib/countries.ts`). Es la única comprobación de la inscripción que **no falla cerrando**:
+       solo bloquea cuando los dos países se resuelven y son distintos, y entonces sale como error
+       del campo `country` nombrando los dos. Se compara el `country` del perfil —un **ISO 3166-1
+       alfa-2 en minúsculas**, que la API ya traía y que hasta aquí se descartaba— contra el **rótulo
+       canónico** que resolvió `parseCountry()`: el código se traduce con `COUNTRY_LABEL_BY_ISO`, una
+       tabla de ISO → rótulo que vive **junto a `DEFAULT_COUNTRIES`** y que hay que ampliar cada vez
+       que se añada un país a la lista (los dos casos que confunden son `pr` = Puerto Rico y
+       `do` = República Dominicana; `npm run verify:sync` comprueba que las dos mitades no diverjan).
+       El rótulo traducido se resuelve **contra la lista admitida vigente**, no contra la del código:
+       si el país del perfil ya no está en la lista publicada, no hay contradicción que afirmar.
+       **Criterio de degradación**: perfil sin país (`country` a `null`), comprobación que no se ha
+       podido hacer (llamada fallida o perfil inexistente) o ISO que no se puede traducir a un rótulo
+       de la lista (por ejemplo `"gb"`) → **se deja pasar**, porque "no se ha podido comprobar" no es
+       "está mal" y bloquear ahí dejaría fuera a alguien que sí cumple. El mensaje dice cuál de los dos
+       países es cuál e invita a corregir el desplegable, porque sin nombrarlos el error no indica qué
+       corregir.
   - **Interfaz**: `/participar` lo pide con un desplegable **obligatorio** cuyo primer `option`
       es "Elige tu país", deshabilitado; la lista se lee en el servidor con `readCountries()` y se
       pasa al formulario cliente, y la página declara `force-dynamic` por esa lectura. El alta de
@@ -623,9 +657,9 @@ cuando hay pendientes.
     activo no salen: un hito no es ni una victoria ni una derrota. Etiqueta, grupo y puntos
     llegan resueltos en la fila (etiqueta, grupo, métrica y puntos), así que la interfaz no
     tiene que mirar el catálogo.
-- [x] **Historial de acciones** (`AdminAction`): altas, bajas y cambios de puntos, con la
-  quien los hizo y cuándo. Se registra en la **misma transacción** que el cambio, así que o hay
-  las dos cosas o no hay ninguna.
+- [x] **Historial de acciones** (`AdminAction`): altas, ediciones, bajas y cambios de
+  puntos, con la quien los hizo y cuándo. Se registra en la **misma transacción** que el
+  cambio, así que o hay las dos cosas o no hay ninguna.
 - [x] **Ordenación por columna en el panel**: `/admin/historial` ordena por **Fecha** y
   **Resultado** (por defecto Fecha, descendente) y `/admin/acciones` por **Fecha**, **Acción**
   (por el tipo) y **Admin**. La Descripción del historial es la frase del feed y las Acciones no
@@ -670,6 +704,93 @@ cuando hay pendientes.
       roadmap. El estado del sincronizador, que sí es salud del sistema, sigue viviendo aparte,
       en `getSyncHealth()` y en el aviso de `/admin`: una alerta de comportamiento y una avería
       del sync son cosas distintas y no se mezclan.
+- [x] **Editar un participante que ya está en el panel** (`updatePlayer`, en
+      `src/app/admin/actions.ts`, con la interfaz en la pestaña de participantes):
+      reescribe **cinco** campos —`name`, `twitchChannel`, `youtubeChannel`,
+      `kickChannel` y `country`— y nada más. Se quedan fuera a propósito el **estado**
+      (que ya tiene aprobar/rechazar/eliminar), el **`profileId`** (es la identidad
+      en AoE4World y único: cambiarlo sería cambiar de persona), el `aoe4WorldName`,
+      el avatar y todo lo que escribe el worker (elo, división, racha, `*IsLive`), y
+      por supuesto los puntos y el ranking, que ni se leen.
+  - **No recalcula ni trae partidas**, al revés que el alta: ninguno de los cinco
+      campos entra en el motor de puntos ni en el de alertas —`PlayerScore` y `Alert`
+      hablan de partidas, no de cómo se llama alguien—, así que no hay nada derivado
+      que se quede viejo. Revalida solo `/admin`; la web pública es `force-dynamic`.
+  - **El formulario es una foto completa de la fila**: los cinco campos se reescriben
+      con lo que venga y un vacío es `null` ("no tiene canal", "no lo sabemos del
+      país"), que es el criterio del alta. **No hay un "no tocado"** y es
+      deliberado: un contrato de "escribe solo los campos que mande el formulario"
+      daría dos formas de lo mismo en el mismo panel y dejaría que un `FormData` al
+      que le faltara un campo borrara el canal sin que nadie lo pidiera. Quien llama
+      es un admin (lo comprueba `requireAdmin`) y el formulario se pinta con los
+      valores que ya trae `AdminParticipant`.
+  - **Validación compartida con el alta**: los mismos parsers y los mismos textos
+      (`YOUTUBE_INVALID_ERROR`, `YOUTUBE_LEGACY_URL_ERROR`, `KICK_INVALID_ERROR`,
+      `TWITCH_INVALID_ERROR`, `COUNTRY_UNKNOWN_ERROR`), y el país **opcional** —vacío es
+      `null` y un valor fuera de la lista vigente es un error—. La lista se lee de
+      `Setting` **solo si el envío trae país**, para que un corte al leerla no impida
+      corregir el nombre o un canal. Los **tres** canales, el de Twitch incluido, se
+      rechazan igual en el alta y en la edición: la asimetría que había —`createPlayer`
+      guardaba el canal de Twitch inválido como `null` en silencio— era una incoherencia
+      dentro del mismo panel, dos formularios para el mismo campo con dos reglas, y el
+      que peor salía era el alta, que es donde el valor se escribe la primera vez y
+      donde guardarlo mal no lo vuelve a corregir nadie.
+  - **Concurrencia**: aprobar, rechazar y editar escriben **conjuntos de columnas
+      disjuntos** —estado por un lado, los cinco campos por otro—, así que ninguna
+      puede deshacer lo que escribió la otra y no hace falta coordinarlas. Es lo
+      contrario de la reinscripción de `/participar`, donde el estado **cambia** y su
+      `UPDATE` filtra por él justamente para no pisar una aprobación. No se usa
+      `Player.updatedAt` como versión: el worker escribe la fila de cada aprobado en
+      cada pasada (`ladder.ts`), así que se movería solo y daría conflictos falsos.
+      Lo que queda es el último `UPDATE` gana entre dos admins, y el mensaje de vuelta
+      dice qué campos han cambiado (y, si no cambia ninguno, no se escribe nada).
+  - **La interfaz es un formulario propio, no el del alta** (`PlayerEditDialog`, en
+      `src/app/admin/player-edit-dialog.tsx`): se abre desde un botón **"Editar"** en la
+      columna Acciones, a la cabeza de las acciones y en tono neutro —filete tenue, texto
+      en `muted`— porque es la de uso diario y no debe competir con aprobar, rechazar ni
+      eliminar, que sí cambian el estado o borran. El alta (`player-form.tsx`, con
+      `createPlayer`) pide además `profileId` y estado y puede tardar segundos trayendo
+      partidas; la edición no toca ninguno de esos dos y solo manda una foto de los cinco
+      campos, así que compartir el componente obligaría a parametrizarlo entero para ganar
+      unas pocas líneas, y se copia su dialecto de campos (mismas clases, mismas pistas).
+      La capa es `Modal` (foco al abrir y devuelto al cerrar, `Esc`, clic en el fondo,
+      scroll bloqueado) con el cromo de tarjeta del panel.
+  - **Los campos son controlados**, y no por gusto: React resetea los formularios de una
+      Server Action al enviarlos, así que con valores no controlados un error de validación
+      llegaría con lo escrito borrado. Manteniendo el valor en estado de React, el error
+      sale en `role="alert"` **sin perder lo escrito**. El error se copia a estado propio y
+      no se pinta desde `useActionState` para poder limpiarlo al abrir de nuevo.
+  - **Descartar lo escrito pide confirmación**: cerrar con cambios sin guardar abre el
+      `ConfirmDialog` del panel ("Seguir editando" / "Descartar"); sin cambios, cierra
+      directo. El éxito cierra el diálogo y el mensaje —que dice qué campos cambiaron— viaja
+      a la banda de `ActionFeedback`, que sobrevive al refresco de la ruta.
+  - **El desplegable de país usa la lista viva** que la página ya lee con `readCountries()`
+      (la misma que valida la acción, para que no diverjan) y, si el jugador tiene un país
+      que la organización ya retiró, lo añade marcado "(ya no admitido)" en lugar de perderlo
+      del desplegable; al enviarlo, `updatePlayer` lo rechaza con su propio mensaje.
+  - **La edición sí registra `AdminAction`** (`PLAYER_EDITED`), dentro de la **misma
+      transacción** que el `UPDATE`, como `createPlayer` y las demás: o se ven el cambio
+      y su línea o no se ve ninguno. Encaja en el criterio del enum —cambia datos que
+      alguien más ve— porque el nombre y los canales salen en la clasificación y en
+      `/partidas`, así que no es una nota privada del panel. Solo se escribe cuando hay
+      cambios de verdad: abrir el formulario y cerrarlo sin tocar nada ya salía antes de
+      escribir, y sigue sin escribir nada, tampoco en el rastro.
+    - **La frase dice el jugador y los campos** (`Edición de BeastWizard (AoE4World
+      123456): nombre, canal de Twitch`), con los **mismos rótulos** que el mensaje de
+      la acción, y se redacta en `admin-actions.ts` como todas las demás para que el
+      historial y la pantalla no puedan divergir. En `details` va lo estructurado y útil
+      para investigar: `name`, `profileId`, la lista de columnas en `campos` y, por
+      columna, `<campo>.antes` y `<campo>.despues`. Las claves van **planas** y no
+      anidadas porque el DAL aplana `details` a primitivos de un nivel (`readDetails()`
+      en `src/lib/admin.ts`) y lo anidado se descartaría al leer.
+    - **Requisito operativo, ya aplicado**: `npm run db:push` (añade el valor
+      `PLAYER_EDITED` a `enum AdminActionType`). No hace falta `npm run db:security`:
+      no se crea ninguna tabla ni columna. El valor va **al final** del enum a propósito,
+      porque en Postgres `ALTER TYPE … ADD VALUE` solo añade al final y ponerlo entre los
+      tipos de jugador obligaría a recrear el tipo, que sobre la base de producción es
+      rehacer una columna entera por algo que se añade con una sentencia de
+      milisegundos. Ese orden es además el que usa la columna "Acción" del panel al
+      ordenar por tipo, así que los valores nuevos salen detrás de los ya escritos.
 
 Decisiones que condicionan lo que viene:
 

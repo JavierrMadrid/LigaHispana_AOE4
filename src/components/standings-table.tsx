@@ -9,6 +9,7 @@ import type {
   StandingRow,
 } from "@/lib/public";
 import { ChannelLinks } from "@/components/channel-links";
+import { CountryFlag } from "@/components/country-flag";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
 import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
@@ -707,7 +708,14 @@ function StandingsRow({
 
         <td className={CELL}>
           <div className="flex items-center gap-3">
-            <PlayerAvatar name={row.name} avatarUrl={row.avatarUrl} className="size-9 text-xs" />
+            {/* Bandera y avatar forman una unidad: van juntos, con menos aire
+                entre ellos que el resto de la fila, porque los dos responden a
+                "quién es". Sin país, `CountryFlag` no pinta nada y el avatar
+                vuelve a quedarse solo, sin hueco de más. */}
+            <span className="flex shrink-0 items-center gap-2">
+              <CountryFlag country={row.country} />
+              <PlayerAvatar name={row.name} avatarUrl={row.avatarUrl} className="size-9 text-xs" />
+            </span>
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <PlayerName row={row} />
               <PlayerChips
@@ -825,7 +833,13 @@ function StandingsCard({
     >
       <div className="flex items-start gap-3">
         <RankBadge rank={row.rank} />
-        <PlayerAvatar name={row.name} avatarUrl={row.avatarUrl} className="size-9 text-xs" />
+        {/* En móvil la bandera repite la posición de la tabla: entre el puesto y
+            el avatar. El bloque va `shrink-0` para que sea la identidad, y no la
+            bandera, quien ceda el ancho que sobra. */}
+        <span className="flex shrink-0 items-center gap-2">
+          <CountryFlag country={row.country} />
+          <PlayerAvatar name={row.name} avatarUrl={row.avatarUrl} className="size-9 text-xs" />
+        </span>
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">

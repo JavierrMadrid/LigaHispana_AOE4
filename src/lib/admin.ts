@@ -569,9 +569,11 @@ export function readActionsSort(query: AdminSortQuery): AdminActionsSort {
  * Orden del historial de acciones en `orderBy` de Prisma.
  *
  * `tipo` ordena por el enum `AdminActionType`, que en Postgres se ordena por el orden
- * de sus valores en el esquema (altas, bajas y cambios de puntos) y no alfabéticamente
- * por la etiqueta. Es el mismo criterio que en la columna de regla de las alertas, y
- * con la misma garantía de desempate por `id`.
+ * de sus valores en el esquema (altas, bajas, cambios de puntos y ediciones, en el
+ * orden en que están declarados) y no alfabéticamente por la etiqueta. Es el mismo
+ * criterio que en la columna de regla de las alertas, y con la misma garantía de
+ * desempate por `id`. Ojo con añadir un valor: `ALTER TYPE … ADD VALUE` solo añade al
+ * final, así que un tipo nuevo nunca se cuela en medio de este orden.
  */
 const ACTION_ORDER_BY: Record<
   AdminActionsSort["key"],
@@ -900,7 +902,8 @@ export type AdminMatchHistoryRow = {
   opponentProfileId: number | null;
   result: MatchResult | null;
   /**
-   * Tamaño real del partido («1vs1», «2v2», «3v3»…), leído de `rawJson.teams`.
+   * Tamaño real del partido («1vs1», «2v2», «3v3»…), leído de `rawJson.teams`
+   * y solo si la partida tiene dos bandos del mismo tamaño.
    *
    * No se puede sacar de `mode`/`leaderboard`: un ranked por equipos llega con
    * `leaderboard: "rm_team"`, que no dice cuántos juegan. `null` cuando el payload no

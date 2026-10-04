@@ -20,6 +20,12 @@ import { readRuntimeEnv } from "@/lib/runtime-env";
  * `unavailable` y la inscripción **no** se crea. Aceptar el `profileId` declarado
  * sin comprobarlo dejaría pasar cualquier número inventado, y eso es justo lo que
  * este módulo evita.
+ *
+ * En el camino `ok` viaja también el **país del perfil**, porque es el dato con el
+ * que la inscripción contrasta el que eligió la persona (ver
+ * `findCountryIsoConflict()`). Aquí solo se traduce el JSON y se deja pasar el
+ * valor tal cual: decidir si dos países se contradicen es de la lista admitida, y
+ * esta comprobación no la conoce.
  */
 
 const DEFAULT_PROFILE_TIMEOUT_MS = 8_000;
@@ -31,6 +37,17 @@ export type ProfileCheck =
       name: string;
       /** `avatars.full` o `null`; null = la tabla dibujará un monograma. */
       avatarUrl: string | null;
+      /**
+       * `country` del perfil: un **ISO 3166-1 alfa-2 en minúsculas** (la API lo
+       * manda así: `"co"`, `"do"`, `"pr"`…) o `null` si el perfil no tiene país.
+       *
+       * Viene sin traducir a propósito: el rótulo canónico es cosa de la lista
+       * admitida, que vive en `Setting`, y quien lo necesita
+       * (`findCountryIsoConflict()`, en `src/lib/countries.ts`) lo resuelve contra
+       * ella. Un `null` es un dato en sí mismo —el perfil no dice de dónde es— y no
+       * un fallo de esta comprobación.
+       */
+      country: string | null;
     }
   /** La API respondió 404: el perfil no existe. */
   | { status: "not-found" }
@@ -102,6 +119,7 @@ export async function checkAoe4WorldProfile(
       status: "ok",
       name: profile.name,
       avatarUrl: profile.avatars.full,
+      country: profile.country,
     };
   } catch (error) {
     if (error instanceof Aoe4WorldNotFoundError) {
