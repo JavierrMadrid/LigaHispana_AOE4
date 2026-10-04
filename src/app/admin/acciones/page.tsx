@@ -19,6 +19,7 @@ export const metadata: Metadata = {
  */
 const ACTION_LABELS: Record<AdminActionType, string> = {
   PLAYER_CREATED: "Alta de jugador",
+  PLAYER_EDITED: "Edición de jugador",
   PLAYER_REMOVED: "Baja de jugador",
   MATCH_POINTS_REVERTED: "Puntos revertidos",
   MATCH_POINTS_RESTORED: "Puntos restaurados",
@@ -30,9 +31,14 @@ const ACTION_LABELS: Record<AdminActionType, string> = {
  * juicio), baja en el rojo de la casa, puntos revertidos en el oro de la liga y
  * puntos restaurados en el verde de lo que vuelve. Es la misma paleta del resto
  * del panel, no una taxonomía nueva.
+ *
+ * La edición comparte el tono neutro del alta: también es una anotación —el jugador
+ * sigue en el torneo—, y darle un color propio haría que una fila de "corregir el
+ * nombre" pesara más en la lista que un alta o una baja.
  */
 const ACTION_STYLES: Record<AdminActionType, string> = {
   PLAYER_CREATED: "border-line-strong text-foreground",
+  PLAYER_EDITED: "border-line-strong text-foreground",
   PLAYER_REMOVED: "border-loss/40 text-loss",
   MATCH_POINTS_REVERTED: "border-accent/40 text-accent",
   MATCH_POINTS_RESTORED: "border-win/40 text-win",

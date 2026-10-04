@@ -103,6 +103,44 @@ const EXPECTED_COUNTRIES = [
 const PAISES_FILE = path.join(process.cwd(), "paises.txt");
 
 /**
+ * El ISO 3166-1 alfa-2 de cada país de `paises.txt`, en minúsculas como los
+ * devuelve AoE4World en `player.country`.
+ *
+ * Vive aquí aparte, por el mismo motivo que `EXPECTED_COUNTRIES`: la traducción
+ * vive en `src/lib/countries.ts`, junto a `DEFAULT_COUNTRIES`, y si las dos
+ * tablas se escribieran en el mismo sitio un cambio a medias no se notaría. Aquí
+ * está como dato esperado, así que añadir un país a la lista sin su ISO (o al
+ * revés) falla la comprobación.
+ *
+ * Los dos que más se confunden van comentados porque son los que aparecen en la
+ * lista: Puerto Rico y República Dominicana.
+ */
+const EXPECTED_COUNTRY_ISOS: Readonly<Record<string, string>> = {
+  Colombia: "co",
+  España: "es",
+  Venezuela: "ve",
+  Perú: "pe",
+  Ecuador: "ec",
+  Guatemala: "gt",
+  Bolivia: "bo",
+  Cuba: "cu",
+  "República Dominicana": "do",
+  Honduras: "hn",
+  Paraguay: "py",
+  "El Salvador": "sv",
+  Nicaragua: "ni",
+  "Costa Rica": "cr",
+  Panamá: "pa",
+  "Guinea Ecuatorial": "gq",
+  "Antigua y Barbuda": "ag",
+  México: "mx",
+  Argentina: "ar",
+  Chile: "cl",
+  Uruguay: "uy",
+  "Puerto Rico": "pr",
+};
+
+/**
  * Reloj congelado para las comprobaciones de normalización: al pasarle `NOW` a
  * `normalizeGame` el resultado no depende del día en que se ejecute. El
  * worker usa el reloj real, y su fixture se construye aparte con `buildFixtureAt`.
@@ -2198,6 +2236,10 @@ async function runDatabaseChecks(): Promise<void> {
  *   elemento que no es texto o un país repetido se descartan enteros, no a medias;
  * - que `parseCountry()` resuelva el valor escrito al rótulo canónico, incluidos
  *   los casos en los que está escrito de otra manera (sin tilde, con espacios).
+ * - que `findCountryIsoConflict()` solo diga que hay contradicción cuando los dos
+ *   países se han resuelto: ISO que coincide, ISO que contradice, ISO que no se
+ *   puede traducir y perfil sin país. Y que la tabla de ISO y la lista por defecto
+ *   no puedan divergir sin que se note.
  *
  * Lo que sí necesita la base es que la lista **publicada** sea la que se está
  * usando, y eso lo comprueba `--db`.
@@ -2331,6 +2373,199 @@ async function checkRegistrationCountries(): Promise<void> {
     assert.equal(parseCountry("", DEFAULT_COUNTRIES), null);
     assert.equal(parseCountry("   ", DEFAULT_COUNTRIES), null);
     assert.equal(parseCountry(null, DEFAULT_COUNTRIES), null);
+  });
+
+  await checkCountryIsoConflict();
+}
+
+/**
+ * El contraste entre el país de AoE4World y el que eligió la persona.
+ *
+ * Son cuatro casos y solo uno bloquea, que es el sentido de toda la regla: el
+ * formulario **no** puede afirmar que alguien se equivoca de país si no ha sido
+ * capaz de resolver los dos.
+ *
+ * 1. Los dos países se resuelven y son el mismo → pasa.
+ * 2. Los dos se resuelven y son distintos → contradicción, con los dos rótulos.
+ * 3. El ISO no se puede traducir a un rótulo de la lista admitida (`"gb"`) → pasa.
+ * 4. El perfil no trae país → pasa.
+ *
+ * Y con ellos, las dos cosas que pueden hacer que la comparación diga algo que no
+ * es: un ISO escrito con otros espacios o en mayúsculas (la API manda minúsculas,
+ * pero el valor viene de fuera), y un ISO que sí se traduce pero cuyo rótulo ya no
+ * está en la lista publicada, que es el caso de una organización que ha acortado la
+ * lista.
+ */
+async function checkCountryIsoConflict(): Promise<void> {
+  const { DEFAULT_COUNTRIES, findCountryIsoConflict } = await import("@/lib/countries");
+
+  await check("la tabla de ISO cubre la lista por defecto, país por país", () => {
+    const conIso = EXPECTED_COUNTRIES.filter((pais) => pais in EXPECTED_COUNTRY_ISOS);
+    const sinIso = EXPECTED_COUNTRIES.filter((pais) => !(pais in EXPECTED_COUNTRY_ISOS));
+
+    assert.deepEqual(
+      sinIso,
+      [],
+      `países de la lista sin ISO en la tabla: ${sinIso.join(", ")}`,
+    );
+    assert.deepEqual(
+      Object.keys(EXPECTED_COUNTRY_ISOS).filter((pais) => !DEFAULT_COUNTRIES.includes(pais)),
+      [],
+      "la tabla de ISO trae países que no están en la lista",
+    );
+    assert.equal(conIso.length, DEFAULT_COUNTRIES.length);
+
+    // Cada ISO resuelve a su propio país y solo a su propio país: es la condición
+    // para que comparar dos rótulos plegados no produzca ni un falso positivo ni un
+    // falso negativo. Los dos códigos que más se confunden van comprobados por su
+    // nombre, porque son los que se escriben mal.
+    for (const [pais, iso] of Object.entries(EXPECTED_COUNTRY_ISOS)) {
+      const otros = EXPECTED_COUNTRIES.filter((otro) => otro !== pais);
+
+      for (const otro of otros) {
+        assert.deepEqual(
+          findCountryIsoConflict({
+            aoe4WorldCountry: iso,
+            selectedCountry: otro,
+            allowed: DEFAULT_COUNTRIES,
+          }),
+          { aoe4WorldCountry: pais, selectedCountry: otro },
+          `el ISO "${iso}" debería señalar solo a ${pais}`,
+        );
+      }
+    }
+
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: "pr",
+        selectedCountry: "República Dominicana",
+        allowed: DEFAULT_COUNTRIES,
+      })?.aoe4WorldCountry,
+      "Puerto Rico",
+      "pr es Puerto Rico, no República Dominicana",
+    );
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: "do",
+        selectedCountry: "Puerto Rico",
+        allowed: DEFAULT_COUNTRIES,
+      })?.aoe4WorldCountry,
+      "República Dominicana",
+      "do es República Dominicana, no Puerto Rico",
+    );
+  });
+
+  await check("un ISO que coincide con lo elegido no da contradicción", () => {
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: "co",
+        selectedCountry: "Colombia",
+        allowed: DEFAULT_COUNTRIES,
+      }),
+      null,
+    );
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: "do",
+        selectedCountry: "República Dominicana",
+        allowed: DEFAULT_COUNTRIES,
+      }),
+      null,
+    );
+
+    // El valor viene de la API y de un perfil escrito por el jugador, así que se
+    // resuelve con el mismo criterio plegado que el resto de países: con espacios o
+    // en mayúsculas sigue siendo el mismo código.
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: " ES ",
+        selectedCountry: "España",
+        allowed: DEFAULT_COUNTRIES,
+      }),
+      null,
+    );
+
+    // Y una lista publicada con otra capitalización no es una contradicción: es el
+    // mismo país escrito de otra manera.
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: "mx",
+        selectedCountry: "mexico",
+        allowed: ["mexico"],
+      }),
+      null,
+      "el rótulo de la lista manda, no el que escribió la persona",
+    );
+  });
+
+  await check("un ISO que contradice lo elegido se señala con los dos países", () => {
+    const conflicto = findCountryIsoConflict({
+      aoe4WorldCountry: "mx",
+      selectedCountry: "Colombia",
+      allowed: DEFAULT_COUNTRIES,
+    });
+
+    assert.deepEqual(conflicto, {
+      aoe4WorldCountry: "México",
+      selectedCountry: "Colombia",
+    });
+
+    // El mensaje se compone con esos dos rótulos, así que tienen que ser los
+    // canónicos y estar los dos: sin el del perfil el error no explica el motivo.
+    assert.equal(
+      conflicto?.aoe4WorldCountry,
+      "México",
+      "el país de AoE4World se nombra con el rótulo de la lista, no con el ISO",
+    );
+  });
+
+  await check("un ISO que no se puede traducir se deja pasar", () => {
+    for (const iso of ["gb", "us", "fr", "de", "zz", "", "   "]) {
+      assert.equal(
+        findCountryIsoConflict({
+          aoe4WorldCountry: iso,
+          selectedCountry: "Colombia",
+          allowed: DEFAULT_COUNTRIES,
+        }),
+        null,
+        `"${iso}" no se puede traducir a un país de la lista y no debe bloquear`,
+      );
+    }
+
+    // Las claves del prototipo tampoco: el valor viene de un perfil escrito por
+    // quien sea, y "constructor" no es un ISO.
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: "constructor",
+        selectedCountry: "Colombia",
+        allowed: DEFAULT_COUNTRIES,
+      }),
+      null,
+    );
+
+    // Se traduce, pero el rótulo ya no está en la lista publicada: solo se compara
+    // contra la lista que se está aplicando.
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: "mx",
+        selectedCountry: "Colombia",
+        allowed: ["Colombia", "España"],
+      }),
+      null,
+      "un país que la lista vigente ya no admite no puede contradecir a otro",
+    );
+  });
+
+  await check("un perfil sin país se deja pasar", () => {
+    assert.equal(
+      findCountryIsoConflict({
+        aoe4WorldCountry: null,
+        selectedCountry: "Colombia",
+        allowed: DEFAULT_COUNTRIES,
+      }),
+      null,
+      "sin país en el perfil no se afirma nada",
+    );
   });
 }
 
