@@ -47,14 +47,16 @@ function disparo(overrides: Partial<AlertTriggerInput> = {}): AlertTriggerInput 
 }
 
 describe("etiquetas", () => {
-  it("las ocho reglas y los tres tipos tienen su rótulo en español", () => {
+  it("las diez reglas y los cuatro tipos tienen su rótulo en español", () => {
     // El `satisfies Record<...>` del módulo obliga a decidir la etiqueta al añadir
     // una regla; aquí se comprueba que ninguna se quedó sin él ni con el mismo
-    // texto que otra.
+    // texto que otra. Las diez reglas son las ocho de comportamiento más las dos de
+    // estado del historial, y los cuatro tipos son las tres rachas/acumulados más
+    // `STATE_DETECTED`.
     const etiquetas = Object.values(ALERT_RULE_LABELS);
 
-    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(8);
-    expect(Object.keys(ALERT_KIND_LABELS)).toHaveLength(3);
+    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(10);
+    expect(Object.keys(ALERT_KIND_LABELS)).toHaveLength(4);
     expect(new Set(etiquetas).size).toBe(etiquetas.length);
     for (const etiqueta of [...etiquetas, ...Object.values(ALERT_KIND_LABELS)]) {
       expect(etiqueta.length).toBeGreaterThan(0);
@@ -144,6 +146,59 @@ describe("alertSummary", () => {
     ).not.toContain("al cerrar el torneo");
   });
 
+  it("las dos reglas de estado dicen lo que se comprobó, sin causa y sin acusar", () => {
+    // La diferencia con el resto no es de estilo: estas frases las lee gente que no
+    // ha hecho nada malo. Ninguna dice por qué (si el jugador cambió el ajuste, si se
+    // le olvidó, si es un problema de la web, no lo sabemos), y ninguna acusa. La
+    // columna `rule` ya dice qué regla es, así que la frase no repite el nombre.
+    expect(
+      alertSummary(
+        disparo({
+          rule: "HISTORY_NOT_PUBLIC",
+          kind: "STATE_DETECTED",
+          count: 3,
+          threshold: 3,
+          anchorGameId: null,
+          detail: { probedCount: 3, probedGameIds: ["1", "2", "3"] },
+        }),
+      ),
+    ).toBe("Su historial de partidas no es público");
+    expect(
+      alertSummary(
+        disparo({
+          rule: "MISSING_LADDER_MATCHES",
+          kind: "STATE_DETECTED",
+          count: 320,
+          threshold: 75,
+          anchorGameId: null,
+          detail: { lagMinutes: 320 },
+        }),
+      ),
+    ).toBe("La ladder registra partidas que no nos llegan");
+  });
+
+  it("las frases de estado no llevan el nombre del jugador ni la causa", () => {
+    for (const rule of ["HISTORY_NOT_PUBLIC", "MISSING_LADDER_MATCHES"] as const) {
+      const frase = alertSummary(
+        disparo({
+          rule,
+          kind: "STATE_DETECTED",
+          subject: SUJETO,
+          count: 3,
+          anchorGameId: null,
+        }),
+      );
+
+      expect(frase).not.toContain("Rival Externo");
+      // Habla en primera persona del sistema ("no nos llegan") o del jugador ("su
+      // historial"), nunca en tercera persona con nombre.
+      expect(frase).toMatch(/^(Su |La ladder)/);
+      // Palabras que serían una acusación o una causa, que es justo lo que no se sabe.
+      expect(frase).not.toMatch(/culpa|trampa|mentir|false|intencionad|mal hecho/i);
+      // Y tampoco "al cerrar el torneo": un estado no se cierra, se comprueba.
+      expect(frase).not.toContain("al cerrar el torneo");
+    }
+  });
 });
 
 describe("alertDetails", () => {
@@ -237,6 +292,66 @@ describe("alertDedupeKey", () => {
     expect(mio.dedupeKey).not.toBe(otro.dedupeKey);
   });
 
+  it("una regla de estado tiene clave estable: da igual cuántas veces se mida", () => {
+    // **La propiedad de la que depende que estas reglas no llenen la tabla.** Se
+    // reevalúan cada 5 minutos (la del historial con caché de 12 h), así que si la
+    // clave llevara la partida sondeada o los minutos de desfase, cada medición
+    // distinta insertaría una fila: una alarma cada 12 horas y para siempre por
+    // jugador. Con `remate = "estado"` la clave depende solo de (regla, tipo,
+    // jugador, sujeto), y la segunda pasada inserta 0 filas.
+    const clave = (overrides: Partial<AlertTriggerInput>) =>
+      buildTriggeredAlert(
+        disparo({
+          rule: "HISTORY_NOT_PUBLIC",
+          kind: "STATE_DETECTED",
+          count: 3,
+          threshold: 3,
+          anchorGameId: null,
+          subject: SELF_SUBJECT,
+          ...overrides,
+        }),
+      ).dedupeKey;
+
+    const primera = clave({ detail: { probedGameIds: ["1", "2", "3"], probedCount: 3 } });
+    // Otra medición de otro día: otras partidas, otro desfase, otra fecha.
+    const segunda = clave({ count: 3, detail: { probedGameIds: ["900", "901", "902"] } });
+    const tercera = clave({
+      count: 99,
+      threshold: 99,
+      anchorGameId: "900",
+      detail: { probedGameIds: ["901"], lagMinutes: 99 },
+    });
+
+    expect(segunda).toBe(primera);
+    expect(tercera).toBe(primera);
+    expect(primera).toContain(`v${ALERTS_RULESET_VERSION}|HISTORY_NOT_PUBLIC|STATE_DETECTED`);
+  });
+
+  it("las dos reglas de estado no comparten clave entre sí", () => {
+    const base = {
+      rule: "HISTORY_NOT_PUBLIC",
+      kind: "STATE_DETECTED",
+      playerId: "jugador-alertas",
+      subjectKey: SELF_SUBJECT.key,
+      anchorGameId: null,
+      count: 3,
+    } as const;
+
+    expect(alertDedupeKey(base)).not.toBe(
+      alertDedupeKey({ ...base, rule: "MISSING_LADDER_MATCHES", count: 320 }),
+    );
+  });
+
+  it("una regla de estado no se confunde con una de racha del mismo jugador", () => {
+    // El `kind` sigue estando en la clave: sin él, "el historial no es público" y
+    // "tres partidas seguidas" podrían coincidir si se mezclaran reglas y tipos.
+    const estado = buildTriggeredAlert(
+      disparo({ rule: "HISTORY_NOT_PUBLIC", kind: "STATE_DETECTED", anchorGameId: null }),
+    );
+    const racha = buildTriggeredAlert(disparo());
+
+    expect(estado.dedupeKey).not.toBe(racha.dedupeKey);
+  });
 });
 
 describe("buildTriggeredAlert", () => {

@@ -71,13 +71,27 @@ export type StreakAlertRule =
 
 /** Reglas que miran un acumulado sobre toda la ventana. */
 export type TotalAlertRule =
-  | "SHORT_MATCH_TOTAL"
-  | "REPEATED_OPPONENT_TOTAL"
-  | "REPEATED_TEAMMATE_TOTAL";
+  "SHORT_MATCH_TOTAL" | "REPEATED_OPPONENT_TOTAL" | "REPEATED_TEAMMATE_TOTAL";
 
-export type AlertsRuleName = StreakAlertRule | TotalAlertRule;
+/**
+ * Reglas que miran un **estado**, no una secuencia.
+ *
+ * No tienen racha ni acumulado: se comprueba una cosa (el historial de partidas del
+ * jugador, la ladder por delante de lo que nos llega) y, mientras siga siendo cierto,
+ * el mismo hecho. Se evalúan en `src/lib/history-checks.ts`, desde el worker del
+ * sincronizador, porque no leen `Match` sino columnas de `Player` y una ruta del sitio
+ * de AoE4World.
+ *
+ * Su `dedupeKey` es estable por (regla, tipo, jugador) —sin partida ancla ni número—,
+ * porque si no, reevaluarlas cada 5 minutos insertaría una fila nueva cada 12 horas
+ * para siempre. Ver el docblock de `alertDedupeKey()`.
+ */
+export type StateAlertRule = "HISTORY_NOT_PUBLIC" | "MISSING_LADDER_MATCHES";
 
-export type AlertKindName = "STREAK_CLOSED" | "STREAK_AT_TOURNAMENT_END" | "TOTAL_REACHED";
+export type AlertsRuleName = StreakAlertRule | TotalAlertRule | StateAlertRule;
+
+export type AlertKindName =
+  "STREAK_CLOSED" | "STREAK_AT_TOURNAMENT_END" | "TOTAL_REACHED" | "STATE_DETECTED";
 
 /* -------------------------------------------------------------------------- */
 /* Las etiquetas                                                               */
@@ -105,16 +119,23 @@ export const ALERT_RULE_LABELS = {
   REPEATED_TEAMMATE_TOTAL: "Compañero repetido, en total",
   TEAMMATE_ELO_GAP: "Brecha de elo con un compañero",
   LOW_DIVISION_TEAM_GAME: "Equipo por debajo de la división",
+  HISTORY_NOT_PUBLIC: "Historial de partidas no público",
+  MISSING_LADDER_MATCHES: "Partidas de ladder que no nos llegan",
 } as const satisfies Record<AlertsRuleName, string>;
 
 /**
  * Cuándo se detectó, en español, con el mismo criterio que `ALERT_RULE_LABELS`: el
  * enum describe el dato y el mapa lo traduce una sola vez.
+ *
+ * `STATE_DETECTED` es el cuarto valor y no es de la misma familia que los otros tres:
+ * no es una racha ni un acumulado, es un **estado comprobado**. Por eso se traduce
+ * como "Estado comprobado" y no como "Racha" o "Acumulado".
  */
 export const ALERT_KIND_LABELS = {
   STREAK_CLOSED: "Racha rota",
   STREAK_AT_TOURNAMENT_END: "Racha cerrada por fin de torneo",
   TOTAL_REACHED: "Acumulado alcanzado",
+  STATE_DETECTED: "Estado comprobado",
 } as const satisfies Record<AlertKindName, string>;
 
 export type AlertsThresholds = {
@@ -274,7 +295,13 @@ export type AlertSubject = {
 /** El sujeto de las reglas que hablan del propio jugador. */
 export const SELF_SUBJECT: AlertSubject = { key: "yo", profileId: null, name: null };
 
-/** Datos de la partida que ha cerrado la racha, para `details`. */
+/**
+ * Datos estructurados que van en `Alert.details`, por encima de los comunes.
+ *
+ * El nombre viene del uso mayoritario —lo que se sabe de la partida que ancla una
+ * racha—, pero las reglas de estado no tienen ancla y aportan aquí lo suyo: los
+ * `gameId` sondeados y las dos fechas que se compararon.
+ */
 export type AlertAnchorDetail = {
   /** Duración en segundos, si la partida la trae. */
   durationSeconds?: number;
@@ -288,6 +315,21 @@ export type AlertAnchorDetail = {
   gameSubdivision?: string;
   /** Subdivisión 1v1 del jugador en el momento de la evaluación (R5). */
   playerSubdivision?: string;
+
+  /* Reglas de estado: la evidencia con la que se comprobó. */
+
+  /** Partidas sondeadas que no tienen summary (`HISTORY_NOT_PUBLIC`). */
+  probedGameIds?: string[];
+  /** Partidas sondeadas en total, incluidas las que sí lo tenían. */
+  probedCount?: number;
+  /** `Player.ladderGamesCount` al comprobar (`MISSING_LADDER_MATCHES`). */
+  ladderGamesCount?: number | null;
+  /** `Player.ladderLastGameAt`, en ISO-8601 UTC. */
+  ladderLastGameAt?: string | null;
+  /** Nuestra partida `rm_solo` más reciente en la ventana, en ISO-8601 UTC. */
+  newestImportedAt?: string | null;
+  /** Minutos que la ladder va por delante de esa partida. */
+  lagMinutes?: number;
 };
 
 export type AlertTriggerInput = {
@@ -339,6 +381,23 @@ export type TriggeredAlert = {
  *   partida X" de "la racha de 3 partidas cerradas por la partida Y", y es lo que
  *   hace que reevaluar los mismos datos no produzca nada nuevo.
  *
+ * ## La excepción: las reglas de estado no llevan remate
+ *
+ * Un estado **no tiene remate**: no hay tramo que cerrar ni número que cruzar, y
+ * su corrección es que la condición deje de cumplirse (el jugador abre el
+ * historial, la ladder vuelve a coincidir con lo que nos llega). Por eso
+ * `STATE_DETECTED` mete `estado` en el sitio del remate y **se queda solo con
+ * (regla, tipo, jugador, sujeto)**: una alerta por jugador y por hecho.
+ *
+ * Es la decisión de la que depende que estas reglas no llenen la tabla. Las dos
+ * se reevalúan **cada 5 minutos** (la del historial con una caché de 12 h), así
+ * que una clave con la partida sondeada o con los minutos de desfase insertaría
+ * una fila nueva cada vez que cambiara el número, y en la práctica una alarma
+ * cada 12 horas para siempre por jugador. Sin `anchorGameId` ni `count` en la
+ * clave, la segunda pasada inserta 0 filas y la alerta sigue siendo la que se
+ * escribió la primera vez. `rules.test.ts` lo fija con una prueba explícita,
+ * porque es una propiedad que se rompe sin que nada falle.
+ *
  * El prefijo de versión existe para que un cambio en la forma de la clave no
  * choque con lo ya escrito: si algún día la clave cambia de ingredientes, sube
  * el prefijo y se vuelve a evaluar desde cero en lugar de saltarse filas.
@@ -351,7 +410,12 @@ export function alertDedupeKey(input: {
   anchorGameId: string | null;
   count: number;
 }): string {
-  const remate = input.kind === "TOTAL_REACHED" ? `total:${input.count}` : `partida:${input.anchorGameId ?? "-"}`;
+  const remate =
+    input.kind === "STATE_DETECTED"
+      ? "estado"
+      : input.kind === "TOTAL_REACHED"
+        ? `total:${input.count}`
+        : `partida:${input.anchorGameId ?? "-"}`;
 
   return [
     `v${ALERTS_RULESET_VERSION}`,
@@ -404,11 +468,9 @@ export function alertSummary(input: AlertTriggerInput): string {
     case "TEAMMATE_ELO_GAP": {
       const gap = input.detail?.eloGap;
 
-      return (
-        gap === undefined
-          ? `${partidas(input.count)} de equipo con un compañero muy por encima o por debajo${cierre}`
-          : `${partidas(input.count)} de equipo con un compañero a ${gap} de elo${cierre}`
-      );
+      return gap === undefined
+        ? `${partidas(input.count)} de equipo con un compañero muy por encima o por debajo${cierre}`
+        : `${partidas(input.count)} de equipo con un compañero a ${gap} de elo${cierre}`;
     }
     case "LOW_DIVISION_TEAM_GAME": {
       const steps = input.detail?.steps;
@@ -417,6 +479,17 @@ export function alertSummary(input: AlertTriggerInput): string {
         ? `${partidas(input.count)} de equipos muy por debajo de su división${cierre}`
         : `${partidas(input.count)} de equipos ${conY(steps)} por debajo de su división${cierre}`;
     }
+    // Las dos de estado van al final y sin `cierre`: no son un tramo que se cierre,
+    // son algo que se ha comprobado. Las frases dicen **qué se ha comprobado**, nunca
+    // por qué: el equipo de Alerts no sabe si el jugador cambió el ajuste, si se le
+    // olvidó, si la API dejó de publicar su historial o si el problema es nuestro, y
+    // escribir una causa sería escribirla inventada. Y no hay nada que acusar: la
+    // transparencia del torneo (poder consultar cualquier partida de un participante)
+    // se cumple abriendo el toggle, que es un ajuste del juego.
+    case "HISTORY_NOT_PUBLIC":
+      return "Su historial de partidas no es público";
+    case "MISSING_LADDER_MATCHES":
+      return "La ladder registra partidas que no nos llegan";
   }
 }
 
@@ -440,7 +513,9 @@ export function alertDetails(input: AlertTriggerInput): Prisma.InputJsonObject {
     threshold: input.threshold,
     ...(input.subject.profileId === null ? {} : { subjectProfileId: input.subject.profileId }),
     ...(input.anchorGameId === null ? {} : { anchorGameId: input.anchorGameId }),
-    ...(input.anchorStartedAt === null ? {} : { anchorStartedAt: input.anchorStartedAt.toISOString() }),
+    ...(input.anchorStartedAt === null
+      ? {}
+      : { anchorStartedAt: input.anchorStartedAt.toISOString() }),
     ...(input.anchorLadder === undefined || input.anchorLadder === null
       ? {}
       : { anchorLadder: input.anchorLadder }),

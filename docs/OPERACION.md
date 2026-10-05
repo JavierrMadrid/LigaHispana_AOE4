@@ -371,6 +371,47 @@ comprobar que el dedupe no se ha roto. Los **umbrales** son configurables sin de
 **no** se duplican ahí: se leen del ruleset de puntuación, y el filtro de clasificatorias es el mismo
 `rankedMatchWhere()` que usa el motor de puntos.
 
+## Transparencia del historial de partidas
+
+Las dos reglas de F11 (`HISTORY_NOT_PUBLIC` y `MISSING_LADDER_MATCHES`) se comprueban en
+`syncApprovedPlayers()`, **después** del motor de alertas y antes de los directos, y su resultado va
+al resumen (`history` y `historyError` de `SyncSummary`) y a `Setting["sync.lastRun"]`. El detalle de
+las reglas está en [`docs/PLAN.md`](./PLAN.md#f11--transparencia-del-historial-de-partidas-).
+
+**Cuesta muy poco, y es lo que hay que mirar si cambia.** La regla de la ladder es una agregación
+por jugador sobre `Match` y **cero peticiones**: lee `Player.ladderGamesCount` y `ladderLastGameAt`,
+que ya se rellenaban con el lote de ladder del principio de la pasada. La del historial es la única
+que sale a la red, y su presupuesto es:
+
+| Qué | Cuánto |
+|---|---|
+| Peticiones al **sitio** de AoE4World | un `HEAD` de 0 bytes por partida, **3 partidas** como mucho |
+| Cada cuánto por jugador | una vez cada **12 h** (`HISTORY_CHECK_TTL_HOURS`, cacheado en `Player.historyCheckedAt`) |
+| Cuántos jugadores por pasada | **6** (`HISTORY_CHECK_MAX_PER_RUN`); el resto sale como "para la siguiente pasada" |
+| Con 30 participantes | menos de **5 peticiones al día** en total |
+
+El tope por pasada **existe por el despliegue**: al activarlo todas las filas tienen
+`historyCheckedAt = null`, así que la primera pasada tendría a todo el torneo venciendo la caché a la
+vez. Con seis, se escalona en cinco pasadas (~25 minutos) y a partir de ahí el ritmo es de uno por
+jugador cada 12 horas. Los seis por pasada sostienen ese ritmo hasta unos 860 participantes.
+
+**No hay rate limit declarado en esa ruta y nadie nos ha dado permiso.** Es el mismo servidor que
+sirve la API, así que se le habla con su mismo `User-Agent`. **Si el volumen creciera, lo que toca es
+avisar a AoE4World por su Discord**, que es lo que pide su documentación antes de un uso de este
+tipo; no subir el ritmo.
+
+**Dónde mirar si deja de funcionar.** En el rastro de la pasada, `historyError`, que sale también en
+el log como `[sync] Historial de partidas: …`. Es el sitio donde se ve el recuento ("6 comprobados, 1
+cerrado"), cuántos quedaron para la siguiente pasada y el motivo de cada `unknown`. **No mueve el
+`lastSuccessAt`**, igual que `alertsError` y `streamsError`: no saber si un participante tiene el
+historial abierto no ha parado ni una partida. Un `unknown` —un timeout, un `5xx` o un error de
+red— **no escribe nada** en `Player`: el jugador vuelve a la cola en la siguiente pasada.
+
+Con `AOE4WORLD_MOCK=1` (la simulación de abajo) este paso **no sale a la red** y no escribe nada: la
+ruta del sitio no tiene fixtures, y preguntar por los `profileId` de la simulación daría 404 para
+todo, o sea, acusaciones contra jugadores que no existen. `syncApprovedPlayers({ history: false })`
+lo apaga del todo.
+
 ## Simulaciones
 
 ### Simulación con fixtures (mock de AoE4World)
