@@ -34,18 +34,23 @@ on:
 permissions:
   contents: read
 
+# Un push nuevo en la misma pull request cancela la ejecución anterior: sus minutos
+# ya no sirven para el commit que se está comprobando.
+#
+# El grupo va a nivel de workflow y **no** por job a propósito. Con un grupo por job
+# los dos compartían nombre en la práctica, así que al arrancar el segundo cancelaba
+# al primero: el job `test` llegaba a morirse en el mismo instante en que se creaba,
+# sin log y sin decir por qué. Cancelar la ejecución entera es además lo que se
+# quiere, porque los dos jobs comprueban el mismo commit: si ese commit ya no es el
+# último, ninguno de los dos minutos sirve.
+concurrency:
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   verificar:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
-    # Un push nuevo en la misma pull request cancela la ejecución anterior de este
-    # job: sus minutos ya no sirven para el commit que se está comprobando. El
-    # `github.job` en el grupo deja el otro job en su propio grupo, que es lo que
-    # permite que los dos sean independientes y cancelar por separado.
-    concurrency:
-      group: ci-pr-${{ github.event.pull_request.number }}-${{ github.job }}
-      cancel-in-progress: true
 
     steps:
       - uses: actions/checkout@v4
@@ -80,10 +85,6 @@ jobs:
     # tope está para que un test colgado (una llamada a la red que no se acaba) no
     # se lleve los minutos de un runner entero.
     timeout-minutes: 10
-
-    concurrency:
-      group: ci-pr-${{ github.event.pull_request.number }}-${{ github.job }}
-      cancel-in-progress: true
 
     steps:
       - uses: actions/checkout@v4
