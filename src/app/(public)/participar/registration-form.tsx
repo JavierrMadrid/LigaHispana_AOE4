@@ -72,6 +72,21 @@ export function RegistrationForm({ countries }: { countries: string[] }) {
         opcionales y solo sirven para señalar tu emisión cuando juegas partidas de
         la liga.
       </p>
+      {/* Requisito de participación (F11): se explica aquí, no como un campo
+          aparte. No hay casilla de confirmación a propósito: no se pide un
+          compromiso, se informa de una condición para poder inscribirse. */}
+      <p className="mt-3 max-w-[58ch] text-sm leading-relaxed text-muted">
+        Tu perfil de AoE4World tiene que tener el historial de partidas en público.
+        La organización lo consulta para poder revisar las partidas del torneo, así
+        que es un requisito de participación. Está detallado en{" "}
+        <Link
+          href="/reglas#historial"
+          className="text-accent underline underline-offset-4 hover:text-accent-strong"
+        >
+          las reglas
+        </Link>
+        .
+      </p>
 
       <form action={formAction} className="mt-6 flex flex-col gap-5">
         {state.status === "error" && state.message ? (

@@ -384,6 +384,15 @@ referencia ordreduwololo.fr y soloqchallenge.gg solo mandan en comportamiento, n
     contrario (ahora se ve la alineación completa); solo la puntuación sigue siendo por jugador.
 - [x] `/reglas` — Conocimiento del torneo: formato, puntuación (10 puntos por victoria),
   sección de objetivos especiales y qué cuenta como partida clasificatoria.
+- [x] **Requisito de participación en `/reglas`** (F11): la página gana la sección
+  "Historial de partidas" (en el índice lateral y plegado, y en el cuerpo, tras
+  "Formato"), donde se pide que la cuenta de AoE4World tenga el historial en
+  público "para que la organización pueda revisar las partidas". Es copy de
+  **requisito y transparencia** y no menciona consecuencias ni puntuación: cerrar
+  el historial no altera el resultado (medido: las partidas siguen llegando a la
+  API con resultado, civilización, mapa y duración y puntúan igual; solo se pierde
+  el resumen, que el sitio no publica). No había recuento que actualizar porque
+  `/reglas` no enumera reglas de conducta.
 - [x] `/objetivos` — Los 38 objetivos especiales por grupos, con los puntos de cada uno, el
   poseedor en caliente y la clasificación deتميز (`getObjectives()`); cada tarjeta explica
   su regla.
@@ -449,6 +458,12 @@ Pendiente de F4:
       → Server Action pública `registerPlayer` que crea el `Player` en estado `PENDING` y lo
       deja en la cola de aprobación de `/admin/jugadores`. Validación de servidor compartida con
       el alta de admin (`src/lib/player-input.ts`), honeypot y mensajes de error por campo.
+- [x] **Aviso del requisito de historial en `/participar`** (F11): una nota en la
+      introducción del formulario —sin campo ni casilla nuevos— avisa de que el perfil
+      de AoE4World debe tener el historial de partidas en público para que la
+      organización pueda revisar las partidas, y enlaza a `/reglas#historial`. Se
+      eligió la introducción y no una casilla de confirmación a propósito: el cliente no
+      pidió un compromiso y añadir un campo a un formulario público encarece el alta.
 - [x] **Verificación del perfil contra AoE4World**: `registerPlayer` solo crea la solicitud si
       `GET /players/:id` responde (con presupuesto acotado, `src/lib/registration.ts`); un 404 da
       error de campo y cualquier otro fallo (red/429/timeout) no crea nada y pide reintentar. El
@@ -833,7 +848,7 @@ condiciones. Aquí están esas condiciones, acordadas con el cliente, y el motor
 estado del sincronizador sigue en su sitio (`getSyncHealth()` y el aviso de `/admin`): son cosas
 distintas y mezclarlas haría que "el torneo lleva roto desde las 10:00" significara dos cosas.
 
-**El modelo, el mismo para las ocho reglas.** Para cada regla hay un *flag* por partida sobre la
+**El modelo de las ocho de comportamiento.** Para cada regla hay un *flag* por partida sobre la
 secuencia de clasificatorias del jugador ordenada por `startedAt`. Una **racha** es un tramo
 maximal de partidas consecutivas con el flag, y el aviso sale **cuando la racha se rompe** (llega
 una clasificatoria sin el flag), diciendo cuántas duró. Si el torneo se cierra con la racha
@@ -927,7 +942,7 @@ etiquetas de regla y de tipo (`ALERT_RULE_LABELS`, `ALERT_KIND_LABELS`) viven en
 comparten la pestaña y el CSV, para que no puedan divergir en cómo llaman a la misma regla.
 
 **Filtros y orden de la pestaña.** La tabla ya no es fija: acepta `playerId`, `from`/`to`, `regla`
-(los ocho valores de `AlertRule`) y `tipo` (los tres de `AlertKind`), y orden por `fecha` (por
+(los diez valores de `AlertRule`) y `tipo` (los cuatro de `AlertKind`), y orden por `fecha` (por
 defecto, descendente), `jugador`, `regla`, `sujeto` o `conteo`. Las etiquetas de los desplegables
 salen de `ALERT_RULE_LABELS` / `ALERT_KIND_LABELS` y el valor que viaja en la URL es el literal
 del enum, que se compara literal. **No** hay filtro por **sujeto**, **detalle** ni **conteo**, y
@@ -943,9 +958,174 @@ estado vacío con filtros dice que hay filtros en vez de "todavía no hay alerta
 ruptura, los múltiplos de 5 y de 10, R3 por pareja, el borde 499/500 de R4, el borde de escalones de
 R5 y su omisión sin cortes, el cierre de torneo, la idempotencia de las claves de dedupe, la
 validación del ruleset y la lectura de la caché de cortes. Reparto: 35 casos en
-`src/lib/alerts/compute.test.ts`, 25 en `rules.test.ts` y 19 en `division-cutoffs.test.ts`, con el
+`src/lib/alerts/compute.test.ts`, 30 en `rules.test.ts` y 19 en `division-cutoffs.test.ts`, con el
 catálogo de subdivisiones en `src/lib/divisions.test.ts`. `npm run alerts:check` es la comprobación
 contra la base de verdad, y es idempotente: la segunda pasada con los mismos datos inserta 0 filas.
+
+### F11 — Transparencia del historial de partidas ✅
+
+Las ocho reglas de F9 miran **las partidas que ya tenemos**. Esta fase añade las dos que
+miran **por qué puede que no las tengamos**, que es un problema distinto y del que el
+motor puro no puede enterarse: no sale de `Match`, sino del juego del jugador y de una
+ruta del sitio de AoE4World.
+
+**El problema.** En AoE4 hay un toggle "Share History" (menú principal -> retrato ->
+Match History) y el FAQ de AoE4World dice que los *game summaries* de un jugador **solo
+existen si está en "Public"**. Con el historial cerrado, sus partidas dejan de
+publicarse: sigue jugando, nosotros no las apuntamos, y la clasificación se queda corta
+sin que nada lo diga. **La API no expone ningún campo que lo diga.**
+
+**El motivo de la regla es la transparencia del torneo**, y eso es lo que decide el
+tono: la organización quiere poder consultar cualquier partida de un participante. No
+es una regla de conducta ni de juego, así que **la frase dice lo que se ha comprobado y
+nunca la causa**: nadie ha hecho nada malo, hay un ajuste del juego. Por eso el resumen
+es "Su historial de partidas no es público" y no nada que suene a acusación; el equipo no
+sabe si el jugador cambió el ajuste, si se le olvidó, si la API dejó de publicar su
+historial o si el problema es nuestro.
+
+#### La sonda: fuera de la API, y eso hay que saberlo
+
+La comprobación sale a una ruta del **sitio**, no a la API:
+
+```
+HEAD https://aoe4world.com/players/{profileId}/games/{gameId}
+  200 -> la partida tiene summary -> el historial está público
+  404 -> no lo tiene
+```
+
+Comprobado contra producción el 2026-10-05: el `HEAD` funciona y devuelve **0 bytes**
+(solo el código), no hace falta el parámetro `sig`, y el slug solo importa por su
+**prefijo numérico** (`/players/21050396` y `/players/21050396-` valen; `/players/2105039`,
+un dígito menos, ya da 404), así que la URL se compone con el `profileId` pelado. Casos
+de referencia: el jugador `7328774` tiene el historial **cerrado** y las 6 partidas suyas
+`processed` dan 404; el `21050396` lo tiene **abierto** y da 200.
+
+Dos consecuencias de que sea una ruta **sin documentar**:
+
+1. **No hay rate limit declarado y nadie nos ha dado permiso.** Es el mismo servidor que
+   sirve la API, así que se le habla con su mismo `User-Agent` y se le trata con el mismo
+   respeto, y el presupuesto es el que hace que no sea un problema: un `HEAD` de 0 bytes
+   por partida, **tres partidas como mucho y solo por jugador cada 12 horas**. Con el
+   torneo de treinta participantes son menos de cinco peticiones al día. Si el volumen
+   creciera, lo que toca es **avisar a AoE4World por su Discord**, que es lo que pide su
+   documentación antes de un uso de este tipo; no subir el ritmo por las bravas.
+2. **Un cambio en el sitio rompe el sondeo en silencio**, y no hay forma de aviso propio: por
+   eso el resultado se cachea en `Player.historyPublic` y el motivo va al rastro de la
+   pasada (`historyError`).
+
+#### Las dos reglas
+
+| Regla | Qué comprueba | De dónde sale |
+|---|---|---|
+| `HISTORY_NOT_PUBLIC` | El toggle "Share History" del jugador, a través de si sus partidas tienen summary | `HEAD` al sitio, 3 partidas |
+| `MISSING_LADDER_MATCHES` | La ladder registra una partida que no nos ha llegado | `Player.ladderGamesCount` / `ladderLastGameAt` y nuestra `rm_solo` más reciente |
+
+**La segunda existe porque la primera tiene un agujero exacto**: solo puede mirar
+partidas que ya tenemos. Si alguien cerrara su historial **y** sus partidas dejaran de
+aparecer en la API, no habría ningún `gameId` que sondear y no se comprobaría nada. La
+segunda mira el otro lado —lo que AoE4World **sí** publica de ese jugador, su fila de la
+ladder— y lo compara con lo que nosotros tenemos. Sale de las columnas que ya se
+rellenaban de la ladder (F11), así que **no cuesta ninguna llamada nueva**.
+
+**No hemos observado este caso en los 136 jugadores de `rm_solo` medidos**, y aun así la
+regla está: es una guarda de barrera contra el fallo que más caro saldría (una
+clasificación incompleta y nadie enterándose), y su coste es una agregación por jugador
+sobre un índice que ya existe. **Quitarla** no costaría nada en peticiones, pero dejaría
+ese agujero abierto, que es justo el que no se puede detectar desde dentro.
+
+#### Las condiciones, y por qué cada guarda existe
+
+`MISSING_LADDER_MATCHES` avisa si se cumple todo esto:
+
+1. `ladderGamesCount >= 10`. **Sin este mínimo saltaría sola a mitad de torneo** con
+   cualquiera que hubiera jugado diez partidas en septiembre y nada desde entonces: su
+   `last_game_at` es viejo y no tendríamos ninguna partida, que es exactamente la forma en
+   que se lee "no está jugando" como "nos está ocultando algo". Diez partidas de ladder
+   son el mínimo que dice "esto es alguien que compite".
+2. `ladderLastGameAt` **dentro de la ventana** del torneo. Si su última partida de ladder
+   es de antes del torneo, es la de alguien que todavía no ha entrado a jugar.
+3. La ladder va **más de `LADDER_PUBLICATION_LAG_MINUTES` (75 min) por delante** de
+   nuestra `rm_solo` más reciente. El margen existe porque el `last_game_at` de la ladder
+   **va por delante de lo que vemos**: medido el 2026-10-05 sobre 136 jugadores, entre 1 y
+   71 minutos, porque la ladder se actualiza en tiempo real al empezar la partida y la
+   fila se publica después. Sin el margen, avisaríamos de todos los jugadores que acaban
+   de jugar.
+4. El **filtro es `rm_solo`**, no "clasificatoria". Si el jugador juega `rm_team` y lo que
+   le falta son las de `rm_solo`, comparar contra las de equipos taparía la alarma sola,
+   porque su última de equipos sí nos habría llegado.
+
+Cuando no tenemos **ninguna** partida `rm_solo` en la ventana, el signo de la comparación
+es el contrario —"¿hace ya más de 75 minutos que la ladder dice eso y no lo tenemos?"—,
+que es lo que evita que un jugador recién aprobado salte solo porque su primera partida
+del torneo todavía no se ha publicado.
+
+**Las tres partidas del sondeo y solo `processed`.** Una partida en curso (`state: "new"`)
+y una con el replay invalidado tras una actualización del juego (`state: "invalid"`, que le
+ocurre a alrededor del 5 % de las partidas de jugadores normales) dan **404 con el historial
+abierto**. Con una sola partida, ese falso negativo sería la regla entera; por eso se
+sondean **las tres más recientes que se sepa resueltas** y se exige que **las tres** den
+404. Un solo 200 cancela: es una respuesta positiva y no hay nada más que buscar. El
+`state` no hay que pedirlo a nadie —la API lo manda en cada partida y viaja dentro de
+`Match.rawJson`—, así que el filtro no cuesta nada.
+
+#### Dónde vive, y qué no hace
+
+El sondeo y la escritura en `Player` van en el **worker del sincronizador**, en
+`src/lib/history-checks.ts`, y no dentro de `computePlayerAlerts()`: el sondeo es una
+llamada de red a una ruta que no es la API, y el motor de alertas es **puro** y se
+comprueba con secuencias sintéticas. Lo que sí está en el dominio de alertas es el valor
+del enum (`AlertRule`) y la **frase**, en `src/lib/alerts/rules.ts`, cuyo `switch` es
+exhaustivo para que una regla sin frase no pueda llegar a la base.
+
+**La fila de alerta se escribe junto a las columnas**, en el mismo sitio y a propósito: la
+corrección de un estado **es** una columna —el jugador abre el historial y se ve en
+`Player.historyPublic` sin recalcular nada—, así que escribirlas en sitios distintos
+obligaría a cruzar dos tablas para responder "¿esto sigue pasando?".
+
+**Un `unknown` no escribe nada.** Ni columnas ni alerta: un timeout, un `5xx` o un error de
+red **no** significan "historial cerrado", y publicar eso por un corte de red sería una
+afirmación que no se sabe. El jugador vuelve a la cola en la siguiente pasada.
+
+**La `dedupeKey` de las reglas de estado es estable por (regla, tipo, jugador)**, sin
+partida ancla ni número. Es la excepción documentada del resto: un estado no tiene remate
+—su corrección es que la condición deje de cumplirse— y como estas reglas se reevalúan
+cada 5 minutos, una clave con el número medido insertaría una fila nueva cada 12 horas y
+para siempre por jugador. Con la clave estable, la segunda pasada inserta 0 filas y la
+alerta sigue siendo la que se escribió la primera vez. Lo fija un test explícito en
+`rules.test.ts` porque es una propiedad que se rompe sin que nada falle.
+
+#### La cara pública de la regla
+
+El copy de la regla vive en dos sitios y en ninguno pide nada al margen del formulario:
+
+- **`/reglas`**, sección "Historial de partidas" (en el índice lateral y plegado, y en el
+  cuerpo tras "Formato"). Dice que la cuenta con la que se compite tiene que tener el
+  historial en público **para que la organización pueda revisar las partidas**, y sitúa el
+  ajuste en el propio juego (*Share History*, en el retrato del jugador).
+- **`/participar`**, una nota en la introducción del formulario, sin campo ni casilla
+  nuevos, con enlace a `/reglas#historial`.
+
+La redacción es de **requisito y transparencia y no menciona consecuencias**: cerrar el
+historial **no** cambia la puntuación (las partidas siguen llegando a la API con
+resultado, civilización, mapa y duración, y puntúan igual; lo único que se pierde es el
+*summary*, que el sitio no publica), así que ningún texto puede insinuar lo contrario ni
+usar lenguaje de sanción. Es la pieza que F11 tiene que proteger: el motor avisa para que
+la organización mire, no para acusar.
+
+En el panel, la pestaña de Alertas ya lista `HISTORY_NOT_PUBLIC` y
+`MISSING_LADDER_MATCHES` con su etiqueta en español (los **diez** valores de `AlertRule` y
+los **cuatro** de `AlertKind` salen en los filtros), y la ventana "Reglas" explica las dos
+comprobaciones de estado además de las cinco de comportamiento. El listado de
+participantes **no** pinta `Player.historyPublic`: la señal accionable ya está en Alertas
+y una columna de tres estados cacheados 12 h en una tabla ya densa añadiría ruido, además
+de exigir un campo nuevo en el contrato del DAL.
+
+#### Requisito operativo
+
+Ya aplicado: `npm run db:push` (los dos valores nuevos de `AlertRule`, `STATE_DETECTED` en
+`AlertKind` y las cuatro columnas de `Player`) y `npm run db:security -- --check`, que
+sigue dando las ocho tablas correctas. **No** hace falta volver a aplicar `db:security`:
+no hay tabla nueva.
 
 ### F10 — YouTube y Kick en el tratamiento de canales de directo ✅ / por desplegar
 

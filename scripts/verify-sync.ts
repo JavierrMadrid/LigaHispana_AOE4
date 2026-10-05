@@ -475,6 +475,7 @@ async function checkNormalization(): Promise<void> {
       ladderError: null,
       scoringError: null,
       alertsError: null,
+      historyError: null,
       streamsError: null,
       failures: [],
     };
@@ -563,6 +564,7 @@ async function checkNormalization(): Promise<void> {
       ladderError: null,
       scoringError: null,
       alertsError: null,
+      historyError: null,
       streamsError: null,
       failures: [],
       lastSuccessAt: finishedAt,

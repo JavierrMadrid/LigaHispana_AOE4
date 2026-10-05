@@ -86,6 +86,8 @@ mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` ex
 | `Player.scores` | `prisma/schema.prisma` | Relación inversa, como en el borrador de §4. |
 | `RateLimitCounter` (tabla nueva, F6) | `prisma/schema.prisma`, `src/lib/rate-limit.ts` | **Ajena a las reglas de puntuación**: sostiene el límite de frecuencia de los endpoints públicos sin sesión (§1.5). Aditiva, sin RLS ni permisos para los roles de cliente, como las otras. |
 | `Player.contactEmail` (columna nueva, F6) | `prisma/schema.prisma`, `src/lib/player-input.ts` | **Ajena a las reglas de puntuación** por el mismo motivo: es un dato de contacto para que la organización responda dudas, no algo de juego. Nullable, aditiva, sin índice y sin RLS nueva. Ver §1.1 y §3.5. |
+| `Player.ladderGamesCount`, `Player.ladderLastGameAt` (columnas nuevas, F11) | `prisma/schema.prisma`, `src/lib/aoe4world/ladder.ts` | **Ajenas a las reglas de puntuación**: no entran en el cómputo, son el dato con el que se contrasta lo que sí tenemos (la regla `MISSING_LADDER_MATCHES`). Salen del lote de ladder que ya se pedía, así que **cero llamadas nuevas**. Nullable y aditivas. |
+| `Player.historyPublic`, `Player.historyCheckedAt` (columnas nuevas, F11) | `prisma/schema.prisma`, `src/lib/history-checks.ts` | **Ajenas a las reglas de puntuación** por lo mismo: son el resultado cacheado de una comprobación externa. `historyPublic` es nullable **a propósito**, porque `null` = "sin comprobar" y un `false` solo puede escribirse cuando una respuesta lo ha dicho (un `unknown` no escribe nada). Ver §1.1. |
 | `Match.points` con valor real | `src/lib/scoring.ts` | **Cambio de fondo respecto a §3.1.4**: allí la columna se quedaba a 0 porque ninguna regla repartía puntos por partida. Aquí sí: vale `ruleset.pointsPerWin` en cada victoria clasificatoria resuelta **y dentro de la ventana**, y 0 en el resto. Es justamente la "regla de puntos por partida" que §3.1.4 anticipaba, y por eso la columna ya existía y no hubo que crearla. |
 | Ventana de fechas del torneo | `src/lib/ranked-match.ts` (definición) y `src/lib/scoring.ts` (ruleset) | `Setting["scoring.ruleset"].window` = `{ from, to }`, instantes ISO-8601 UTC con zona explícita, `[from, to)` sobre `Match.startedAt`, con `to: null` como ventana abierta. **Aplicada**: una partida fuera de la ventana deja `Match.points = 0` y no entra ni en el agregado ni en los objetivos. El filtro vive en un solo módulo y lo consumen las tres consultas del motor. **Sin columnas ni índices nuevos**: el índice `(mode, startedAt)` de §3.1.3 ya lo cubría. |
 | `scoring.lastRun` en `Setting` | `writeScoringLastRun()` en `src/lib/settings.ts` | Rastro de la última pasada (§3.4). Lo escribe el motor **dentro** de su transacción, así que se confirma junto con la clasificación. |
@@ -170,6 +172,10 @@ esta tabla: está hecho, versionado en `scripts/db-security.ts` y se comprueba c
 | `name` | `String` | **Nombre de display**: lo escribe quien se inscribió (formulario de inscripción) o el admin. El worker no lo toca nunca. |
 | `aoe4WorldName` | `String?` | **Nombre oficial de AoE4World**, en columna aparte para poder publicar los dos. Lo refresca el worker con `GET /players/:profile_id`; `null` = todavía no sincronizado. Nullable y sin valor por defecto a propósito: las filas que ya existían no tienen oficial y no hay que inventárselo con un *backfill*. |
 | `twitchChannel` | `String?` | Lo rellena el admin. Lo usa F5, no el motor de puntos. |
+| `ladderGamesCount` | `Int?` | `games_count` de la entrada de ladder (`GET /leaderboards/rm_solo`, en el lote de hasta 50 ids por el que salen el elo y la racha). **Ninguna llamada nueva**: el campo venía en el payload y hasta F11 se descartaba. `null` = el jugador no ha salido en la respuesta, o la API no lo publica. |
+| `ladderLastGameAt` | `DateTime?` | `last_game_at` de la misma entrada y por el mismo motivo. **Va por delante de lo que vemos**: medido el 2026-10-05 sobre 136 jugadores de `rm_solo`, entre 1 y 71 minutos por delante del `startedAt` de la partida más reciente que somos capaces de importar (la ladder se actualiza en tiempo real al empezar la partida y la fila se publica después). El margen con el que hay que comparar está en `LADDER_PUBLICATION_LAG_MINUTES` (`src/lib/history-visibility.ts`). |
+| `historyPublic` | `Boolean?` | **Si el historial de partidas del jugador es público en el juego** (F11). En AoE4 hay un toggle "Share History" y el FAQ de AoE4World dice que los *game summaries* solo existen con el toggle en "Public". La API **no expone el dato**: se comprueba con un `HEAD` a la ruta del sitio que sirve el summary. **Nullable a propósito, y no por descuido**: un timeout, un `5xx` o un error de red **no** significan "cerrado", así que de un `unknown` no se escribe nada y la fila se queda en `null` = "sin comprobar". |
+| `historyCheckedAt` | `DateTime?` | Cuándo se comprobó lo anterior. El veredicto se cachea **12 h** (`HISTORY_CHECK_TTL_HOURS`) porque el worker corre cada ~5 minutos: sin caché serían tres peticiones por jugador cada cinco minutos para no aprender nada nuevo. `null` = nunca comprobado. |
 | `contactEmail` | `String?` | **Correo de contacto** (F6). Lo exige el formulario público de `/participar` y lo valida `parseEmail` en `src/lib/player-input.ts`, con tope de 254 caracteres (el máximo de RFC 5321) y guardado en minúsculas. **Nullable a propósito:** el alta manual de admin no lo pide y las filas anteriores no lo tienen. El motor no lo lee: no entra en la clasificación ni en ningún desglose. |
 | `status` | `PlayerStatus` (`PENDING`/`APPROVED`/`REJECTED`) | Filtro de la clasificación: solo `APPROVED` puntúa (requisito 11). |
 | `createdAt`, `updatedAt` | `DateTime` | |
@@ -317,13 +323,13 @@ en cada momento.
 | Campo | Tipo | Notas |
 |---|---|---|
 | `rule` | `AlertRule` | Qué comportamiento se detectó. Enum **fijo en el código**: lo configurable son los umbrales (`Setting["alerts.ruleset"]`), no la lista de comportamientos. |
-| `kind` | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END` o `TOTAL_REACHED`. Ver "Por qué tres" abajo. |
+| `kind` | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED` o `STATE_DETECTED`. Ver "Por qué cuatro" abajo. |
 | `playerId` | `String` | FK a `Player.id`, `onDelete: Cascade`, como `Match` y `PlayerScore`. |
 | `subjectProfileId` | `Int?` | El rival (R2) o el compañero (R3) de la que habla la alerta. Es un `profileId` de AoE4World y **no** una FK a `Player`, porque el torneo es individual y casi todos los rivales y compañeros son de fuera de la liga. `null` en las reglas sin sujeto. |
 | `subjectName` | `String?` | Nombre del sujeto **en el momento de escribir la fila**. Es el único registro que queda de a quién señalaba, y no se puede resolver con un `join`: el sujeto puede no estar en `Player`. |
-| `count` | `Int` | Partidas del tramo, o el número que se ha cruzado en un acumulado. En un total es siempre el múltiplo o el umbral, así que `count == threshold`. |
-| `threshold` | `Int` | Umbral del ruleset activo, guardado para que el informe pueda decir con qué criterio se avisó aunque las reglas cambien después. |
-| `anchorGameId` | `String?` | La partida que **rompió** la racha o cruzó el umbral; en el cierre de torneo, la última de la racha, que es la única que se puede señalar porque no hubo ninguna que la rompiera. |
+| `count` | `Int` | Partidas del tramo, o el número que se ha cruzado en un acumulado. En un total es siempre el múltiplo o el umbral, así que `count == threshold`. **Las reglas de estado no cuentan nada**: ahí es la magnitud **con la que se comparó** (partidas sondeadas sin summary, o minutos que la ladder va por delante). |
+| `threshold` | `Int` | Umbral del ruleset activo, guardado para que el informe pueda decir con qué criterio se avisó aunque las reglas cambien después. En las reglas de estado, el valor con el que se comparó. |
+| `anchorGameId` | `String?` | La partida que **rompió** la racha o cruzó el umbral; en el cierre de torneo, la última de la racha, que es la única que se puede señalar porque no hubo ninguna que la rompiera. `null` en las reglas de estado: no hay partida que rompa nada, y la evidencia (los `gameId` sondeados, las dos fechas comparadas) va en `details`. |
 | `dedupeKey` | `String` **único** | Ver abajo. |
 | `summary` | `String` | Una línea en español **ya redactada** al escribir la fila (`src/lib/alerts/rules.ts`), que el informe pinta tal cual. |
 | `details` | `Json` | Lo que hay detrás de la frase, para el que tenga que investigar. De ahí no se lee nada para pintar el resumen. |
@@ -347,11 +353,22 @@ partida que rompió la racha o el número que se cruzó); por eso el `kind` entr
 clave, para que una racha rota y una racha que solo cerró el fin del torneo no
 colisionen.
 
-**Por qué tres `kind` y no dos.** Una racha normalmente se avisa cuando se rompe,
-porque es cuando se sabe cuánto duró. Pero si el torneo se cierra con la racha
+**Y una excepción, a propósito: las reglas de estado no llevan remate.** Un estado no
+tiene tramo que cerrar ni número que cruzar, así que `STATE_DETECTED` mete `estado` en
+ese sitio y la clave se queda en (regla, tipo, jugador, sujeto). Sin esa decisión,
+`HISTORY_NOT_PUBLIC` insertaría una fila nueva cada 12 horas y para siempre por jugador,
+porque se reevalúa cada 5 minutos y el número de partidas sondeadas o los minutos de
+desfase cambian con cada medición. Con ella, la segunda pasada inserta 0 filas y la
+alerta sigue siendo la que se escribió la primera vez.
+
+**Por qué cuatro `kind` y no dos.** Una racha normalmente se avisa cuando se rompe,
+porque es cuando se sabe cuánto duración. Pero si el torneo se cierra con la racha
 abierta, el patrón ya no se va a romper nunca, y sin `STREAK_AT_TOURNAMENT_END` esa
 racha no se avisaría jamás. Los acumulados no son rachas: no tienen ni principio ni
-fin, y por eso tienen su propio `kind`.
+fin, y por eso tienen su propio `kind`. El cuarto es otro género: `STATE_DETECTED` no
+marca un tramo ni un acumulado, sino **un estado comprobado** (el historial público o
+cerrado, la ladder por delante de lo que nos llega), que no tiene "cuándo cerrarlo" sino
+"con qué evidencia".
 
 **`summary` no lleva el nombre del jugador.** La fila ya es de un jugador y el
 informe hace el `join` con `Player`, así que guardarlo ahí solo serviría para que un
@@ -384,7 +401,7 @@ cortes de la ladder **de la partida** está en `docs/PLAN.md` F9.
 | 6 | Reglas y memoria del motor en `Setting` | Filas nuevas (`scoring.ruleset` y `scoring.lastRun`, hechas) | 4 |
 | 7 | Índice parcial de partidas en directo | **SQL a mano** | 7 (corregido, ver §3.6) |
 | 8 | RLS sin políticas | **SQL a mano** (hecho, §7) | 10 |
-| — | `Player` | Una columna (`contactEmail`, F6; §3.5) | 11 (ya resuelto con `status`) |
+| — | `Player` | Columnas (`contactEmail` en F6, §3.5; las cuatro del historial en F11, §1.1) | 11 (ya resuelto con `status`) |
 | — | `Match.points` | Sin cambios de schema; la columna ya tomaba valor | 8 |
 
 Dos tablas y dos columnas. Nada se borra ni se renombra.

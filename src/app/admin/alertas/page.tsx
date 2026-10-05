@@ -37,7 +37,7 @@ function single(value: string | string[] | undefined): string | undefined {
  * ## Filtros y orden
  *
  * La tabla tiene los mismos filtros que el historial —jugador, rango de fechas— más los
- * dos propios de las alertas: **regla** (las ocho del enum) y **tipo** (las tres clases
+ * dos propios de las alertas: **regla** (las diez del enum) y **tipo** (las cuatro clases
  * de hallazgo). Todos viven en la URL, junto con el orden por columna
  * (`fecha`, `jugador`, `regla`, `sujeto`, `conteo`). No hay filtro por sujeto, detalle ni
  * conteo: el sujeto es un rival que puede no estar en la liga (no hay lista de la que
@@ -110,9 +110,10 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold">Alertas</h1>
           <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            Comportamientos anómalos detectados en las partidas clasificatorias, de lo
-            más reciente a lo más antiguo. El informe descargable incluye además las
-            rachas que siguen abiertas.
+            Comportamientos anómalos detectados en las partidas clasificatorias y avisos
+            sobre el estado del historial de los participantes, de lo más reciente a lo
+            más antiguo. El informe descargable incluye además las rachas que siguen
+            abiertas.
           </p>
         </div>
 
@@ -151,7 +152,7 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
               body={
                 hasFilters
                   ? "Prueba con otro jugador, otra regla o amplía el rango de fechas. El filtro de fechas incluye el día final completo."
-                  : "El motor crea un aviso cuando una racha se rompe o se alcanza un umbral. Aquí aparecerán, de lo más reciente a lo más antiguo."
+                  : "El motor crea un aviso cuando una racha se rompe, se alcanza un umbral o cambia un estado comprobado (como el historial de partidas no público). Aquí aparecerán, de lo más reciente a lo más antiguo."
               }
             />
           ) : (

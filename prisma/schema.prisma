@@ -64,12 +64,22 @@ enum AdminActionType {
 ///
 /// Deliberadamente corto y **fijo en el código**: son las condiciones que el
 /// cliente hoaxó (partidas cortas, rival o compañero repetido, brecha de elo
-/// con el equipo y equipo muy por debajo de la división del jugador). Lo que sí
+/// con el equipo y equipo muy por debajo de la división del jugador, más las dos
+/// de la transparencia del historial). Lo que sí
 /// es configurable son los umbrales, que viven en `Setting["alerts.ruleset"]`:
 /// añadir un comportamiento nuevo exige un cambio de esquema, y añadir un umbral
 /// no. Cuando haga falta un comportamiento nuevo, se añade el valor al enum y la
 /// frase en `src/lib/alerts/rules.ts`; el `switch` de ese módulo es exhaustivo
 /// para que un valor sin frase no pueda salir a la base.
+///
+/// Los dos últimos no miran las partidas que ya tenemos, sino **el historial en el
+/// juego** del jugador: que el toggle "Share History" esté en "Public" y que la
+/// última partida que la ladder le registra nos llegue. Las evalúa el worker del
+/// sync (`src/lib/history-checks.ts`), no `computePlayerAlerts()`, porque son
+/// datos de `Player` y de una ruta del sitio de AoE4World, no de `Match`. Van
+/// **al final del enum** por lo mismo que `PLAYER_EDITED`: `ALTER TYPE … ADD
+/// VALUE` solo añade al final, y el panel ordena por el enum, así que lo nuevo
+/// sale detrás de lo ya escrito.
 enum AlertRule {
   SHORT_MATCH_STREAK
   SHORT_MATCH_TOTAL
@@ -79,35 +89,45 @@ enum AlertRule {
   REPEATED_TEAMMATE_TOTAL
   TEAMMATE_ELO_GAP
   LOW_DIVISION_TEAM_GAME
+  HISTORY_NOT_PUBLIC
+  MISSING_LADDER_MATCHES
 }
 
 /// Cuándo se ha detectado la alerta.
 ///
-/// Los tres casos no se pueden reducir a dos. Una racha normalmente se avisa
+/// Los cuatro casos no se pueden reducir a menos. Una racha normalmente se avisa
 /// **cuando se rompe** (llega una partida sin el patrón), porque es el momento en
 /// que se sabe cuánto duró; pero si el torneo se cierra con la racha todavía
 /// abierta, el patrón ya no se va a romper nunca y sin este valor esa racha no se
 /// avisaría jamás. Los acumulados no son rachas: no tienen ni principio ni fin.
+///
+/// El cuarto es otro género: `STATE_DETECTED` no marca un tramo ni un acumulado,
+/// sino **un estado que se ha comprobado** (el historial público o el cerrado, la
+/// ladder por delante de lo que nos llega). No tiene "cuándo cerrar el tramo",
+/// tiene "con qué evidencia", y por eso es el único cuyo `anchorGameId` es
+/// siempre `null`: la evidencia son las respuestas del sondeo, que van en
+/// `details`, y la corrección es que la condición deje de cumplirse.
 enum AlertKind {
   STREAK_CLOSED
   STREAK_AT_TOURNAMENT_END
   TOTAL_REACHED
+  STATE_DETECTED
 }
 
 model Player {
-  id            String       @id @default(cuid())
-  profileId     Int          @unique
+  id             String       @id @default(cuid())
+  profileId      Int          @unique
   // Nombre de **display**: lo escribe quien participa (formulario de
   // inscripción) o el admin. No lo toca el worker nunca, para que el nombre que
   // alguien eligió no dependa de que AoE4World lo cambie por su cuenta.
-  name          String
+  name           String
   // Nombre **oficial de AoE4World**, separado del de display para poder publicar
   // los dos. Lo refresca el worker con `GET /players/:profile_id`; null = aún no
   // se ha sincronizado, que es lo que hay en toda fila creada hoy.
-  aoe4WorldName String?
+  aoe4WorldName  String?
   // Canal registrado en el panel (lo escribe el admin). No es lo mismo que
   // `twitchUrl`, que es lo que AoE4World publica en el perfil del jugador.
-  twitchChannel String?
+  twitchChannel  String?
   // Canal de **YouTube** y de **Kick**, con el mismo sentido y las mismas reglas
   // que `twitchChannel`: lo escribe quien se inscribe o el admin, en minúsculas y
   // ya canónico, y **AoE4World no publica ninguno de los dos**, así que aquí no
@@ -118,14 +138,14 @@ model Player {
   // usa para componer la URL) y el de Kick es su slug, también sin arroba ni
   // https.
   youtubeChannel String?
-  kickChannel     String?
+  kickChannel    String?
   // Correo de contacto: lo **exige** el formulario público de `/participar` para
   // que la organización pueda responder dudas. Es nullable a propósito, y no por
   // descuido: el alta manual de admin no tiene por qué traerlo (se puede dar de
   // alta a un jugador sin pedirle que deje un correo) y las filas que ya existían
   // no lo tienen. El motor de puntos no lo lee nunca: es un dato de contacto, no
   // de juego, así que no entra en la clasificación ni en ningún desglose.
-  contactEmail  String?
+  contactEmail   String?
   // País del participante, guardado con el **rótulo canónico** de la lista que
   // admite el torneo (`Setting["registration.countries"]`, sembrada desde
   // `paises.txt` con `npm run countries:seed`): "República Dominicana", no "RD" ni
@@ -141,8 +161,8 @@ model Player {
   // para todas las filas y eso que unas no la informen es información —"no lo
   // sabemos"— y no una fila a medias. Como el correo, el motor de puntos no lo lee:
   // no entra en la clasificación ni en ningún desglose.
-  country       String?
-  status        PlayerStatus @default(PENDING)
+  country        String?
+  status         PlayerStatus @default(PENDING)
 
   // Lo siguiente se rellena con `GET /leaderboards/rm_solo`, una sola vez por
   // pasada del worker (no una por jugador). Ver `src/lib/aoe4world/ladder.ts`.
@@ -150,17 +170,33 @@ model Player {
   // `rating` de la ladder. Null = el jugador no tiene partidas clasificatorias
   // en la ladder (o todavía no se ha sincronizado): sigue siendo una fila
   // válida del torneo, solo que sin elo ni división.
-  elo             Int?
+  elo              Int?
   // `rank_level` literal de AoE4World ("gold_2"), no la división resuelta: la
   // tabla puede querer pintar el tier y la división se deriva en el DAL.
-  rankLevel       String?
+  rankLevel        String?
   // Racha **firmada**: positiva = victorias seguidas, negativa = derrotas
   // seguidas, null = sin ladder. No guardarla en valor absoluto: el signo es
   // la información.
-  streak          Int?
+  streak           Int?
+  // `games_count` de la misma entrada de ladder (`GET /leaderboards/rm_solo`, el
+  // lote de hasta 50 ids por el que salen el elo y la racha): **ninguna llamada
+  // nueva**, el campo venía en el payload y hasta aquí se descartaba. `null` = el
+  // jugador no ha salido en la respuesta de la ladder, o la API no lo publica.
+  ladderGamesCount Int?
+  // `last_game_at` de esa misma entrada, y por el mismo motivo.
+  //
+  // **Va por delante de lo que vemos, y medido cuánto** (2026-10-05, sobre 136
+  // jugadores de `rm_solo`): entre 1 y 71 minutos por delante del `startedAt` de la
+  // partida más reciente que somos capaces de importar. La ladder se actualiza en
+  // tiempo real al empezar la partida y la fila se publica después, así que un
+  // `last_game_at` reciente **no** demuestra que falte ninguna partida. El margen
+  // con el que hay que comparar está en `LADDER_PUBLICATION_LAG_MINUTES`
+  // (`src/lib/history-visibility.ts`), que es donde también vive la comprobación
+  // del historial de partidas.
+  ladderLastGameAt DateTime?
   // "En directo en Twitch" leído de `twitch_is_live` del mismo endpoint que el
   // elo, así F5 no necesita la API de Helix para el indicador de la clasificación.
-  twitchIsLive    Boolean   @default(false)
+  twitchIsLive     Boolean   @default(false)
   // "En directo" en YouTube y en Kick, con el mismo significado que
   // `twitchIsLive`, pero de otra manera: **AoE4World no publica nada de esto**,
   // así que quien lo escribe es el propio worker llamando a cada plataforma
@@ -172,16 +208,42 @@ model Player {
   // Un `false` aquí significa "no se ha comprobado que esté en directo", que es lo
   // único que se puede decir sin mentir; por eso **no** se escribe cuando el
   // refresco falla, solo cuando la plataforma ha dicho que sí o que no.
-  youtubeIsLive  Boolean   @default(false)
-  kickIsLive     Boolean   @default(false)
+  youtubeIsLive    Boolean   @default(false)
+  kickIsLive       Boolean   @default(false)
   // Respaldo del canal: si el jugador no tiene `twitchChannel` registrado, la
   // tabla enlaza el que declara en AoE4World.
-  twitchUrl       String?
+  twitchUrl        String?
   // `avatars.full`; si es null la interfaz dibuja un monograma.
-  avatarUrl       String?
+  avatarUrl        String?
   // Cuándo se miró la ladder por última vez. No se toca si el jugador no
   // aparece en la respuesta, para poder distinguir "sin ladder" de "sin sync".
-  ladderUpdatedAt DateTime?
+  ladderUpdatedAt  DateTime?
+
+  // ¿Tiene el participante **abierto** el historial de partidas en el juego? En AoE4
+  // hay un toggle "Share History" (menú principal -> retrato -> Match History) y el
+  // FAQ de AoE4World dice que los *game summaries* solo existen si está en "Public":
+  // con el historial cerrado podemos dejar de verle las partidas sin que nada lo diga.
+  //
+  // La API **no expone el dato**, así que se comprueba con un `HEAD` a la ruta del
+  // sitio que sirve ese summary (`src/lib/history-visibility.ts`), que responde 200
+  // si la partida lo tiene y 404 si no. Las otras plataformas no hacen falta: el
+  // ajuste es del juego y el summary lo publica AoE4World.
+  //
+  // **Un `false` afirma "cerrado", y eso solo se puede afirmar con una respuesta.**
+  // Un timeout, un 5xx o un error de red no significa cerrado, así que no se
+  // escriben: quien no ha podido comprobarlo no toca estas columnas y reintenta más
+  // tarde. Por eso `historyPublic` es nullable y `null` significa "sin comprobar".
+  historyPublic    Boolean?
+  // Cuándo se comprobó por última vez. Da igual de qué valor: es el plazo de la
+  // caché, y el `null` de las dos columnas a la vez es lo que hace que un jugador
+  // aprobado sin verificar se compruebe en la siguiente pasada.
+  //
+  // El plazo son 12 h (`HISTORY_CHECK_TTL_HOURS`) porque el worker corre cada ~5 min:
+  // sin caché serían tres peticiones por jugador y cada cinco minutos para no
+  // aprender nada nuevo. Y no sale gratis: el sitio de AoE4World es el mismo que
+  // sirve la API, así que se le habla con el mismo `User-Agent` del cliente y con el
+  // mismo ritmo.
+  historyCheckedAt DateTime?
 
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -460,6 +522,15 @@ model AdminAction {
 /// `kind` entra en la clave: una racha que se rompe y una que solo la cerró el
 /// fin del torneo son alertas distintas del mismo tramo, y sin él colisionarían.
 ///
+/// **La regla de estado (`STATE_DETECTED`) es la excepción, y a propósito.** Un
+/// estado no tiene remate: o se cumple o no se cumple, y su corrección es que
+/// deje de cumplirse (el jugador abre el historial; la ladder vuelve a coincide
+/// con lo que nos llega). Si su clave llevara la partida ancla o el número
+/// medido, y estos se reevalúan **cada 5 minutos**, insertaría una fila nueva
+/// cada 12 horas para siempre. Por eso su clave es solo (regla, tipo, jugador):
+/// una alerta por jugador y por hecho, y la fila dice "esto se detectó", no
+/// "esto se detectó por nth vez".
+///
 /// `summary` está **ya redactado en español** en el momento de escribir la fila
 /// (`src/lib/alerts/rules.ts`), igual que en `AdminAction`: el informe lo pinta
 /// tal cual y no monta la frase en el cliente, donde un número o un nombre con
@@ -486,6 +557,14 @@ model Alert {
   // Magnitud del hallazgo: partidas de la racha para los avisos de racha, y
   // partidas acumuladas para los de total. En un total es siempre el múltiplo o
   // el umbral que se ha cruzado, así que `count == threshold`.
+  //
+  // Las reglas de estado (`AlertKind.STATE_DETECTED`) no cuentan nada: ahí
+  // `count` es la magnitud **con la que se comparó** y `threshold` el valor con
+  // el que se comparó, para que el informe diga por qué se avisó sin deducirlo
+  // de la regla. En `HISTORY_NOT_PUBLIC` son las partidas sondeadas sin summary
+  // y las que se exigen; en `MISSING_LADDER_MATCHES`, los minutos que la ladder
+  // va por delante y el margen de publicación. Lo demás (los `gameId` sondeados,
+  // las dos fechas comparadas) va en `details`.
   count     Int
   // Umbral que dispara el aviso, tomado del ruleset activo. Se guarda para que
   // el informe pueda decir con qué criterio se avisó aunque las reglas cambien
@@ -495,7 +574,8 @@ model Alert {
   // Partida que **rompió** la racha (la primera clasificatoria sin el patrón) o
   // cruzó el umbral; en el cierre de torneo, la última de la racha, que es la
   // única que se puede señalar porque no hay ninguna que la rompiera.
-  // `null` solo si algún día una regla dispara sin partida que señalar.
+  // `null` en las reglas de estado —no hay partida que rompa nada— y también si
+  // algún día una regla dispara sin partida que señalar.
   anchorGameId String?
 
   dedupeKey String @unique
