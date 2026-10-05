@@ -40,6 +40,8 @@ npm run dev          # arranca en http://localhost:3000
 | `npm run build` | Build de producción (`next build`). |
 | `npm run start` | Sirve el build con `next start`. |
 | `npm run lint` | ESLint. |
+| `npm test` | Tests unitarios (Vitest, `vitest run`). Sin base de datos, sin red y sin variables de entorno. |
+| `npm run test:watch` | Los mismos tests en modo watch, para mientras se desarrolla. |
 | `npm run generate` | Regenera el cliente Prisma en `src/generated/prisma`. |
 | `npm run postinstall` | Lo que `npm install` ejecuta al final: `prisma generate`. |
 | `npm run studio` | Abre Prisma Studio. |
@@ -53,7 +55,6 @@ npm run dev          # arranca en http://localhost:3000
 | `npm run score` | Recalcula la clasificación y la imprime (lo que hace el worker al final de cada pasada). |
 | `npm run backfill:model` | Rellena `mode` y `civRandomized` de las partidas anteriores. |
 | `npm run verify:sync` | Comprobaciones de normalización, DAL, streams y guardado. Con `-- --db` añade las que van contra la base de datos (y borra lo que crea). |
-| `npm run verify:alerts` | 53 comprobaciones puras del motor de alertas. **Sin base de datos.** |
 | `npm run alerts:check` | Evalúa las alertas de todo el torneo y las imprime. Idempotente. |
 | `npm run alerts:cutoffs` | Deriva o refresca los cortes de división que necesita la regla R5. Con `-- --show` enseña los cacheados. |
 | `npm run mock:tournament` | Simula el torneo completo contra la API falsa. |
@@ -271,7 +272,7 @@ candado de las pasadas a mano es de **5 minutos**, no de uno. Detalle medido en
 ### Alertas de comportamiento
 
 ```bash
-npm run verify:alerts    # 53 comprobaciones puras, sin base de datos
+npm test                 # los tests del motor de alertas, sin base de datos
 npm run alerts:check     # evaluación completa + resumen por consola
 npm run alerts:cutoffs   # deriva o refresca los cortes de división que necesita R5
 ```
@@ -281,6 +282,14 @@ una fila por alerta en `Alert`; los umbrales se tocan en `Setting["alerts.rulese
 evalúa cada 5 minutos con el sync (solo sobre los jugadores tocados en la pasada), al revertir o
 restaurar una partida, al cerrar el torneo y a mano. Las ocho reglas, sus umbrales y las decisiones,
 con sus costes, están en [`docs/PLAN.md`](docs/PLAN.md#f9--motor-de-alertas-de-comportamiento-).
+
+Todo lo que decide el motor es una función pura, así que se comprueba con `npm test` y sin nada
+preparado: [`tests/unit/lib/alerts/compute.test.ts`](tests/unit/lib/alerts/compute.test.ts) pasa las secuencias de
+partidas regla a regla, [`tests/unit/lib/alerts/rules.test.ts`](tests/unit/lib/alerts/rules.test.ts) los umbrales, las
+frases y las claves de dedupe, y
+[`tests/unit/lib/alerts/division-cutoffs.test.ts`](tests/unit/lib/alerts/division-cutoffs.test.ts) la traducción de
+rating a subdivisión y la lectura de la caché de cortes. Lo que sí necesita la base de datos —que la
+inserción sea idempotente de verdad, que el rastro del sync lo refleje— lo comprueba `alerts:check`.
 
 ### Inscripción pública
 
