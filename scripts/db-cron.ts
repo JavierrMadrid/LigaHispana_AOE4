@@ -89,14 +89,10 @@ import { Client } from "pg";
  *   extensión ya instalada es un `drop` + `create`, y eso no se decide solo).
  * - **`SITE_URL`** es la URL pública del Worker, y solo la lee este script (para
  *   programar el job). Está declarado en `.env.example` y no hace falta definirlo:
- *   sin él, o con la cadena vacía de ejemplo, sale `DEFAULT_SITE_URL`.
- *   **Ese valor por defecto sigue siendo el `workers.dev` a propósito**, aunque el
- *   sitio ya tenga Custom Domain en Cloudflare: la zona de `laligahispana.es` está
- *   `pending` (los nameservers siguen siendo los del registrador) y, mientras lo
- *   esté, apuntar aquí el job sería mandar cada pasada a un dominio que no
- *   resuelve. El cambio va **después** de que la zona se active, y es reprogramar
- *   este job, no crear otro. Ver `docs/OPERACION.md`, "Cuándo cambia el reloj de
- *   dominio".
+ *   sin él, o con la cadena vacía de ejemplo, sale `DEFAULT_SITE_URL`. Ojo con
+ *   `--check`: compara el comando guardado con el que genera **el `SITE_URL` del
+ *   entorno**, así que sin esa variable avisa que el comando no es de este script
+ *   aunque el job sea correcto. Hay que pasársela también al `--check`.
  * - **`cron.job` tiene RLS** con una política que solo deja ver los jobs del rol
  *   propio. Da igual mientras se programe y se compruebe con el mismo
  *   `DATABASE_URL` (el rol `postgres` de Supabase), que es lo normal, pero por
@@ -128,19 +124,22 @@ const SCHEDULE = "*/5 * * * *";
  * URL pública del Worker a la que dispara el job. Es un valor por defecto, no un
  * destino final: `SITE_URL` lo sustituye.
  *
- * Sigue siendo el `workers.dev` **a propósito**, aunque `laligahispana.es` ya
- * exista como Custom Domain en el panel de Cloudflare. La zona está `pending`
- * —los nameservers siguen siendo los del registrador—, así que ese dominio
- * todavía no resuelve: apuntar aquí el cron sería mandar cada pasada a un sitio
- * que no contesta, y eso no se ve en el `200` de `cron.job_run_details` sino en
- * `net._http_response` y, veinte minutos después, como "pasada vieja" en
- * `/admin`. Se cambia cuando la zona esté `active` y el certificado emitido, y
- * entonces no hace falta ni tocar este fichero: `SITE_URL=https://laligahispana.es
- * npm run db:cron` reprograma este mismo job por el `upsert` de
- * `jobname_username_uniq`. Ver `docs/OPERACION.md`, "Cuándo cambia el reloj de
- * dominio".
+ * Es el dominio propio desde que la zona de `laligahispana.es` pasó a `active`
+ * y hay certificado emitido (4 de octubre de 2026). **Estuvo horas siendo el
+ * `workers.dev` a propósito, y ese orden no era capricho**: mientras la zona
+ * estaba `pending`, apuntar aquí el cron era mandar cada pasada a un dominio que
+ * no resuelve, y el fallo no aparece en el `200` de `cron.job_run_details`
+ * porque `pg_net` no espera la respuesta, sino veinte minutos después en
+ * `/admin`, como "pasada vieja" y con la clasificación congelada. Por eso se
+ * cambió primero la *build variable* (que solo afecta a los metadatos, que no
+ * rompen nada si fallan) y después el reloj.
+ *
+ * Reprogramar el reloj no es crear otro job: `cron.schedule` hace *upsert* sobre
+ * `jobname_username_uniq`, así que `SITE_URL=... npm run db:cron` con otra URL
+ * reescribe el `ligahispana-sync` de siempre y se puede repetir sin miedo. Ver
+ * `docs/OPERACION.md`, "El reloj del torneo y el cambio de dominio".
  */
-const DEFAULT_SITE_URL = "https://ligahispana-aoe4.javierr-ma93.workers.dev";
+const DEFAULT_SITE_URL = "https://laligahispana.es";
 
 /** Timeout del cliente HTTP de `pg_net`, en ms. */
 const HTTP_TIMEOUT_MS = 240_000;

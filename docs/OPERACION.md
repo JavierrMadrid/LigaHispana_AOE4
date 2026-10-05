@@ -92,7 +92,7 @@ select cron.schedule(
   'ligahispana-sync',
   '*/5 * * * *',
   $$select net.http_post(
-       url := 'https://ligahispana-aoe4.javierr-ma93.workers.dev/api/sync',
+       url := 'https://laligahispana.es/api/sync',
        body := '{}'::jsonb,
        headers := '{"Content-Type": "application/json"}'::jsonb,
        timeout_milliseconds := 240000
@@ -129,54 +129,58 @@ Cuatro decisiones que no son obvias:
 - **`pg_net` se instala en `extensions`**, no en `public`: es donde lo pone Supabase y es lo que
   evita el aviso del *Security Advisor*.
 
-### Cuándo cambia el reloj de dominio
+### El reloj del torneo y el cambio de dominio
 
-`SITE_URL` sale del entorno y, si no está, el job usa el valor por defecto de
-[`scripts/db-cron.ts`](../scripts/db-cron.ts), que **hoy sigue siendo**
-`https://ligahispana-aoe4.javierr-ma93.workers.dev`. No es que el dominio no haya cambiado: es que
-**todavía no se puede cambiar**, y el orden importa.
+El job dispara contra `https://laligahispana.es/api/sync`. `SITE_URL` sale del entorno y, si no está,
+sale el valor por defecto de [`scripts/db-cron.ts`](../scripts/db-cron.ts), que ya es ese mismo.
 
-`laligahispana.es` ya está en Cloudflare como Custom Domain del Worker, pero la zona está **`pending`**:
-los nameservers siguen siendo los del registrador, así que el dominio no resuelve y no hay certificado
-emitido. El detalle está en
-[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#el-dominio-propio-y-por-qué-no-está-en-el-archivo). Si el job
-apuntara a `https://laligahispana.es/api/sync` antes de que eso cambie:
+**Hubo un momento en que ese valor por defecto era `workers.dev`, y el cambio se hizo a posteriori a
+propósito.** La zona de `laligahispana.es` estuvo `pending` varias horas (los nameservers no llegaban al
+TLD `.es`), así que el dominio no resolvía. Adelantarlo habría sido mandar cada pasada a un sitio
+que no contesta, y ese fallo es **invisible donde se mira primero**:
 
 - **`cron.job_run_details` seguiría dando `200`.** `net.http_post` encola la petición y devuelve; no
-  espera al Worker ni mira lo que conteste. El fallo no se ve en el reloj.
-- **El síntoma real llega veinte minutos después**: como ninguna pasada termina,
-  `Setting["sync.lastRun"]` envejece y `/admin` enseña **pasada vieja** (`stale`) (ver
+  espera al Worker ni mira lo que conteste.
+- **El síntoma real llegaba veinte minutos después**: como ninguna pasada terminaba,
+  `Setting["sync.lastRun"]` envejecía y `/admin` enseñaba **pasada vieja** (`stale`) (ver
   [Ver si el sincronizador está vivo](#ver-si-el-sincronizador-está-vivo)), con la clasificación
-  congelada y sin el dato de que la causa es el nombre del dominio.
-- **Revertirlo no es local**: hay que acordarse de que era eso y volver a lanzar el script.
+  congelada y sin el dato de que la causa era el nombre del dominio.
+- **Revertirlo no era local**: había que acordarse de que era eso y volver a lanzar el script.
 
-Mientras tanto, `workers.dev` **no** da ningún problema: es el mismo Worker en el mismo edge, y lo
-único que cambia es el nombre. Adelantarse no gana nada y arriesga el reloj del torneo, así que el
-valor por defecto se queda como está.
+Por eso el orden fue **build variable primero, reloj después**: los metadatos no rompen nada si fallan,
+el reloj sí. Todo el razonamiento, y los tres pasos con su orden, están en
+[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#lo-que-se-hizo-y-en-qué-orden).
 
-Y ojo con que hay **dos** `SITE_URL` distintos: este (el del script, que solo se lee al programar el
-job) y el del [workflow de GitHub](.github/workflows/cron-sync.yml), que es la *variable* del
-repositorio en Settings → Secrets and variables → Actions → Variables. El segundo **no hay que
-tocarlo**: sigue siendo válido mientras `workers.dev` sirva, y ese reloj es la red de seguridad del
-primario, así que conviene que siga siendo el que no depende de la zona.
-
-**El paso, el día que la zona esté `active`** (con el certificado emitido y `curl -I
-https://laligahispana.es` ya contestando), es este y no otro:
+**Para volver a cambiarlo** (a otro dominio, o para deshacer), con la zona nueva ya activa y
+comprobando que `curl -I` contesta antes de tocar nada:
 
 ```bash
 SITE_URL=https://laligahispana.es npm run db:cron
-npm run db:cron -- --check      # el comando del job tiene que salir ya con el dominio
+SITE_URL=https://laligahispana.es npm run db:cron -- --check   # el comando tiene que salir con el dominio
 ```
 
 Es un **upsert** sobre `jobname_username_uniq`: reprograma `ligahispana-sync` con la URL nueva, no crea
 un segundo job, y por eso se puede repetir sin miedo. Después hay que mirar la primera respuesta de
 `pg_net` en `net._http_response`: `"status":"ok"`, y no un error de resolución de nombre.
 
-Ese mismo valor, como *build variable* en las **dos** listas del panel, es lo que hace que los
-canónicos y las tarjetas de Open Graph apunten al dominio bueno; y el `routes` del Custom Domain en
-`wrangler.jsonc`, si algún día se quiere declarar, es el último de los tres por razones que no tienen
-nada que ver con el reloj. Los tres pasos y su orden están en
-[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#qué-queda-por-hacer-cuando-la-zona-esté-activa).
+**`SITE_URL` también al `--check`.** La comprobación compara el comando guardado con el que genera
+**el `SITE_URL` del entorno**, así que si no se le pasa, avisa `REVISAR: el comando no es el de este
+script` aunque el job sea correcto. Pasa la variable también ahí y el aviso desaparece.
+
+**Y las variables hay que exportarlas antes.** Los scripts de `scripts/` arrancan con
+`import "dotenv/config"`, que lee **`.env`**, y en este equipo lo que hay es **`.env.local`**
+(no versionado). Sin exportarlas primero, `npm run db:cron` muere con `DATABASE_URL no está definida`:
+
+```bash
+set -a && . ./.env.local && set +a
+SITE_URL=https://laligahispana.es npm run db:cron
+```
+
+Y ojo con que hay **dos** `SITE_URL` distintos: este (el del script, que solo se lee al programar el
+job) y el del [workflow de GitHub](.github/workflows/cron-sync.yml), que es la *variable* del
+repositorio en Settings → Secrets and variables → Actions → Variables. Ese segundo **sigue apuntando a
+`workers.dev` y no hay que tocarlo**: es la red de seguridad del reloj primario, y conviene que sea el
+que no depende de la zona, porque es el único que seguiría funcionando si el dominio se cayera.
 
 **Cómo se comprueba que está disparando.** `npm run db:cron -- --check` imprime las dos extensiones
 con su versión y esquema, el `jobid`, el `schedule` y el comando tal cual están grabados, el resto
@@ -553,9 +557,9 @@ npm run db:cron                  # programa el job de sincronización cada 5 min
   es otra lista distinta y es la única que existe durante el build. Igual que el resto de secretos que
   lee el código de servidor.
 - `NEXT_PUBLIC_SITE_URL` va **también** en *Build variables and secrets*, en las **dos**
-  configuraciones de build, y su valor cambia con el dominio del sitio: sin ella, los canónicos y las
-  rutas absolutas de las imágenes salen del `workers.dev` (y en local, de `localhost`). El día que haya
-  dominio propio hay que ponerla, y no antes. Ver
+  configuraciones de build, y vale `https://laligahispana.es`: sin ella, los canónicos y las rutas
+  absolutas de las imágenes caen al `localhost` de desarrollo, que es lo que se veía en producción antes
+  de definirla. Si algún día cambia el dominio, hay que cambiar el valor en las dos listas. Ver
   [El dominio propio](./DESPLIEGUE.md#el-dominio-propio-y-por-qué-no-está-en-el-archivo).
 
 Lo que hay que poner en el panel del Worker (secretos y build variables, que no son la misma cosa, y

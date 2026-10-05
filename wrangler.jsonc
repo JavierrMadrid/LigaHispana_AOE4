@@ -12,36 +12,35 @@
   "main": ".open-next/worker.js",
   "name": "ligahispana-aoe4",
   // El dominio publico de la liga, `laligahispana.es`, esta en produccion como
-  // **Custom Domain** de este Worker y aun asi **no** hay un bloque `routes` aqui.
-  // Es a proposito, y el motivo es el estado de la zona.
+  // **Custom Domain** de este Worker (zona `active` y con certificado emitido
+  // desde el 4 de octubre de 2026) y aun asi **no** hay un bloque `routes` aqui.
+  // Es a proposito.
   //
-  // La zona esta anadida a la cuenta, pero **pending**: los nameservers siguen
-  // siendo los del registrador (IONOS) y el dominio todavia no resuelve por
-  // ninguna parte. Declarar aqui
+  // Declarar aqui
   //
   //   "routes": [{ "pattern": "laligahispana.es", "custom_domain": true }]
   //
-  // hace que **cada** `wrangler deploy` intente crear ese Custom Domain, y el
-  // despliegue ya no es manual: lo hace Workers Builds en cada push a `main`. Con
-  // la zona sin activar, ese paso puede abortar el despliegue entero, `main` no
-  // publica y produccion se queda sirviendo la version anterior sin que nada en la
-  // web lo diga. Es el mismo modo de fallo que la build variable de Hyperdrive que
-  // rompio cuatro pushes seguidos, y quien hace el push no ve el panel, asi que
-  // tampoco puede arreglarlo.
+  // no hace falta para nada: los Custom Domains son un objeto **aparte** de
+  // `routes`, cuelgan del Worker y no son una ruta que `wrangler deploy`
+  // reconstruya desde el archivo. Por eso el del panel sobrevive a todos los
+  // despliegues aunque no aparezca aqui, y `wrangler deploy` no lo toca ni lo
+  // puede borrar por no estar declarado. Ese fue el motivo que lo justificaba
+  // cuando la zona estaba `pending` y cada `wrangler deploy` intentaba recrear el
+  // Custom Domain, con riesgo de abortar el build y dejar `main` sin publicar.
   //
-  // Omitirlo es estable, no un descuido pendiente: los Custom Domains son un
-  // objeto **aparte** de `routes`, asi que `wrangler deploy` no borra los que no
-  // esten declarados. El que hay en el panel se queda, y en cuanto la zona se
-  // active `laligahispana.es` sirve este mismo Worker.
+  // Hoy el riesgo ese ya no existe (la zona esta activa), asi que lo que queda es
+  // no anadir un paso que pueda tumbar un despliegue sin ganar nada. El
+  // despliegue no es manual: lo hace Workers Builds en cada push a `main`.
   //
-  // Declararlo de forma declarativa es un paso de un dia, y es el **ultimo** de los
-  // que dependen del dominio: solo con la zona `active` y el certificado emitido,
-  // y con un push de prueba para confirmar que el despliegue sigue publicando.
+  // Si algun dia se declara, hay que mirar dos cosas: que `routes` **no**
+  // sustituye a los Previews (que viven en su propio bloque `previews`), y que un
+  // despliegue con la lista declarada deja de publicar si esa llamada falla, asi
+  // que conviene hacerlo en un push vigilado.
   // Ver docs/DESPLIEGUE.md, "El dominio propio, y por que no esta en el archivo".
   //
-  // Mientras tanto, la URL publica es `https://ligahispana-aoe4.javierr-ma93.workers.dev`,
-  // y ese hostname no se toca: es el que consume el job de Supabase Cron
-  // (`scripts/db-cron.ts`) y el que hay que comprobar cuando algo falla.
+  // Este hostname `workers.dev` **no** desaparece: es el que consumen los Previews
+  // por rama y el que usa el workflow de GitHub como reloj de respaldo, asi que
+  // sigue siendo el que hay que comprobar cuando algo falla.
 
   // Requisito de @opennextjs/cloudflare: 2024-09-23 o posterior para nodejs_compat.
   //

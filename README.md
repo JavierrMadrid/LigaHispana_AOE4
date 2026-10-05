@@ -78,7 +78,7 @@ código de servidor: ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 | `NEXT_PUBLIC_SUPABASE_URL` | URL del proyecto Supabase (auth/API) |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Clave publicable de Supabase (auth/API) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Alternativa antigua a la clave publicable |
-| `NEXT_PUBLIC_SITE_URL` | Dominio público del sitio, con protocolo: de él salen los canónicos y las rutas absolutas de las imágenes. Variable de **build**, no de runtime, así que va en *Build variables and secrets* (hoy `https://ligahispana-aoe4.javierr-ma93.workers.dev`, hasta que la zona del dominio propio esté activa) |
+| `NEXT_PUBLIC_SITE_URL` | Dominio público del sitio, con protocolo: de él salen los canónicos y las rutas absolutas de las imágenes. Variable de **build**, no de runtime, así que va en *Build variables and secrets*, en las **dos** configuraciones de build (hoy `https://laligahispana.es`) |
 | `AOE4WORLD_API_BASE` | Base de la API de AoE4World (`https://aoe4world.com`) |
 | `AOE4WORLD_API_KEY` | Opcional, para partidas privadas; viaja en la query y nunca se escribe en los logs |
 | `AOE4WORLD_USER_AGENT` | Cómo se identifica el worker ante la API (`LigaHispanaAOE4/0.1 (sync AoE4World)`) |
@@ -223,10 +223,12 @@ repositorio está conectado a Workers Builds y el trigger de `main` ejecuta `npx
   si falta. Hay **dos** configuraciones de build —la del *trigger* de `main` y la de *Previews Base*—,
   no heredan nada entre ellas, y lo que va en una tiene que ir también en la otra. Detalle en
   `docs/DESPLIEGUE.md`, "Los dos sitios del panel".
-- **El dominio propio `laligahispana.es` ya está en producción como Custom Domain**, pero **no** está
-  declarado en `wrangler.jsonc` a propósito, y su zona sigue `pending` porque los nameservers aún no se
-  han cambiado en el registrador. Hasta que eso pase, la URL pública es la de `workers.dev`. Estado y
-  pasos pendientes en `docs/DESPLIEGUE.md`, "El dominio propio, y por qué no está en el archivo".
+- **El dominio propio `laligahispana.es` es la URL pública del sitio**, en producción como Custom
+  Domain desde que la zona pasó a `active` (4 de octubre de 2026), con certificado de Let's Encrypt
+  emitido y `always_use_https` activado: entrar por `http` salta a `https` y `www` salta al apex. **No**
+  está declarado en `wrangler.jsonc`, a propósito, porque los Custom Domains son un objeto aparte de
+  `routes` y no hace falta declararlos. Estado, certificados y qué hacer si un visitante no entra por
+  la caché DNS antigua, en `docs/DESPLIEGUE.md`, "El dominio propio, y por qué no está en el archivo".
 - La conexión a la base va por el **binding de Hyperdrive**: `src/lib/db.ts` lee
   `env.HYPERDRIVE.connectionString` y, si no está, cae a `DATABASE_URL`. Ese paso, que no se puede
   saltar, en local lo hace `scripts/deploy-worker.mjs`, que exporta desde `.dev.vars` la cadena local
