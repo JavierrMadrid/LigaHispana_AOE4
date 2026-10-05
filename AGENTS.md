@@ -45,7 +45,7 @@ Un cambio es **pequeño** si no toca el modelo (`prisma/`), el plan, el stack/ar
 
 Esos cambios se hacen **directamente** (el orquestador, o el subagente de turno si se delega), y **sin**: cargar skills, `todowrite`, tocar `docs/PLAN.md` ni `npm run build` (`lint` solo si el cambio puede romper tipos o sintaxis). Se cierra con una línea.
 
-Todo lo demás es **vía completa**: skills según el paso 0 de cada subagente (solo las que apliquen), ciclo de trabajo entero y `lint` + `build`.
+Todo lo demás es **vía completa**: skills según el paso 0 de cada subagente (solo las que apliquen), ciclo de trabajo entero y `lint` + `build` + `test`.
 
 Reglas de enrutado (vía completa):
 
@@ -60,8 +60,14 @@ Reglas de enrutado (vía completa):
 - **Textos en español**, sin emojis.
 - Comentarios de código solo cuando explican un *porqué* no obvio.
 - Nada de secretos en el código, en los logs ni en commits.
-- `npm run lint` y `npm run build` deben pasar antes de dar cualquier tarea por terminada.
+- `npm run lint`, `npm run build` y `npm test` deben pasar antes de dar cualquier tarea por terminada.
 - No hagas commits salvo que te lo pidan explícitamente.
+
+## Tests
+
+Los tests van **junto al código que prueban** (`src/lib/scoring.test.ts` al lado de `src/lib/scoring.ts`) y usan **Vitest**: `npm test` los pasa una vez, `npm run test:watch` los deja en watch. El runner está en `vitest.config.mts`, que solo recoge `src/**/*.test.ts` para no entrar en `.open-next/`, donde el build deja `*.test.js` de dependencias.
+
+Son tests **puros**: sin base de datos, sin red, sin variables de entorno y sin temporizadores reales. Cuando toques lógica de negocio o de puntuación, o la frontera con la API de AoE4World, añade o ajusta el test del módulo en el mismo diff. Los `npm run verify:*` que quedan en `scripts/` no se sustituyen por los tests: revisan lo que sí necesita datos de verdad o la base de datos (`verify:sync --db`). Cuando lo que se comprueba sea puro, el test es el sitio: no escribas un `verify:*` nuevo.
 
 ## Skills del proyecto
 

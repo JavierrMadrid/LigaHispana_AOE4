@@ -939,12 +939,13 @@ regla agrupa por familia, y el tipo se recorta con `?tipo=`. El informe descarga
 siguen en la cabecera aunque la tabla degrade (son acciones independientes de la lectura), y el
 estado vacío con filtros dice que hay filtros en vez de "todavía no hay alertas".
 
-**Verificación**: `npm run verify:alerts` son 53 comprobaciones puras, sin base de datos, sobre
-secuencias sintéticas: rachas y su ruptura, los múltiplos de 5 y de 10, R3 por pareja, el borde
-499/500 de R4, el borde de escalones de R5 y su omisión sin cortes, el cierre de torneo, la
-idempotencia de las claves de dedupe y la validación del ruleset. `npm run alerts:check` es la
-comprobación contra la base de verdad, y es idempotente: la segunda pasada con los mismos datos
-inserta 0 filas.
+**Verificación**: `npm test` cubre el motor con secuencias sintéticas, sin base de datos: rachas y su
+ruptura, los múltiplos de 5 y de 10, R3 por pareja, el borde 499/500 de R4, el borde de escalones de
+R5 y su omisión sin cortes, el cierre de torneo, la idempotencia de las claves de dedupe, la
+validación del ruleset y la lectura de la caché de cortes. Reparto: 35 casos en
+`src/lib/alerts/compute.test.ts`, 25 en `rules.test.ts` y 19 en `division-cutoffs.test.ts`, con el
+catálogo de subdivisiones en `src/lib/divisions.test.ts`. `npm run alerts:check` es la comprobación
+contra la base de verdad, y es idempotente: la segunda pasada con los mismos datos inserta 0 filas.
 
 ### F10 — YouTube y Kick en el tratamiento de canales de directo ✅ / por desplegar
 

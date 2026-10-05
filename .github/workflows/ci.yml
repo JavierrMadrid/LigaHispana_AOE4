@@ -1,15 +1,27 @@
 name: Verificación de pull requests
 
-# Comprueba las pull requests: `npm ci`, `npm run lint` y `npm run build`.
+# Comprueba las pull requests en **dos jobs en paralelo**:
+#
+# - `verificar`: `npm ci`, `npm run lint` y `npm run build`. Dice si el código
+#   compila y pasa el linter.
+# - `test`: `npm ci` y `npm test` (Vitest). Dice si la lógica que no se ve —el
+#   motor de puntos, el de alertas, la frontera con la API— sigue cumplir las
+#   reglas de `docs/PUNTUACION.md`.
+#
+# Van separados a propósito. Compilar es lento y los tests no lo necesitan, así que
+# un fallo de lógica no tiene que esperar al `next build` para salir, y el
+# veredicto de los tests no se pierde porque el build haya fallado antes (ni al
+# revés). Cada uno con su `npm ci`: compartir el directorio de trabajo entre dos
+# jobs en paralelo no es posible, y un `node_modules` compartido sería una carrera.
 #
 # No se dispara en los pushes a `main` porque ese despliegue ya lo hace el
 # trigger de Workers Builds, que es además el único sitio donde se construye de
 # verdad el bundle de OpenNext y el Worker. Aquí no hay nada que desplegar, solo
-# que comprobar que el código compila y pasa el linter.
+# que comprobar que el código compila, pasa el linter y pasa los tests.
 #
 # Convive con los previews de Workers Builds, que también se disparan en un push
 # a una rama y también despliegan, pero no lo sustituyen: un Preview tarda bastante
-# más que `npm ci && npm run lint`, así que este workflow es el que da el veredicto
+# más que `npm ci && npm test`, así que este workflow es el que da el veredicto
 # en un par de minutos. Ver docs/DESPLIEGUE.md, "Workers Builds: `main` despliega y
 # las ramas hacen Preview".
 
@@ -18,20 +30,23 @@ on:
     types: [opened, synchronize, reopened]
 
 # El repositorio es público y este workflow solo lee el código del pull request:
-# no necesita ningún otro permiso.
+# no necesita ningún otro permiso. Lo hereda también el job de tests.
 permissions:
   contents: read
-
-# Un push nuevo en la misma pull request cancela la ejecución anterior: sus
-# minutos ya no sirven para el commit que se está comprobando.
-concurrency:
-  group: ci-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 
 jobs:
   verificar:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    # Un push nuevo en la misma pull request cancela la ejecución anterior de este
+    # job: sus minutos ya no sirven para el commit que se está comprobando. El
+    # `github.job` en el grupo deja el otro job en su propio grupo, que es lo que
+    # permite que los dos sean independientes y cancelar por separado.
+    concurrency:
+      group: ci-pr-${{ github.event.pull_request.number }}-${{ github.job }}
+      cancel-in-progress: true
+
     steps:
       - uses: actions/checkout@v4
 
@@ -58,3 +73,34 @@ jobs:
       # `http://localhost:3000` y los metadatos que se compilan aquí se
       # descartan al terminar el job.
       - run: npm run build
+
+  test:
+    runs-on: ubuntu-latest
+    # Margen de sobra para lo que hace: instalar y pasar unos segundos de tests. El
+    # tope está para que un test colgado (una llamada a la red que no se acaba) no
+    # se lleve los minutos de un runner entero.
+    timeout-minutes: 10
+
+    concurrency:
+      group: ci-pr-${{ github.event.pull_request.number }}-${{ github.job }}
+      cancel-in-progress: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # El `prisma generate` del `postinstall` también hace falta aquí: los tests
+      # de `scoring.test.ts` y de `normalize.test.ts` importan los enums y el
+      # cliente de `src/generated/prisma`, que no está versionado.
+      - run: npm ci
+
+      # Ni variables de entorno ni `DATABASE_URL`: los tests cubren lógica pura de
+      # `src/lib` y no abren ni una conexión ni una llamada a la API de AoE4World.
+      # `CI` no se define a mano porque Actions ya lo pone a `true` en todos los
+      # pasos, y `npm test` es `vitest run` —sin modo watch— tanto en local como
+      # aquí, que es lo que hace que el resultado sea el mismo en los dos sitios.
+      - run: npm test

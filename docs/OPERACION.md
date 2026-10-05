@@ -326,13 +326,17 @@ guardadas, y deja una fila por alerta en la tabla `Alert`. Las ocho reglas, sus 
 datos están en [`docs/PLAN.md`](./PLAN.md#f9--motor-de-alertas-de-comportamiento-).
 
 ```bash
-npm run verify:alerts              # 53 comprobaciones puras, SIN base de datos
-npm run alerts:check                # evaluación completa + resumen por consola
+npm test                      # el motor, con secuencias sintéticas y SIN base de datos
+npm run alerts:check           # evaluación completa + resumen por consola
 npm run alerts:check -- 6000037     # solo esos profileId
 npm run alerts:cutoffs              # deriva o refresca los cortes de división (rm_solo y rm_team)
 npm run alerts:cutoffs -- --ladder=rm_team   # solo una ladder
 npm run alerts:cutoffs -- --show    # solo enseña los cortes cacheados
 ```
+
+La parte que no necesita la base está en los tests de `src/lib/alerts/`: `compute.test.ts` (las reglas
+sobre secuencias de partidas), `rules.test.ts` (umbrales, frases y claves de dedupe) y
+`division-cutoffs.test.ts` (rating → subdivisión y lectura de la caché). Los tres pasan en `npm test`.
 
 **Cuándo se evalúa.** Colgado del sincronizador, cada 5 minutos: en `syncApprovedPlayers()`,
 después de `recomputeScores()`, se evalúan **solo los jugadores tocados** en la pasada, y en una

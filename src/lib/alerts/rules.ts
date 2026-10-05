@@ -4,7 +4,7 @@ import { isRecord } from "@/lib/json";
 /**
  * Umbrales y frases de las alertas de comportamiento. **Módulo puro**: no toca
  * la base de datos ni sale a la red, para que `computePlayerAlerts()` y
- * `npm run verify:alerts` se puedan comprobar con secuencias sintéticas.
+ * `rules.test.ts` (vía `npm test`) se puedan comprobar con secuencias sintéticas.
  *
  * ## Las tres piezas
  *

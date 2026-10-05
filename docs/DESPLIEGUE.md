@@ -336,7 +336,7 @@ importación del `.wasm` siempre entra por el cargador de ESM. Es además la mis
 su cuenta, así que los dos se apoyan en ella.
 
 Se aplica en `package.json` a los scripts que **consultan** la base (`sync`, `score`,
-`backfill:model`, `verify:sync`, `verify:alerts`, `alerts:check`, `alerts:cutoffs`, `db:window`,
+`backfill:model`, `verify:sync`, `alerts:check`, `alerts:cutoffs`, `db:window`,
 `countries:seed`, `mock:tournament`, `mock:clean`, `simulate:tournament`, `simulate:clean`):
 
 ```json
@@ -918,6 +918,11 @@ Workers Builds sustituya: un Preview **despliega**, y eso tarda bastante más qu
 lint`. El workflow da el veredicto en un par de minutos y sin gastar un despliegue, y el Preview da
 la URL. Los dos se disparan en el mismo push, y en un repositorio público ninguno de los dos cobra
 minutos.
+
+Son dos jobs en paralelo y cada uno con su veredicto: `verificar` (`npm ci`, `npm run lint`,
+`npm run build`) y `test` (`npm ci`, `npm test`). Los tests van aparte porque compilar es lento y no
+hace falta para pasarlos, así que un fallo de lógica sale sin esperar al `next build` y sin que el
+build pueda taparlo. El workflow solo se dispara en pull requests.
 
 ### Lo que hay que hacer en el panel
 
