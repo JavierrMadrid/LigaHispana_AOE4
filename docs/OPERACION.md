@@ -92,13 +92,16 @@ select cron.schedule(
   'ligahispana-sync',
   '*/5 * * * *',
   $$select net.http_post(
-       url := 'https://ligahispana-aoe4.javierr-ma93.workers.dev/api/sync',
+       url := 'https://laligahispana.es/api/sync',
        body := '{}'::jsonb,
        headers := '{"Content-Type": "application/json"}'::jsonb,
        timeout_milliseconds := 240000
      );$$
 );
 ```
+
+La URL de `url :=` es el valor por defecto de [`scripts/db-cron.ts`](../scripts/db-cron.ts), y por qué
+ese valor es el que es está en [Cuándo cambia el reloj de dominio](#cuándo-cambia-el-reloj-de-domino).
 
 Cuatro decisiones que no son obvias:
 
@@ -126,9 +129,58 @@ Cuatro decisiones que no son obvias:
 - **`pg_net` se instala en `extensions`**, no en `public`: es donde lo pone Supabase y es lo que
   evita el aviso del *Security Advisor*.
 
-`SITE_URL` sale del entorno y por defecto es
-`https://ligahispana-aoe4.javierr-ma93.workers.dev`; no hace falta definirlo mientras el dominio no
-cambie.
+### El reloj del torneo y el cambio de dominio
+
+El job dispara contra `https://laligahispana.es/api/sync`. `SITE_URL` sale del entorno y, si no está,
+sale el valor por defecto de [`scripts/db-cron.ts`](../scripts/db-cron.ts), que ya es ese mismo.
+
+**Hubo un momento en que ese valor por defecto era `workers.dev`, y el cambio se hizo a posteriori a
+propósito.** La zona de `laligahispana.es` estuvo `pending` varias horas (los nameservers no llegaban al
+TLD `.es`), así que el dominio no resolvía. Adelantarlo habría sido mandar cada pasada a un sitio
+que no contesta, y ese fallo es **invisible donde se mira primero**:
+
+- **`cron.job_run_details` seguiría dando `200`.** `net.http_post` encola la petición y devuelve; no
+  espera al Worker ni mira lo que conteste.
+- **El síntoma real llegaba veinte minutos después**: como ninguna pasada terminaba,
+  `Setting["sync.lastRun"]` envejecía y `/admin` enseñaba **pasada vieja** (`stale`) (ver
+  [Ver si el sincronizador está vivo](#ver-si-el-sincronizador-está-vivo)), con la clasificación
+  congelada y sin el dato de que la causa era el nombre del dominio.
+- **Revertirlo no era local**: había que acordarse de que era eso y volver a lanzar el script.
+
+Por eso el orden fue **build variable primero, reloj después**: los metadatos no rompen nada si fallan,
+el reloj sí. Todo el razonamiento, y los tres pasos con su orden, están en
+[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#lo-que-se-hizo-y-en-qué-orden).
+
+**Para volver a cambiarlo** (a otro dominio, o para deshacer), con la zona nueva ya activa y
+comprobando que `curl -I` contesta antes de tocar nada:
+
+```bash
+SITE_URL=https://laligahispana.es npm run db:cron
+SITE_URL=https://laligahispana.es npm run db:cron -- --check   # el comando tiene que salir con el dominio
+```
+
+Es un **upsert** sobre `jobname_username_uniq`: reprograma `ligahispana-sync` con la URL nueva, no crea
+un segundo job, y por eso se puede repetir sin miedo. Después hay que mirar la primera respuesta de
+`pg_net` en `net._http_response`: `"status":"ok"`, y no un error de resolución de nombre.
+
+**`SITE_URL` también al `--check`.** La comprobación compara el comando guardado con el que genera
+**el `SITE_URL` del entorno**, así que si no se le pasa, avisa `REVISAR: el comando no es el de este
+script` aunque el job sea correcto. Pasa la variable también ahí y el aviso desaparece.
+
+**Y las variables hay que exportarlas antes.** Los scripts de `scripts/` arrancan con
+`import "dotenv/config"`, que lee **`.env`**, y en este equipo lo que hay es **`.env.local`**
+(no versionado). Sin exportarlas primero, `npm run db:cron` muere con `DATABASE_URL no está definida`:
+
+```bash
+set -a && . ./.env.local && set +a
+SITE_URL=https://laligahispana.es npm run db:cron
+```
+
+Y ojo con que hay **dos** `SITE_URL` distintos: este (el del script, que solo se lee al programar el
+job) y el del [workflow de GitHub](.github/workflows/cron-sync.yml), que es la *variable* del
+repositorio en Settings → Secrets and variables → Actions → Variables. Ese segundo **sigue apuntando a
+`workers.dev` y no hay que tocarlo**: es la red de seguridad del reloj primario, y conviene que sea el
+que no depende de la zona, porque es el único que seguiría funcionando si el dominio se cayera.
 
 **Cómo se comprueba que está disparando.** `npm run db:cron -- --check` imprime las dos extensiones
 con su versión y esquema, el `jobid`, el `schedule` y el comando tal cual están grabados, el resto
@@ -504,6 +556,11 @@ npm run db:cron                  # programa el job de sincronización cada 5 min
 - `YOUTUBE_API_KEY` va **además** en *Build variables and secrets* del trigger de Workers Builds, que
   es otra lista distinta y es la única que existe durante el build. Igual que el resto de secretos que
   lee el código de servidor.
+- `NEXT_PUBLIC_SITE_URL` va **también** en *Build variables and secrets*, en las **dos**
+  configuraciones de build, y vale `https://laligahispana.es`: sin ella, los canónicos y las rutas
+  absolutas de las imágenes caen al `localhost` de desarrollo, que es lo que se veía en producción antes
+  de definirla. Si algún día cambia el dominio, hay que cambiar el valor en las dos listas. Ver
+  [El dominio propio](./DESPLIEGUE.md#el-dominio-propio-y-por-qué-no-está-en-el-archivo).
 
 Lo que hay que poner en el panel del Worker (secretos y build variables, que no son la misma cosa, y
 el paso de Hyperdrive) está en

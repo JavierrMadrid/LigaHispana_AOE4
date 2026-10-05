@@ -87,10 +87,12 @@ import { Client } from "pg";
  *   Supabase y es lo que evita el aviso del *Security Advisor*. Si algún día
  *   estuviera en `public`, este script lo avisa en vez de moverlo (mover una
  *   extensión ya instalada es un `drop` + `create`, y eso no se decide solo).
- * - **`SITE_URL`** es la URL pública del Worker. Está declarado en
- *   `.env.example` pero no hace falta definirlo: sin él (o con la cadena vacía
- *   de ejemplo) sale el valor por defecto de más abajo. Conviene ponerlo si
- *   algún día el sitio cambia de dominio.
+ * - **`SITE_URL`** es la URL pública del Worker, y solo la lee este script (para
+ *   programar el job). Está declarado en `.env.example` y no hace falta definirlo:
+ *   sin él, o con la cadena vacía de ejemplo, sale `DEFAULT_SITE_URL`. Ojo con
+ *   `--check`: compara el comando guardado con el que genera **el `SITE_URL` del
+ *   entorno**, así que sin esa variable avisa que el comando no es de este script
+ *   aunque el job sea correcto. Hay que pasársela también al `--check`.
  * - **`cron.job` tiene RLS** con una política que solo deja ver los jobs del rol
  *   propio. Da igual mientras se programe y se compruebe con el mismo
  *   `DATABASE_URL` (el rol `postgres` de Supabase), que es lo normal, pero por
@@ -118,8 +120,26 @@ const JOB_NAME = "ligahispana-sync";
 
 const SCHEDULE = "*/5 * * * *";
 
-/** Si el sitio cambia de dominio, se define `SITE_URL` en `.env`. */
-const DEFAULT_SITE_URL = "https://ligahispana-aoe4.javierr-ma93.workers.dev";
+/**
+ * URL pública del Worker a la que dispara el job. Es un valor por defecto, no un
+ * destino final: `SITE_URL` lo sustituye.
+ *
+ * Es el dominio propio desde que la zona de `laligahispana.es` pasó a `active`
+ * y hay certificado emitido (4 de octubre de 2026). **Estuvo horas siendo el
+ * `workers.dev` a propósito, y ese orden no era capricho**: mientras la zona
+ * estaba `pending`, apuntar aquí el cron era mandar cada pasada a un dominio que
+ * no resuelve, y el fallo no aparece en el `200` de `cron.job_run_details`
+ * porque `pg_net` no espera la respuesta, sino veinte minutos después en
+ * `/admin`, como "pasada vieja" y con la clasificación congelada. Por eso se
+ * cambió primero la *build variable* (que solo afecta a los metadatos, que no
+ * rompen nada si fallan) y después el reloj.
+ *
+ * Reprogramar el reloj no es crear otro job: `cron.schedule` hace *upsert* sobre
+ * `jobname_username_uniq`, así que `SITE_URL=... npm run db:cron` con otra URL
+ * reescribe el `ligahispana-sync` de siempre y se puede repetir sin miedo. Ver
+ * `docs/OPERACION.md`, "El reloj del torneo y el cambio de dominio".
+ */
+const DEFAULT_SITE_URL = "https://laligahispana.es";
 
 /** Timeout del cliente HTTP de `pg_net`, en ms. */
 const HTTP_TIMEOUT_MS = 240_000;

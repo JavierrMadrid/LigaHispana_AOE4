@@ -537,7 +537,12 @@ arriba son las de producción; un Preview tiene su propio par, en *Previews Base
   `npx wrangler deploy` **aborta**. Es la variable que faltó cuatro pushes seguidos.
 - **Las `NEXT_PUBLIC_*`** (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
   `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `NEXT_PUBLIC_SITE_URL`). Obligatorias: Next las sustituye por un
-  literal al compilar y en runtime ningún binding puede llegar al bundle del navegador.
+  literal al compilar y en runtime ningún binding puede llegar al bundle del navegador. La de
+  `NEXT_PUBLIC_SITE_URL` es además la que decide de qué dominio salen los canónicos y las tarjetas
+  sociales, y vale `https://laligahispana.es`. Sin ella los canónicos caen a `http://localhost:3000`,
+  que fue un fallo real en producción: las tarjetas al compartir el link salían rotas. Si algún día
+  cambia el dominio, hay que cambiar el valor en **las dos** listas (ver
+  [El dominio propio, y por qué no está en el archivo](#el-dominio-propio-y-por-qué-no-está-en-el-archivo)).
 - **Los secretos que lee el código de servidor** (`YOUTUBE_API_KEY`, `CRON_SECRET`,
   `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`): también están, y deben estarlo. Ojo con el matiz, que
   es lo que distingue este caso de los dos anteriores: hoy sus lecturas son **perezosas** (dentro
@@ -662,6 +667,122 @@ páginas públicas ya **no** devuelven un 500: `getStandings()`, `getLiveMatches
 lleva una línea con prefijo `[db]` y el motivo. Ver [Qué ve la web cuando la base de datos no
 responde](./OPERACION.md#cuando-la-base-de-datos-no-responde).
 
+## El dominio propio, y por qué no está en el archivo
+
+`laligahispana.es` es **la URL pública del torneo**, y está en producción **como Custom Domain** del
+Worker sin estar declarado en [`wrangler.jsonc`](../wrangler.jsonc). Lo primero se comprobó el 4 de
+octubre de 2026; lo segundo es una decisión.
+
+### Qué hay montado
+
+| Qué | Estado |
+|---|---|
+| Zona `laligahispana.es` | **`active`** desde el 4 de octubre de 2026, 22:12 UTC, sin `activation_failure_reason` |
+| Custom Domain `laligahispana.es` → Worker `ligahispana-aoe4` | Creado y `enabled`. Lo creó el alta del dominio, que dejó el `AAAA 100::` proxied del apex; ese registro es de Cloudflare y sale `read_only` |
+| `www.laligahispana.es` | `A 192.0.2.0` proxied, de relleno, más una regla *Single Redirect* al apex con 301. La redirección se resuelve en el edge, así que la IP de relleno nunca recibe una petición: es una dirección de documentación (RFC 5737) y no hace falta un origen real detrás |
+| Ajustes de zona | `min_tls_version` de 1.0 a 1.2, y `always_use_https` activado |
+| Certificados | Universal SSL emitido y `active`, Let's Encrypt, `CN=laligahispana.es` más `*.laligahispana.es`. Vence el **2 de enero de 2027** y Let's Encrypt lo renueva solo: no hay que hacer nada |
+| `NEXT_PUBLIC_SITE_URL` | `https://laligahispana.es` en las **dos** configuraciones de build |
+| Correo | **Sin MX**, y a propósito: se borraron los registros de correo que traía IONOS (`mx00`, `mx01`, el SPF, `autodiscover`, `_dmarc`, `_domainconnect`) después de confirmar con la organización que no hay ningún buzón con ese dominio. Si algún día se quiere correo, hay que configurarlo desde cero |
+
+Comprobado sobre el dominio real: `https://laligahispana.es` contesta 200, y también `/partidas` y
+`/objetivos`; `http://` responde 301 a https; `https://www.` responde 301 al apex.
+
+### El apex no tiene registro `A`, y no lo necesita
+
+El único registro del apex es el `AAAA 100::` proxied que creó el Custom Domain. **No hay ningún `A`,
+y no hay que añadirlo**: Cloudflare sintetiza las direcciones de las dos familias a partir de ese
+`100::`, así que un visitante que solo tenga IPv4 resuelve igual y llega al edge. Se comprobó en
+`atlas-center.com`, que tiene la configuración idéntica: no registra ningún `A` para su apex y resuelve
+en IPv4 y en IPv6.
+
+`100::` es el *discard prefix* IPv6 (RFC 6666) y `192.0.2.0` el rango de documentación (RFC 5737):
+direcciones que no corresponden a ningún servidor. Como el registro está proxied, Cloudflare intercepta
+la petición en el edge y nunca sale hacia ellas.
+
+Y no se puede añadir el `A` a mano: Workers responde `81062 A DNS record managed by Workers already
+exists on that host`. No es un error que haya que arreglar.
+
+### Por qué no está en `wrangler.jsonc`
+
+Lo tentador es declarar la ruta, que es la forma documentada de tener un Custom Domain:
+
+```jsonc
+"routes": [{ "pattern": "laligahispana.es", "custom_domain": true }]
+```
+
+Mientras la zona estuvo `pending` el motivo era claro: `wrangler deploy` corre solo en cada push a
+`main` y, con `routes` declarados, habría intentado recrear el Custom Domain sobre una zona sin
+activar, con riesgo de abortar el build y dejar `main` sin publicar. **Ese motivo ya no aplica**, porque
+la zona está activa. La decisión sí se mantiene, pero por otra razón:
+
+- **Declararlo no aporta nada.** El Custom Domain ya existe en el panel, los Custom Domains son un
+  objeto **distinto** de `routes` (cuelgan del Worker, no son una ruta que `wrangler deploy` reconstruya
+  desde el archivo) y `wrangler deploy` no los borra ni los puede borrar por no estar declarados. Ese
+  fue el motivo por el que el del panel sobrevivió a todos los despliegues.
+- **Mantiene el despliegue con menos superficie.** Cada paso que puede abortar un build es un paso que
+  puede dejar `main` sin publicar sin que nada en la web lo diga
+  ([El mensaje que sale es engañoso](#el-mensaje-que-sale-es-enganoso)).
+
+Si algún día se declara, hay que mirar dos cosas antes: que `routes` **no** sustituye a los Previews
+(que viven en su propio `previews` block), y que un despliegue con la lista de `routes` declarada
+puede dejar de publicar si esa llamada falla, así que conviene hacerlo en un push vigilado.
+
+### Cambiar los nameservers, y por qué tardó horas
+
+El dominio se añadió a la cuenta el 4 de octubre de 2026. **El cambio de nameservers lo hizo la
+organización en el registrador** (IONOS), no desde el repositorio: los cuatro de IONOS
+(`ns1039.ui-dns.de`, `ns1101.ui-dns.biz`, `ns1117.ui-dns.org`, `ns1126.ui-dns.com`) por
+`lara.ns.cloudflare.com` y `odin.ns.cloudflare.com`.
+
+ Tardó **horas** en reflejarse, y el motivo importa para la próxima vez: el registro `.es` tiene TTL
+86400 (un día). Durante el camino intermedio los nameservers de IONOS ya devolvían los de Cloudflare
+pero el TLD seguía delegando en los antiguos, así que Cloudflare no activaba la zona.
+
+**Para comprobar si un dominio delega donde crees, `dig +trace` es lo único fiable.** Los resolvers
+normales (1.1.1.1, 8.8.8.8) contestan desde su caché y dan la impresión contraria: durante horas dijeron
+`lara`/`odin` cuando el registro `.es` aún tenía los cuatro de IONOS, y luego al revés. Sin
+`+trace` es fácil dar por hecho que el cambio está publicado cuando no lo está.
+
+### Si un visitante no puede entrar: la caché DNS
+
+Un buen número de visitantes llegaron con el dominio cacheado de antes del cambio, y siguen
+resolviéndolo a `217.160.0.224`, la IP de IONOS. Allí el TLS falla con `internal error (592)`, así que el
+navegador no abre la web. **El sitio está bien**: contra las IPs de Cloudflare contesta 200.
+
+No hay nada que arreglar en el servidor:
+
+- Se resuelve **solo**, cuando caduque la caché del visitante (unas horas).
+- **No afecta a quien entra por primera vez**: ese ve el certificado válido directamente.
+- Para forzarlo: `ipconfig /flushdns` en Windows, `sudo dscacheutil -flushcache; sudo killall -HUP
+  mDNSResponder` en macOS, o `chrome://net-internals/#dns` → *Clear host cache* en Chrome. Y cambiar de
+  red (datos móviles en vez de wifi) suele bastar.
+
+Lo único que evita el transtorno es no volver a difundir la URL antigua de `workers.dev`: desde que el
+dominio está activo, la que se comparte es `https://laligahispana.es`.
+
+### Lo que se hizo, y en qué orden
+
+Los tres pasos dependían de que el dominio ya resolviera, y cada uno se rompe de una forma distinta,
+así que el orden era el que hacía que un fallo se viera. Está **hecho**:
+
+1. **`NEXT_PUBLIC_SITE_URL` = `https://laligahispana.es`** en *Build variables and secrets*, en las
+   **dos** configuraciones de build: la del *trigger* de `main` y la de *Previews Base*. Va como *build
+   variable* y no como secreto del Worker porque Next la sustituye por un literal al compilar, y en
+   runtime ningún binding puede llegar al bundle del navegador (ver
+   [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables)).
+   Fue lo primero porque **solo afecta a los metadatos**: si el dominio fallara, las tarjetas saldrían
+   mal y no se caería nada.
+2. **El reloj del torneo**: `SITE_URL=https://laligahispana.es npm run db:cron`. Fue lo segundo, y no
+   por capricho: `pg_net` no espera la respuesta, así que apuntarlo antes habría devuelto `200` igual y
+   el único síntoma habría sido "pasada vieja" en `/admin` veinte minutos después. El fondo está en
+   [`docs/OPERACION.md`](./OPERACION.md#el-reloj-del-torneo-y-el-cambio-de-domino).
+3. **`routes` en `wrangler.jsonc`**, opcional, sin hacer (ver [Por qué no está en
+   `wrangler.jsonc`](#por-qué-no-está-en-wranglerjsonc)).
+
+El orden era **build variable primero, reloj después**, y no al revés: los metadatos no rompen nada si
+fallan, el reloj sí. Los dos primeros se pueden deshacer igual de fácil.
+
 ## Publicar
 
 ```bash
@@ -738,6 +859,7 @@ necesita el build:
 |---|---|
 | `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` | `wrangler preview` emula Hyperdrive igual que `deploy`, y sin ella el build muere al ver el binding |
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Next las sustituye por un literal al compilar, y en runtime ningún binding puede llegar al bundle del navegador |
+| `NEXT_PUBLIC_SITE_URL` | Lo mismo, y además es lo que hace que un Preview anuncie el dominio de producción y no el suyo: es el mismo valor que en la del *trigger* de `main`, y por eso tiene que ir en las dos listas. Ver [El dominio propio](#el-dominio-propio-y-por-qué-no-está-en-el-archivo) |
 | `CRON_SECRET`, `DATABASE_URL`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `YOUTUBE_API_KEY` | No las necesita el build: están por si algún día un módulo de servidor las lee al importar. Ver [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables) |
 
 **Las build variables no están en runtime**, solo en el proceso de build (eso dice la documentación de
