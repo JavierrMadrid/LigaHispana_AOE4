@@ -958,8 +958,8 @@ estado vacío con filtros dice que hay filtros en vez de "todavía no hay alerta
 ruptura, los múltiplos de 5 y de 10, R3 por pareja, el borde 499/500 de R4, el borde de escalones de
 R5 y su omisión sin cortes, el cierre de torneo, la idempotencia de las claves de dedupe, la
 validación del ruleset y la lectura de la caché de cortes. Reparto: 35 casos en
-`src/lib/alerts/compute.test.ts`, 30 en `rules.test.ts` y 19 en `division-cutoffs.test.ts`, con el
-catálogo de subdivisiones en `src/lib/divisions.test.ts`. `npm run alerts:check` es la comprobación
+`tests/unit/lib/alerts/compute.test.ts`, 30 en `rules.test.ts` y 19 en `division-cutoffs.test.ts`, con el
+catálogo de subdivisiones en `tests/unit/lib/divisions.test.ts`. `npm run alerts:check` es la comprobación
 contra la base de verdad, y es idempotente: la segunda pasada con los mismos datos inserta 0 filas.
 
 ### F11 — Transparencia del historial de partidas ✅

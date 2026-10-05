@@ -334,7 +334,7 @@ npm run alerts:cutoffs -- --ladder=rm_team   # solo una ladder
 npm run alerts:cutoffs -- --show    # solo enseña los cortes cacheados
 ```
 
-La parte que no necesita la base está en los tests de `src/lib/alerts/`: `compute.test.ts` (las reglas
+La parte que no necesita la base está en los tests de `tests/unit/lib/alerts/`: `compute.test.ts` (las reglas
 sobre secuencias de partidas), `rules.test.ts` (umbrales, frases y claves de dedupe) y
 `division-cutoffs.test.ts` (rating → subdivisión y lectura de la caché). Los tres pasan en `npm test`.
 
