@@ -65,7 +65,7 @@ Reglas de enrutado (vía completa):
 
 ## Tests
 
-Los tests van **junto al código que prueban** (`src/lib/scoring.test.ts` al lado de `src/lib/scoring.ts`) y usan **Vitest**: `npm test` los pasa una vez, `npm run test:watch` los deja en watch. El runner está en `vitest.config.mts`, que solo recoge `src/**/*.test.ts` para no entrar en `.open-next/`, donde el build deja `*.test.js` de dependencias.
+Los tests viven en un **árbol espejo** de producción, no junto al código que prueban: `tests/unit/lib/scoring.test.ts` espeja `src/lib/scoring.ts`, y la razón de separarlos es que `src/` quede con código de producción únicamente, sin pruebas dentro. Usan **Vitest**: `npm test` los pasa una vez, `npm run test:watch` los deja en watch. Lo que el espejo conserva es la correspondencia: el path sigue diciendo a qué módulo pertenece cada test, así que al retocar un módulo tienes a la vista, en el mismo `git diff`, qué se comprobó de él. El runner está en `vitest.config.mts`, que solo recoge `tests/**/*.test.ts`: ni entra en `src/` ni en `.open-next/`, donde el build deja `*.test.js` de dependencias.
 
 Son tests **puros**: sin base de datos, sin red, sin variables de entorno y sin temporizadores reales. Cuando toques lógica de negocio o de puntuación, o la frontera con la API de AoE4World, añade o ajusta el test del módulo en el mismo diff. Los `npm run verify:*` que quedan en `scripts/` no se sustituyen por los tests: revisan lo que sí necesita datos de verdad o la base de datos (`verify:sync --db`). Cuando lo que se comprueba sea puro, el test es el sitio: no escribas un `verify:*` nuevo.
 

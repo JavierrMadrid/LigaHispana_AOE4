@@ -284,10 +284,10 @@ restaurar una partida, al cerrar el torneo y a mano. Las ocho reglas, sus umbral
 con sus costes, están en [`docs/PLAN.md`](docs/PLAN.md#f9--motor-de-alertas-de-comportamiento-).
 
 Todo lo que decide el motor es una función pura, así que se comprueba con `npm test` y sin nada
-preparado: [`src/lib/alerts/compute.test.ts`](src/lib/alerts/compute.test.ts) pasa las secuencias de
-partidas regla a regla, [`src/lib/alerts/rules.test.ts`](src/lib/alerts/rules.test.ts) los umbrales, las
+preparado: [`tests/unit/lib/alerts/compute.test.ts`](tests/unit/lib/alerts/compute.test.ts) pasa las secuencias de
+partidas regla a regla, [`tests/unit/lib/alerts/rules.test.ts`](tests/unit/lib/alerts/rules.test.ts) los umbrales, las
 frases y las claves de dedupe, y
-[`src/lib/alerts/division-cutoffs.test.ts`](src/lib/alerts/division-cutoffs.test.ts) la traducción de
+[`tests/unit/lib/alerts/division-cutoffs.test.ts`](tests/unit/lib/alerts/division-cutoffs.test.ts) la traducción de
 rating a subdivisión y la lectura de la caché de cortes. Lo que sí necesita la base de datos —que la
 inserción sea idempotente de verdad, que el rastro del sync lo refleje— lo comprueba `alerts:check`.
 

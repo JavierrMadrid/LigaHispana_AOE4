@@ -4,9 +4,19 @@ import { configDefaults, defineConfig } from "vitest/config";
 /**
  * Runner de los tests.
  *
- * Los tests van **junto al código que prueban** (`src/lib/scoring.test.ts` al
- * lado de `src/lib/scoring.ts`), no en una carpeta central: el que retoca un
- * módulo tiene que ver, en el mismo `git diff`, qué se comprobó de él.
+ * Los tests viven en un **árbol espejo** de producción (`tests/unit/lib/scoring.test.ts`
+ * espeja `src/lib/scoring.ts`), no junto al módulo: así `src/` se queda con código de
+ * producción únicamente, y nada de lo que hay en `tests/` entra en el grafo del bundle
+ * porque ningún fichero de la aplicación los importa.
+ *
+ * Separarlos **no** significa que dejen de type-checkearse: el `include` de
+ * `tsconfig.json` agarra todos los `.ts` del proyecto, así que `next build` sigue
+ * pasándolos por TypeScript y un test con un error de tipos rompe el build. Es lo que
+ * se quiere: un test que no compila es un test que no vale.
+ *
+ * Lo que el espejo no pierde es la correspondencia: el path sigue diciendo a qué
+ * módulo pertenece cada test, así que el que retoca `src/lib/scoring.ts` tiene a la
+ * vista, en el mismo `git diff`, qué se comprobó de él.
  */
 export default defineConfig({
   resolve: {
@@ -32,12 +42,15 @@ export default defineConfig({
       "server-only": fileURLToPath(new URL("./node_modules/server-only/empty.js", import.meta.url)),
     },
     /**
-     * Solo se recogen tests del proyecto y bajo `src/`. Sin este `include`,
-     * Vitest entraría también en `.open-next/`, donde el build de OpenNext copia
-     * las dependencias con sus `*.test.js` (113 ficheros hoy): no son código
-     * nuestro y no tienen nada que ver con el torneo.
+     * Solo se recogen tests del proyecto, y solo del árbol espejo `tests/`. El
+     * patrón se deja explícito, y no un `**` abierto, para que qué se ejecuta
+     * dependa de dónde está cada test y no de lo que aparezca por debajo: un test
+     * que se quedara en `src/` dejaría de ejecutarse sin que nada lo dijera. Sin
+     * este `include`, Vitest entraría además en `.open-next/`, donde el build de
+     * OpenNext copia las dependencias con sus `*.test.js` (113 ficheros hoy): no
+     * son código nuestro y no tienen nada que ver con el torneo.
      */
-    include: ["src/**/*.test.ts"],
+    include: ["tests/**/*.test.ts"],
     /**
      * Los directorios de salida del proyecto se excluyen **explícitamente** y no
      * solo por acierto: se regeneran con cada build, y un cambio en ellos no

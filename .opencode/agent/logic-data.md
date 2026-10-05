@@ -71,7 +71,7 @@ Lee `docs/PLAN.md` antes de empezar: contiene el estado de las fases, el modelo 
 2. Localiza el código afectado y **respeta sus convenciones** antes de proponer nada nuevo.
 3. Comentarios solo cuando explican un *porqué* no obvio.
 4. En vía completa, al terminar ejecuta `npm run lint`, `npm run build` y `npm test`, y `npm run generate` si tocaste el schema. Arréglalo si falla. En vía rápida basta con `lint`.
-5. Si tocaste lógica de negocio, de puntuación o la frontera con la API de AoE4World, el test del módulo va en el mismo diff: los tests de `src/lib` son **puros** (sin base de datos, sin red, sin variables de entorno) y van junto al código que prueban, en `src/lib/<modulo>.test.ts`.
+5. Si tocaste lógica de negocio, de puntuación o la frontera con la API de AoE4World, el test del módulo va en el mismo diff: los tests son **puros** (sin base de datos, sin red, sin variables de entorno) y van en el árbol espejo, en `tests/unit/lib/<modulo>.test.ts`, replicando la estructura de carpetas de `src/lib/`, para que `src/` no lleve código de prueba dentro. Sus imports no se tocan al moverlos: siguen apuntando al código con `@/…`.
 6. Antes de un `db:push` con cambios destructivos (borrar o renombrar columnas), pregunta al usuario.
 
 ## Fuera de tu ámbito
