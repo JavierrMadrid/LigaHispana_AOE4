@@ -158,7 +158,7 @@ export function PlayerEditDialog({
       <button
         type="button"
         onClick={openDialog}
-        className="h-10 rounded-md border border-line px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+        className="h-10 whitespace-nowrap rounded-md border border-line px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
       >
         Editar
       </button>

@@ -55,8 +55,14 @@ export default async function AdminLayout({
         </div>
       </header>
 
-      {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`. */}
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-8 pb-20">{children}</main>
+      {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`.
+          El ancho es el que manda aquí y no en las tablas: el listado de
+          participantes tiene nueve columnas y con `max-w-5xl` se salía del
+          contenedor, con la última (Acciones) cortada. Un tope más alto
+          (`max-w-[100rem]`) deja que la tabla crezca con el ancho de la
+          pantalla en pantallas anchas, y en las estrechas manda igual el
+          desplazamiento horizontal del propio `<table>`. */}
+      <main className="mx-auto w-full max-w-[100rem] flex-1 px-4 pt-8 pb-20">{children}</main>
     </div>
   );
 }

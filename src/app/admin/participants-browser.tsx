@@ -583,7 +583,12 @@ function ParticipantRow({
             <span className="block max-w-[12rem] break-words text-foreground">
               @{player.discordUsername}
             </span>
-            <DiscordGuildBadge inGuild={player.discordInGuild} />
+            {/* El usuario puede partirse (`break-words`, nombres largos o con
+                puntos), pero el distintivo de al lado no: se queda en su línea
+                aunque la columna quede justa. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <DiscordGuildBadge inGuild={player.discordInGuild} />
+            </div>
           </div>
         )}
       </td>
@@ -620,7 +625,12 @@ function ParticipantRow({
       </td>
 
       <td className={`${CELL} text-right`}>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        {/* `flex-nowrap` y `whitespace-nowrap` en los botones: las cuatro acciones
+            (Editar, Aprobar, Rechazar y Eliminar) se leen en una sola línea, que
+            es como se comparan entre filas. Antes se partían en dos cuando la
+            tabla se estrechaba, y una fila con el botón de borrar en su propia
+            línea se lee peor que una que se desplaza. */}
+        <div className="flex flex-nowrap items-center justify-end gap-2">
           {/* Editar va primero y en tono neutro: es la acción que se usa a
               diario, y el filete tenue la deja cerca del nombre sin competir con
               aprobar, rechazar o eliminar, que sí cambian el estado o borran. */}
@@ -716,7 +726,11 @@ function DiscordGuildBadge({ inGuild }: { inGuild: boolean | null }) {
 
   return (
     <span
-      className={`inline-block rounded-full border px-2 py-0.5 text-xs ${state.style}`}
+      // `whitespace-nowrap` porque el rótulo no puede partirse: "En el
+      // servidor" en dos líneas dentro de una píldora redonda se lee como dos
+      // cosas, y "Fuera del servidor" no cabe en la columna junto al usuario.
+      // Si la columna no da de sí, se desplaza la tabla, que ya lo hace.
+      className={`inline-block whitespace-nowrap rounded-full border px-2 py-0.5 text-xs ${state.style}`}
     >
       {state.label}
     </span>
@@ -748,7 +762,7 @@ function StatusForm({
     <form action={action}>
       <input type="hidden" name="playerId" value={playerId} />
       <PendingButton
-        className={`h-10 rounded-md border px-3 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${style}`}
+        className={`h-10 whitespace-nowrap rounded-md border px-3 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${style}`}
       >
         {label}
       </PendingButton>
