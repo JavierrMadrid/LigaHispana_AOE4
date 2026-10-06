@@ -130,8 +130,8 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
                 Estado que no sale de las partidas
               </h3>
               <p className="mt-1 text-sm leading-relaxed text-muted">
-                Dos comprobaciones más no miran las partidas que ya tenemos, sino el
-                perfil del jugador en AoE4World. Avisan cuando:
+                Tres comprobaciones más no miran las partidas que ya tenemos, sino el
+                perfil del jugador en AoE4World y su cuenta de Discord. Avisan cuando:
               </p>
               <ul className="mt-3 flex flex-col gap-3 text-sm leading-relaxed text-muted">
                 <li>
@@ -150,9 +150,17 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
                   Se compara la ladder de AoE4World con nuestras partidas de 1v1 y se
                   avisa cuando va claramente por delante de lo que tenemos.
                 </li>
+                <li>
+                  <strong className="font-medium text-foreground">
+                    La cuenta de Discord no está en el servidor del torneo.
+                  </strong>{" "}
+                  Se comprueba cada doce horas si la cuenta de Discord enlazada sigue
+                  en el servidor. Un fallo de red no cuenta como salida: en ese caso no
+                  se escribe nada.
+                </li>
               </ul>
               <p className="mt-3 text-sm leading-relaxed text-muted/85">
-                Estas dos son un aviso para que la organización mire, no un veredicto.
+                Estas tres son un aviso para que la organización mire, no un veredicto.
               </p>
             </div>
           </div>

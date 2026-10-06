@@ -109,7 +109,7 @@ type PlayerEditedEntry = {
   name: string;
   profileId: number;
   /**
-   * Solo los campos que han cambiado, nunca los cinco, y **siempre al menos uno**.
+   * Solo los campos que han cambiado, nunca todos, y **siempre al menos uno**.
    *
    * Que no esté vacío es lo que decide si hace falta escribir la fila: abrir el
    * formulario y cerrarlo sin tocar nada es lo más normal del mundo y no deja rastro

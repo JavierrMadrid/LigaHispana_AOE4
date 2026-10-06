@@ -47,15 +47,15 @@ function disparo(overrides: Partial<AlertTriggerInput> = {}): AlertTriggerInput 
 }
 
 describe("etiquetas", () => {
-  it("las diez reglas y los cuatro tipos tienen su rótulo en español", () => {
+  it("las once reglas y los cuatro tipos tienen su rótulo en español", () => {
     // El `satisfies Record<...>` del módulo obliga a decidir la etiqueta al añadir
     // una regla; aquí se comprueba que ninguna se quedó sin él ni con el mismo
-    // texto que otra. Las diez reglas son las ocho de comportamiento más las dos de
-    // estado del historial, y los cuatro tipos son las tres rachas/acumulados más
-    // `STATE_DETECTED`.
+    // texto que otra. Las once reglas son las ocho de comportamiento más las tres de
+    // estado (las dos del historial de partidas y la de Discord), y los cuatro tipos
+    // son las tres rachas/acumulados más `STATE_DETECTED`.
     const etiquetas = Object.values(ALERT_RULE_LABELS);
 
-    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(10);
+    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(11);
     expect(Object.keys(ALERT_KIND_LABELS)).toHaveLength(4);
     expect(new Set(etiquetas).size).toBe(etiquetas.length);
     for (const etiqueta of [...etiquetas, ...Object.values(ALERT_KIND_LABELS)]) {
@@ -232,6 +232,91 @@ describe("alertDetails", () => {
     const detalles = alertDetails(disparo({ detail: { eloGap: 500, durationSeconds: 1800 } }));
 
     expect(detalles).toMatchObject({ eloGap: 500, durationSeconds: 1800 });
+  });
+
+  it("una regla que no mira partidas no escribe ventana", () => {
+    // `DISCORD_NOT_IN_GUILD` se comprueba contra la API de Discord y no tiene nada
+    // que ver con fechas de partidas. Ponerle la ventana del torneo afirmaría un
+    // alcance que no tiene ("esto se comprobó dentro del torneo") y el `details` es
+    // justo lo que se lee cuando alguien quiere saber qué se miró.
+    const detalles = alertDetails(
+      disparo({
+        rule: "DISCORD_NOT_IN_GUILD",
+        kind: "STATE_DETECTED",
+        anchorGameId: null,
+        anchorStartedAt: null,
+        window: undefined,
+        count: 1,
+        threshold: 1,
+        detail: {
+          discordUserId: "1234567890123456789",
+          discordCheckedAt: "2026-10-06T12:00:00.000Z",
+          discordHttpStatus: 404,
+        },
+      }),
+    );
+
+    expect(detalles).not.toHaveProperty("windowFrom");
+    expect(detalles).not.toHaveProperty("windowTo");
+    // La evidencia con la que se comprobó sí va, y en plana: el DAL aplana `details` a
+    // primitivos de un nivel, así que una estructura anidada se descartaría al leer.
+    expect(detalles).toMatchObject({
+      discordUserId: "1234567890123456789",
+      discordCheckedAt: "2026-10-06T12:00:00.000Z",
+      discordHttpStatus: 404,
+    });
+  });
+});
+
+describe("DISCORD_NOT_IN_GUILD: una regla, dos casos", () => {
+  /** El disparo tal y como lo escribe el worker, con la evidencia de cada camino. */
+  function disparoDiscord(resolvedBy: "discordUserId" | "username") {
+    return disparo({
+      rule: "DISCORD_NOT_IN_GUILD",
+      kind: "STATE_DETECTED",
+      anchorGameId: null,
+      anchorStartedAt: null,
+      window: undefined,
+      count: 1,
+      threshold: 1,
+      subject: SELF_SUBJECT,
+      detail: {
+        resolvedBy,
+        discordUsername: "pepito",
+        ...(resolvedBy === "discordUserId"
+          ? { discordUserId: "1234567890123456789", discordHttpStatus: 404 }
+          : { discordRosterMembers: 47 }),
+        discordCheckedAt: "2026-10-06T12:00:00.000Z",
+      },
+    });
+  }
+
+  it("los dos casos comparten frase y clave de dedupe, y se distinguen en `details`", () => {
+    // Es la razón de que `resolvedBy` vaya en el `details` y no sea un valor de
+    // `AlertRule`: la cuenta se ha ido del servidor y el `@usuario` no aparecen son
+    // hechos distintos, pero para quien mira la alerta son **lo mismo** ("su Discord no
+    // está en el servidor del torneo") y para la organización es una fila, no dos. Con
+    // dos reglas habría el mismo texto duplicado y dos claves que explicar.
+    const conCuenta = buildTriggeredAlert(disparoDiscord("discordUserId"));
+    const conNombre = buildTriggeredAlert(disparoDiscord("username"));
+
+    expect(conCuenta.rule).toBe(conNombre.rule);
+    expect(conCuenta.kind).toBe(conNombre.kind);
+    expect(conCuenta.summary).toBe(conNombre.summary);
+    // Y la clave es la misma a propósito: si el dedupe las distinguiera, la segunda
+    // comprobación insertaría una fila cada doce horas para siempre.
+    expect(conCuenta.dedupeKey).toBe(conNombre.dedupeKey);
+
+    expect(conCuenta.details.resolvedBy).toBe("discordUserId");
+    expect(conNombre.details.resolvedBy).toBe("username");
+    // La evidencia propia de cada camino: el estado HTTP cuando se preguntó por la
+    // cuenta, el tamaño de la lista cuando se buscó por el nombre.
+    expect(conCuenta.details.discordHttpStatus).toBe(404);
+    expect(conNombre.details.discordRosterMembers).toBe(47);
+    // Y el `@usuario` va en los dos, que es lo que quien tiene que arreglarlo necesita
+    // para encontrar a esa persona en Discord.
+    expect(conCuenta.details.discordUsername).toBe("pepito");
+    expect(conNombre.details.discordUsername).toBe("pepito");
   });
 });
 

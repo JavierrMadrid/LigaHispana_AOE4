@@ -72,14 +72,15 @@ enum AdminActionType {
 /// frase en `src/lib/alerts/rules.ts`; el `switch` de ese módulo es exhaustivo
 /// para que un valor sin frase no pueda salir a la base.
 ///
-/// Los dos últimos no miran las partidas que ya tenemos, sino **el historial en el
-/// juego** del jugador: que el toggle "Share History" esté en "Public" y que la
-/// última partida que la ladder le registra nos llegue. Las evalúa el worker del
-/// sync (`src/lib/history-checks.ts`), no `computePlayerAlerts()`, porque son
-/// datos de `Player` y de una ruta del sitio de AoE4World, no de `Match`. Van
-/// **al final del enum** por lo mismo que `PLAYER_EDITED`: `ALTER TYPE … ADD
-/// VALUE` solo añade al final, y el panel ordena por el enum, así que lo nuevo
-/// sale detrás de lo ya escrito.
+/// Los tres últimos no miran las partidas que ya tenemos, sino **el estado del
+/// jugador fuera de AoE4World**: que el toggle "Share History" esté en "Public",
+/// que la última partida que la ladder le registra nos llegue y que su cuenta de
+/// Discord esté en el servidor del torneo. Las evalúa el worker del sync
+/// (`src/lib/history-checks.ts` y `src/lib/discord/check.ts`), no
+/// `computePlayerAlerts()`, porque son datos de `Player` y de fuentes que no son
+/// `Match`. Van **al final del enum** por lo mismo que `PLAYER_EDITED`: `ALTER
+/// TYPE … ADD VALUE` solo añade al final, y el panel ordena por el enum, así que
+/// lo nuevo sale detrás de lo ya escrito.
 enum AlertRule {
   SHORT_MATCH_STREAK
   SHORT_MATCH_TOTAL
@@ -91,6 +92,16 @@ enum AlertRule {
   LOW_DIVISION_TEAM_GAME
   HISTORY_NOT_PUBLIC
   MISSING_LADDER_MATCHES
+  /// La cuenta de Discord del participante no está en el servidor del torneo, o
+  /// no se ha podido comprobar que lo esté.
+  ///
+  /// Es la tercera regla de **estado** (F12): se comprueba contra la API de
+  /// Discord con el bot, no contra `Match`. El vínculo OAuth2 de la inscripción
+  /// guarda quién es la persona (`Player.discordUserId`) y lo que después lo
+  /// comprueba el worker (`discordInGuild`). Un `null` ahí significa "sin
+  /// comprobar" y **no** dispara nada: como en `historyPublic`, un fallo no
+  /// puede afirmar lo contrario de lo que se quería comprobar.
+  DISCORD_NOT_IN_GUILD
 }
 
 /// Cuándo se ha detectado la alerta.
@@ -162,6 +173,77 @@ model Player {
   // sabemos"— y no una fila a medias. Como el correo, el motor de puntos no lo lee:
   // no entra en la clasificación ni en ningún desglose.
   country        String?
+  // Identidad de Discord del participante.
+  //
+  // Lo único de F12 que **no** se escribe a mano en ningún sitio es el
+  // `discordUserId`, que solo firma Discord. Del `@usuario` sí se ocupa la
+  // organización cuando da de alta a alguien —es un dato que le dan— y esa es la
+  // diferencia entre las dos columnas de identidad.
+  //
+  // Las escriben las dos, y solo las dos: el **vínculo OAuth2** de la inscripción
+  // pública (`src/app/api/discord/oauth/callback`) guarda `discordUserId` y
+  // `discordUsername` con lo que responde `GET /users/@me`, el **alta de admin**
+  // escribe `discordUsername` (que se lo dice la organización) y el **worker** deja
+  // `discordUserId`, `discordInGuild` y `discordCheckedAt` con lo que dice la API de
+  // Discord. El panel **no edita el `discordUserId`** y `updatePlayer` no lo toca: una
+  // cuenta de Discord es una identidad que solo Discord firma, y dejar que alguien la
+  // escriba a mano sería no comprobar nada.
+  //
+  // **Las cuatro son nullable, y por dos motivos distintos.** `discordUserId` es
+  // `null` en toda fila anterior a F12 y en todo alta de admin —que escribe el
+  // `@usuario` pero no el id, que solo Discord firma— y el worker lo rellena cuando
+  // encuentra la cuenta en el roster del servidor. `discordUsername` es `null` solo
+  // en las filas anteriores a F12. `discordInGuild` y `discordCheckedAt` son las que
+  // escribe el worker, y `discordInGuild === null` significa **"sin comprobar"**,
+  // igual que `historyPublic`: no se escribe valor cuando la comprobación falla o no
+  // se ha hecho, porque un `false` afirma "no está en el servidor" y eso solo puede
+  // salir de una respuesta de Discord.
+  //
+  // **`discordUserId` es `@unique` a propósito**: una cuenta de Discord no puede
+  // quedar vinculada a dos participantes, porque el mismo jugador podría tener dos
+  // filas en el torneo y la organización no sabría cuál es cuál al hablar con él
+  // por su servidor. Los `null` no colisionan en Postgres (como en el índice único
+  // de `Alert.dedupeKey`), así que las filas sin Discord no estorban entre sí. Y como
+  // `Player` tiene **tres** unicidades, cada `P2002` se distingue por **qué** columna
+  // lo saltó (`profileId`, `discordUserId` y `discordUsername`): son tres problemas
+  // distintos y tres mensajes distintos.
+  discordUserId    String?     @unique
+  // **Nombre de usuario global de Discord** (`pepito`), guardado en su forma
+  // canónica: **sin arroba y en minúsculas**, que es exactamente lo que devuelve
+  // `GET /users/@me` y lo que trae la lista de miembros del servidor. Es lo que se
+  // guarda; lo que **se escribe en los formularios lleva la arroba** (`@pepito`) y
+  // es obligatorio empezar por ella, porque en un servidor Discord hay muchos nombres
+  // iguales y `@usuario` solo significa una cosa.
+  //
+  // Es `@unique`, y por el mismo motivo que `discordUserId`: el `@usuario` identifica
+  // a una persona en todo Discord, así que dos participantes con el mismo nombre
+  // serían la misma cuenta escrita de dos maneras —el alta de admin escribe el
+  // `@usuario` que le dice la organización y la inscripción pública lo resuelve por
+  // OAuth—, y la organización no sabría a cuál de las dos filas hablarle. Sin la
+  // unicidad, el worker no podría ni resolver un `discordUserId` a partir del
+  // `@usuario`: dos coincidencias exactas en el roster serían indistinguibles.
+  //
+  // Los `null` no colisionan en Postgres, así que las filas anteriores a F12 (sin
+  // Discord) siguen conviviendo con las nuevas sin estorbar. Y como ahora hay tres
+  // unicidades, los tres `P2002` posibles se distinguen por **qué** columna saltó:
+  // `profileId`, `discordUserId` y esta.
+  //
+  // Es **una foto**, igual que lo era sin la unicidad: Discord deja renombrarse, así
+  // que el nombre de hoy puede no ser este, y por eso no se usa para decidir nada
+  // sobre la pertenencia al servidor. Va para que el panel reconozca a la persona de
+  // un vistazo y es lo que el worker usa para **encontrar** la cuenta en el roster.
+  //
+  // **Al aplicar el `@unique` puede saltar un `P2002`**: dos filas de antes de esta
+  // fase pueden tener el mismo nombre con discriminador (`pepito#1234` y
+  // `pepito#5678`), que al quitarlo son el mismo `@usuario`. Es el caso que hay que
+  // mirar si `db push` se queja (ver `docs/OPERACION.md`).
+  discordUsername  String?     @unique
+  // ¿Está la cuenta en el servidor del torneo? `null` = sin comprobar (ver arriba).
+  // El worker lo refresca con la caché de `DISCORD_CHECK_TTL_HOURS`.
+  discordInGuild   Boolean?
+  // Cuándo se comprobó lo anterior: es el plazo de la caché y, con
+  // `discordUserId === null`, la señal de que esa fila nunca se ha comprobado.
+  discordCheckedAt DateTime?
   status         PlayerStatus @default(PENDING)
 
   // Lo siguiente se rellena con `GET /leaderboards/rm_solo`, una sola vez por

@@ -476,6 +476,7 @@ async function checkNormalization(): Promise<void> {
       scoringError: null,
       alertsError: null,
       historyError: null,
+      discordError: null,
       streamsError: null,
       failures: [],
     };
@@ -539,6 +540,20 @@ async function checkNormalization(): Promise<void> {
       buena.finishedAt,
       "no comprobar los directos tampoco lo mueve",
     );
+    // Y `discordError` también, por el mismo motivo y con la misma permanence: sin
+    // `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` la pertenencia al servidor no se
+    // comprueba nunca, y eso no ha parado ni una partida.
+    assert.equal(
+      salida(
+        {
+          ...buena,
+          discordError: "sin DISCORD_BOT_TOKEN no se comprueba la pertenencia a Discord",
+        },
+        { ...buena, lastSuccessAt: buena.finishedAt },
+      ),
+      buena.finishedAt,
+      "no comprobar la pertenencia a Discord tampoco lo mueve",
+    );
   });
 
   await check("una pasada vieja se detecta como vieja y una ausente no", () => {
@@ -565,6 +580,7 @@ async function checkNormalization(): Promise<void> {
       scoringError: null,
       alertsError: null,
       historyError: null,
+      discordError: null,
       streamsError: null,
       failures: [],
       lastSuccessAt: finishedAt,
