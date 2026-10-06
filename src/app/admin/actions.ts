@@ -25,7 +25,9 @@ import {
   parseYoutubeChannel,
 } from "@/lib/player-input";
 import { countsAsRanked } from "@/lib/ranked-match";
+import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
+import { readRegistrationOpen, writeRegistrationOpen } from "@/lib/settings";
 
 /**
  * Server Actions del panel de administración.
@@ -214,6 +216,17 @@ const SAVE_FAILED_MESSAGE = "No se ha podido guardar. Inténtalo de nuevo en uno
 const COUNTRIES_UNAVAILABLE_MESSAGE =
   "No se ha podido leer la lista de países admitidos. Inténtalo de nuevo en unos minutos.";
 
+/**
+ * Fallo al leer el estado del plazo de inscripción.
+ *
+ * Igual que `COUNTRIES_UNAVAILABLE_MESSAGE`: en ese punto no se ha intentado
+ * guardar nada, así que no es un `SAVE_FAILED_MESSAGE`. Se falla **cerrando** —no
+ * se da de alta— porque el interruptor existe justo para bloquear el alta y un
+ * fallo de lectura no es una razón para saltárselo.
+ */
+const REGISTRATION_UNAVAILABLE_MESSAGE =
+  "No se ha podido leer el estado de las inscripciones. Inténtalo de nuevo en unos minutos.";
+
 const COUNTRY_UNKNOWN_ERROR =
   "Ese país no está en la lista de los que admite el torneo. Elígelo en el desplegable o déjalo vacío.";
 
@@ -313,6 +326,28 @@ export async function createPlayer(
   formData: FormData,
 ): Promise<PlayerFormState> {
   const admin = await requireAdmin();
+
+  // El cierre de inscripciones bloquea también el alta de admin, no solo el
+  // formulario público: es el mismo interruptor (`Setting["registration.open"]`) y
+  // se comprueba en servidor aunque la acción se llame a mano. Va lo primero,
+  // antes de validar nada, porque con el plazo cerrado no se va a escribir: no
+  // tiene sentido pagar validaciones ni lecturas para un alta descartada.
+  //
+  // Aprobar y rechazar solicitudes **no** pasan por aquí y siguen funcionando
+  // siempre: el interruptor cierra el alta, no la gestión de lo ya recibido.
+  let registrationOpen: boolean;
+
+  try {
+    registrationOpen = await readRegistrationOpen();
+  } catch (error) {
+    logDatabaseFailure("admin/createPlayer/plazo", error);
+
+    return { error: REGISTRATION_UNAVAILABLE_MESSAGE, message: null };
+  }
+
+  if (!registrationOpen) {
+    return { error: REGISTRATION_CLOSED_MESSAGE, message: null };
+  }
 
   // `readField` en todos, como en la edición: `formData.get` también puede
   // devolver un `File`, y el parser recibiría `"[object File]"`, que es un valor
@@ -846,6 +881,46 @@ export async function approvePlayer(formData: FormData) {
 
 export async function rejectPlayer(formData: FormData) {
   await setPlayerStatus(readField(formData, "playerId"), PlayerStatus.REJECTED);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Plazo de inscripción                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Abre o cierra las inscripciones del torneo.
+ *
+ * Es el interruptor manual del plazo: escribe `Setting["registration.open"]`, que
+ * es lo que comprueban `registerPlayer` (formulario público) y `createPlayer`
+ * (alta de admin). **No** se registra en `AdminAction` —igual que los cambios de
+ * `scoring.ruleset`—: la fila de `Setting` ya lleva su `updatedAt` como rastro, y
+ * el enum de acciones es corto a propósito.
+ *
+ * Lee el valor deseado de un campo `open` con `"true"`/`"false"`. Cualquier otra
+ * cosa —incluido el campo ausente— se interpreta como `false`, que es el estado
+ * seguro: un `FormData` hecho a mano no puede abrir el plazo por accidente.
+ *
+ * No devuelve estado: es un interruptor. Si la escritura falla, el motivo queda
+ * en el log y el panel relee el valor real en el siguiente render, que es donde
+ * se ve que no ha cambiado.
+ */
+export async function setRegistrationOpen(formData: FormData): Promise<void> {
+  await requireAdmin();
+
+  const open = readField(formData, "open") === "true";
+
+  try {
+    await writeRegistrationOpen(open);
+  } catch (error) {
+    logDatabaseFailure("admin/setRegistrationOpen", error);
+
+    return;
+  }
+
+  // Las dos caras del interruptor: el panel donde se cambia y el formulario
+  // público donde se nota.
+  revalidatePath("/admin");
+  revalidatePath("/participar");
 }
 
 /* -------------------------------------------------------------------------- */

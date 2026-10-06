@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { PageHead } from "@/components/page-head";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
+import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
+import { readRegistrationOpen } from "@/lib/settings";
 import { RegistrationForm } from "./registration-form";
 
 export const metadata: Metadata = {
@@ -20,13 +22,15 @@ export default async function ParticipatePage() {
   // se pinta con la lista por defecto y, al enviarlo, la acción vuelve a leer la
   // lista viva y pide reintentar si tampoco puede. Es la misma degradación que el
   // resto de la web.
-  let countries: string[];
-
-  try {
-    countries = await readCountries();
-  } catch {
-    countries = [...DEFAULT_COUNTRIES];
-  }
+  //
+  // El plazo se lee igual y degrada a `DEFAULT_REGISTRATION_OPEN` (cerrado): si no
+  // se puede leer, el formulario se pinta como cerrado en vez de abrir por
+  // accidente, y el servidor vuelve a comprobarlo en cada envío real. Las dos
+  // lecturas van en paralelo porque son independientes.
+  const [countries, registrationOpen] = await Promise.all([
+    readCountries().catch(() => [...DEFAULT_COUNTRIES]),
+    readRegistrationOpen().catch(() => DEFAULT_REGISTRATION_OPEN),
+  ]);
 
   return (
     // La página es una sola columna centrada: el formulario marca el ancho
@@ -41,7 +45,7 @@ export default async function ParticipatePage() {
         hasta entonces. No hay equipos: cada persona compite por su cuenta.
       </p>
 
-      <RegistrationForm countries={countries} />
+      <RegistrationForm countries={countries} registrationOpen={registrationOpen} />
 
       <p className="border-t border-line pt-6 text-sm leading-relaxed text-muted">
         Las{" "}

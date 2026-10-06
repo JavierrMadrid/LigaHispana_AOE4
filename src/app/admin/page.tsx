@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { approvePlayer, rejectPlayer } from "@/app/admin/actions";
 import { ParticipantsBrowser } from "@/app/admin/participants-browser";
 import { PlayerForm } from "@/app/admin/player-form";
+import { RegistrationSwitch } from "@/app/admin/registration-switch";
 import { SyncNowButton } from "@/app/admin/sync-now-button";
 import { EmptyState } from "@/components/empty-state";
 import { PendingButton } from "@/components/pending-button";
@@ -9,6 +10,8 @@ import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
+import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
+import { readRegistrationOpen } from "@/lib/settings";
 
 export const metadata: Metadata = {
   title: { absolute: "Participantes · Admin" },
@@ -39,16 +42,16 @@ export default async function AdminPage() {
   const participants = participantsRead.status === "ok" ? participantsRead.data : [];
   const pending = participants.filter((player) => player.status === "PENDING");
 
-  // El país del alta se elige de la lista viva (`Setting["registration.countries"]`).
-  // Si la lectura falla, el desplegable cae a la lista por defecto y el formulario
-  // sigue siendo usable; la acción vuelve a leer la lista viva al guardar.
-  let countries: string[];
-
-  try {
-    countries = await readCountries();
-  } catch {
-    countries = [...DEFAULT_COUNTRIES];
-  }
+  // La lista de países y el estado del plazo se leen de `Setting`, y las dos
+  // lecturas degradan a su valor de respaldo en vez de tumbar el panel: la lista,
+  // a la de por defecto; el plazo, a cerrado. El servidor vuelve a comprobar
+  // ambas al guardar —el país en el alta y el plazo en el alta y en el envío
+  // público—, así que una lectura degradada aquí no abre nada por accidente. Van
+  // en paralelo porque son independientes.
+  const [countries, registrationOpen] = await Promise.all([
+    readCountries().catch(() => [...DEFAULT_COUNTRIES]),
+    readRegistrationOpen().catch(() => DEFAULT_REGISTRATION_OPEN),
+  ]);
 
   // `syncHealth` es un `PublicRead`: `status` distingue "no se ha podido leer" de
   // "leído", y `data.degraded`/`data.stale` son el estado del sincronizador. Son
@@ -191,8 +194,20 @@ export default async function AdminPage() {
       </section>
 
       <section>
+        <h2 className="text-lg font-medium">Inscripciones</h2>
+        <p className="mt-1 max-w-[70ch] text-sm text-muted">
+          Quién puede entrar al torneo. Con el plazo abierto se admiten solicitudes
+          nuevas desde la web y altas desde este panel; con el plazo cerrado, solo se
+          gestionan las solicitudes ya recibidas.
+        </p>
+        <div className="mt-4">
+          <RegistrationSwitch open={registrationOpen} />
+        </div>
+      </section>
+
+      <section>
         <h2 className="mb-3 text-lg font-medium">Añadir jugador</h2>
-        <PlayerForm countries={countries} />
+        <PlayerForm countries={countries} disabled={!registrationOpen} />
       </section>
 
       <section>
@@ -201,7 +216,7 @@ export default async function AdminPage() {
         {participantsRead.status === "degraded" ? (
           <EmptyState
             title="No se ha podido leer la lista de jugadores"
-            body="La base de datos no ha respondido. El alta sigue disponible; vuelve a intentarlo en unos minutos para ver el listado."
+            body="La base de datos no ha respondido. Vuelve a intentarlo en unos minutos para ver el listado."
           />
         ) : (
           <ParticipantsBrowser participants={participants} countries={countries} />

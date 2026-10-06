@@ -4,7 +4,7 @@ import type { ComponentPropsWithoutRef } from "react";
 import { useActionState, useEffect } from "react";
 import Link from "next/link";
 import { CONTACT_EMAIL_MAX_LENGTH } from "@/lib/player-input";
-import { REGISTRATION_IS_CLOSED } from "@/lib/registration-open";
+import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { registerPlayer, type RegistrationFormState } from "./actions";
 import { TurnstileWidget, resetTurnstileWidget } from "./turnstile-widget";
 
@@ -38,11 +38,19 @@ const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "
  * pistas de cada campo, no en un bloque aparte que se quedaría colgando tras
  * enviar.
  *
- * Con el plazo cerrado (`REGISTRATION_IS_CLOSED`) el botón se desactiva y el
+ * Con el plazo cerrado (`registrationOpen` en `false`) el botón se desactiva y el
  * motivo se lee a su lado, enlazado con `aria-describedby`. El servidor lo
- * rechaza igualmente: esto es la cara visible del mismo flag, no la defensa.
+ * rechaza igualmente: esto es la cara visible del mismo interruptor
+ * (`Setting["registration.open"]`), no la defensa.
  */
-export function RegistrationForm({ countries }: { countries: string[] }) {
+export function RegistrationForm({
+  countries,
+  registrationOpen,
+}: {
+  countries: string[];
+  /** Si el plazo está cerrado, el envío se desactiva y se explica por qué. */
+  registrationOpen: boolean;
+}) {
   const [state, formAction, pending] = useActionState(registerPlayer, initialState);
 
   // El token de Turnstile es de un solo uso: la Server Action lo canjea contra
@@ -60,6 +68,11 @@ export function RegistrationForm({ countries }: { countries: string[] }) {
   }
 
   const { fieldErrors } = state;
+
+  // El plazo cerrado decide tres cosas de la misma línea: el botón, su
+  // descripción accesible y el aviso. Se calcula una vez para que no puedan
+  // divergir.
+  const isClosed = !registrationOpen;
 
   return (
     <section className="mx-auto w-full max-w-2xl rounded-lg border border-line bg-surface p-6 sm:p-8">
@@ -221,17 +234,21 @@ export function RegistrationForm({ countries }: { countries: string[] }) {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
-            disabled={pending || REGISTRATION_IS_CLOSED}
-            aria-describedby={REGISTRATION_IS_CLOSED ? "registration-closed-note" : undefined}
+            disabled={pending || isClosed}
+            aria-describedby={isClosed ? "registration-closed-note" : undefined}
             className="inline-flex h-10 items-center justify-center rounded-md border border-accent-strong/70 bg-linear-to-b from-accent-strong to-accent px-5 text-sm font-semibold text-accent-ink transition-colors hover:border-accent-strong hover:to-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
           >
             {pending ? "Enviando…" : "Enviar solicitud"}
           </button>
-          {REGISTRATION_IS_CLOSED ? (
+          {isClosed ? (
             // Aviso, no error: se queda en `muted` para no competir con el rojo
-            // que este formulario reserva a los fallos.
-            <p id="registration-closed-note" className="max-w-[42ch] text-sm leading-relaxed text-muted">
-              La organización abrirá las inscripciones más adelante, una vez que se acerquen las fechas del torneo.
+            // que este formulario reserva a los fallos. El texto es el compartido
+            // con el servidor, para que la cara visible y el rechazo digan lo mismo.
+            <p
+              id="registration-closed-note"
+              className="max-w-[42ch] text-sm leading-relaxed text-muted"
+            >
+              {REGISTRATION_CLOSED_MESSAGE}
             </p>
           ) : null}
         </div>

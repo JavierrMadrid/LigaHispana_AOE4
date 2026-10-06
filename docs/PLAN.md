@@ -232,7 +232,7 @@ Notas:
   sale de ningún `join`. El `dedupeKey` es una **columna de texto** y no un índice único compuesto
   porque en Postgres los `NULL` de un índice único no colisionan, y el sujeto es opcional; sobre él
   va el `skipDuplicates` que hace la evaluación idempotente.
-- `Setting` no es solo configuración: también es la memoria del worker (`aoe4world.sync.player.<profileId>`) y el rastro del motor (`scoring.lastRun`). Añade `sync.lastRun`, el rastro de la última pasada del sincronizador, que es lo que hace visible un fallo suyo: contadores, errores y los jugadores que no se pudieron sincronizar, más un `lastSuccessAt` que solo avanza en las pasadas enteras. La simulación con jugadores reales añade `simulation.roster`, el **manifiesto de a quién dio de alta y con qué identidad**: es lo único que permite deshacerla sin borrar participantes de verdad.
+- `Setting` no es solo configuración: también es la memoria del worker (`aoe4world.sync.player.<profileId>`) y el rastro del motor (`scoring.lastRun`). Añade `sync.lastRun`, el rastro de la última pasada del sincronizador, que es lo que hace visible un fallo suyo: contadores, errores y los jugadores que no se pudieron sincronizar, más un `lastSuccessAt` que solo avanza en las pasadas enteras. La simulación con jugadores reales añade `simulation.roster`, el **manifiesto de a quién dio de alta y con qué identidad**: es lo único que permite deshacerla sin borrar participantes de verdad. Y `registration.open` es el **interruptor manual del plazo de inscripción**: un booleano que el panel abre y cierra a mano y que comparten la inscripción pública y el alta de admin (ver F6).
 
 ## Integración con AoE4World
 
@@ -534,6 +534,18 @@ Pendiente de F4:
       para ver la vigente y `--dry-run` para ver el cambio sin escribir). Hasta que se siembre, todo
       funciona con `DEFAULT_COUNTRIES`. **No** hace falta `npm run db:security`: no se crea ninguna
       tabla.
+- [x] **Interruptor manual del plazo de inscripción** (`Setting["registration.open"]`): el cierre
+      deja de ser un flag hardcodeado en `src/lib/registration-open.ts` y pasa a ser un booleano
+      que la organización abre y cierra desde `/admin` (sección **Inscripciones**) sin desplegar.
+      Es el mismo dato para las dos puertas de entrada: `registerPlayer` lo rechaza en servidor en
+      cada envío real y `createPlayer` bloquea el alta de admin, mientras que aprobar/rechazar
+      solicitudes sigue siempre disponible. Sin fila publicada el plazo está **cerrado**
+      (`DEFAULT_REGISTRATION_OPEN = false`), que es el comportamiento que tenía el flag; en el
+      alta la lectura falla cerrando y se distingue "no hay dato" (default) de "no se ha podido
+      leer" (error de base). El contrato puro (clave, default, parser y mensaje compartido) vive en
+      `src/lib/registration-open.ts` y se comprueba en
+      `tests/unit/lib/registration-open.test.ts`; el botón y el aviso de `/participar` son su cara
+      visible, no la defensa. No hay cambio de schema.
 
 ### F7 — Reglas reales + pulido
 - [x] **Objetivos y reglas del torneo definidos y conectados al motor** (versión 2, ver F3 y
