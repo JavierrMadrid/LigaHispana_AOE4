@@ -151,11 +151,15 @@ model Player {
   youtubeChannel String?
   kickChannel    String?
   // Correo de contacto: lo **exige** el formulario público de `/participar` para
-  // que la organización pueda responder dudas. Es nullable a propósito, y no por
-  // descuido: el alta manual de admin no tiene por qué traerlo (se puede dar de
-  // alta a un jugador sin pedirle que deje un correo) y las filas que ya existían
-  // no lo tienen. El motor de puntos no lo lee nunca: es un dato de contacto, no
-  // de juego, así que no entra en la clasificación ni en ningún desglose.
+  // que la organización pueda responder dudas, y el panel de administración lo
+  // pide **opcional** en el alta y en la edición (mismo criterio que `country`
+  // abajo: vacío es `null`, y un valor escrito que no es una dirección es un error
+  // en vez de un `null` en silencio).
+  //
+  // Es nullable a propósito, y no por descuido: las filas que ya existían en la
+  // base de producción no lo tienen y no se van a rellenar, y en el panel es
+  // opcional. El motor de puntos no lo lee nunca: es un dato de contacto, no de
+  // juego, así que no entra en la clasificación ni en ningún desglose.
   contactEmail   String?
   // País del participante, guardado con el **rótulo canónico** de la lista que
   // admite el torneo (`Setting["registration.countries"]`, sembrada desde
@@ -167,8 +171,8 @@ model Player {
   //
   // Nullable a propósito, y por el mismo motivo que `contactEmail`: el formulario
   // público de `/participar` lo **exige** (es de los datos con los que la
-  // organización organiza el torneo), pero el alta manual de admin no tiene por qué
-  // traerlo y las filas que ya estaban guardadas no lo tienen. La columna existe
+  // organización organiza el torneo), pero en el panel es opcional y las filas que ya
+  // estaban guardadas no lo tienen. La columna existe
   // para todas las filas y eso que unas no la informen es información —"no lo
   // sabemos"— y no una fila a medias. Como el correo, el motor de puntos no lo lee:
   // no entra en la clasificación ni en ningún desglose.

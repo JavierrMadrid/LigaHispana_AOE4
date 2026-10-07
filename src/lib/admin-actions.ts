@@ -23,8 +23,9 @@ import { AdminActionType } from "@/generated/prisma/enums";
  *
  * El enum (`AdminActionType`) es corto a propósito: registra lo que **alguien más ve**
  * —un jugador entra o sale, una partida deja de contar o vuelve a contar—. Editar
- * nombre, canales o país también cambia lo que ve el resto (el nombre y el canal salen
- * en la clasificación, en `/partidas` y en el propio panel), así que también está.
+ * nombre, correo, canales o país también cambia lo que ve el resto (el nombre y el
+ * canal salen en la clasificación, en `/partidas` y en el propio panel, y el correo
+ * en el panel), así que también está.
  * Aprobar o rechazar una solicitud no está, y por eso tampoco hay tipo: cuando la
  * pestaña de acciones lo necesite se añade el valor al enum y el `switch` de este
  * módulo deja de ser exhaustivo solo, que es lo que evita que un tipo nuevo salga con

@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { DISCORD_USERNAME_FIELD_MAX_LENGTH } from "@/lib/player-input";
+import { CONTACT_EMAIL_MAX_LENGTH, DISCORD_USERNAME_FIELD_MAX_LENGTH } from "@/lib/player-input";
 import { createPlayer, type PlayerFormState } from "./actions";
 
 const initialState: PlayerFormState = { error: null, message: null };
@@ -64,6 +64,26 @@ export function PlayerForm({
             required
             placeholder="Beastyqt"
             maxLength={64}
+            autoComplete="off"
+            className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
+          />
+        </label>
+
+        {/*
+          Opcional, y con el mismo criterio que el país: vacío es `null` ("no lo
+          sabemos") y un valor escrito que no es una dirección es un error, no un `null`
+          silencioso. Va detrás del nombre porque es un dato de la persona y no un canal.
+          `autoComplete="off"` a propósito, como los demás campos: quien escribe es un
+          admin rellenando datos de otro, y aquí autocompletar su propia dirección
+          acabaría con el correo del admin en la ficha del jugador.
+        */}
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted">Correo de contacto (opcional)</span>
+          <input
+            name="email"
+            type="email"
+            placeholder="nombre@correo.com"
+            maxLength={CONTACT_EMAIL_MAX_LENGTH}
             autoComplete="off"
             className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
           />
