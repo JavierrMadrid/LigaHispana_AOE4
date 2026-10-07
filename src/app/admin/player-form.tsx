@@ -18,14 +18,26 @@ const initialState: PlayerFormState = { error: null, message: null };
  * la clasificación. Son varios segundos contra una API externa, y un "Guardando…"
  * sin más invites a pensar que se ha colgado.
  */
-export function PlayerForm({ countries }: { countries: string[] }) {
+export function PlayerForm({
+  countries,
+  disabled = false,
+}: {
+  countries: string[];
+  /** El plazo cerrado bloquea el alta; el servidor lo rechaza igualmente. */
+  disabled?: boolean;
+}) {
   const [state, formAction, pending] = useActionState(createPlayer, initialState);
 
   return (
-    <form
-      action={formAction}
-      className="grid gap-4 rounded-lg border border-line bg-surface p-4 sm:grid-cols-2"
-    >
+    <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
+      {disabled ? (
+        <p className="mb-4 rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm leading-relaxed text-muted">
+          El alta está bloqueada porque las inscripciones están cerradas. Ábrelas en el
+          control de arriba para poder añadir jugadores.
+        </p>
+      ) : null}
+
+      <fieldset disabled={disabled} className="grid min-w-0 gap-4 sm:grid-cols-2">
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-muted">Profile ID (AoE4World)</span>
         <input
@@ -166,6 +178,7 @@ export function PlayerForm({ countries }: { countries: string[] }) {
           {pending ? "Guardando y trayendo sus partidas…" : "Añadir jugador"}
         </button>
       </div>
+      </fieldset>
     </form>
   );
 }

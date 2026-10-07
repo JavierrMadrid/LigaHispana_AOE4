@@ -767,6 +767,11 @@ export type SyncHealth = {
    * `true` solo si la última pasada no salió bien: algún jugador falló o se canceló,
    * la ladder no se refrescó o no se pudo recalcular la clasificación. Es el estado
    * en el que la web pública puede estar enseñando una clasificación vieja.
+   *
+   * **`notice` no cuenta**, y es deliberado: que no se haya podido comprobar si
+   * alguien está emitiendo no ha parado ninguna partida ni ha congelado la
+   * clasificación, así que no puede marcar el panel como degradado. Lo que hace es
+   * existir, y por eso se enseña siempre que haya algo que decir.
    */
   degraded: boolean;
   /**
@@ -775,6 +780,20 @@ export type SyncHealth = {
    * `—` aquí y un textoAML there acabarían discrepando.
    */
   headline: string;
+  /**
+   * Aviso de lo que pasó sin llegar a romper la pasada, o `null` si no hay ninguno.
+   *
+   * Es donde vive `streamsError`, que hasta ahora no se pintaba en ninguna parte: la
+   * detección de directos puede llevar días apagada —una credencial caducada, un `403`
+   * sin cuota, un tope— sin que nada en el panel lo diga, porque el motivo solo
+   * llegaba a la base de datos. Se enseña tal cual, con su texto literal, porque es
+   * texto que viene de fuera y resumirlo perdería justo lo que dice —qué servicio, qué
+   * estado y qué motivo—, que es lo que hay que mirar para arreglarlo.
+   *
+   * **No** cuenta para `degraded`, y por lo mismo que allí: no saber si alguien está
+   * emitiendo no ha parado ninguna partida.
+   */
+  notice: string | null;
 };
 
 /**
@@ -797,7 +816,14 @@ export async function getSyncHealth(): Promise<PublicRead<SyncHealth>> {
         trace.ladderError !== null ||
         trace.scoringError !== null);
 
-    return { lastRun: trace, lastSuccessAt: trace?.lastSuccessAt ?? null, stale, degraded, headline: syncHeadline(trace, stale) };
+    return {
+      lastRun: trace,
+      lastSuccessAt: trace?.lastSuccessAt ?? null,
+      stale,
+      degraded,
+      headline: syncHeadline(trace, stale),
+      notice: trace?.streamsError ?? null,
+    };
   });
 }
 
@@ -1367,8 +1393,17 @@ export async function getAdminMatchHistory(
     // Los filtros se suman, no se eligen: `where` es una conjunción, así que jugador
     // + fechas + resultado se combinan solos. No hace falta ninguna lógica de "si hay
     // dos, el segundo gana", que es justo donde estos filtros se suelen equivocar.
+    //
+    // El `null` del `registeredAt` es deliberado y es la excepción de este módulo:
+    // el historial enseña **el recorrido entero** de cada participante dentro de la
+    // ventana del torneo, con sus 0 puntos a la vista, no solo lo que le suma. Un
+    // historial del que desaparecieran las partidas anteriores al alta dejaría al
+    // panel contradiciendo la cuenta de AoE4World, que sí las enseña. Lo que puntúa
+    // lo dicen `Match.points` y la clasificación, y el botón de revertir ya solo
+    // aparece donde hay puntos (`setMatchReverted()` vuelve a preguntar por la regla
+    // entera, corte incluido).
     const where: Prisma.MatchWhereInput = {
-      ...classificatoryWhere(ruleset.modes, ruleset.window),
+      ...classificatoryWhere(ruleset.modes, ruleset.window, null),
       ...(playerId === null ? {} : { playerId }),
       ...(hasDateBounds(rango) ? { startedAt: rango } : {}),
       ...(resultado === null ? {} : { result: resultado }),

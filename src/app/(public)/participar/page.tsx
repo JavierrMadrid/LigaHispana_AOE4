@@ -3,6 +3,8 @@ import Link from "next/link";
 import { PageHead } from "@/components/page-head";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { readDiscordStep } from "@/lib/discord/session";
+import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
+import { readRegistrationOpen } from "@/lib/settings";
 import { RegistrationForm } from "./registration-form";
 
 export const metadata: Metadata = {
@@ -23,16 +25,24 @@ export default async function ParticipatePage({ searchParams }: PageProps<"/part
   // lista viva y pide reintentar si tampoco puede. Es la misma degradación que el
   // resto de la web.
   //
-  // Los tres `Promise.all` no son un detalle: la lista de países sale de Postgres, el
-  // paso de Discord sale de la petición y el aviso del OAuth sale de la URL. Leídos
-  // en paralelo, la página tarda lo que el más lento; en serie, lo que los tres suman.
-  const [countries, discord, params] = await Promise.all([
+  // Los cuatro no son un detalle: la lista de países sale de Postgres, el paso de
+  // Discord sale de la petición, el estado del plazo sale de `Setting` y el aviso del
+  // OAuth sale de la URL. Leídos en paralelo, la página tarda lo que el más lento; en
+  // serie, lo que los cuatro suman.
+  //
+  // El plazo degrada a `DEFAULT_REGISTRATION_OPEN` (cerrado) igual que los países
+  // degradan a la lista por defecto: si no se puede leer, el formulario se pinta como
+  // cerrado en vez de abrir por accidente, y el servidor vuelve a comprobarlo en cada
+  // envío real.
+  const [countries, discord, registrationOpen, params] = await Promise.all([
     readCountries().catch(() => [...DEFAULT_COUNTRIES]),
     readDiscordStep(),
+    readRegistrationOpen().catch(() => DEFAULT_REGISTRATION_OPEN),
     searchParams,
   ]);
 
   const notice = readDiscordNotice(params.discord);
+
 
   return (
     // La página es una sola columna centrada: el formulario marca el ancho
@@ -53,7 +63,11 @@ export default async function ParticipatePage({ searchParams }: PageProps<"/part
         hasta entonces. No hay equipos: cada persona compite por su cuenta.
       </p>
 
-      <RegistrationForm countries={countries} discord={discord} />
+      <RegistrationForm
+        countries={countries}
+        discord={discord}
+        registrationOpen={registrationOpen}
+      />
 
       <p className="border-t border-line pt-6 text-sm leading-relaxed text-muted">
         Las{" "}

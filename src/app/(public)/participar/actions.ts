@@ -22,7 +22,8 @@ import {
 } from "@/lib/player-input";
 import { consumePublicFormAttempt } from "@/lib/rate-limit";
 import { checkAoe4WorldProfile } from "@/lib/registration";
-import { REGISTRATION_IS_CLOSED } from "@/lib/registration-open";
+import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
+import { readRegistrationOpen } from "@/lib/settings";
 import { readTurnstileToken, verifyTurnstile } from "@/lib/turnstile";
 
 /**
@@ -87,9 +88,6 @@ export type RegistrationFormState = {
   };
 };
 
-/** Lo que se devuelve al envío real con el plazo cerrado. */
-const REGISTRATION_CLOSED_MESSAGE =
-  "El torneo todavía no es oficial, así que las inscripciones no están abiertas. La organización las abrirá más adelante, una vez que se acerquen las fechas del mismo."
 /**
  * Confirmación de la inscripción. La comparten el envío real y el que cae en el
  * campo trampa, a propósito: un bot no debe poder distinguir uno del otro. La
@@ -97,7 +95,7 @@ const REGISTRATION_CLOSED_MESSAGE =
  * el resultado es el mismo: su solicitud vuelve a estar en la cola de revisión.
  *
  * El camino del campo trampa la sigue devolviendo aunque el plazo esté cerrado
- * (ver `REGISTRATION_IS_CLOSED`): el cierre no se le revela a un bot.
+ * (ver `readRegistrationOpen()`): el cierre no se le revela a un bot.
  */
 const CONFIRMATION =
   "Solicitud recibida. La organización la revisa antes de que entres en la clasificación.";
@@ -396,6 +394,12 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
         contactEmail: input.contactEmail,
         country: input.country,
         ...discord,
+        // Cuándo se inscribió la persona, y no cuándo se apruebe: de esto depende
+        // que no le cuenten las partidas que jugó antes de entrar al torneo. Por eso
+        // se escribe **aquí**, con la fila `PENDING`, y no al aprobar. No es
+        // `createdAt` porque una reinscripción de un `REJECTED` reutiliza la fila y
+        // ese se queda en el primer envío.
+        registeredAt: new Date(),
         // `PENDING` fijo y no el que venga en el `FormData`: aprobar o rechazar
         // es una decisión de la organización, y un formulario público no puede
         // autoaprobar su propia solicitud por mucho que mida el campo.
@@ -488,9 +492,10 @@ async function borrarDiscordLink(): Promise<void> {
  * aplican, y a partir de F12 hay una sexta que no es de abuso sino un **requisito
  * del torneo**:
  *
- * Antes de todas está el **interruptor de plazo** (`REGISTRATION_IS_CLOSED`, que
- * vive en `src/lib/registration-open.ts` para que el formulario y esta acción lean
- * el mismo flag), que no es una capa de defensa sino una decisión de producto: con
+ * Antes de todas está el **interruptor de plazo** (`readRegistrationOpen()`, que
+ * lee `Setting["registration.open"]` y comparte contrato en
+ * `src/lib/registration-open.ts` para que el formulario y esta acción lean el
+ * mismo dato), que no es una capa de defensa sino una decisión de producto: con
  * el plazo cerrado el envío real se rechaza con un mensaje general y no se aplica
  * ninguna, porque no se va a escribir nada. Sale después del campo trampa para que
  * un bot siga viendo la misma confirmación.
@@ -573,7 +578,22 @@ export async function registerPlayer(
   // un captcha ni validaciones en un envío que ya está descartado. Va después del
   // campo trampa a propósito: un bot tiene que seguir viendo la misma
   // confirmación y no poder deducir de la respuesta que el plazo está cerrado.
-  if (REGISTRATION_IS_CLOSED) {
+  //
+  // El valor vive en `Setting` y se lee aquí, no se hardcodea: la organización lo
+  // abre y lo cierra desde `/admin` sin desplegar. Si la lectura falla no se dice
+  // "cerradas" —eso afirmaría un estado que no se ha podido comprobar— sino que no
+  // se ha podido registrar, y el motivo queda en el log con el prefijo `[db]`.
+  let registrationOpen: boolean;
+
+  try {
+    registrationOpen = await readRegistrationOpen();
+  } catch (error) {
+    logDatabaseFailure("participar/plazo", error);
+
+    return { status: "error", message: DATABASE_UNAVAILABLE_MESSAGE, fieldErrors: {} };
+  }
+
+  if (!registrationOpen) {
     return {
       status: "error",
       message: REGISTRATION_CLOSED_MESSAGE,

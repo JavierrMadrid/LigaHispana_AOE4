@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { isRecord } from "@/lib/json";
+import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration-open";
 
 /**
  * Lectura y escritura de la tabla `Setting`.
@@ -19,6 +20,9 @@ import { isRecord } from "@/lib/json";
  *
  * Clave que introduce el arreglo del sync invisible:
  * - `sync.lastRun`: rastro de la última pasada del sincronizador, con sus fallos.
+ *
+ * Clave que introduce el cierre manual de inscripciones:
+ * - `registration.open`: booleano; si falta o no es legible, el plazo está cerrado.
  */
 
 /** Cuántos `gameId` de partidas abandonadas se guardan como rastro. */
@@ -430,4 +434,38 @@ export function isSyncTraceStale(trace: SyncRunTrace | null, now: Date = new Dat
   }
 
   return now.getTime() - finished > SYNC_STALE_MINUTES * 60_000;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Plazo de inscripción                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * ¿Están abiertas las inscripciones ahora mismo?
+ *
+ * Lee `Setting["registration.open"]` y aplica el parser puro de
+ * `src/lib/registration-open.ts`, que cae al valor por defecto (cerrada) cuando
+ * la clave no existe o el valor no es un booleano. Un **fallo de la base sí se
+ * propaga**, como en `readCountries()`: "no hay nada publicado" tiene su valor
+ * por defecto y "no se ha podido leer" no, y quien comprueba un envío tiene que
+ * poder distinguir la segunda para no validar contra un estado inventado.
+ */
+export async function readRegistrationOpen(): Promise<boolean> {
+  const setting = await db.setting.findUnique({ where: { key: REGISTRATION_OPEN_KEY } });
+
+  return parseRegistrationOpen(setting?.value);
+}
+
+/**
+ * Publica el plazo. La usa el interruptor de `/admin`.
+ *
+ * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
+ * `Setting.updatedAt`, que es justo el rastro que deja el cambio.
+ */
+export async function writeRegistrationOpen(open: boolean): Promise<void> {
+  await db.setting.upsert({
+    where: { key: REGISTRATION_OPEN_KEY },
+    create: { key: REGISTRATION_OPEN_KEY, value: open },
+    update: { value: open },
+  });
 }

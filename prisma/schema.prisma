@@ -246,6 +246,30 @@ model Player {
   discordCheckedAt DateTime?
   status         PlayerStatus @default(PENDING)
 
+  // Cuándo se **inscribió** la persona, no cuándo la aprobó la organización:
+  // es el instante del envío del alta (formulario público o alta de admin), y
+  // **no se toca al aprobar**. Quien se apunta a tiempo no pierde partidas porque
+  // la organización mire su solicitud más tarde.
+  //
+  // Es lo que hace que el motor no le cuente a un alta posterior el historial
+  // anterior: la ventana de puntuaciones no es solo la del torneo, sino
+  // `max(window.from, registeredAt)` para cada jugador (ver `scoringCutoff()` en
+  // `src/lib/ranked-match.ts`). Los objetivos van con el mismo corte, así que no
+  // se puede ganar un objetivo con partidas que no puntúan.
+  //
+  // **Nullable a propósito, y sin *backfill*.** La base es la de producción y no
+  // hay *staging*: `db:push` no debe tocar las filas que ya están, y `null`
+  // significa justo lo que les toca a los que ya estaban inscritos —"cuenta desde
+  // el inicio de la ventana"—, así que es el valor correcto para ellos, no una
+  // falta de información.
+  //
+  // **No reutiliza `createdAt`.** Una reinscripción de un `REJECTED` reutiliza la
+  // fila (ver F6 en `docs/PLAN.md`), así que `createdAt` se queda en el primer
+  // envío —que la organización ya miró y rechazó— y no dice cuándo empezó a
+  // contar la persona. Solo se escribe en el alta; el diálogo de edición del
+  // panel no lo mueve.
+  registeredAt DateTime?
+
   // Lo siguiente se rellena con `GET /leaderboards/rm_solo`, una sola vez por
   // pasada del worker (no una por jugador). Ver `src/lib/aoe4world/ladder.ts`.
 

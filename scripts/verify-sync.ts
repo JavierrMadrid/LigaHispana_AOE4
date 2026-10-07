@@ -385,30 +385,102 @@ async function checkNormalization(): Promise<void> {
       revertedAt: null,
     };
     const ventana = DEFAULT_RULESET.window;
+    // `null` es el `Player.registeredAt` de toda la fila que ya estaba inscrita, así
+    // que estas comprobaciones cubren el caso mayoritario.
+    const cuenta = (m: Parameters<typeof countsAsRanked>[0], registeredAt: Date | null = null) =>
+      countsAsRanked(m, ventana, registeredAt);
 
-    assert.equal(countsAsRanked(base, ventana), true);
+    assert.equal(cuenta(base), true);
     assert.equal(
-      countsAsRanked({ ...base, mode: "rm_team" }, ventana),
+      cuenta({ ...base, mode: "rm_team" }),
       true,
       "los equipos también son ranked",
     );
-    assert.equal(countsAsRanked({ ...base, finishedAt: null }, ventana), false, "en curso no puntúa");
-    assert.equal(countsAsRanked({ ...base, result: null }, ventana), false, "sin resultado no puntúa");
+    assert.equal(cuenta({ ...base, finishedAt: null }), false, "en curso no puntúa");
+    assert.equal(cuenta({ ...base, result: null }), false, "sin resultado no puntúa");
     assert.equal(
-      countsAsRanked({ ...base, mode: "qm_1v1" }, ventana),
+      cuenta({ ...base, mode: "qm_1v1" }),
       false,
       "una custom no es clasificatoria",
     );
-    assert.equal(countsAsRanked({ ...base, mode: null }, ventana), false, "sin ladder resuelta no puntúa");
+    assert.equal(cuenta({ ...base, mode: null }), false, "sin ladder resuelta no puntúa");
     assert.equal(
-      countsAsRanked({ ...base, mode: "rm_solo", result: "LOSS", finishedAt: NOW }, ventana),
+      cuenta({ ...base, mode: "rm_solo", result: "LOSS", finishedAt: NOW }),
       true,
       "una derrota cuenta como partida, aunque no dé puntos",
     );
     assert.equal(
-      countsAsRanked({ ...base, revertedAt: NOW }, ventana),
+      cuenta({ ...base, revertedAt: NOW }),
       false,
       "una partida revertida no cuenta, ni a favor ni en contra",
+    );
+  });
+
+  await check("el corte de inscripcion sube con `registeredAt` y no toca el `to`", () => {
+    const ventana = DEFAULT_RULESET.window;
+    const alta = new Date("2026-09-25T12:00:00.000Z");
+    const partida = (startedAt: string) => ({
+      mode: "rm_solo",
+      result: "WIN" as const,
+      startedAt: new Date(startedAt),
+      finishedAt: NOW,
+      revertedAt: null,
+    });
+
+    // Un alta posterior a la ventana no acorta nada: es el comportamiento que ya
+    // había y el que le toca a todo el que se|Apuntó antes de empezar.
+    assert.equal(
+      countsAsRanked(partida("2026-09-16T10:00:00.000Z"), ventana, new Date("2026-09-01T00:00:00Z")),
+      true,
+      "inscrito antes de la ventana: cuenta desde `window.from`",
+    );
+    assert.equal(
+      countsAsRanked(partida("2026-09-24T23:59:59.999Z"), ventana, alta),
+      false,
+      "un alta posterior no cuenta las partidas de antes de la inscripcion",
+    );
+    assert.equal(
+      countsAsRanked(partida("2026-09-25T12:00:00.000Z"), ventana, alta),
+      true,
+      "el corte es inclusivo",
+    );
+    assert.equal(
+      countsAsRanked(partida("2026-09-26T10:00:00.000Z"), ventana, alta),
+      true,
+      "despues del alta si cuenta",
+    );
+
+    // `null` y "inscrito antes de la ventana" tienen que ser indistinguibles.
+    for (const instante of [
+      "2026-09-14T23:59:59.999Z",
+      "2026-09-15T00:00:00.000Z",
+      "2026-09-25T12:00:00.000Z",
+      "2026-10-14T23:59:59.999Z",
+      "2026-10-15T00:00:00.000Z",
+    ]) {
+      assert.equal(
+        countsAsRanked(partida(instante), ventana, new Date("2026-09-01T00:00:00Z")),
+        countsAsRanked(partida(instante), ventana, null),
+        `registeredAt null debería ser lo mismo que inscritarse antes, en ${instante}`,
+      );
+    }
+
+    // El `to` exclusivo no se mueve por el corte, y el corte no destapa el resto de
+    // las condiciones.
+    assert.equal(
+      countsAsRanked(partida("2026-10-15T00:00:00.000Z"), ventana, null),
+      false,
+      "`to` sigue siendo exclusivo",
+    );
+    assert.equal(
+      countsAsRanked({ ...partida("2026-09-26T10:00:00.000Z"), revertedAt: NOW }, ventana, alta),
+      false,
+      "el corte no destapa la marca de revertida",
+    );
+    assert.equal(
+      countsAsRanked({ ...partida("2026-09-26T10:00:00.000Z"), finishedAt: null }, ventana, alta),
+      false,
+      "el corte no destapa una partida sin resolver",
     );
   });
 
@@ -416,8 +488,8 @@ async function checkNormalization(): Promise<void> {
     // Réplica de la guarda de `setMatchReverted()`. El criterio es el mismo en los
     // dos sentidos, y tiene que seguir siéndolo: invertido al restaurar, ninguna
     // partida clasificatoria se podía devolver. La guarda se pregunta siempre con
-    // `revertedAt: null`, que es lo que la deja decidir por las otras tres
-    // condiciones.
+    // `revertedAt: null`, que es lo que la deja decidir por las otras cuatro
+    // condiciones, y con el `registeredAt` del dueño, que es la quinta.
     const clasificatoria = {
       mode: "rm_team",
       result: "WIN" as const,
@@ -428,7 +500,8 @@ async function checkNormalization(): Promise<void> {
     const ventana = DEFAULT_RULESET.window;
     // El parámetro se toma del de `countsAsRanked` y no del literal de `clasificatoria`:
     // si se declarara con el tipo de este, `result: null` no entraría.
-    const cuenta = (m: Parameters<typeof countsAsRanked>[0]) => countsAsRanked(m, ventana);
+    const cuenta = (m: Parameters<typeof countsAsRanked>[0], registeredAt: Date | null = null) =>
+      countsAsRanked(m, ventana, registeredAt);
 
     assert.equal(cuenta(clasificatoria), true, "una partida clasificatoria cuenta");
     assert.equal(
@@ -442,9 +515,14 @@ async function checkNormalization(): Promise<void> {
       "sin resolver no cuenta en ningún sentido",
     );
     assert.equal(
-      countsAsRanked({ ...clasificatoria, revertedAt: NOW }, ventana),
+      countsAsRanked({ ...clasificatoria, revertedAt: NOW }, ventana, null),
       false,
       "marcada no cuenta, que es justo lo que deshace el restore",
+    );
+    assert.equal(
+      cuenta(clasificatoria, new Date("2026-10-01T00:00:00.000Z")),
+      false,
+      "anterior al alta no cuenta, así que no hay puntos que revertir ni que devolver",
     );
   });
 
@@ -613,24 +691,27 @@ async function checkNormalization(): Promise<void> {
       new Date(Date.parse(instante) - 1).toISOString();
 
     assert.ok(to !== null, "la ventana de pruebas tiene fin, para poder cortar los dos bordes");
+    // El `null` es el `Player.registeredAt` ausente, que es el caso de todo el que ya
+    // estaba en la base. El corte de inscripción se comprueba al final de esta misma
+    // comprobación.
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(from)), ventana),
+      countsAsRanked(resuelta(milisegundoAntes(from)), ventana, null),
       false,
       "un milisegundo antes de `from` no cuenta",
     );
-    assert.equal(countsAsRanked(resuelta(from), ventana), true, "`from` es inclusivo");
+    assert.equal(countsAsRanked(resuelta(from), ventana, null), true, "`from` es inclusivo");
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(to)), ventana),
+      countsAsRanked(resuelta(milisegundoAntes(to)), ventana, null),
       true,
       "un milisegundo antes de `to` todavía cuenta",
     );
     assert.equal(
-      countsAsRanked(resuelta(to), ventana),
+      countsAsRanked(resuelta(to), ventana, null),
       false,
       "`to` es exclusivo: una partida empezada exactamente ahí ya es de la siguiente",
     );
     assert.equal(
-      countsAsRanked(resuelta(new Date(Date.parse(to) + 1).toISOString()), ventana),
+      countsAsRanked(resuelta(new Date(Date.parse(to) + 1).toISOString()), ventana, null),
       false,
       "después de `to` no cuenta",
     );
@@ -642,7 +723,7 @@ async function checkNormalization(): Promise<void> {
       finishedAt: new Date(Date.parse("2030-01-01T00:00:00.000Z")),
     };
     assert.equal(
-      countsAsRanked(empezadaDentroTerminadaDespues, ventana),
+      countsAsRanked(empezadaDentroTerminadaDespues, ventana, null),
       true,
       "empezada dentro de la ventana cuenta aunque termine fuera",
     );
@@ -651,14 +732,33 @@ async function checkNormalization(): Promise<void> {
     // el fin del torneo más tarde sin tocar código.
     const abierta = { from, to: null };
     assert.equal(
-      countsAsRanked(resuelta("2031-06-01T12:00:00.000Z"), abierta),
+      countsAsRanked(resuelta("2031-06-01T12:00:00.000Z"), abierta, null),
       true,
       "con `to: null` no hay corte por la derecha",
     );
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(from)), abierta),
+      countsAsRanked(resuelta(milisegundoAntes(from)), abierta, null),
       false,
       "`from` sigue cortando por la izquierda con la ventana abierta",
+    );
+
+    // Y el corte de inscripción, que es el mismo `max` por jugador: con el alta a
+    // mitad de ventana, lo anterior a ella deja de contar aunque siga dentro.
+    const alta = new Date((Date.parse(from) + Date.parse(to)) / 2);
+    assert.equal(
+      countsAsRanked(resuelta(new Date(alta.getTime() - 1).toISOString()), ventana, alta),
+      false,
+      "con `registeredAt` a mitad de ventana, lo anterior al alta no cuenta",
+    );
+    assert.equal(
+      countsAsRanked(resuelta(alta.toISOString()), ventana, alta),
+      true,
+      "el corte de inscripción es inclusivo, como `from`",
+    );
+    assert.equal(
+      countsAsRanked(resuelta(to), ventana, alta),
+      false,
+      "el corte no mueve el `to` exclusivo",
     );
   });
 
@@ -1248,6 +1348,9 @@ async function runWindowChecks(
               revertedAt: null,
             },
             ventana,
+            // `registeredAt` ausente: es lo que tiene el jugador de esta
+            // comprobación, y el caso mayoritario de toda la base.
+            null,
           ),
           caso.dentro,
           `${caso.etiqueta} (${new Date(caso.at).toISOString()})`,
@@ -1386,6 +1489,92 @@ async function runWindowChecks(
       const agregados = await loadObjectivePlayers(db, (await readRuleset()));
       const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
       assert.equal(suyo?.matches, esperada, "los objetivos también las cuentan");
+    });
+
+    /**
+     * El corte de inscripción, contra datos de verdad.
+     *
+     * Las tres traducciones de la regla se contrastan aquí a la vez, y no solo la
+     * regla de partida: se le pone al jugador de la ventana un `registeredAt` a
+     * mitad de torneo y se mira que el `UPDATE` de `Match.points` pone a 0 lo que
+     * es anterior al alta, que el agregado de `PlayerScore` deja de contar esas
+     * partidas y que los objetivos cuentan exactamente las mismas. Si alguna de las
+     * tres se quedara sin el corte, es justo aquí donde se vería.
+     *
+     * El corte se pone **después** de comprobar que sin él todo cuadra, y se vuelve
+     * a dejar en `null` al final para que la comprobación de `to: null` siga viendo
+     * el caso mayoritario.
+     */
+    await check("un alta posterior no cuenta las partidas anteriores al alta", async () => {
+      const { loadObjectivePlayers } = await import("@/lib/objectives");
+      // Un milisegundo después de `from`: la partida de "justo en `from`" queda
+      // justo fuera y la de "justo antes de `to`" justo dentro, así que el corte se
+      // contrasta contra los dos bordes de la ventana a la vez.
+      const alta = new Date(from + 1);
+
+      await db.player.update({ where: { id: jugador.id }, data: { registeredAt: alta } });
+      await recomputeScores();
+
+      const puntos = await db.match.findMany({
+        where: { playerId: jugador.id },
+        orderBy: { startedAt: "asc" },
+        select: { gameId: true, startedAt: true, points: true },
+      });
+
+      const despuesDelAlta = casos.filter((caso) => caso.at >= from + 1 && caso.at < to).length;
+      assert.equal(
+        puntos.filter((fila) => fila.points > 0).length,
+        despuesDelAlta,
+        "solo puntúan las partidas de después del alta",
+      );
+      assert.equal(
+        puntos.find((fila) => fila.gameId === "9000102")?.points,
+        0,
+        "la partida de justo en `from`, un milisegundo antes del alta, deja de puntuar",
+      );
+
+      const score = await db.playerScore.findUnique({
+        where: {
+          playerId_ruleSetVersion: { playerId: jugador.id, ruleSetVersion: RULESET_VERSION },
+        },
+      });
+      assert.equal(
+        score?.matches,
+        despuesDelAlta,
+        "y la clasificación cuenta solo las de después del alta",
+      );
+
+      // Los objetivos van con el mismo corte: sin esto, un alta tardía con muchas
+      // partidas se llevaría un objetivo por partidas que no puntúan.
+      const agregados = await loadObjectivePlayers(db, (await readRuleset()));
+      const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
+      assert.equal(
+        suyo?.matches,
+        despuesDelAlta,
+        "los objetivos tampoco cuentan las partidas anteriores al alta",
+      );
+
+      // Y `countsAsRanked()`, que es lo que decide el botón de revertir del panel,
+      // tiene que dar la misma respuesta fila a fila.
+      const ventanaActiva = (await readRuleset()).window;
+      const enJs = puntos.filter(
+        (fila) =>
+          countsAsRanked(
+            {
+              mode: "rm_solo",
+              result: "WIN",
+              startedAt: fila.startedAt,
+              finishedAt: new Date(fila.startedAt.getTime() + 1_800_000),
+              revertedAt: null,
+            },
+            ventanaActiva,
+            alta,
+          ),
+      );
+      assert.equal(enJs.length, despuesDelAlta, "las tres traducciones cuentan lo mismo");
+
+      // Se deja como estaba: el resto de la comprobación usa el `null`.
+      await db.player.update({ where: { id: jugador.id }, data: { registeredAt: null } });
     });
   } finally {
     // Se devuelve el ruleset como estaba y se recalcula, para que la
@@ -1832,11 +2021,16 @@ async function runDatabaseChecks(): Promise<void> {
       );
 
       // `countsAsRanked()` (que decide fila a fila, en memoria) tiene que contar
-      // lo mismo que el `groupBy` y que el `UPDATE` de `Match.points`, que son sus
+      // lo mismo que el agregado y que el `UPDATE` de `Match.points`, que son sus
       // dos traducciones a SQL. Es la comprobación que avisa si las tres se
       // desincronizan: se recorren todas las partidas del jugador de muestra y se
-      // comparan las dos cuentas.
+      // comparan las dos cuentas. El `registeredAt` del jugador va en la llamada
+      // porque es la condición que depende de él.
       const ventana = (await readRuleset()).window;
+      const { registeredAt } = await db.player.findUniqueOrThrow({
+        where: { id: player.id },
+        select: { registeredAt: true },
+      });
       const filas = await db.match.findMany({
         where: { playerId: player.id },
         select: {
@@ -1848,7 +2042,7 @@ async function runDatabaseChecks(): Promise<void> {
           points: true,
         },
       });
-      const enJs = filas.filter((fila) => countsAsRanked(fila, ventana));
+      const enJs = filas.filter((fila) => countsAsRanked(fila, ventana, registeredAt));
 
       assert.equal(
         enJs.length,
@@ -1866,7 +2060,9 @@ async function runDatabaseChecks(): Promise<void> {
         "los puntos de `Match.points` son los que suman en la clasificación",
       );
       assert.equal(
-        filas.filter((fila) => !countsAsRanked(fila, ventana)).every((fila) => fila.points === 0),
+        filas.filter((fila) => !countsAsRanked(fila, ventana, registeredAt)).every(
+          (fila) => fila.points === 0,
+        ),
         true,
         "ninguna partida que no cuenta puede tener puntos",
       );

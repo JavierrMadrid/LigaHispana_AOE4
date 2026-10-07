@@ -501,7 +501,7 @@ mismos datos no crea nada, así que `npm run alerts:check` dos veces seguidas es
 comprobar que el dedupe no se ha roto. Los **umbrales** son configurables sin desplegar en
 `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo); `window` y `modes`
 **no** se duplican ahí: se leen del ruleset de puntuación, y el filtro de clasificatorias es el mismo
-`rankedMatchWhere()` que usa el motor de puntos.
+`rankedMatchWhere()` que usa el motor de puntos, más el corte de inscripción del jugador.
 
 ## Transparencia del historial de partidas
 

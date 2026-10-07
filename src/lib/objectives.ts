@@ -355,10 +355,15 @@ type ObjectiveMatchRow = {
  * Qué es una partida clasificatoria **no** se decide aquí: sale de
  * `rankedMatchSql()`, el mismo predicado que aplica el `UPDATE` de `Match.points`
  * y el agregado de la clasificación (`src/lib/ranked-match.ts`). Así los
- * objetivos cuentan exactamente las mismas partidas que las victorias, incluida la
- * ventana de fechas y la marca de revertida: no hay forma de ganar un objetivo por
- * partidas que no puntúan, ni de que una partida revertida deje de contar para las
- * victorias y siga contando para `loco-por-ganar` o para una `masterizar-*`.
+ * objetivos cuentan exactamente las mismas partidas que las victorias, incluido el
+ * **corte de inscripción** (una partida anterior a `Player.registeredAt` no puntúa
+ * y por tanto tampoco puede ganar un objetivo), el final de la ventana y la marca
+ * de revertida: no hay forma de ganar un objetivo por partidas que no puntúan, ni
+ * de que una partida revertida deje de contar para las victorias y siga contando
+ * para `loco-por-ganar` o para una `masterizar-*`.
+ *
+ * El `join` con `Player` no es solo por el estado: también es de donde sale el
+ * corte de inscripción, que es el `p` que se le pasa a `rankedMatchSql()`.
  *
  * El formato de la partida no está en una columna (el `mode` solo distingue
  * `rm_solo` de `rm_team`), así que se deriva aquí del `kind` que devolvió la
@@ -385,7 +390,7 @@ function objectiveRowsQuery(ruleset: ScoringRuleset): Prisma.Sql {
     from "Match" m
     join "Player" p on p."id" = m."playerId"
     where p."status" = 'APPROVED'
-      and ${rankedMatchSql(Prisma.sql`m`, ruleset.modes, ruleset.window)}
+      and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window)}
     order by p."id", m."finishedAt", m."gameId"
   `;
 }
