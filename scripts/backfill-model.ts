@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
  *
  *   npm run backfill:model
  *
- * Son los *backfills* 3a y 3b de `docs/MODELO-DATOS.md` §8.1. Las dos columnas
+ * Son los *backfills* de `mode` y `civRandomized` (ver `docs/MODELO-DATOS.md`, "Match"). Las dos columnas
  * las escribe el worker con cada partida nueva, así que esto solo hace falta para
  * las filas que ya había en la base de datos cuando se añadieron.
  *

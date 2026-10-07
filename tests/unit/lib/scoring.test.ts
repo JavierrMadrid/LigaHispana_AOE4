@@ -65,7 +65,7 @@ describe("reglas v2 (constantes del motor)", () => {
     expect(DEFAULT_RULESET.countRandomizedCivs).toBe(false);
   });
 
-  it("el catálogo sigue siendo el de 38 objetivos de docs/PUNTUACION.md", () => {
+  it("el catálogo sigue siendo el de 38 objetivos de docs/OBJETIVOS.md", () => {
     expect(OBJECTIVE_COUNT).toBe(38);
     // El desglose de `PlayerScore` y `Setting["scoring.ruleset"].objectives` se
     // indexan por id, así que un objetivo sin puntos o con un id repetido

@@ -40,10 +40,10 @@ Reglas de selección:
 
 - **Stack visual**: Next.js 16 (App Router, `src/app`) + TailwindCSS v4. Nada de librerías de UI nuevas sin motivo justificado; Tailwind v4 cubre el 100% de lo que necesita esta web.
 - **Tokens**: `src/app/globals.css` define `--background`, `--foreground` y las fuentes Geist, con soporte de `prefers-color-scheme`. Reutiliza los tokens y clases existentes en lugar de introducir colores sueltos.
-- **Páginas vivas**: `/` (home por defecto de create-next-app, pendiente de diseño), `/login`, `/admin`, `/admin/jugadores`. El panel admin ya tiene su lenguaje visual (fondos `neutral-950/900/800`, acentos `amber-500`): respétalo para que el conjunto no parezca hecho por dos personas.
+- **Páginas vivas**: públicas `/` (clasificación), `/partidas` (en directo), `/objetivos`, `/reglas` y `/participar`; de acceso `/login`; y el panel en `/admin`, con `/admin/historial`, `/admin/alertas` y `/admin/acciones`. El panel admin ya tiene su lenguaje visual (fondos `neutral-950/900/800`, acentos `amber-500`): respétalo para que el conjunto no parezca hecho por dos personas.
 - **Copy**: todo en español, sin emojis, terminología de torneo (clasificación, partida clasificatoria, jugador, jornada).
 - **Datos**: las cifras vienen de Prisma vía Server Components. No escribas queries ni llames a la BBDD desde un componente; si necesitas un dato nuevo, pídelo en el informe para que lo implemente `@logic-data`.
-- **Fases**: el estado de F0–F7 está en `docs/PLAN.md`. La fase F7 es tu bloque grande (pulido visual); la UI pública de clasificación y partidas en directo es F4.
+- **Estado del trabajo**: en las **issues del repositorio en GitHub** (`JavierrMadrid/LigaHispana_AOE4`). En el repositorio no hay documento de plan; no lo busques ni lo escribas.
 
 ## Cómo trabajas
 
@@ -54,6 +54,7 @@ Reglas de selección:
 5. Responsive y estados vacíos/cargando/error como parte del diseño, no como añadido.
 6. Sin comentarios de código innecesarios.
 7. En vía completa, al terminar ejecuta `npm run lint`, `npm run build` y `npm test`, y arréglalo si falla. En vía rápida basta con `lint` si el cambio puede romper tipos o sintaxis; si es copy/CSS puro, ninguna.
+8. **Documentación**: si el cambio toca copy o comportamiento visible, actualiza el documento que lo refleja (`docs/REGLAS.md`, `docs/PUNTUACION.md`, `docs/OBJETIVOS.md`, `README.md`) en el mismo diff. La tabla completa está en `AGENTS.md`.
 
 ## Fuera de tu ámbito
 
@@ -62,4 +63,4 @@ Reglas de selección:
 
 ## Informe final
 
-Di qué skills cargaste (y por qué aplican), qué decisiones de diseño tomaste, qué archivos creaste o modificaste y qué falta por decidir.
+Di qué skills cargaste (y por qué aplican), qué decisiones de diseño tomaste, qué archivos creaste o modificaste, qué documentos actualizaste y qué falta por decidir.

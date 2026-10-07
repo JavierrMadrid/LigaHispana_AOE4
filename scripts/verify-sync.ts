@@ -57,7 +57,7 @@ const SAMPLE_RIVAL_ID = 9_000_004;
 const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
 
 /**
- * Objetivos que fija `docs/PUNTUACION.md`. Vive como constante y no como
+ * Objetivos que fija `docs/OBJETIVOS.md`. Vive como constante y no como
  * `OBJECTIVE_COUNT` para que el número no pueda cambiar en los dos sitios a la vez
  * sin que se note.
  */
@@ -1024,7 +1024,7 @@ async function checkObjectiveCatalogue(): Promise<void> {
     computeObjectives,
   } = await import("@/lib/objectives");
 
-  await check(`el catálogo tiene los ${EXPECTED_OBJECTIVE_COUNT} objetivos de docs/PUNTUACION.md`, () => {
+  await check(`el catálogo tiene los ${EXPECTED_OBJECTIVE_COUNT} objetivos de docs/OBJETIVOS.md`, () => {
     assert.equal(OBJECTIVE_COUNT, EXPECTED_OBJECTIVE_COUNT);
     assert.equal(OBJECTIVE_DEFINITIONS.length, EXPECTED_OBJECTIVE_COUNT);
     assert.equal(
@@ -1129,7 +1129,7 @@ async function checkObjectiveCatalogue(): Promise<void> {
     }
   });
 
-  await check("los puntos en juego son los de la tabla de §4", () => {
+  await check("los puntos en juego son los de la tabla de `docs/OBJETIVOS.md`", () => {
     const porGrupo = new Map<string, number>();
 
     for (const definition of OBJECTIVE_DEFINITIONS) {
@@ -2095,7 +2095,7 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(
         view.options.length,
         OBJECTIVE_COUNT,
-        `hay los ${OBJECTIVE_COUNT} objetivos de docs/PUNTUACION.md`,
+        `hay los ${OBJECTIVE_COUNT} objetivos de docs/OBJETIVOS.md`,
       );
 
       const groups = view.options.map((option) => option.group);
@@ -2115,7 +2115,7 @@ async function runDatabaseChecks(): Promise<void> {
         "todo grupo tiene rótulo",
       );
 
-      // Copy exacto del cliente y métricas de Actividad y Racha (§3.2-§3.3).
+      // Copy exacto del cliente y métricas de Actividad y Racha.
       const porId = new Map(view.options.map((option) => [option.id, option]));
 
       assert.equal(

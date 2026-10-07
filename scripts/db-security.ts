@@ -29,7 +29,7 @@ import { Client } from "pg";
  * repositorio, así que el siguiente `db push` o el siguiente que separe el caso no
  * sabría ni que existe. Esto lo deja escrito, repetible y comprobable.
  *
- * La postura es la de `docs/MODELO-DATOS.md` §7, y cabe en tres frases:
+ * La postura es la de `docs/MODELO-DATOS.md`, seccion "RLS y privilegios", y cabe en tres frases:
  * - la web **nunca** se conecta con una clave de cliente: todo pasa por el DAL con
  *   `DATABASE_URL`, así que las tablas no tienen por qué ser legibles por nadie más;
  * - con RLS activada y **ninguna** política, un rol sin `BYPASSRLS` ve cero filas;

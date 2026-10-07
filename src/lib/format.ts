@@ -50,6 +50,74 @@ export function formatAbsoluteTime(date: Date): string {
   return absoluteTime.format(date);
 }
 
+// Los límites de la ventana son instantes UTC (`from`/`to` son medianoche UTC), así
+// que se formatean en UTC y no en la zona del proceso: si no, el día que se pinta
+// dependería de dónde corra el Worker y no de lo que la organización configuró.
+const windowDay = new Intl.DateTimeFormat("es-ES", {
+  day: "numeric",
+  month: "long",
+  timeZone: "UTC",
+});
+
+const windowDayYear = new Intl.DateTimeFormat("es-ES", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/**
+ * El periodo del torneo en una frase, para `/puntuacion`.
+ *
+ * `to` es opcional en el ruleset (`null` = ventana abierta), y de ahí las dos
+ * formas: "Del 15 de septiembre al 15 de octubre de 2026" y "Desde el 15 de
+ * septiembre de 2026". Cuando los dos límites caen en el mismo año, el año se dice
+ * una sola vez, al final, que es como se lee una fecha en español.
+ */
+export function formatTournamentWindow(window: { from: string; to: string | null }): string {
+  const from = new Date(window.from);
+
+  if (window.to === null) {
+    return `Desde el ${windowDayYear.format(from)}`;
+  }
+
+  const to = new Date(window.to);
+
+  if (from.getUTCFullYear() === to.getUTCFullYear()) {
+    return `Del ${windowDay.format(from)} al ${windowDayYear.format(to)}`;
+  }
+
+  return `Del ${windowDayYear.format(from)} al ${windowDayYear.format(to)}`;
+}
+
+/**
+ * Cuánto queda hasta `to`, desglosado en días, horas y minutos.
+ *
+ * Se trunca hacia abajo al minuto, nunca se redondea al alza: prometer un minuto
+ * que ya no queda es peor que quedarse corto. Devuelve `null` cuando `to` ya pasó
+ * (o es justo `now`), que es lo que usa la portada para no pintar un contador a
+ * cero.
+ *
+ * `now` entra por parámetro a propósito: así la función es pura y se puede probar
+ * sin temporizadores reales, y el contador decide cuándo recalcular.
+ */
+export function countdownParts(
+  to: Date,
+  now: Date,
+): { days: number; hours: number; minutes: number } | null {
+  if (to.getTime() <= now.getTime()) {
+    return null;
+  }
+
+  const totalMinutes = Math.floor((to.getTime() - now.getTime()) / 60_000);
+
+  return {
+    days: Math.floor(totalMinutes / 1_440),
+    hours: Math.floor((totalMinutes % 1_440) / 60),
+    minutes: totalMinutes % 60,
+  };
+}
+
 /**
  * Enlace al perfil de un jugador en AoE4World.
  *

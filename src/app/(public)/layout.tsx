@@ -35,7 +35,7 @@ export default function PublicLayout({
             se active en `xl` y no en `lg`: por debajo, marca y acciones comparten la
             primera fila y la navegación baja a la segunda, a ancho completo, sin que
             el wordmark se recorte. En móvil (`< sm`) esa segunda fila desaparece: los
-            cuatro destinos bajan a `SiteTabBar`, la barra fija del pie, y la cabecera
+            cinco destinos bajan a `SiteTabBar`, la barra fija del pie, y la cabecera
             se queda en una sola fila compacta.
             En la celda de la derecha viven las dos acciones de la barra —la
             inscripción y el acceso de la organización—. Son cromo: cada una tiene
@@ -81,7 +81,7 @@ export default function PublicLayout({
           {/* `min-w-0`: sin él, el ancho mínimo de la lista de navegación (con
               enlaces que no se parten) empujaría la rejilla y abriría scroll de
               página en lugar de desplazarse solo la barra.
-              Por debajo de `sm` no se pinta: los cuatro destinos no caben sin
+              Por debajo de `sm` no se pinta: los cinco destinos no caben sin
               desplazamiento horizontal y ahí navega `SiteTabBar`. La fila queda
               vacía y la rejilla se cierra en una sola altura. */}
           <div className="col-span-2 row-start-2 hidden min-w-0 w-full sm:block xl:col-span-1 xl:col-start-2 xl:row-start-1 xl:w-auto">

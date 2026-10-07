@@ -46,8 +46,8 @@ const ROSTER: DiscordRosterMember[] = [
 
 describe("la caché de la comprobación", () => {
   it("duelve horas, que es lo que se decidió", () => {
-    // El número está en `docs/PLAN.md` (F12) y en el docblock de `Player` del schema:
-    // si el TTL se cambiasse sin actualizar los tres, la comprobación y su
+    // El número está en el docblock de `Player` del schema:
+    // si el TTL se cambiase sin actualizarlo, la comprobación y su
     // documentación empezarían a discrepar sin que nada fallara.
     expect(DISCORD_CHECK_TTL_HOURS).toBe(12);
     expect(DISCORD_CHECK_TTL_MS).toBe(12 * 3_600_000);
@@ -127,9 +127,9 @@ describe("el veredicto, según lo que respondió la API", () => {
 
 describe("la caché del roster", () => {
   it("duelve horas, igual que la del veredicto, y son dos relojes distintos", () => {
-    // Las dos cifras están en `docs/PLAN.md` (F12) y en los docblocks de `Player` del
-    // schema: si una se cambiara sin actualizar lo otro, la comprobación y su
-    // documentación empezarían a discrepar sin que nada fallara. Que coincidan no
+    // Las dos cifras están en los docblocks de `Player` del schema: si una se
+    // cambiara sin actualizar lo otro, la comprobación y su documentación
+    // empezarían a discrepar sin que nada fallara. Que coincidan no
     // significa que sean la misma caché: la del roster es un dato compartido y la del
     // veredicto es uno por fila.
     expect(DISCORD_ROSTER_TTL_HOURS).toBe(12);

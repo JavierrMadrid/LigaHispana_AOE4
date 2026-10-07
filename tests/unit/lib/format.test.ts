@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   aoe4WorldProfileUrl,
+  countdownParts,
   describeMode,
   describeTeamSize,
   formatRelativeTime,
+  formatTournamentWindow,
   kickChannelUrl,
   teamSizesFromRawJson,
   twitchChannelUrl,
@@ -139,6 +141,67 @@ describe("describeTeamSize", () => {
 
   it("un bando vacío no da tamaño", () => {
     expect(describeTeamSize([0, 0])).toBeNull();
+  });
+});
+
+describe("formatTournamentWindow", () => {
+  it("con los dos límites en el mismo año, el año se dice una vez", () => {
+    expect(
+      formatTournamentWindow({
+        from: "2026-09-15T00:00:00.000Z",
+        to: "2026-10-15T00:00:00.000Z",
+      }),
+    ).toBe("Del 15 de septiembre al 15 de octubre de 2026");
+  });
+
+  it("una ventana abierta se lee como «desde»", () => {
+    // `to: null` es una ventana sin fin: la organización puede fijarlo más tarde
+    // sin desplegar.
+    expect(
+      formatTournamentWindow({ from: "2026-09-15T00:00:00.000Z", to: null }),
+    ).toBe("Desde el 15 de septiembre de 2026");
+  });
+
+  it("si los límites cruzan el año, cada fecha lleva el suyo", () => {
+    expect(
+      formatTournamentWindow({
+        from: "2026-12-01T00:00:00.000Z",
+        to: "2027-01-15T00:00:00.000Z",
+      }),
+    ).toBe("Del 1 de diciembre de 2026 al 15 de enero de 2027");
+  });
+});
+
+describe("countdownParts", () => {
+  it("desglosa días, horas y minutos", () => {
+    const to = new Date(AHORA.getTime() + ((2 * 24 + 3) * 60 + 5) * 60_000);
+
+    expect(countdownParts(to, AHORA)).toEqual({ days: 2, hours: 3, minutes: 5 });
+  });
+
+  it("por debajo de un día, los días son cero", () => {
+    const to = new Date(AHORA.getTime() + (5 * 60 + 30) * 60_000);
+
+    expect(countdownParts(to, AHORA)).toEqual({ days: 0, hours: 5, minutes: 30 });
+  });
+
+  it("trunca al minuto, nunca redondea al alza", () => {
+    // 59 s no es un minuto: prometerlo sería regalar tiempo que no queda.
+    expect(countdownParts(new Date(AHORA.getTime() + 59_000), AHORA)).toEqual({
+      days: 0,
+      hours: 0,
+      minutes: 0,
+    });
+    expect(countdownParts(new Date(AHORA.getTime() + 7_199_000), AHORA)).toEqual({
+      days: 0,
+      hours: 1,
+      minutes: 59,
+    });
+  });
+
+  it("cuando el torneo ya terminó devuelve `null`, no un contador a cero", () => {
+    expect(countdownParts(AHORA, AHORA)).toBeNull();
+    expect(countdownParts(new Date(AHORA.getTime() - 60_000), AHORA)).toBeNull();
   });
 });
 

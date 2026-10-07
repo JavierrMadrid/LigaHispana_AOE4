@@ -67,7 +67,7 @@ export {
 /* Ruleset                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Clave de `Setting` donde vive el ruleset activo (§8 de `docs/PUNTUACION.md`). */
+/** Clave de `Setting` donde vive el ruleset activo. */
 export const SCORING_RULESET_KEY = "scoring.ruleset";
 
 /**
@@ -412,7 +412,7 @@ function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode
  * igual que `getStandings`, así que la página que la use tiene que ser
  * dinámica.
  *
- * `window` se publica para que `/reglas` y `/objetivos` puedan decir qué periodo
+ * `window` se publica para que `/puntuacion` y `/objetivos` puedan decir qué periodo
  * cuenta, sin que el copy de la interfaz tenga que escribir fechas a mano que
  * acabarían mintiendo el día que se cambien en `Setting`.
  *
