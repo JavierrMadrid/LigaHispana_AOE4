@@ -178,6 +178,21 @@ export default async function AdminPage() {
             ? syncState.headline
             : "No se ha podido leer el estado del sincronizador. El botón sigue disponible para forzar una pasada."}
         </p>
+        {/* El aviso va por debajo del `headline` y de la lista de fallos, con su
+            propio tono neutro y no el rojo de `syncAlarm`: es información y no una
+            alarma —la pasada salió bien y aun así una parte no pudo hacer su
+            trabajo—, así que `role="status"` y no `alert`. El texto va literal
+            porque lo escribe el servicio de fuera y lo que dice —qué servicio, qué
+            estado, qué motivo— es justo lo que hay que mirar para arreglarlo;
+            resumirlo aquí perdería lo único que vale. */}
+        {syncState?.notice ? (
+          <p
+            role="status"
+            className="mt-3 break-words rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-xs leading-relaxed text-muted"
+          >
+            {syncState.notice}
+          </p>
+        ) : null}
         {syncState?.lastRun?.failures.length ? (
           <ul className="mt-2 flex flex-col gap-1 text-sm text-muted">
             {syncState.lastRun.failures.map((fallo) => (

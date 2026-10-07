@@ -177,6 +177,21 @@ function redactUrl(url: URL): string {
  * reintentar tiene sentido), que es el único de los dos que **documenta** su error;
  * con el payload de Kick, que no tiene contrato, sale vacío y el mensaje se queda en
  * el código y el estado, que es lo único que de verdad sabemos.
+ *
+ * ## Por qué el `reason` va en el mensaje
+ *
+ * Porque es lo que hace el texto legible **inequívoco**, y el texto es lo único que
+ * sale de aquí: `StreamsError` acaba en el rastro de la pasada (`streamsError`) y es
+ * lo que lee quien tenga que averiguar por qué el directo de un canal lleva días sin
+ * detectar. La prosa de Google no distingue por sí sola —"API key expired. Please renew
+ * the API key." no dice *qué* ha caducado ni si es la clave o el proyecto—, mientras
+ * que `reason` es un valor cerrado y por plataforma (`API_KEY_EXPIRED`,
+ * `API_KEY_INVALID`, `quotaExceeded`, `SERVICE_DISABLED`…) que se puede leer de un
+ * vistazo y comparar con los otros fallos.
+ *
+ * Cuando está, va delante: es el dato accionable y el resto es el contexto. Cuando no
+ * está, el mensaje no cambia, porque el `reason` era opcional desde el principio y su
+ * ausencia no significa que falte nada.
  */
 function readApiErrorDetail(value: unknown): { message: string; reason: string | null } {
   if (!isRecord(value)) {
@@ -193,8 +208,12 @@ function readApiErrorDetail(value: unknown): { message: string; reason: string |
   const reason = typeof errors[0]?.reason === "string" ? errors[0].reason : null;
   const detail = typeof errors[0]?.message === "string" ? errors[0].message : "";
   const summary = typeof error.message === "string" ? error.message : "";
+  const prose = `${summary}${detail === "" ? "" : ` (${detail})`}`;
 
-  return { message: `${summary}${detail === "" ? "" : ` (${detail})`}`.slice(0, 200), reason };
+  return {
+    message: (reason === null ? prose : `${reason}: ${prose}`).slice(0, 200),
+    reason,
+  };
 }
 
 export function createStreamsHttpClient(
