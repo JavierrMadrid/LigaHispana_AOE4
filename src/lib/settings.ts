@@ -224,6 +224,39 @@ export type SyncRunTrace = {
    */
   alertsError: string | null;
   /**
+   * Por qué no se pudo comprobar el historial de partidas en el juego, o qué hubo que
+   * avisar aunque no fuera un fallo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, por el mismo motivo que
+   * `alertsError`: que no se sepa si un participante tiene el historial de partidas
+   * abierto **no ha parado ni una partida**. Las que sí se han sincronizado están
+   * guardadas y la clasificación está recalculada; lo que falta es poder decir que ese
+   * jugador podría tener el historial cerrado, que es un aviso para la organización, no
+   * salud del sincronizador.
+   *
+   * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que el
+   * sondeo está corriendo (y cuántos players quedaron para la siguiente pasada por el
+   * tope), igual que el aviso de `YOUTUBE_API_KEY` en `streamsError`.
+   */
+  historyError: string | null;
+  /**
+   * Por qué no se pudo comprobar la pertenencia al servidor de Discord de los
+   * participantes, o qué hubo que avisar aunque no fuera un fallo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, por el mismo motivo que
+   * `alertsError`: que no se sepa si alguien sigue en el servidor de Discord **no ha
+   * parado ni una partida**. Lo que falta es poder avisar a la organización de que
+   * una cuenta se ha ido del servidor, que es un aviso para ella, no salud del
+   * sincronizador.
+   *
+   * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que la
+   * comprobación está corriendo, cuántos participantes quedaron para la siguiente pasada
+   * por el tope, **con cuántos miembros salió la lista de miembros del servidor** —y si
+   * se ha podido leer o no— y, si faltan las credenciales, que la comprobación **no se
+   * está haciendo**, igual que el aviso de `YOUTUBE_API_KEY` en `streamsError`.
+   */
+  discordError: string | null;
+  /**
    * Por qué no se pudo comprobar el estado de directo de YouTube o de Kick, si no se
    * pudo.
    *
@@ -320,6 +353,8 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     ladderError: readText(value["ladderError"]),
     scoringError: readText(value["scoringError"]),
     alertsError: readText(value["alertsError"]),
+    historyError: readText(value["historyError"]),
+    discordError: readText(value["discordError"]),
     streamsError: readText(value["streamsError"]),
     failures: readFailures(value["failures"]),
     lastSuccessAt: readText(value["lastSuccessAt"]),
@@ -358,7 +393,11 @@ export async function writeSyncRunTrace(
   // del motor de alertas no ha parado ni una partida. Meterlo haría que el panel
   // dijera que el torneo lleva horas roto cuando lo que se ha caído es un informe.
   // Lo mismo con `streamsError`: no saber si un canal está emitiendo tampoco para
-  // nada del torneo.
+  // nada del torneo, y con `historyError`: no saber si un participante tiene el
+  // historial de partidas abierto tampoco. Y con `discordError`: no saber si la cuenta
+  // de alguien sigue en el servidor de Discord tampoco, y además la falta de
+  // `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` es permanente, así que si contara un
+  // torneo entero con la comprobación apagada se publicaría como sincronizador roto.
 
   const value = {
     ...trace,

@@ -46,6 +46,11 @@ process.env.AOE4WORLD_MOCK = "1";
  * aquí). Un `false` escrito por el refresco borraría el "en directo" que la
  * simulación acaba de plantar, y un `true` real exigiría llamar a YouTube desde un
  * script de desarrollo.
+ *
+ * El paso del **historial de partidas** también va apagado (`history: false`) y por
+ * el mismo motivo: su ruta no tiene fixtures, así que con el mock activo no sale a
+ * la red y no escribe nada. Apagarlo del todo solo evita el aviso; el comportamiento
+ * correcto ya está dentro del módulo.
  */
 async function ensureMockPlayers(): Promise<void> {
   for (const player of MOCK_TOURNAMENT_PLAYERS) {
@@ -192,10 +197,15 @@ async function runMockTournament(): Promise<void> {
   await ensureMockPlayers();
 
   // Solo los participantes simulados: una base con otros jugadores aprobados
-  // no se toca ni se les pide nada al mock. `streams: false` por lo que dice el
-  // docblock de `ensureMockPlayers()`: la detección de YouTube y Kick queda apagada
-  // y sus canales se quedan como los que ha plantado este script.
-  const summary = await syncApprovedPlayers({ profileIds: MOCK_PROFILE_IDS, streams: false });
+  // no se toca ni se les pide nada al mock. `streams: false` y `history: false` por
+  // lo que dice el docblock de `ensureMockPlayers()`: la detección de YouTube y Kick
+  // queda apagada y sus canales se quedan como los que ha plantado este script, y el
+  // sondeo del historial no sale a la red.
+  const summary = await syncApprovedPlayers({
+    profileIds: MOCK_PROFILE_IDS,
+    streams: false,
+    history: false,
+  });
 
   // "Partidas en directo" se cuenta por `gameId` distinto, igual que hace la
   // web: una 1v1 entre participantes genera dos filas `Match` (una por jugador)

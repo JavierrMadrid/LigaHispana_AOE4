@@ -17,6 +17,7 @@ permission:
     "git show*": allow
     "npm run lint*": allow
     "npm run build*": allow
+    "npm test*": allow
   task:
     "*": deny
     design-ux: allow
@@ -68,7 +69,7 @@ Si el cambio **no** cumple las cinco condiciones, es **vía completa** y se apli
 1. **Enquadra**: qué pide el usuario, en qué fase cae, qué queda fuera de alcance. Si el alcance es ambiguo de verdad (no una duda técnica), pregunta con `question` antes de consumir subagentes.
 2. **Planifica**: registra el trabajo con `todowrite` y actualiza `docs/PLAN.md` cuando cambie el estado de una fase. En la **vía rápida**, ninguno de los dos: haz el cambio y listo.
 3. **Delega**: reparte en el menor número de tareas posible. Cada tarea, un subagente.
-4. **Verifica**: `npm run lint` y `npm run build` tienen que pasar (en la **vía rápida**, solo `lint` si el cambio puede romper sintaxis o tipos). Revisa el diff completo (`git diff`) contra el estilo del repo. Si tocaste lógica de negocio o modelo sin pasar por `@logic-data`, corrígelo delegándolo.
+4. **Verifica**: `npm run lint`, `npm run build` y `npm test` tienen que pasar (en la **vía rápida**, solo `lint` si el cambio puede romper sintaxis o tipos). Revisa el diff completo (`git diff`) contra el estilo del repo. Si tocaste lógica de negocio o modelo sin pasar por `@logic-data`, corrígelo delegándolo.
 5. **Cierra**: refleja el avance en `docs/PLAN.md` y resume al usuario qué se hizo, qué archivos cambiaron y qué queda pendiente.
 
 ## Cómo escribes el encargo
@@ -78,7 +79,7 @@ Cada subagente arranca con contexto fresco: no sabe nada de esta conversación. 
 - Qué hay que hacer, en una frase, y por qué le importa al torneo.
 - Los archivos exactos que puede tocar y los que no.
 - El contexto que necesita, **con la ruta del fichero** donde está, no el contenido copiado.
-- Cómo verificar: `npm run lint`, `npm run build`, y `npm run generate` si toca el schema.
+- Cómo verificar: `npm run lint`, `npm run build`, `npm test`, y `npm run generate` si toca el schema.
 - Que termine con un informe: skills cargadas, archivos tocados, decisiones, qué falta y qué necesita del otro ámbito.
 
 **No le digas qué skills cargar.** Cada subagente tiene su propia tabla de selección y la aplica según lo que toca. Si tú le impones una skill, rompes ese filtro y gastas contexto en algo que no aplica. Solo menciónalas si hay un motivo concreto y no evidente (por ejemplo, "esto crea un patrón de componente nuevo, no un retoque").

@@ -40,6 +40,8 @@ npm run dev          # arranca en http://localhost:3000
 | `npm run build` | Build de producción (`next build`). |
 | `npm run start` | Sirve el build con `next start`. |
 | `npm run lint` | ESLint. |
+| `npm test` | Tests unitarios (Vitest, `vitest run`). Sin base de datos, sin red y sin variables de entorno. |
+| `npm run test:watch` | Los mismos tests en modo watch, para mientras se desarrolla. |
 | `npm run generate` | Regenera el cliente Prisma en `src/generated/prisma`. |
 | `npm run postinstall` | Lo que `npm install` ejecuta al final: `prisma generate`. |
 | `npm run studio` | Abre Prisma Studio. |
@@ -53,7 +55,6 @@ npm run dev          # arranca en http://localhost:3000
 | `npm run score` | Recalcula la clasificación y la imprime (lo que hace el worker al final de cada pasada). |
 | `npm run backfill:model` | Rellena `mode` y `civRandomized` de las partidas anteriores. |
 | `npm run verify:sync` | Comprobaciones de normalización, DAL, streams y guardado. Con `-- --db` añade las que van contra la base de datos (y borra lo que crea). |
-| `npm run verify:alerts` | 53 comprobaciones puras del motor de alertas. **Sin base de datos.** |
 | `npm run alerts:check` | Evalúa las alertas de todo el torneo y las imprime. Idempotente. |
 | `npm run alerts:cutoffs` | Deriva o refresca los cortes de división que necesita la regla R5. Con `-- --show` enseña los cacheados. |
 | `npm run mock:tournament` | Simula el torneo completo contra la API falsa. |
@@ -78,6 +79,7 @@ código de servidor: ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 | `NEXT_PUBLIC_SUPABASE_URL` | URL del proyecto Supabase (auth/API) |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Clave publicable de Supabase (auth/API) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Alternativa antigua a la clave publicable |
+| `NEXT_PUBLIC_SITE_URL` | Dominio público del sitio, con protocolo: de él salen los canónicos y las rutas absolutas de las imágenes. Variable de **build**, no de runtime, así que va en *Build variables and secrets*, en las **dos** configuraciones de build (hoy `https://laligahispana.es`) |
 | `AOE4WORLD_API_BASE` | Base de la API de AoE4World (`https://aoe4world.com`) |
 | `AOE4WORLD_API_KEY` | Opcional, para partidas privadas; viaja en la query y nunca se escribe en los logs |
 | `AOE4WORLD_USER_AGENT` | Cómo se identifica el worker ante la API (`LigaHispanaAOE4/0.1 (sync AoE4World)`) |
@@ -91,7 +93,7 @@ código de servidor: ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 | `AOE4WORLD_SYNC_DEADLINE_MS` | Plazo global de una pasada (240000) |
 | `AOE4WORLD_MOCK` | `1` responde con las fixtures de `src/lib/aoe4world/mock/` en vez de salir a la red (`0`; imposible con `NODE_ENV=production`) |
 | `CRON_SECRET` | Secreto para llamar a `POST /api/cron/sync` sin sesión |
-| `SITE_URL` | URL pública del Worker de la que parte el job de Supabase Cron. Solo la lee `scripts/db-cron.ts` (`https://ligahispana-aoe4.javierr-ma93.workers.dev`) |
+| `SITE_URL` | URL pública del Worker de la que parte el job de Supabase Cron. Solo la lee `scripts/db-cron.ts`, y es **otra** distinta de la variable `SITE_URL` del workflow de GitHub |
 | `RATE_LIMIT_MAX_ATTEMPTS` | Envíos de inscripción permitidos por IP y ventana (5) |
 | `RATE_LIMIT_WINDOW_SECONDS` | Longitud de la ventana del límite, en segundos (3600) |
 | `RATE_LIMIT_STALE_SECONDS` | Antigüedad a partir de la cual se purga una fila de contador, en segundos (86400) |
@@ -105,6 +107,16 @@ código de servidor: ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 | `STREAMS_MIN_REQUEST_INTERVAL_MS` | Separación mínima entre peticiones a esas dos APIs, en ms (200) |
 | `STREAMS_MAX_RETRIES` / `STREAMS_RETRY_BASE_MS` / `STREAMS_RETRY_MAX_MS` | Reintentos y *backoff* del módulo de directos (2 / 400 / 8000) |
 | `STREAMS_MAX_CHECKS_PER_RUN` | Tope de comprobaciones de directo por pasada (24 = 12 participantes con las dos plataformas) |
+| `DISCORD_CLIENT_ID` | Client ID de la aplicación OAuth2 de Discord. **Sin las credenciales de Discord el paso de la inscripción no se exige ni se pinta**: en producción son obligatorias |
+| `DISCORD_CLIENT_SECRET` | Client secret de esa aplicación. Solo el servidor lo ve: viaja en el cuerpo del canje y nunca en un log |
+| `DISCORD_BOT_TOKEN` | Token del bot. Hace el auto-unión al servidor (`CREATE_INSTANT_INVITE`) y, en la entrega 2, la comprobación de pertenencia |
+| `DISCORD_GUILD_ID` | Id del servidor de Discord del torneo |
+| `DISCORD_OAUTH_SECRET` | Secreto con el que se firma la cookie `discord_link` (HMAC-SHA-256, 20 min). Sin ella se usa `CRON_SECRET`, y **no hay valor de respaldo en el código** |
+| `DISCORD_REDIRECT_URI` | URI de redirección registrada en Discord. Opcional: si falta, se deriva del origen de la petición + `/api/discord/oauth/callback` |
+| `DISCORD_INVITE_URL` | Invitación al servidor, que el formulario enseña como respaldo cuando el auto-unión falla. Opcional |
+| `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Base, presupuesto por petición y `User-Agent` del cliente de Discord (`https://discord.com/api/v10`, 8000, `LigaHispanaAOE4/0.1 (inscripción Discord)`) |
+| `DISCORD_CHECK_MAX_PER_RUN` | Tope de comprobaciones de Discord por pasada del worker. Opcional (10) |
+| `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas por refresco de la lista de miembros del servidor y cuántas horas se cachea. Opcionales (20 y 12). La lista **exige el intent privilegiado `GUILD_MEMBERS`** en el Developer Portal: sin él Discord devuelve la lista vacía, el worker lo detecta y sigue con la comprobación por cuenta |
 
 ## Cómo funciona
 
@@ -219,8 +231,15 @@ repositorio está conectado a Workers Builds y el trigger de `main` ejecuta `npx
   llegar al bundle del navegador), los secretos que lee el código de servidor (`YOUTUBE_API_KEY`,
   `CRON_SECRET`…) y la cadena local de Hyperdrive
   `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`, que es la que aborta el paso de deploy
-  si falta. Hoy solo hay un trigger y escucha `main`, así que ese es el único sitio donde hay que
-  ponerlas. Detalle en `docs/DESPLIEGUE.md`, "Los dos sitios del panel".
+  si falta. Hay **dos** configuraciones de build —la del *trigger* de `main` y la de *Previews Base*—,
+  no heredan nada entre ellas, y lo que va en una tiene que ir también en la otra. Detalle en
+  `docs/DESPLIEGUE.md`, "Los dos sitios del panel".
+- **El dominio propio `laligahispana.es` es la URL pública del sitio**, en producción como Custom
+  Domain desde que la zona pasó a `active` (4 de octubre de 2026), con certificado de Let's Encrypt
+  emitido y `always_use_https` activado: entrar por `http` salta a `https` y `www` salta al apex. **No**
+  está declarado en `wrangler.jsonc`, a propósito, porque los Custom Domains son un objeto aparte de
+  `routes` y no hace falta declararlos. Estado, certificados y qué hacer si un visitante no entra por
+  la caché DNS antigua, en `docs/DESPLIEGUE.md`, "El dominio propio, y por qué no está en el archivo".
 - La conexión a la base va por el **binding de Hyperdrive**: `src/lib/db.ts` lee
   `env.HYPERDRIVE.connectionString` y, si no está, cae a `DATABASE_URL`. Ese paso, que no se puede
   saltar, en local lo hace `scripts/deploy-worker.mjs`, que exporta desde `.dev.vars` la cadena local
@@ -263,7 +282,7 @@ candado de las pasadas a mano es de **5 minutos**, no de uno. Detalle medido en
 ### Alertas de comportamiento
 
 ```bash
-npm run verify:alerts    # 53 comprobaciones puras, sin base de datos
+npm test                 # los tests del motor de alertas, sin base de datos
 npm run alerts:check     # evaluación completa + resumen por consola
 npm run alerts:cutoffs   # deriva o refresca los cortes de división que necesita R5
 ```
@@ -273,6 +292,14 @@ una fila por alerta en `Alert`; los umbrales se tocan en `Setting["alerts.rulese
 evalúa cada 5 minutos con el sync (solo sobre los jugadores tocados en la pasada), al revertir o
 restaurar una partida, al cerrar el torneo y a mano. Las ocho reglas, sus umbrales y las decisiones,
 con sus costes, están en [`docs/PLAN.md`](docs/PLAN.md#f9--motor-de-alertas-de-comportamiento-).
+
+Todo lo que decide el motor es una función pura, así que se comprueba con `npm test` y sin nada
+preparado: [`tests/unit/lib/alerts/compute.test.ts`](tests/unit/lib/alerts/compute.test.ts) pasa las secuencias de
+partidas regla a regla, [`tests/unit/lib/alerts/rules.test.ts`](tests/unit/lib/alerts/rules.test.ts) los umbrales, las
+frases y las claves de dedupe, y
+[`tests/unit/lib/alerts/division-cutoffs.test.ts`](tests/unit/lib/alerts/division-cutoffs.test.ts) la traducción de
+rating a subdivisión y la lectura de la caché de cortes. Lo que sí necesita la base de datos —que la
+inserción sea idempotente de verdad, que el rastro del sync lo refleje— lo comprueba `alerts:check`.
 
 ### Inscripción pública
 

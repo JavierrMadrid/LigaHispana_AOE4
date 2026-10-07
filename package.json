@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "db:push": "prisma db push",
@@ -19,7 +21,6 @@
     "score": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/score.ts",
     "backfill:model": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/backfill-model.ts",
     "verify:sync": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/verify-sync.ts",
-    "verify:alerts": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/verify-alerts.ts",
     "alerts:check": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/alerts-check.ts",
     "alerts:cutoffs": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/alerts-cutoffs.ts",
     "mock:tournament": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/mock-tournament.ts",
@@ -58,6 +59,8 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5",
+    "vite": "^8.3.2",
+    "vitest": "^4.1.11",
     "wrangler": "^4.143.0"
   }
 }

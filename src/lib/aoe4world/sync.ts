@@ -1,7 +1,13 @@
 import "server-only";
 
 import { evaluateAlerts, type EvaluateAlertsResult } from "@/lib/alerts/evaluate";
+import { checkDiscordMembership, describeDiscordChecks, type DiscordChecksResult } from "@/lib/discord/check";
 import { db } from "@/lib/db";
+import {
+  checkPlayerHistory,
+  describeHistoryChecks,
+  type HistoryChecksResult,
+} from "@/lib/history-checks";
 import {
   mergeAbandonedAudit,
   readPlayerSyncState,
@@ -41,6 +47,22 @@ import type { Aoe4WorldGame } from "./types";
  * que cumple el requisito de "siempre actualizada" sin que nadie tenga que
  * recargar: cada pasada del worker deja la tabla de puntos al día y el historial
  * de alertas al día.
+ *
+ * Después, y antes de los directos, se comprueba **el historial de partidas en el
+ * juego** de los participantes (`src/lib/history-checks.ts`): si alguien tiene el
+ * toggle "Share History" cerrado, lo sabemos, y si la ladder registra una partida
+ * que no nos ha llegado, también. Es el único paso de la pasada que sale a una ruta
+ * **del sitio** de AoE4World y no a su API, y lleva su propio presupuesto: un `HEAD`
+ * de 0 bytes por partida, tres partidas como mucho y solo para quien tiene vencida la
+ * caché de 12 horas.
+ *
+ * Y en el mismo sitio, con el mismo trato, la **pertenencia al servidor de Discord**
+ * (`src/lib/discord/check.ts`, F12): para saber si la organización sigue teniendo por
+ * dónde hablar con esa persona. Sale con la **lista de miembros del servidor** cuando
+ * esa lista se puede leer —una lectura por cada mil miembros, cacheada doce horas, que
+ * además resuelve la cuenta de quien solo tiene `@usuario`—, y si no se puede leer cae
+ * a una petición por cuenta vinculada. A quien no tenga Discord no se le comprueba ni
+ * se le avisa, y lo que no se ha podido comprobar no se escribe.
  *
  * Y en el último sitio, y con la misma tolerancia, se comprueba el estado de
  * directo de **YouTube y Kick** (`src/lib/streams/`): al final porque no depende de
@@ -138,7 +160,45 @@ export type SyncSummary = {
   /** Por qué no se pudieron evaluar las alertas, si no se pudieron. */
   alertsError: string | null;
   /**
- * Estado de directo de YouTube y Kick para los participantes con canal. `null`
+   * Comprobación del historial de partidas en el juego y de la regla de la ladder
+   * (`src/lib/history-checks.ts`). `null` solo si el paso se apagó con
+   * `history: false`, que es lo que hace el mock del torneo para no tocar el sitio de
+   * AoE4World.
+   *
+   * **No** es parte de la salud del sincronizador: que no se haya podido comprobar si
+   * alguien tiene el historial abierto no ha parado ni una partida de las que sí se han
+   * sincronizado. El motivo va en `historyError` y **no** mueve `lastSuccessAt`.
+   */
+  history: HistoryChecksResult | null;
+  /**
+   * Lo que hay que saber del paso del historial y no es un éxito limpio: comprobaciones
+   * que no se han podido hacer, players que quedaron para la siguiente pasada por el
+   * tope, o el mock activo. `null` cuando todo fue bien.
+   */
+  historyError: string | null;
+  /**
+   * Comprobación de la pertenencia al servidor de Discord de los participantes que
+   * tienen la cuenta vinculada o el `@usuario` (`src/lib/discord/check.ts`).
+   *
+   * **No** es parte de la salud del sincronizador, por lo mismo que `historyError`:
+   * que no se sepa si alguien se ha salido del servidor no ha parado ni una partida.
+   * El motivo va en `discordError` y **no** mueve `lastSuccessAt`.
+   */
+  discord: DiscordChecksResult | null;
+  /**
+   * Lo que hay que saber del paso de Discord y no es un éxito limpio: cuentas que no
+   * se han podido comprobar, participantes que quedaron para la siguiente pasada por el
+   * tope, una lista de miembros que no se ha podido leer (típicamente el intent
+   * privilegiado `GUILD_MEMBERS` sin activar), o la comprobación apagada por falta de
+   * `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID`. `null` cuando todo fue bien.
+   *
+   * **No** mueve `lastSuccessAt` del rastro, igual que `historyError` y
+   * `streamsError`: es información sobre si la organización puede hablar con sus
+   * participantes, no salud del sincronizador.
+   */
+  discordError: string | null;
+  /**
+   * Estado de directo de YouTube y Kick para los participantes con canal. `null`
    * cuando la detección estaba apagada en esta pasada (`streams: false`) o no había
    * nadie con canal, que es lo que hace que una pasada sin nada que hacer no salga a
    * la red.
@@ -173,6 +233,17 @@ export type SyncOptions = {
    * se lee ni se escribe nada.
    */
   streams?: boolean;
+  /**
+   * Comprueba el historial de partidas en el juego y la regla de la ladder. Por
+   * defecto `true`.
+   *
+   * Existe por el mismo motivo que `streams`: `npm run mock:tournament` **no debe
+   * tocar ninguna API externa**, y aquí la ruta que se toca (`HEAD` al sitio de
+   * AoE4World) no tiene fixtures. Con el mock activo el propio módulo no sale a la red y
+   * devuelve `unknown`, así que apagar esto solo evita el ruido del aviso; apagado,
+   * `history` sale a `null` y no se lee ni se escribe nada.
+   */
+  history?: boolean;
 };
 
 type SyncConfig = {
@@ -377,7 +448,9 @@ async function reconcileUnfinishedMatches(
       where: { playerId_gameId: { playerId: player.id, gameId } },
     });
     result.abandonedGameIds.push(gameId);
-    console.warn(`[sync] Jugador ${player.profileId}: partida ${gameId} borrada (${ABANDONED_REASON}).`);
+    console.warn(
+      `[sync] Jugador ${player.profileId}: partida ${gameId} borrada (${ABANDONED_REASON}).`,
+    );
   };
 
   for (const match of pending) {
@@ -481,8 +554,7 @@ async function syncPlayer(
 ): Promise<SyncPlayerResult> {
   const state = await readPlayerSyncState(player.profileId);
   const storedSince = state === null ? null : new Date(state.since);
-  const since =
-    storedSince !== null && !Number.isNaN(storedSince.getTime()) ? storedSince : null;
+  const since = storedSince !== null && !Number.isNaN(storedSince.getTime()) ? storedSince : null;
   const sinceUsed = since === null ? null : since.toISOString();
 
   // `Player.name` es el nombre de display y no se toca aquí: lo escribió quien
@@ -552,10 +624,13 @@ async function syncPlayer(
 
   // El cursor solo avanza si hemos visto alguna partida, y nunca retrocede.
   const nextSince =
-    fetched.maxStartedAt === null ? null : new Date(fetched.maxStartedAt.getTime() - SYNC_OVERLAP_MS);
+    fetched.maxStartedAt === null
+      ? null
+      : new Date(fetched.maxStartedAt.getTime() - SYNC_OVERLAP_MS);
   const cursorAdvances = nextSince !== null && (since === null || nextSince > since);
   const effectiveSince = cursorAdvances ? nextSince : since;
-  const effectiveMaxStartedAt = fetched.maxStartedAt ?? (state === null ? null : new Date(state.maxStartedAt));
+  const effectiveMaxStartedAt =
+    fetched.maxStartedAt ?? (state === null ? null : new Date(state.maxStartedAt));
 
   let sinceStored = sinceUsed;
 
@@ -628,7 +703,8 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
 
   // Plazo global: mejor un lote incompleto y legible que un cron que no acaba.
   const deadline = AbortSignal.timeout(config.deadlineMs);
-  const signal = options.signal === undefined ? deadline : AbortSignal.any([options.signal, deadline]);
+  const signal =
+    options.signal === undefined ? deadline : AbortSignal.any([options.signal, deadline]);
 
   const players = await readApprovedPlayers(options.profileIds);
 
@@ -657,7 +733,9 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     if (result.status === "failed") {
       console.error(`[sync] Jugador ${result.profileId} (${result.name}): ${result.error}`);
     } else if (result.status === "cancelled") {
-      console.warn(`[sync] Jugador ${result.profileId} (${result.name}): sincronización cancelada.`);
+      console.warn(
+        `[sync] Jugador ${result.profileId} (${result.name}): sincronización cancelada.`,
+      );
     }
   }
 
@@ -698,9 +776,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     // cierre de torneo si la ventana ya terminó y no estaba hecha. Por eso se
     // llama siempre, también con `tocados` vacío: el cierre no depende de que
     // alguien haya jugado nada en esta pasada.
-    alerts = await evaluateAlerts(
-      tocados.length === 0 ? {} : { profileIds: tocados },
-    );
+    alerts = await evaluateAlerts(tocados.length === 0 ? {} : { profileIds: tocados });
 
     if (alerts.alertsCreated > 0 || alerts.tournamentClose) {
       console.info(
@@ -715,12 +791,89 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se han podido evaluar las alertas: ${alertsError}`);
   }
 
-  // El estado de directo de YouTube y Kick va **último**, con el mismo tratamiento
-  // que las alertas: tolerante a fallos, con el motivo en el rastro, y sin que un
-  // fallo suyo pueda parar la pasada. Y por el mismo motivo que las alertas, se
-  // ejecuta aquí y no en el DAL: son peticiones salientes a dos APIs externas, y en
-  // el plan Free de Cloudflare eso solo cabe una vez por pasada (README, "El límite
-  // de CPU del plan Free"), no en cada visita a la web.
+  // El historial de partidas en el juego va **después** de las alertas y **antes** de
+  // los directos, con el mismo tratamiento tolerante que ellos: un fallo no para la
+  // pasada y el motivo va al rastro sin mover `lastSuccessAt`.
+  //
+  // Y aquí, no en el DAL ni en el motor de alertas, por lo que dice el docblock de
+  // `history-checks.ts`: el sondeo es una petición de red a una ruta del sitio de
+  // AoE4World, y el motor de alertas es puro. Lo que hace falta cada 12 horas por
+  // jugador no justifica una comprobación por visita a la web.
+  let history: HistoryChecksResult | null = null;
+  let historyError: string | null = null;
+
+  try {
+    if (options.history !== false) {
+      history = await checkPlayerHistory({ signal });
+
+      // `describeHistoryChecks()` escribe también los_counts sin fallos, porque es donde
+      // se ve que el sondeo está funcionando; lo que no puede es mover el marcador de
+      // "cuándo funcionó por última vez", y no lo mueve.
+      historyError = describeHistoryChecks(history);
+
+      if (historyError !== null) {
+        console.warn(`[sync] ${historyError}`);
+      }
+
+      if (history.alertsCreated > 0) {
+        console.info(
+          `[sync] Historial: ${history.alertsCreated} alerta(s) nueva(s), ` +
+            `${history.checked} comprobación(es), ${history.verdicts.closed} con el historial cerrado, ` +
+            `${history.ladder.ahead} con la ladder por delante.`,
+        );
+      }
+    }
+  } catch (error) {
+    historyError = toErrorMessage(error);
+    console.error(`[sync] No se ha podido comprobar el historial de partidas: ${historyError}`);
+  }
+
+  // La pertenencia al servidor de Discord va **después** del historial y **antes** de
+  // los directos, con el mismo tratamiento tolerante: un fallo no para la pasada, el
+  // motivo va al rastro sin mover `lastSuccessAt`, y lo que no se ha podido comprobar no
+  // se escribe.
+  //
+  // Y en el worker y no en el motor de alertas, igual que las dos reglas de F11: son
+  // datos de `Player` y de una API externa, no de `Match`, y el motor es puro. La
+  // comprobación usa la **lista de miembros del servidor** cuando puede leerla —una
+  // lectura por cada mil miembros, cacheada doce horas, que además resuelve el
+  // `discordUserId` de quien solo tiene `@usuario`— y solo si esa lista no está
+  // disponible cae a una petición por cuenta (`GET /guilds/{id}/members/{user}`).
+  let discord: DiscordChecksResult | null = null;
+  let discordError: string | null = null;
+
+  try {
+    discord = await checkDiscordMembership({ signal });
+
+    // `describeDiscordChecks()` escribe también los recuentos sin fallos, porque es
+    // donde se ve que la comprobación está corriendo (con cuántos miembros sale la
+    // lista, cuántos participantes quedaron para la siguiente pasada por el tope y si
+    // hace falta activarle el intent privilegiado al bot); lo que no puede es mover el
+    // marcador de "cuándo funcionó por última vez", y no lo mueve.
+    discordError = describeDiscordChecks(discord);
+
+    if (discordError !== null) {
+      console.warn(`[sync] ${discordError}`);
+    }
+
+    if (discord.alertsCreated > 0) {
+      console.info(
+        `[sync] Discord: ${discord.alertsCreated} alerta(s) nueva(s), ` +
+          `${discord.checked} comprobación(es), ${discord.verdicts.notMember} fuera del servidor, ` +
+          `${discord.resolvedByUsername} enlazada(s) por @usuario.`,
+      );
+    }
+  } catch (error) {
+    discordError = toErrorMessage(error);
+    console.error(`[sync] No se ha podido comprobar la pertenencia a Discord: ${discordError}`);
+  }
+
+  // El estado de directo de YouTube y Kick va **el último de los tres que salen a la
+  // red**, con el mismo tratamiento que las alertas: tolerante a fallos, con el motivo
+  // en el rastro, y sin que un fallo suyo pueda parar la pasada. Y por el mismo motivo
+  // que las alertas, se ejecuta aquí y no en el DAL: son peticiones salientes a dos
+  // APIs externas, y en el plan Free de Cloudflare eso solo cabe una vez por pasada
+  // (README, "El límite de CPU del plan Free"), no en cada visita a la web.
   //
   // La llamada se hace siempre, salvo que quien la llama la apague (el mock del
   // torneo, que no toca APIs externas), y `refreshStreamLiveStatus()` sale antes de
@@ -760,7 +913,10 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     playersCancelled: settled.filter((result) => result.status === "cancelled").length,
     newMatches: settled.reduce((total, result) => total + result.matchesInserted, 0),
     updatedMatches: settled.reduce((total, result) => total + result.matchesUpdated, 0),
-    resolvedByRefetch: settled.reduce((total, result) => total + result.matchesResolvedByRefetch, 0),
+    resolvedByRefetch: settled.reduce(
+      (total, result) => total + result.matchesResolvedByRefetch,
+      0,
+    ),
     abandonedMatches: settled.reduce((total, result) => total + result.matchesAbandoned, 0),
     skippedGames: settled.reduce((total, result) => total + result.matchesSkipped, 0),
     liveMatches: settled.reduce((total, result) => total + result.liveMatches, 0),
@@ -773,6 +929,10 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     scoringError,
     alerts,
     alertsError,
+    history,
+    historyError,
+    discord,
+    discordError,
     streams,
     streamsError,
     players: settled,
@@ -825,6 +985,8 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       ladderError: summary.ladder.error,
       scoringError: summary.scoringError,
       alertsError: summary.alertsError,
+      historyError: summary.historyError,
+      discordError: summary.discordError,
       streamsError: summary.streamsError,
       failures: summary.players
         .filter((result) => result.status !== "ok")

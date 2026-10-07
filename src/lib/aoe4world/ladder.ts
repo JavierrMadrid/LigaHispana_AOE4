@@ -8,10 +8,10 @@ import { DEFAULT_LEADERBOARD } from "./types";
  * Instantánea de la ladder de los participantes, una vez por pasada del worker.
  *
  * Un único `GET /leaderboards/rm_solo?profile_id=…` (ids separados por comas,
- * hasta 50 por llamada) trae de golpe elo, `rank_level`, racha, canal y estado
- * de directo de Twitch de todos los aprobados. Pedirlo jugador a jugador
- * multiplicaría el consumo de la API por el número de participantes para traer
- * exactamente los mismos datos.
+ * hasta 50 por llamada) trae de golpe elo, `rank_level`, racha, número de partidas,
+ * fecha de la última, canal y estado de directo de Twitch de todos los aprobados.
+ * Pedirlo jugador a jugador multiplicaría el consumo de la API por el número de
+ * participantes para traer exactamente los mismos datos.
  *
  * Reglas:
  *
@@ -112,6 +112,14 @@ export async function syncLadderSnapshot(
             elo: entry.rating,
             rankLevel: entry.rankLevel,
             streak: entry.streak,
+            // Los dos que se estaban descartando y que no costaban nada: vienen en
+            // la misma entrada de la misma llamada por lotes. Con
+            // `ladderLastGameAt` se puede saber que la ladder registra una partida
+            // que todavía no aparece en nuestro histórico (ver
+            // `LADDER_PUBLICATION_LAG_MINUTES`); con `ladderGamesCount`, cuántos
+            // juegos lleva en la temporada.
+            ladderGamesCount: entry.gamesCount,
+            ladderLastGameAt: entry.lastGameAt,
             twitchIsLive: entry.twitchIsLive,
             twitchUrl: entry.twitchUrl,
             // Sin la clave en el `update`, Prisma no toca el campo: un avatar

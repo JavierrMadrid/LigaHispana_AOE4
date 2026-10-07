@@ -10,6 +10,8 @@ export const metadata: Metadata = {
 
 const SECTIONS = [
   { id: "formato", label: "Formato" },
+  { id: "historial", label: "Historial de partidas" },
+  { id: "discord", label: "Discord" },
   { id: "puntuacion", label: "Puntuación" },
   { id: "objetivos", label: "Objetivos especiales" },
   { id: "clasificatorias", label: "Partidas clasificatorias" },
@@ -99,6 +101,54 @@ export default function RulesPage() {
                 La clasificación se recalcula sola cada pocos minutos con los
                 resultados que va publicando AoE4World, así que no hay que recargar
                 la página a mano.
+              </p>
+            </div>
+          </section>
+
+          <section id="historial" className="scroll-mt-24">
+            <SectionHeading title="Historial de partidas" />
+            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
+              <p>
+                Para participar, la cuenta de AoE4World con la que compites tiene que
+                tener el{" "}
+                <strong className="font-semibold text-foreground">
+                  historial de partidas en público
+                </strong>
+                . La organización lo consulta para poder revisar las partidas de
+                cualquier participante cuando lo necesite: es una regla de
+                transparencia, no una condición sobre cómo se juega.
+              </p>
+              <p>
+                El ajuste está en el propio juego, en el menú principal, dentro del
+                retrato del jugador, en el apartado del historial de partidas (en
+                inglés, <em>Share History</em>). Si no está en público, la organización
+                lo verá indicado en su panel y podrá pedir que se abra.
+              </p>
+            </div>
+          </section>
+
+          <section id="discord" className="scroll-mt-24">
+            <SectionHeading title="Discord" />
+            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
+              <p>
+                Para participar hay que estar en el{" "}
+                <strong className="font-semibold text-foreground">
+                  servidor de Discord del torneo
+                </strong>
+                . La propia inscripción incluye el botón para conectar la cuenta y
+                entrar, así que no hace falta que la organización te añada a mano.
+              </p>
+              <p>
+                El servidor es el canal por el que se comunica la organización:
+                allí se avisa de las jornadas, se resuelven las dudas y se toman
+                las decisiones del torneo. Por eso el paso es obligatorio para
+                completar la inscripción, y no una recomendación.
+              </p>
+              <p>
+                La pertenencia se comprueba cada cierto tiempo para que la
+                organización sepa con quién puede contar. Si en algún momento sales
+                del servidor, lo verá en su panel y podrá pedirte que vuelvas a
+                entrar.
               </p>
             </div>
           </section>

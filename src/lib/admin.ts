@@ -437,7 +437,7 @@ function readSort<K extends string>(
  *   y no por la información de la frase, así que el orden no significaría nada; además
  *   obligaría a traer la columna entera y ordenarla en memoria, porque el criterio no
  *   es una columna de la tabla.
- * - **Tipo de alerta** (`kind`): son tres valores, se filtran con `?tipo=` y ya se
+ * - **Tipo de alerta** (`kind`): son cuatro valores, se filtran con `?tipo=` y ya se
  *   pintan como distintivo en cada fila. Ordenarlos no respondería a nada que alguien
  *   se pregunte ("¿cuántas rachas rotas hay y cuántas acumuladas?"), y el filtro cubre
  *   la necesidad real.
@@ -615,6 +615,42 @@ export type AdminParticipant = {
   kickChannel: string | null;
   contactEmail: string | null;
   /**
+   * Identidad de Discord del participante (F12), **solo lectura**.
+   *
+   * No está en `CamposEditables` ni en `PlayerFormState`, y no es un descuido: el
+   * panel **no** añade ni edita Discord. `discordUserId` es la prueba de que una
+   * persona es quien dice ser —lo firma Discord con el paso OAuth2 de la
+   * inscripción—, y una caja de texto en la que un admin escribiera un id sería un
+   * campo de identidad que se rellena a mano, que es justo lo que el paso de OAuth
+   * existe para evitar. Quien necesite corregir algo aquí lo hace desde Discord y
+   * vuelve a hacer el paso.
+   *
+   * Llega **sin normalizar**, como los canales: `discordUsername` es el nombre de
+   * usuario en el momento del vínculo y Discord permite renombrarse, así que aquí se
+   * muestra tal cual está en la fila y no se "arregla" al leer.
+   */
+  discordUserId: string | null;
+  /** Nombre de usuario de Discord, o `null` si la fila no tiene Discord vinculado. */
+  discordUsername: string | null;
+  /**
+   * ¿Está la cuenta de Discord en el servidor del torneo? **Tres estados**, y la
+   * distinción es lo que importa:
+   *
+   * - `true`: el worker lo ha comprobado con la lista de miembros del servidor.
+   * - `false`: comprobado, y **no está**. Es el estado que genera la alerta
+   *   `DISCORD_NOT_IN_GUILD`.
+   * - `null`: sin comprobar. O no se ha comprobado nunca (el alta de admin, hasta que
+   *   el worker encuentre la cuenta por el `@usuario`), o no se ha podido comprobar
+   *   (un fallo de la API de Discord, o una lista de miembros vacía porque al bot le
+   *   falta el intent privilegiado). **Nunca** significa "no está": eso solo puede
+   *   salir de una respuesta de Discord.
+   *
+   * Llega junto a `discordUsername` porque con las dos columnas la interfaz puede
+   * distinguir "nunca comprobado" de "comprobado y no se ha podido identificar", que
+   * es la diferencia entre no tener nada y tener una avería.
+   */
+  discordInGuild: boolean | null;
+  /**
    * `Player.country`: el rótulo canónico de la lista admitida
    * (`Setting["registration.countries"]`), o `null` si el alta no lo trajo. El
    * panel no lo resuelve ni lo normaliza —lo hace `parseCountry()` al validarlo—,
@@ -639,6 +675,9 @@ const PARTICIPANT_SELECT = {
   youtubeChannel: true,
   kickChannel: true,
   contactEmail: true,
+  discordUserId: true,
+  discordUsername: true,
+  discordInGuild: true,
   country: true,
   status: true,
   avatarUrl: true,
@@ -1557,7 +1596,10 @@ export type AdminAlertRow = {
   rule: AlertRule;
   /** Cómo se llama esa regla en español (`ALERT_RULE_LABELS`). */
   ruleLabel: string;
-  /** `Alert.kind`: si la racha se rompió, la cerró el torneo o se cruzó un acumulado. */
+  /**
+   * `Alert.kind`: si la racha se rompió, la cerró el torneo, se cruzó un acumulado o se
+   * comprobó un estado (las dos reglas del historial de partidas).
+   */
   kind: AlertKind;
   /** Nombre de display del jugador, del `join` con `Player` (nunca del texto de la alerta). */
   playerName: string;
@@ -1565,7 +1607,10 @@ export type AdminAlertRow = {
   /** El rival o el compañero al que se refiere, o `null` en las reglas sin sujeto. */
   subjectName: string | null;
   subjectProfileId: number | null;
-  /** Magnitud del hallazgo: partidas de la racha o del acumulado. */
+  /**
+   * Magnitud del hallazgo: partidas de la racha, del acumulado, o —en las reglas de
+   * estado— la magnitud con la que se comparó.
+   */
   count: number;
   /** La frase en español, tal cual se pinta. La redacta `alertSummary()`. */
   summary: string;
@@ -1596,8 +1641,8 @@ const ALERT_SELECT = {
  * |---|---|---|
  * | `from` / `to` | `Alert.createdAt` | fecha `YYYY-MM-DD` o instante con zona, con los mismos bordes que el historial |
  * | `playerId` | `Alert.playerId` | un `Player.id` con forma de `cuid` |
- * | `regla` | `Alert.rule` | uno de los ocho `AlertRule` |
- * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED` |
+ * | `regla` | `Alert.rule` | uno de los diez `AlertRule` |
+ * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
  *
  * Los cuatro se combinan (es una conjunción), y los tres que son una lista usan
  * **allowlist**: un valor que no está en la lista es ausencia de filtro, no "cero alertas

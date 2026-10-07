@@ -18,7 +18,7 @@ import {
 /**
  * Motor de alertas: qué comportamientos anómalos se ven en las partidas
  * clasificatorias de un jugador. **Módulo puro**: no toca la base de datos ni
- * sale a la red, para que `npm run verify:alerts` pueda comprobarlo con
+ * sale a la red, para que `compute.test.ts` (vía `npm test`) pueda comprobarlo con
  * secuencias sintéticas y sin nada preparado.
  *
  * ## El modelo, que es el mismo para las ocho reglas
@@ -644,7 +644,7 @@ function plannedRules(ruleset: AlertsRuleset): PlannedRule[] {
  * Alertas de un jugador sobre sus partidas clasificatorias.
  *
  * Determinista: las mismas entradas dan siempre las mismas alertas, y por eso
- * `npm run verify:alerts` puede comprobar cada regla con secuencias escritas a
+ * `compute.test.ts` puede comprobar cada regla con secuencias escritas a
  * mano. Lo único que depende del reloj es si una racha abierta se avisa por fin
  * de torneo, y para eso está `now`.
  */

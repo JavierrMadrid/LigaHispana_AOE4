@@ -336,7 +336,7 @@ importación del `.wasm` siempre entra por el cargador de ESM. Es además la mis
 su cuenta, así que los dos se apoyan en ella.
 
 Se aplica en `package.json` a los scripts que **consultan** la base (`sync`, `score`,
-`backfill:model`, `verify:sync`, `verify:alerts`, `alerts:check`, `alerts:cutoffs`, `db:window`,
+`backfill:model`, `verify:sync`, `alerts:check`, `alerts:cutoffs`, `db:window`,
 `countries:seed`, `mock:tournament`, `mock:clean`, `simulate:tournament`, `simulate:clean`):
 
 ```json
@@ -569,9 +569,15 @@ arriba son las de producción; un Preview tiene su propio par, en *Previews Base
   `npx wrangler deploy` **aborta**. Es la variable que faltó cuatro pushes seguidos.
 - **Las `NEXT_PUBLIC_*`** (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
   `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `NEXT_PUBLIC_SITE_URL`). Obligatorias: Next las sustituye por un
-  literal al compilar y en runtime ningún binding puede llegar al bundle del navegador.
+  literal al compilar y en runtime ningún binding puede llegar al bundle del navegador. La de
+  `NEXT_PUBLIC_SITE_URL` es además la que decide de qué dominio salen los canónicos y las tarjetas
+  sociales, y vale `https://laligahispana.es`. Sin ella los canónicos caen a `http://localhost:3000`,
+  que fue un fallo real en producción: las tarjetas al compartir el link salían rotas. Si algún día
+  cambia el dominio, hay que cambiar el valor en **las dos** listas (ver
+  [El dominio propio, y por qué no está en el archivo](#el-dominio-propio-y-por-qué-no-está-en-el-archivo)).
 - **Los secretos que lee el código de servidor** (`YOUTUBE_API_KEY`, `CRON_SECRET`,
-  `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`): también están, y deben estarlo. Ojo con el matiz, que
+  `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`,
+  `DISCORD_OAUTH_SECRET`): también están, y deben estarlo. Ojo con el matiz, que
   es lo que distingue este caso de los dos anteriores: hoy sus lecturas son **perezosas** (dentro
   del módulo que las usa, nunca al importar), así que el build no las necesita para pasar. La razón
   de tenerlas no es esa, sino que **el entorno del build no es el entorno del Worker**: en cuanto un
@@ -694,6 +700,202 @@ páginas públicas ya **no** devuelven un 500: `getStandings()`, `getLiveMatches
 lleva una línea con prefijo `[db]` y el motivo. Ver [Qué ve la web cuando la base de datos no
 responde](./OPERACION.md#cuando-la-base-de-datos-no-responde).
 
+## El dominio propio, y por qué no está en el archivo
+
+`laligahispana.es` es **la URL pública del torneo**, y está en producción **como Custom Domain** del
+Worker sin estar declarado en [`wrangler.jsonc`](../wrangler.jsonc). Lo primero se comprobó el 4 de
+octubre de 2026; lo segundo es una decisión.
+
+### Qué hay montado
+
+| Qué | Estado |
+|---|---|
+| Zona `laligahispana.es` | **`active`** desde el 4 de octubre de 2026, 22:12 UTC, sin `activation_failure_reason` |
+| Custom Domain `laligahispana.es` → Worker `ligahispana-aoe4` | Creado y `enabled`. Lo creó el alta del dominio, que dejó el `AAAA 100::` proxied del apex; ese registro es de Cloudflare y sale `read_only` |
+| `www.laligahispana.es` | `A 192.0.2.0` proxied, de relleno, más una regla *Single Redirect* al apex con 301. La redirección se resuelve en el edge, así que la IP de relleno nunca recibe una petición: es una dirección de documentación (RFC 5737) y no hace falta un origen real detrás |
+| Ajustes de zona | `min_tls_version` de 1.0 a 1.2, y `always_use_https` activado |
+| Certificados | Universal SSL emitido y `active`, Let's Encrypt, `CN=laligahispana.es` más `*.laligahispana.es`. Vence el **2 de enero de 2027** y Let's Encrypt lo renueva solo: no hay que hacer nada |
+| `NEXT_PUBLIC_SITE_URL` | `https://laligahispana.es` en las **dos** configuraciones de build |
+| Correo | **Sin MX**, y a propósito: se borraron los registros de correo que traía IONOS (`mx00`, `mx01`, el SPF, `autodiscover`, `_dmarc`, `_domainconnect`) después de confirmar con la organización que no hay ningún buzón con ese dominio. Si algún día se quiere correo, hay que configurarlo desde cero |
+
+Comprobado sobre el dominio real: `https://laligahispana.es` contesta 200, y también `/partidas` y
+`/objetivos`; `http://` responde 301 a https; `https://www.` responde 301 al apex.
+
+### El apex no tiene registro `A`, y no lo necesita
+
+El único registro del apex es el `AAAA 100::` proxied que creó el Custom Domain. **No hay ningún `A`,
+y no hay que añadirlo**: Cloudflare sintetiza las direcciones de las dos familias a partir de ese
+`100::`, así que un visitante que solo tenga IPv4 resuelve igual y llega al edge. Se comprobó en
+`atlas-center.com`, que tiene la configuración idéntica: no registra ningún `A` para su apex y resuelve
+en IPv4 y en IPv6.
+
+`100::` es el *discard prefix* IPv6 (RFC 6666) y `192.0.2.0` el rango de documentación (RFC 5737):
+direcciones que no corresponden a ningún servidor. Como el registro está proxied, Cloudflare intercepta
+la petición en el edge y nunca sale hacia ellas.
+
+Y no se puede añadir el `A` a mano: Workers responde `81062 A DNS record managed by Workers already
+exists on that host`. No es un error que haya que arreglar.
+
+### Por qué no está en `wrangler.jsonc`
+
+Lo tentador es declarar la ruta, que es la forma documentada de tener un Custom Domain:
+
+```jsonc
+"routes": [{ "pattern": "laligahispana.es", "custom_domain": true }]
+```
+
+Mientras la zona estuvo `pending` el motivo era claro: `wrangler deploy` corre solo en cada push a
+`main` y, con `routes` declarados, habría intentado recrear el Custom Domain sobre una zona sin
+activar, con riesgo de abortar el build y dejar `main` sin publicar. **Ese motivo ya no aplica**, porque
+la zona está activa. La decisión sí se mantiene, pero por otra razón:
+
+- **Declararlo no aporta nada.** El Custom Domain ya existe en el panel, los Custom Domains son un
+  objeto **distinto** de `routes` (cuelgan del Worker, no son una ruta que `wrangler deploy` reconstruya
+  desde el archivo) y `wrangler deploy` no los borra ni los puede borrar por no estar declarados. Ese
+  fue el motivo por el que el del panel sobrevivió a todos los despliegues.
+- **Mantiene el despliegue con menos superficie.** Cada paso que puede abortar un build es un paso que
+  puede dejar `main` sin publicar sin que nada en la web lo diga
+  ([El mensaje que sale es engañoso](#el-mensaje-que-sale-es-enganoso)).
+
+Si algún día se declara, hay que mirar dos cosas antes: que `routes` **no** sustituye a los Previews
+(que viven en su propio `previews` block), y que un despliegue con la lista de `routes` declarada
+puede dejar de publicar si esa llamada falla, así que conviene hacerlo en un push vigilado.
+
+### Cambiar los nameservers, y por qué tardó horas
+
+El dominio se añadió a la cuenta el 4 de octubre de 2026. **El cambio de nameservers lo hizo la
+organización en el registrador** (IONOS), no desde el repositorio: los cuatro de IONOS
+(`ns1039.ui-dns.de`, `ns1101.ui-dns.biz`, `ns1117.ui-dns.org`, `ns1126.ui-dns.com`) por
+`lara.ns.cloudflare.com` y `odin.ns.cloudflare.com`.
+
+ Tardó **horas** en reflejarse, y el motivo importa para la próxima vez: el registro `.es` tiene TTL
+86400 (un día). Durante el camino intermedio los nameservers de IONOS ya devolvían los de Cloudflare
+pero el TLD seguía delegando en los antiguos, así que Cloudflare no activaba la zona.
+
+**Para comprobar si un dominio delega donde crees, `dig +trace` es lo único fiable.** Los resolvers
+normales (1.1.1.1, 8.8.8.8) contestan desde su caché y dan la impresión contraria: durante horas dijeron
+`lara`/`odin` cuando el registro `.es` aún tenía los cuatro de IONOS, y luego al revés. Sin
+`+trace` es fácil dar por hecho que el cambio está publicado cuando no lo está.
+
+### Si un visitante no puede entrar: la caché DNS
+
+Un buen número de visitantes llegaron con el dominio cacheado de antes del cambio, y siguen
+resolviéndolo a `217.160.0.224`, la IP de IONOS. Allí el TLS falla con `internal error (592)`, así que el
+navegador no abre la web. **El sitio está bien**: contra las IPs de Cloudflare contesta 200.
+
+No hay nada que arreglar en el servidor:
+
+- Se resuelve **solo**, cuando caduque la caché del visitante (unas horas).
+- **No afecta a quien entra por primera vez**: ese ve el certificado válido directamente.
+- Para forzarlo: `ipconfig /flushdns` en Windows, `sudo dscacheutil -flushcache; sudo killall -HUP
+  mDNSResponder` en macOS, o `chrome://net-internals/#dns` → *Clear host cache* en Chrome. Y cambiar de
+  red (datos móviles en vez de wifi) suele bastar.
+
+Lo único que evita el transtorno es no volver a difundir la URL antigua de `workers.dev`: desde que el
+dominio está activo, la que se comparte es `https://laligahispana.es`.
+
+### Lo que se hizo, y en qué orden
+
+Los tres pasos dependían de que el dominio ya resolviera, y cada uno se rompe de una forma distinta,
+así que el orden era el que hacía que un fallo se viera. Está **hecho**:
+
+1. **`NEXT_PUBLIC_SITE_URL` = `https://laligahispana.es`** en *Build variables and secrets*, en las
+   **dos** configuraciones de build: la del *trigger* de `main` y la de *Previews Base*. Va como *build
+   variable* y no como secreto del Worker porque Next la sustituye por un literal al compilar, y en
+   runtime ningún binding puede llegar al bundle del navegador (ver
+   [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables)).
+   Fue lo primero porque **solo afecta a los metadatos**: si el dominio fallara, las tarjetas saldrían
+   mal y no se caería nada.
+2. **El reloj del torneo**: `SITE_URL=https://laligahispana.es npm run db:cron`. Fue lo segundo, y no
+   por capricho: `pg_net` no espera la respuesta, así que apuntarlo antes habría devuelto `200` igual y
+   el único síntoma habría sido "pasada vieja" en `/admin` veinte minutos después. El fondo está en
+   [`docs/OPERACION.md`](./OPERACION.md#el-reloj-del-torneo-y-el-cambio-de-domino).
+3. **`routes` en `wrangler.jsonc`**, opcional, sin hacer (ver [Por qué no está en
+   `wrangler.jsonc`](#por-qué-no-está-en-wranglerjsonc)).
+
+El orden era **build variable primero, reloj después**, y no al revés: los metadatos no rompen nada si
+fallan, el reloj sí. Los dos primeros se pueden deshacer igual de fácil.
+
+## El paso de Discord: variables y pasos manuales
+
+La inscripción de `/participar` exige conectar la cuenta de Discord (F12) cuando el OAuth está
+configurado, así que hay **cinco variables obligatorias en producción** que no existían antes:
+
+| Variable | Qué es |
+|---|---|
+| `DISCORD_CLIENT_ID` | Client ID de la aplicación OAuth2 (público) |
+| `DISCORD_CLIENT_SECRET` | Client secret. **Solo se muestra una vez** al crearla y nunca debe salir del servidor |
+| `DISCORD_BOT_TOKEN` | Token del bot, que hace el auto-unión al servidor y la comprobación de pertenencia |
+| `DISCORD_GUILD_ID` | Id del servidor del torneo |
+| `DISCORD_OAUTH_SECRET` | Secreto con el que se firma la cookie del vínculo. Sin él se usa `CRON_SECRET` |
+
+Y opcionales: `DISCORD_REDIRECT_URI` (si falta se deriva del origen de la petición),
+`DISCORD_INVITE_URL` (respaldo cuando el auto-unión falla), las de ajuste del cliente
+(`DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT`),
+`DISCORD_CHECK_MAX_PER_RUN` (tope de comprobaciones por pasada, 10 por defecto) y las dos de
+la lista de miembros del servidor: `DISCORD_ROSTER_MAX_PAGES` (páginas por refresco, 20 por
+defecto, que son veinte mil miembros) y `DISCORD_ROSTER_TTL_HOURS` (cuánto se cachea esa
+lista, 12 por defecto).
+
+**Las cinco van en los dos sitios**, como el resto de secretos que lee el servidor: en
+*Settings → Variables and Secrets* del Worker (y como **secretos**, no como *vars*) **y** en
+*Build variables and secrets* del trigger, en las dos configuraciones de build. El detalle de
+por qué son dos listas está en
+[Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
+
+### Qué hay que hacer en Discord, una sola vez
+
+1. Crear la **aplicación** en el portal de desarrolladores de Discord y anotar client id y
+   client secret.
+2. En **OAuth2 → Redirects**, añadir `https://laligahispana.es/api/discord/oauth/callback`.
+   Si se define `DISCORD_REDIRECT_URI`, tiene que ser **exactamente** la misma cadena.
+3. Crear el **bot** (Bot → Add Bot) y copiar su token. Si se regenera después, hay que
+   actualizar `DISCORD_BOT_TOKEN`.
+4. **Invitar el bot al servidor** con el permiso `CREATE_INSTANT_INVITE`, que es lo que
+   habilita `PUT /guilds/{guild_id}/members/{user_id}`. Se hace con el **URL Generator**
+   del final de la página de OAuth2: marca `bot` y ese permiso, y abre el enlace copiado.
+   Ese generador **no tiene botón de guardar** porque no guarda nada: solo compone una
+   URL, y perder las casillas al navegar es lo normal.
+5. Los scopes `identify` y `guilds.join` **no se configuran en ningún sitio**. Discord no
+   tiene una lista de scopes permitidos por aplicación: se piden en cada redirección, y los
+   pone el código (`DISCORD_OAUTH_SCOPES` en `src/lib/discord/env.ts`) al construir la URL
+   de autorización. Por eso no hay nada que guardar en el portal.
+6. Copiar el **id del servidor** a `DISCORD_GUILD_ID` (Developer Mode → clic derecho sobre
+   el servidor → "Copiar id de servidor").
+7. **Activar el intent privilegiado `GUILD_MEMBERS`** (Bot → Privileged Gateway Intents →
+   **SERVER MEMBERS INTENT** → Save Changes). Es un paso **manual y necesario para la lista
+   de miembros**, y no se puede pedir por API. Sin él,
+   `GET /guilds/{guild_id}/members` **contesta `200` con la lista vacía**, y el sistema lo
+   detecta y cae a la comprobación por cuenta (que no necesita el intent); lo que se pierde
+   sin activarlo es que **las altas de admin no se comprueban ni se enlazan solas**, porque
+   son filas que solo tienen `@usuario` y no hay `discordUserId` con el que preguntar. El
+   rastro lo dice siempre (`discordError`, con "sin lista de miembros" y el motivo), así que
+   no hace falta buscar el síntoma.
+   El botón **desaparece solo** cuando el bot está en un servidor con más de cien miembros,
+   por un límite de Discord; eso también es normal y no hay que hacer nada.
+
+### Si el paso no aparece
+
+No es un error de la web: `isDiscordOAuthConfigured()` es `false` y el formulario no pinta el
+paso, con un aviso `[discord]` en el log. Falta alguna de las cinco variables **en el Worker en
+runtime** —tenerla solo en *Build variables and secrets* es el caso típico, porque la de runtime
+es la que llega en `ctx.env` (ver
+[Cómo se lee la configuración en el Worker](#cómo-se-lee-la-configuración-en-el-worker))—.
+
+### Y antes de esto, en la base de datos
+
+`npm run db:push` (las cuatro columnas de Discord de `Player`, el valor
+`DISCORD_NOT_IN_GUILD` de `AlertRule` y el **`@unique` de `discordUsername`**). No hace
+falta `npm run db:security`: no se crea ninguna tabla.
+
+**Ojo con el `@unique` de `discordUsername`.** Si el `db push` se queja de una violación de
+unicidad en esa columna, es que dos filas anteriores a este ajuste comparten nombre con el
+discriminador antiguo (`pepito#1234` y `pepito#5678`), que al quitarlo son el mismo
+`@usuario`. No es un fallo del despliegue: hay que decidir cuál de las dos filas se queda
+con el `@usuario` y **cambiarle o vaciarle el nombre en la otra** (por SQL, con el panel
+cerrado para no escribir en caliente), y repetir. Ver
+[`docs/OPERACION.md`](./OPERACION.md#discord-obligatorio-f12).
+
 ## Publicar
 
 ```bash
@@ -770,7 +972,8 @@ necesita el build:
 |---|---|
 | `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` | `wrangler preview` emula Hyperdrive igual que `deploy`, y sin ella el build muere al ver el binding |
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Next las sustituye por un literal al compilar, y en runtime ningún binding puede llegar al bundle del navegador |
-| `CRON_SECRET`, `DATABASE_URL`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `YOUTUBE_API_KEY` | No las necesita el build: están por si algún día un módulo de servidor las lee al importar. Ver [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables) |
+| `NEXT_PUBLIC_SITE_URL` | Lo mismo, y además es lo que hace que un Preview anuncie el dominio de producción y no el suyo: es el mismo valor que en la del *trigger* de `main`, y por eso tiene que ir en las dos listas. Ver [El dominio propio](#el-dominio-propio-y-por-qué-no-está-en-el-archivo) |
+| `CRON_SECRET`, `DATABASE_URL`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `YOUTUBE_API_KEY`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_OAUTH_SECRET` | No las necesita el build: están por si algún día un módulo de servidor las lee al importar. Ver [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables) |
 
 **Las build variables no están en runtime**, solo en el proceso de build (eso dice la documentación de
 Cloudflare, sin excepciones). Lo que un Preview tiene en runtime sale de su *Preview settings*, que en
@@ -828,6 +1031,11 @@ Workers Builds sustituya: un Preview **despliega**, y eso tarda bastante más qu
 lint`. El workflow da el veredicto en un par de minutos y sin gastar un despliegue, y el Preview da
 la URL. Los dos se disparan en el mismo push, y en un repositorio público ninguno de los dos cobra
 minutos.
+
+Son dos jobs en paralelo y cada uno con su veredicto: `verificar` (`npm ci`, `npm run lint`,
+`npm run build`) y `test` (`npm ci`, `npm test`). Los tests van aparte porque compilar es lento y no
+hace falta para pasarlos, así que un fallo de lógica sale sin esperar al `next build` y sin que el
+build pueda taparlo. El workflow solo se dispara en pull requests.
 
 ### Lo que hay que hacer en el panel
 

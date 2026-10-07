@@ -10,6 +10,7 @@ permission:
     "*": ask
     "npm run lint*": allow
     "npm run build*": allow
+    "npm test*": allow
 ---
 
 Eres el subagente de **diseño y UX** de la Liga Hispana AoE4. Tu ámbito es todo lo que el usuario ve: páginas, componentes, estilos y textos.
@@ -52,7 +53,7 @@ Reglas de selección:
 4. Accesibilidad: contraste, foco visible, estados `disabled`/`pending`, `<label>` real en formularios, `<th>` en tablas, jerarquía de encabezados.
 5. Responsive y estados vacíos/cargando/error como parte del diseño, no como añadido.
 6. Sin comentarios de código innecesarios.
-7. En vía completa, al terminar ejecuta `npm run lint` y `npm run build`, y arréglalo si falla. En vía rápida basta con `lint` si el cambio puede romper tipos o sintaxis; si es copy/CSS puro, ninguna.
+7. En vía completa, al terminar ejecuta `npm run lint`, `npm run build` y `npm test`, y arréglalo si falla. En vía rápida basta con `lint` si el cambio puede romper tipos o sintaxis; si es copy/CSS puro, ninguna.
 
 ## Fuera de tu ámbito
 
