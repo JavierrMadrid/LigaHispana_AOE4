@@ -90,6 +90,7 @@ mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` ex
 | `Player.historyPublic`, `Player.historyCheckedAt` (columnas nuevas, F11) | `prisma/schema.prisma`, `src/lib/history-checks.ts` | **Ajenas a las reglas de puntuación** por lo mismo: son el resultado cacheado de una comprobación externa. `historyPublic` es nullable **a propósito**, porque `null` = "sin comprobar" y un `false` solo puede escribirse cuando una respuesta lo ha dicho (un `unknown` no escribe nada). Ver §1.1. |
 | `Match.points` con valor real | `src/lib/scoring.ts` | **Cambio de fondo respecto a §3.1.4**: allí la columna se quedaba a 0 porque ninguna regla repartía puntos por partida. Aquí sí: vale `ruleset.pointsPerWin` en cada victoria clasificatoria resuelta **y dentro de la ventana**, y 0 en el resto. Es justamente la "regla de puntos por partida" que §3.1.4 anticipaba, y por eso la columna ya existía y no hubo que crearla. |
 | Ventana de fechas del torneo | `src/lib/ranked-match.ts` (definición) y `src/lib/scoring.ts` (ruleset) | `Setting["scoring.ruleset"].window` = `{ from, to }`, instantes ISO-8601 UTC con zona explícita, `[from, to)` sobre `Match.startedAt`, con `to: null` como ventana abierta. **Aplicada**: una partida fuera de la ventana deja `Match.points = 0` y no entra ni en el agregado ni en los objetivos. El filtro vive en un solo módulo y lo consumen las tres consultas del motor. **Sin columnas ni índices nuevos**: el índice `(mode, startedAt)` de §3.1.3 ya lo cubría. |
+| Corte de inscripción | `Player.registeredAt` (`prisma/schema.prisma`), regla en `src/lib/ranked-match.ts` | `max(window.from, registeredAt)`: un alta posterior a mitad de torneo no puntúa las partidas anteriores al alta, y los 38 objetivos van con el mismo corte. **Las traducciones SQL** la llevan como columna de `Player` (`is null or startedAt >= registeredAt`), que es lo que permite que las tres consultas del motor abarquen a todos los jugadores; **las de Prisma y la de memoria** reciben el `registeredAt` como parámetro obligatorio, porque un `where` de Prisma no compara dos columnas. Por eso el agregado de la clasificación es SQL crudo y no un `groupBy`. Nullable y sin *backfill* (§1.1). |
 | `scoring.lastRun` en `Setting` | `writeScoringLastRun()` en `src/lib/settings.ts` | Rastro de la última pasada (§3.4). Lo escribe el motor **dentro** de su transacción, así que se confirma junto con la clasificación. |
 | `Match.revertedAt` (columna nueva) | `prisma/schema.prisma`, `src/lib/ranked-match.ts` | Marca de "esta partida no puntúa", nullable (`null` = cuenta). **No es un borrado**: el worker de sync volvería a importarla en su siguiente pasada, y el panel tiene que poder deshacer el cambio. Aplica a las tres traducciones de la regla (`countsAsRanked`, `rankedMatchWhere`, `rankedMatchSql`), así que una partida revertida no da ni victorias ni objetivos. El historial del panel la **lista** marcada, con `classificatoryWhere()`. |
 | `AdminAction` (tabla nueva) | `prisma/schema.prisma`, `src/lib/admin-actions.ts` | Rastro de lo que hace una persona administradora. **Ajena a las reglas de puntuación**, como `RateLimitCounter`: se escribe en la misma transacción que el cambio que registra. Aditiva, sin RLS propia más allá de la postura de §7 (`TABLES` en `scripts/db-security.ts`). |
@@ -176,11 +177,16 @@ esta tabla: está hecho, versionado en `scripts/db-security.ts` y se comprueba c
 | `ladderLastGameAt` | `DateTime?` | `last_game_at` de la misma entrada y por el mismo motivo. **Va por delante de lo que vemos**: medido el 2026-10-05 sobre 136 jugadores de `rm_solo`, entre 1 y 71 minutos por delante del `startedAt` de la partida más reciente que somos capaces de importar (la ladder se actualiza en tiempo real al empezar la partida y la fila se publica después). El margen con el que hay que comparar está en `LADDER_PUBLICATION_LAG_MINUTES` (`src/lib/history-visibility.ts`). |
 | `historyPublic` | `Boolean?` | **Si el historial de partidas del jugador es público en el juego** (F11). En AoE4 hay un toggle "Share History" y el FAQ de AoE4World dice que los *game summaries* solo existen con el toggle en "Public". La API **no expone el dato**: se comprueba con un `HEAD` a la ruta del sitio que sirve el summary. **Nullable a propósito, y no por descuido**: un timeout, un `5xx` o un error de red **no** significan "cerrado", así que de un `unknown` no se escribe nada y la fila se queda en `null` = "sin comprobar". |
 | `historyCheckedAt` | `DateTime?` | Cuándo se comprobó lo anterior. El veredicto se cachea **12 h** (`HISTORY_CHECK_TTL_HOURS`) porque el worker corre cada ~5 minutos: sin caché serían tres peticiones por jugador cada cinco minutos para no aprender nada nuevo. `null` = nunca comprobado. |
-| `contactEmail` | `String?` | **Correo de contacto** (F6). Lo exige el formulario público de `/participar` y lo valida `parseEmail` en `src/lib/player-input.ts`, con tope de 254 caracteres (el máximo de RFC 5321) y guardado en minúsculas. **Nullable a propósito:** el alta manual de admin no lo pide y las filas anteriores no lo tienen. El motor no lo lee: no entra en la clasificación ni en ningún desglose. |
+| `contactEmail` | `String?` | **Correo de contacto** (F6). Lo exige el formulario público de `/participar` y lo valida `parseEmail` en `src/lib/player-input.ts`, con tope de 254 caracteres (el máximo de RFC 5321) y guardado en minúsculas. **Nullable a propósito:** en el panel de administración es opcional (como `country`), igual que desde #29, y las filas anteriores no lo tienen. El motor no lo lee: no entra en la clasificación ni en ningún desglose. |
+| `discordUserId` | `String?` **único** | **Identidad de Discord** (F12). La escribe el vínculo OAuth2 de la inscripción (`GET /users/@me`) y el **worker**, cuando resuelve la cuenta a partir del `@usuario` con la lista de miembros del servidor. Es `@unique` porque una cuenta de Discord no puede quedar vinculada a dos participantes. Los `null` no colisionan en Postgres, así que las filas sin Discord no estorban entre sí. El panel **no la edita**: un `userId` escrito a mano no sería una identidad comprobada. |
+| `discordUsername` | `String?` **único** | **Nombre de usuario global de Discord**, guardado en su **forma canónica: sin arroba y en minúsculas** (`pepito`), que es lo que devuelve `GET /users/@me` y lo que trae la lista de miembros del servidor (`canonicalDiscordUsername()` en `src/lib/player-input.ts`). Lo que **se escribe en los formularios lleva la arroba y es obligatorio empezar por ella** (`@pepito`), porque es lo único que significa "el nombre único de esta persona" en todo el servicio; lo valida `parseDiscordUsername()`. **Es `@unique`**: dos participantes con el mismo `@usuario` serían la misma cuenta escrita de dos maneras —el alta de admin con lo que le dicen a la organización y la inscripción pública con lo que resolvió Discord— y la organización no sabría a cuál de las dos filas hablarle; sin la unicidad el worker tampoco podría resolver un `discordUserId`, porque dos coincidencias exactas serían indistinguibles. Los `null` no colisionan en Postgres, así que las filas anteriores a F12 conviven con las nuevas. **Es obligatorio en el alta y en la edición de admin** (en la edición un vacío es un error, no `null`). **Una foto**: Discord permite renombrarse, así que no se usa para afirmar nada sobre la pertenencia al servidor; lo que sí hace es dejar que el worker **encuentre** la cuenta en el roster. |
+| `discordInGuild` | `Boolean?` | ¿Está la cuenta en el servidor del torneo? Lo escribe el worker (`src/lib/discord/check.ts`, F12) con la **lista de miembros del servidor** (`GET /guilds/{guild_id}/members`, cacheada 12 h en `Setting["discord.roster"]`) y, si esa lista no se ha podido leer, contra `GET /guilds/{guild_id}/members/{user_id}` con el bot. **Nullable a propósito, y por el mismo motivo que `historyPublic`**: `null` = "sin comprobar", y no se escribe un valor cuando la comprobación falla o cuando no se ha podido identificar la cuenta, porque un `false` afirma "no está en el servidor" y eso solo puede salir de una respuesta. **Una lista de miembros vacía no significa que no haya nadie**: es lo que devuelve Discord cuando al bot le falta el intent privilegiado `GUILD_MEMBERS`, y en ese caso no se escribe nada y se cae a la consulta por id. El DAL lo publica como `AdminParticipant.discordInGuild` (`boolean | null`) para que la interfaz distinga "en el servidor" / "no aparece" / "sin comprobar". |
+| `discordCheckedAt` | `DateTime?` | Cuándo se comprobó lo anterior. Es el plazo de la caché (`DISCORD_CHECK_TTL_HOURS`, 12 h), que es **independiente** del de la lista de miembros (`DISCORD_ROSTER_TTL_HOURS`, también 12 h: uno es un dato compartido y el otro uno por fila). Se escribe también cuando la comprobación se hizo por `@usuario` y no se pudo identificar la cuenta, para que esa fila siga el mismo ritmo que las demás. |
 | `status` | `PlayerStatus` (`PENDING`/`APPROVED`/`REJECTED`) | Filtro de la clasificación: solo `APPROVED` puntúa (requisito 11). |
+| `registeredAt` | `DateTime?` | **Cuándo se inscribió la persona**, no cuándo la aprobó la organización: es el envío del alta (formulario público o alta de admin) y **no se toca al aprobar**. Define el **corte de inscripción**, `max(window.from, registeredAt)`, con el que el motor no le cuenta a un alta posterior las partidas que jugó antes de entrar (los 38 objetivos van con el mismo corte). **Nullable a propósito y sin *backfill***: la base es la de producción y no hay *staging*, así que `db:push` no toca filas y `null` —"cuenta desde el principio de la ventana"— es justo lo que les toca a las que ya estaban. **No se deduce de `createdAt`**, porque una reinscripción de un `REJECTED` reutiliza la fila. Solo se escribe en el alta; la edición del panel no lo mueve. Ver `docs/PUNTUACION.md` §1. |
 | `createdAt`, `updatedAt` | `DateTime` | |
 
-Índices: `id` (pk) y `profileId` (único). **Ninguno más**, y está justificado en §6.
+Índices: `id` (pk), `profileId` (único), `discordUserId` (único) y `discordUsername` (único). **Ninguno más**, y está justificado en §6. Los dos índices únicos de Discord no sostienen ninguna consulta: son **restricciones** (una cuenta, y un nombre de usuario, no pueden estar en dos filas), no filtros, y por eso los `P2002` que saltan se traducen a su propio mensaje —en la inscripción pública y en las dos acciones del panel, que distinguen **qué columna** lo saltó con `uniqueViolationOn()` en `src/lib/db-errors.ts`.
 
 ### 1.2 `Match`
 
@@ -231,6 +237,16 @@ resultados, civilizaciones y puntos propios.
 | `updatedAt` | `DateTime` | |
 
 Sin índices adicionales: se lee siempre por clave, que es la primaria.
+
+Además de configuración, `Setting` es la **memoria del worker**. De F12:
+
+| Clave | Contenido | Quién la escribe | TTL |
+|---|---|---|---|
+| `discord.roster` | `{ fetchedAt, members }`, con `members` la lista de miembros del servidor (`{ id, username }[]`) de la última lectura buena. Es lo que permite comprobar la pertenencia de todos los participantes con una lectura y resolver el `discordUserId` de quien solo tiene `@usuario`. | `writeDiscordRosterCache()` en `src/lib/discord/roster-cache.ts`, desde `checkDiscordMembership()` | 12 h (`DISCORD_ROSTER_TTL_HOURS`) |
+
+Un documento que no se entiende entero, o una lista vacía, se **descarta entero** y se
+vuelve a leer: una lista a la que le falta un miembro afirmaría "no está en el servidor"
+de una cuenta que sí está, y doce horas de esa afirmación son doce horas de alertas.
 
 ### 1.5 `RateLimitCounter`
 
@@ -322,14 +338,14 @@ en cada momento.
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `rule` | `AlertRule` | Qué comportamiento se detectó. Enum **fijo en el código**: lo configurable son los umbrales (`Setting["alerts.ruleset"]`), no la lista de comportamientos. |
+| `rule` | `AlertRule` | Qué comportamiento se detectó. Enum **fijo en el código**: lo configurable son los umbrales (`Setting["alerts.ruleset"]`), no la lista de comportamientos. F12 añade `DISCORD_NOT_IN_GUILD` **al final** (los valores nuevos del enum siempre van al final, porque en Postgres `ALTER TYPE … ADD VALUE` solo añade al final). |
 | `kind` | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED` o `STATE_DETECTED`. Ver "Por qué cuatro" abajo. |
 | `playerId` | `String` | FK a `Player.id`, `onDelete: Cascade`, como `Match` y `PlayerScore`. |
 | `subjectProfileId` | `Int?` | El rival (R2) o el compañero (R3) de la que habla la alerta. Es un `profileId` de AoE4World y **no** una FK a `Player`, porque el torneo es individual y casi todos los rivales y compañeros son de fuera de la liga. `null` en las reglas sin sujeto. |
 | `subjectName` | `String?` | Nombre del sujeto **en el momento de escribir la fila**. Es el único registro que queda de a quién señalaba, y no se puede resolver con un `join`: el sujeto puede no estar en `Player`. |
 | `count` | `Int` | Partidas del tramo, o el número que se ha cruzado en un acumulado. En un total es siempre el múltiplo o el umbral, así que `count == threshold`. **Las reglas de estado no cuentan nada**: ahí es la magnitud **con la que se comparó** (partidas sondeadas sin summary, o minutos que la ladder va por delante). |
 | `threshold` | `Int` | Umbral del ruleset activo, guardado para que el informe pueda decir con qué criterio se avisó aunque las reglas cambien después. En las reglas de estado, el valor con el que se comparó. |
-| `anchorGameId` | `String?` | La partida que **rompió** la racha o cruzó el umbral; en el cierre de torneo, la última de la racha, que es la única que se puede señalar porque no hubo ninguna que la rompiera. `null` en las reglas de estado: no hay partida que rompa nada, y la evidencia (los `gameId` sondeados, las dos fechas comparadas) va en `details`. |
+| `anchorGameId` | `String?` | La partida que **rompió** la racha o cruzó el umbral; en el cierre de torneo, la última de la racha, que es la única que se puede señalar porque no hubo ninguna que la rompiera. `null` en las reglas de estado: no hay partida que rompa nada, y la evidencia (los `gameId` sondeados, las dos fechas comparadas, la cuenta de Discord comprobada y su estado HTTP) va en `details`. |
 | `dedupeKey` | `String` **único** | Ver abajo. |
 | `summary` | `String` | Una línea en español **ya redactada** al escribir la fila (`src/lib/alerts/rules.ts`), que el informe pinta tal cual. |
 | `details` | `Json` | Lo que hay detrás de la frase, para el que tenga que investigar. De ahí no se lee nada para pintar el resumen. |
@@ -356,10 +372,11 @@ colisionen.
 **Y una excepción, a propósito: las reglas de estado no llevan remate.** Un estado no
 tiene tramo que cerrar ni número que cruzar, así que `STATE_DETECTED` mete `estado` en
 ese sitio y la clave se queda en (regla, tipo, jugador, sujeto). Sin esa decisión,
-`HISTORY_NOT_PUBLIC` insertaría una fila nueva cada 12 horas y para siempre por jugador,
-porque se reevalúa cada 5 minutos y el número de partidas sondeadas o los minutos de
-desfase cambian con cada medición. Con ella, la segunda pasada inserta 0 filas y la
-alerta sigue siendo la que se escribió la primera vez.
+`HISTORY_NOT_PUBLIC` —o `DISCORD_NOT_IN_GUILD`— insertaría una fila nueva cada 12 horas y
+para siempre por jugador, porque se reevalúa cada 5 minutos y el número de partidas
+sondeadas, los minutos de desfase o el estado HTTP cambian con cada medición. Con ella,
+la segunda pasada inserta 0 filas y la alerta sigue siendo la que se escribió la primera
+vez.
 
 **Por qué cuatro `kind` y no dos.** Una racha normalmente se avisa cuando se rompe,
 porque es cuando se sabe cuánto duración. Pero si el torneo se cierra con la racha
@@ -367,8 +384,11 @@ abierta, el patrón ya no se va a romper nunca, y sin `STREAK_AT_TOURNAMENT_END`
 racha no se avisaría jamás. Los acumulados no son rachas: no tienen ni principio ni
 fin, y por eso tienen su propio `kind`. El cuarto es otro género: `STATE_DETECTED` no
 marca un tramo ni un acumulado, sino **un estado comprobado** (el historial público o
-cerrado, la ladder por delante de lo que nos llega), que no tiene "cuándo cerrarlo" sino
-"con qué evidencia".
+cerrado, la ladder por delante de lo que nos llega, la cuenta de Discord fuera del
+servidor), que no tiene "cuándo cerrarlo" sino "con qué evidencia". Y por eso tampoco
+lleva **ventana del torneo** en `details`: se comprueba contra la API de Discord y
+contra el sitio de AoE4World, no contra partidas, así que `windowFrom`/`windowTo` solo se
+escriben cuando quien dispara la alerta pasa una ventana (`alertDetails()`).
 
 **`summary` no lleva el nombre del jugador.** La fila ya es de un jugador y el
 informe hace el `join` con `Player`, así que guardarlo ahí solo serviría para que un
@@ -623,8 +643,9 @@ Desde F6 hay **una** columna nueva, y no la pidió ninguna regla: `contactEmail`
 contacto que el formulario público de `/participar` exige para que la organización pueda responder
 dudas, y por eso se distingue de todo lo demás:
 
-- **Es nullable y sin valor por defecto.** El alta manual de admin no lo pide, y las filas que ya
-  existían no lo tienen. Hacerlo obligatorio obligaría a un *backfill* inventado sobre datos que
+- **Es nullable y sin valor por defecto.** Las filas que ya existían no lo tienen y no se van a
+  rellenar, y en el panel de administración es **opcional** (como `country`), aunque el panel sí lo
+  pida desde #29. Hacerlo obligatorio obligaría a un *backfill* inventado sobre datos que
   nadie tiene, que es justo lo que este diseño evita en todas partes.
 - **No lleva índice.** No se filtra por correo en ninguna consulta: se escribe una vez (al
   inscribirse o al reinscribirse) y se lee en el panel. La regla de §6 manda: un índice que no
@@ -868,6 +889,7 @@ el modelo aguanta.
 | **Categoría 4** (coronas) | Agrupar victorias por civ, quedarse con el máximo de cada civ, con el mínimo de 10 | Derivado de `Match.civ` → `crownsCount` y `breakdown.crowns` | — |
 | **Categoría 5** (hitos) | `PlayerScore.wins` contra los escalones, y la fecha de la `n`-ésima victoria | `Match.finishedAt` + `PlayerScore.milestonesReached` | — |
 | **Ventana de fechas** | Ruleset `window.from` / `window.to` contra `Match.startedAt` | `Setting` + `Match.startedAt` | **Aplicada** (D-02 con fechas de trabajo; §0 bis.2). Sin columnas nuevas. |
+| **Corte de inscripción** | `max(window.from, Player.registeredAt)` contra `Match.startedAt` | `Player.registeredAt` + `Match.startedAt` | **Aplicada**. Columna nullable y sin *backfill* (§1.1); los objetivos van con el mismo corte. |
 | **Filtro de modo** | Ruleset `modes.include` / `modes.exclude` contra `Match.mode` | `Setting` + `Match.mode` | — |
 | **Filtro de resultado resuelto** | `Match.result is not null and finishedAt is not null` | `Match` | — |
 | **Filtro de duración** | Ruleset `minDurationSeconds` contra `Match.durationSeconds` | `Setting` + `Match.durationSeconds` | — |
@@ -924,15 +946,31 @@ Cada consulta con el índice que la sostiene. Un índice que no aparece aquí, n
 | 22 | Motor de alertas, carga | `Match where playerId in (...) and <clasificatorias> order by startedAt, gameId` | `@@index([playerId, startedAt])` | Es la consulta 9 más el `playerId`: el motor de alertas (F9) carga **las clasificatorias de los jugadores tocados** y las pasa por un módulo puro. `orderBy` por `(startedAt, gameId)` porque dos jugadores de la liga en la misma partida tienen el mismo `startedAt`, y sin el desempate el orden dentro del empate dependería del planificador. |
 | 23 | Motor de alertas, escritura | `Alert createMany (skipDuplicates) sobre dedupeKey` | `(dedupeKey)` único | Es la idempotencia entera del motor: una sentencia, sin leer antes lo que ya hay (§1.7). |
 | 24 | `/admin` alertas | `Alert [where playerId = X] [where rule = R] order by createdAt desc, id desc take/skip` | `@@index([createdAt])`, `@@index([playerId, rule])` | Pocas filas por temporada (25 en la de este torneo, todas de `REPEATED_TEAMMATE_*`), así que la paginación es barata. |
+| 25 | Worker (sync), pertenencia a Discord | `Player where status = APPROVED order by profileId` | **Ninguno, a propósito** | Es la consulta 13 sin más filtro: `Player` tiene decenas de filas y no lleva índice en `status` (M-09), y los índices únicos de `discordUserId` y `discordUsername` son **restricciones** —una cuenta, y un nombre, no pueden estar en dos participantes—, no índices de filtro. **Desde el ajuste de F12 ya no se filtra por `discordUserId`**: también se trae quien solo tiene `@usuario` (las altas de admin), y de paso sale el recuento de los que no tienen Discord, que es lo que el rastro tiene que poder decir. El TTL de 12 h no va a la consulta: se filtra en memoria con `discordCheckIsDue()`, que es un módulo puro y comprobable sin base de datos. El tope por pasada es `DISCORD_CHECK_MAX_PER_RUN` (10 por defecto). |
 
 Las consultas 9 a 12 son las que corren en cada pasada del worker. Con el volumen de un torneo
 (30 jugadores, 30.000 a 50.000 partidas) son milisegundos: no es un problema de rendimiento, es un
 problema de **correctitud** (que el filtro se aplique en SQL y no se pierda nada por un `join`
-mal hecho). Las cuatro llevan hoy la ventana de fechas y la marca de revertida; y el filtro no está
-escrito cuatro veces: `src/lib/ranked-match.ts` lo construye una vez y lo reparte como filtro de
-Prisma (`rankedMatchWhere`), como predicado SQL (`rankedMatchSql`) y fila a fila
-(`countsAsRanked`). `classificatoryWhere()` es la misma regla sin la marca de revertida, y solo la
+mal hecho). Las cuatro llevan hoy la ventana de fechas, el corte de inscripción y la marca de
+revertida; y el filtro no está escrito cuatro veces: `src/lib/ranked-match.ts` lo construye una vez y
+lo reparte como filtro de Prisma (`rankedMatchWhere`), como predicado SQL (`rankedMatchSql`) y fila a
+fila (`countsAsRanked`). `classificatoryWhere()` es la misma regla sin la marca de revertida, y solo la
 consume el listado del panel (§5, fila 18).
+
+**El corte de inscripción cambia una de esas cuatro.** El `groupBy` del agregado pasó a **SQL
+crudo** (`scoring.ts`) porque la condición necesita comparar `Match.startedAt` con
+`Player.registeredAt`, y un `where` de Prisma solo compara un campo con un valor: la referencia a
+campo de Prisma 7 es *entre campos del modelo consultado* y rechaza la de otro modelo con
+*"Expected a referenced scalar field of model Match, but found a field of model Player"*. El predicado
+sigue siendo `rankedMatchSql()` —el mismo de las otras tres consultas—, con la referencia de `Player`
+añadida, de modo que no nace una segunda definición. El `join` es interior y sobre la clave foránea,
+que no admite nulos, así que no pierde partidas; y el filtro por `mode`/`startedAt` sigue siendo el
+que elige `@@index([mode, startedAt])`.
+
+La fila 25 es la única que **no lleva su filtro en la consulta**: el TTL de doce horas se aplica en
+memoria con `discordCheckIsDue()`, el mismo reparto que en F11 (el módulo puro decide y el worker
+escribe). Con la tabla que hay no hay nada que ganar llevándolo a SQL, y el criterio de caché
+puro es el que se puede comprobar con fechas escritas a mano.
 
 ## 7. RLS y privilegios
 

@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { refreshDivisionCutoffs } from "@/lib/alerts/derive-cutoffs";
 import { readDivisionCutoffs } from "@/lib/alerts/settings";

@@ -8,6 +8,7 @@ import {
   isLiveGame,
   normalizeGame,
   readOwnCivRandomized,
+  reconciliationCutoff,
   resolveGameMode,
   type NormalizedMatch,
 } from "@/lib/aoe4world/normalize";
@@ -134,6 +135,28 @@ describe("isLiveGame", () => {
   it("la ventana es de 60 minutos", () => {
     expect(LIVE_GAME_WINDOW_MINUTES).toBe(60);
     expect(LIVE_GAME_WINDOW_MS).toBe(60 * 60_000);
+  });
+});
+
+describe("reconciliationCutoff", () => {
+  it("el corte está una ventana de directo por detrás de ahora", () => {
+    expect(reconciliationCutoff(AHORA).toISOString()).toBe(
+      new Date(AHORA.getTime() - LIVE_GAME_WINDOW_MS).toISOString(),
+    );
+  });
+
+  it("alcanza lo que ya no puede estar vivo y respeta lo que sí", () => {
+    // Es el corte con el que el worker elige qué filas guardadas sin resolver va a
+    // reconciliar: una partida empezada hace 61 min ya no puede estar viva y hay que
+    // ir a por su desenlace (resolverla o abandonarla); una de hace 59 min todavía
+    // podría estarlo. El corte mira solo la ventana, **no** el cursor `since`, que es
+    // lo que dejaba colgada una partida abandonada que fuera la más nueva del jugador.
+    const hace61 = new Date(AHORA.getTime() - 61 * 60_000);
+    const hace59 = new Date(AHORA.getTime() - 59 * 60_000);
+    const corte = reconciliationCutoff(AHORA).getTime();
+
+    expect(hace61.getTime()).toBeLessThan(corte);
+    expect(hace59.getTime()).toBeGreaterThan(corte);
   });
 });
 

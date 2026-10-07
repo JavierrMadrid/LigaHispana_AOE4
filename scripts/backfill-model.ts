@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { db } from "@/lib/db";
 

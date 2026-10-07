@@ -15,8 +15,9 @@ victoria, versión de reglas 1) está en §9.
   por equipos).
 - `Match.result` informado (`WIN` o `LOSS`) **y** `Match.finishedAt` informado:
   una partida en curso nunca puntúa, ni a favor ni en contra.
-- `Match.startedAt` dentro de la **ventana del torneo**: `>= window.from` y
-  `< window.to` (§8). La ventana vive en el ruleset y se cambia sin desplegar.
+- `Match.startedAt` no es anterior al **corte** del jugador
+  (`max(window.from, Player.registeredAt)`, ver "El corte" más abajo).
+- `Match.startedAt` es anterior a `window.to`, que es **exclusivo** (§8).
 - `Match.revertedAt` **sin** informar. Es la marca que pone el panel de admin para
   que una partida deje de puntuar sin borrarla: la fila se queda en el histórico,
   marcada, y el worker de sync no la toca (la reimportaría en unos minutos si se
@@ -35,6 +36,36 @@ día del torneo cuenta aunque termine después. `from` es obligatorio y `to` es
 opcional: con `to: null` la ventana queda abierta por la derecha, que es lo que
 permite fijar el fin del torneo más tarde sin tocar código. Los dos valores son
 **instantes ISO-8601 con zona explícita** (`Z` o `±hh:mm`) y se normalizan a UTC.
+
+### El corte de inscripción
+
+**`corte(jugador) = max(window.from, Player.registeredAt)`.** La ventana del torneo
+es global, pero el corte es de cada participante: a quien la organización da de
+alta **a mitad de torneo** no le cuentan las partidas que jugó antes de entrar, por
+muchas que le trajera el worker de su histórico.
+
+- **Inscrito antes de `window.from` → cuenta desde `window.from`.** Es el caso de
+  todo el que ya estaba, y es exactamente como funcionaba antes de existir la
+  columna.
+- **Alta posterior → cuenta desde su fecha de inscripción.**
+- **`registeredAt` a `null` → cuenta desde `window.from`.** Es lo que significa
+  para toda fila que ya estaba en la base cuando se añadió la columna, y por eso
+  la columna es nullable y **no lleva *backfill***: la base de datos es la de
+  producción y no hay *staging*, así que `db:push` no toca filas y `null` es el
+  valor correcto para ellas, no una falta de información. Tampoco se deduce de
+  `Player.createdAt`, porque una reinscripción de un `REJECTED` **reutiliza la
+  fila** y ese se queda en el primer envío, que la organización ya miró y
+  rechazó.
+
+**La fecha es la del envío del alta, no la de la aprobación.** Quien se apunta a
+tiempo no pierde partidas porque la organización apruebe más tarde. Se escribe en
+el alta (formulario público y alta de admin) y **no se toca al aprobar**; el
+diálogo de edición del panel tampoco lo mueve.
+
+**El mismo corte aplica a los 38 objetivos.** Son *winner-takes-all* y se resuelven
+al final, así que sin esto un alta tardía con muchas partidas podría robarle un
+objetivo a quien lo tenía. Mantiene la invariante de esta sección: no se gana un
+objetivo con partidas que no puntúan.
 
 > **Valor de pruebas: del 15 de septiembre de 2026 al 15 de octubre de 2026,
 > medianoche UTC** (`from` = `2026-09-15T00:00:00.000Z`, `to` =
@@ -60,7 +91,33 @@ como filtro de Prisma y `rankedMatchSql()` como predicado SQL). La única funci�
 que devuelve esas condiciones **sin** la marca de revertida es
 `classificatoryWhere()`, y la usa solo el historial de partidas del panel, que
 tiene que enseñar las revertidas en vez de esconderlas. El worker sigue
-guardando **todo** el histórico: la ventana se aplica al puntuar, no al importar.
+guardando **todo** el histórico: el corte se aplica al puntuar, no al importar.
+
+**Las dos traducciones del corte.** El corte depende del jugador, y eso no se
+puede escribir igual en las tres formas. Las de SQL llevan la fila de `Player` en
+la propia consulta y lo escriben como columna
+(`(player."registeredAt" is null or match."startedAt" >= player."registeredAt")`),
+así que valen para una consulta que abarque a todos los jugadores: el `UPDATE` de
+`Match.points`, el agregado de la clasificación y la carga de objetivos. Las otras
+dos son consultas de las que ya se sabe de qué jugador hablan, así que **reciben
+su `registeredAt` como parámetro** (`countsAsRanked(match, window, registeredAt)`
+y `windowWhere(window, registeredAt)`). Es **obligatorio**, no opcional: un `null`
+explícito es una decisión y un valor por defecto sería indistinguible de haberse
+olvidado. Por eso el **agregado de la clasificación es SQL crudo y no un
+`groupBy`**: un `where` de Prisma compara un campo con un valor y nunca dos
+columnas, y una referencia a campo solo vale entre campos del modelo consultado
+(Prisma 7 responde *"Expected a referenced scalar field of model Match, but found
+a field of model Player"*).
+
+**Dos consumidores se apartan del corte, y a propósito.** El historial del panel
+(`/admin/historial`) lo pasa como `null`, porque enseña el recorrido entero de
+cada participante dentro de la ventana —con sus 0 puntos a la vista— y no solo lo
+que le suma: un historial del que desaparecieran las partidas anteriores al alta
+dejaría al panel contradiciendo la cuenta de AoE4World, que sí las enseña. Y las
+reglas de transparencia del historial (`HISTORY_NOT_PUBLIC`,
+`MISSING_LADDER_MATCHES`) tampoco lo aplican, porque preguntan **qué partidas
+existen y qué publica la API**, no cuáles puntúan. Lo que puntúa lo dicen
+`Match.points` y la clasificación.
 
 ## 2. Puntos por partida
 
@@ -397,6 +454,9 @@ Cambia:
 - **Ventana de fechas** del torneo sobre `Match.startedAt`, configurable en el
   ruleset y aplicada por igual a las victorias, al agregado y a los objetivos
   (§1). Con el worker guardando el histórico entero, como hasta ahora.
+- **Corte de inscripción**: `max(window.from, Player.registeredAt)` (§1). Un alta
+  posterior a mitad de torneo no puntúa las partidas anteriores al alta, y los 38
+  objetivos van con el mismo corte.
 - La vista de objetivos entrega los números vivos (`pointsPerWin`, `window`,
   `minimums`), `profileUrl`, el `detail` de `otp`, una `description` por objetivo
   y el `ranking` **completo** en vez del top 3 (§3.7).

@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { evaluateAlerts } from "@/lib/alerts/evaluate";
 import { readAlertsRuleset, readDivisionCutoffs, readTournamentCloseMark } from "@/lib/alerts/settings";

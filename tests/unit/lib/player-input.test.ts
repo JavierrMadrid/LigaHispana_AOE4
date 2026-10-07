@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_COUNTRIES } from "@/lib/countries";
 import {
+  canonicalDiscordUsername,
   CONTACT_EMAIL_MAX_LENGTH,
+  DISCORD_USERNAME_FIELD_MAX_LENGTH,
+  DISCORD_USERNAME_MAX_LENGTH,
   foldCountryName,
   isLegacyYoutubeUrl,
   parseCountry,
+  parseDiscordUsername,
   parseEmail,
   parseKickChannel,
   parseName,
@@ -215,6 +219,90 @@ describe("foldCountryName", () => {
 
     expect(precompuesta).not.toBe(descompuesta);
     expect(foldCountryName(precompuesta)).toBe(foldCountryName(descompuesta));
+  });
+});
+
+describe("canonicalDiscordUsername", () => {
+  it("quita la arroba, quita el discriminador antiguo y baja a minúsculas", () => {
+    // Es la forma en que se guarda y en que se compara con el roster del servidor:
+    // si normalizara solo una parte, un nombre no coincidiría consigo mismo.
+    expect(canonicalDiscordUsername("@pepito")).toBe("pepito");
+    expect(canonicalDiscordUsername("PEPITO")).toBe("pepito");
+    expect(canonicalDiscordUsername("@Pepito")).toBe("pepito");
+    expect(canonicalDiscordUsername("  @pepito  ")).toBe("pepito");
+  });
+
+  it("el `#0000` se va con todo lo que haya detrás, no solo con los dígitos", () => {
+    // El `#1234` era el nombre antiguo, único solo dentro de un servidor. Lo que va
+    // detrás no es parte del nombre y acabaría en la base si no se recortara entero.
+    expect(canonicalDiscordUsername("@pepito#1234")).toBe("pepito");
+    expect(canonicalDiscordUsername("pepito#5678")).toBe("pepito");
+    expect(canonicalDiscordUsername("@pepito#1234 (nombre real)")).toBe("pepito");
+  });
+
+  it("no juzga: normaliza y nada más", () => {
+    // Es lo que la usan las dos mitades de lo que es el mismo campo: lo que ya
+    // validó Discord (el `username` del OAuth y el de cada miembro del roster) y el
+    // parser de lo que escribe una persona, que además exige la arroba y el rango.
+    // Si esta rechazara algo, el paso del OAuth fallaría por una regla de formulario.
+    expect(canonicalDiscordUsername("")).toBe("");
+    expect(canonicalDiscordUsername("a")).toBe("a");
+    expect(canonicalDiscordUsername("@con espacios")).toBe("con espacios");
+  });
+});
+
+describe("parseDiscordUsername", () => {
+  it("exige la arroba y devuelve el nombre pelado", () => {
+    // La arroba es lo que distingue el nombre global del nombre de display que
+    // alguien se haya puesto dentro del servidor, así que es obligatoria y no se
+    // perdona. El valor que sale no la lleva: es la forma canónica de la columna.
+    expect(parseDiscordUsername("@pepito")).toBe("pepito");
+    expect(parseDiscordUsername("@PEPITO")).toBe("pepito");
+    expect(parseDiscordUsername("  @Pepito  ")).toBe("pepito");
+    expect(parseDiscordUsername("@pepito#1234")).toBe("pepito");
+    expect(parseDiscordUsername("@pepito_oficial.2")).toBe("pepito_oficial.2");
+  });
+
+  it("sin arroba es un error, y es el caso que más importa", () => {
+    // Aceptar "pepito" convertiría un nombre de display en una identidad de
+    // Discord. Los dos casos que salen de teclear lo mismo sin querer se rechazan
+    // igual: o no es el nombre global, o el nombre dentro del servidor.
+    for (const valor of ["pepito", "Pepito", "pepito#1234", " pepito "]) {
+      expect(parseDiscordUsername(valor), valor).toBeNull();
+    }
+  });
+
+  it("vacío, solo arroba y `null` no son un usuario", () => {
+    for (const valor of ["", "   ", "@", "@@", " @ ", null]) {
+      expect(parseDiscordUsername(valor), String(valor)).toBeNull();
+    }
+  });
+
+  it("el rango es de 2 a 32 caracteres, y los dos bordes se comprueban", () => {
+    expect(parseDiscordUsername("@ab")).toBe("ab");
+    expect(parseDiscordUsername("@a")).toBeNull();
+    expect(parseDiscordUsername(`@${"a".repeat(DISCORD_USERNAME_MAX_LENGTH)}`)).toBe(
+      "a".repeat(DISCORD_USERNAME_MAX_LENGTH),
+    );
+    expect(parseDiscordUsername(`@${"a".repeat(DISCORD_USERNAME_MAX_LENGTH + 1)}`)).toBeNull();
+  });
+
+  it("dentro del nombre no valen espacios ni caracteres de fuera del juego", () => {
+    // El patrón se escribe sobre la forma canónica, así que una `@` o un `#` por
+    // medio tampoco valen: `canonicalDiscordUsername()` solo quita el primero del
+    // principio y el segundo a partir de ahí.
+    const invalidos = ["@pepito 1", "@pep to", "@pepito@extra", "@pepito-2", "@pepé", "@pepito/2"];
+
+    for (const valor of invalidos) {
+      expect(parseDiscordUsername(valor), valor).toBeNull();
+    }
+  });
+
+  it("el `maxLength` del campo tiene en cuenta la arroba que se escribe", () => {
+    // El navegador limita lo que se escribe, no lo que se guarda: si el campo
+    // estuviera limitado al nombre, el último carácter sería la arroba y el nombre
+    // válido más largo no entraría nunca.
+    expect(DISCORD_USERNAME_FIELD_MAX_LENGTH).toBe(DISCORD_USERNAME_MAX_LENGTH + 1);
   });
 });
 
