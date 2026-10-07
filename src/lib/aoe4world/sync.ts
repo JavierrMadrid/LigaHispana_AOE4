@@ -26,7 +26,7 @@ import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
 import { Aoe4WorldError, Aoe4WorldNotFoundError } from "./http";
 import { syncLadderSnapshot, type LadderSyncResult } from "./ladder";
-import { normalizeGame, type NormalizedMatch } from "./normalize";
+import { normalizeGame, reconciliationCutoff, type NormalizedMatch } from "./normalize";
 import type { Aoe4WorldGame } from "./types";
 
 /**
@@ -111,7 +111,7 @@ export type SyncPlayerResult = {
   matchesInserted: number;
   matchesUpdated: number;
   matchesSkipped: number;
-  /** Partidas en curso que el listado ya no alcanzaba y el refetch sí resolvió. */
+  /** Partidas sin resolver que el refetch confirmó y resolvió (ya fuera de la ventana). */
   matchesResolvedByRefetch: number;
   /** Partidas borradas por abandono (regla "nunca cuenta"). */
   matchesAbandoned: number;
@@ -413,27 +413,32 @@ function toGameIdNumber(gameId: string): number | null {
 }
 
 /**
- * Segunda pasada sobre las partidas que el listado ya no puede alcanzar.
+ * Segunda pasada sobre las partidas guardadas que ya no pueden estar vivas.
  *
- * El cursor `since` es `maxStartedAt - 60 min`, así que una partida en curso que
- * haya empezado más de 60 min antes de la partida más nueva del jugador queda
- * fuera del paginado para siempre. Sin esto se quedaría con `finishedAt = null`
- *indefinidamente: ni F3 la puntuaría ni F4 la listaría.
+ * Una fila con `finishedAt = null` solo es legítima mientras la partida pueda
+ * seguir jugándose. Pasada la ventana de directo, el listado ya no la resuelve:
+ * la devuelve, pero `normalizeGame` la clasifica como "cerrada sin resultado" y
+ * entonces no se refresca (ni se borra) la fila que ya estaba guardada. Sin esta
+ * pasada se quedaría con `finishedAt = null` indefinidamente: ni F3 la puntuaría
+ * ni F4 dejaría de listarla.
+ *
+ * El corte es la **ventana de directo** (`reconciliationCutoff()`) y **no** el
+ * cursor `since`: una partida abandonada que fuera la más nueva del jugador tiene
+ * `startedAt >= since` (el cursor es `maxStartedAt − 60 min`) y con el criterio
+ * del cursor se quedaba sin reconciliar para siempre. El corte de la ventana es
+ * un superconjunto del cursor, así que rescata también ese borde.
  *
  * Aquí se resuelven con el endpoint de detalle (una llamada por partida, y el
  * conjunto suele ser de 0 a 2). `normalizeGame` sigue siendo el único que juzga
  * si una partida está en curso, con el mismo criterio de 60 minutos: el refetch
- * no se salta ninguna regla, solo rescata lo que el listado no ve.
+ * no se salta ninguna regla, solo rescata lo que el listado no resuelve.
  */
 async function reconcileUnfinishedMatches(
   player: SyncPlayerRow,
   client: Aoe4WorldClient,
-  listingSince: Date | null,
   signal: AbortSignal,
 ): Promise<ReconcileResult> {
-  // Sin cursor todavía no hay partidas guardadas, pero por si acaso el corte es
-  // la epoch y así ninguna se queda sin resolver.
-  const cutoff = listingSince ?? new Date(0);
+  const cutoff = reconciliationCutoff();
 
   const pending = await db.match.findMany({
     where: { playerId: player.id, finishedAt: null, startedAt: { lt: cutoff } },
@@ -595,8 +600,8 @@ async function syncPlayer(
     throw error;
   }
 
-  // Antes de paginar: rescata lo que el listado no va a alcanzar.
-  const reconcile = await reconcileUnfinishedMatches(player, client, since, signal);
+  // Antes de paginar: resuelve o abandona lo que ya no puede estar vivo.
+  const reconcile = await reconcileUnfinishedMatches(player, client, signal);
 
   const fetched = await fetchPlayerGames(client, player.profileId, since, config, signal);
   const now = new Date();

@@ -1896,6 +1896,64 @@ async function runDatabaseChecks(): Promise<void> {
       );
     });
 
+    await check(
+      "una partida sin resolver más nueva que el cursor pero fuera de la ventana se abandona",
+      async () => {
+        // El caso que dejaba la fila colgada: la partida abandonada es la más nueva
+        // del jugador, así que `startedAt >= since` (el cursor es `maxStartedAt − 60
+        // min`) y el criterio del cursor no la alcanzaba. Ya fuera de la ventana de
+        // directo, el worker tiene que ir a por su desenlace igualmente.
+        const startedAt = new Date(now.getTime() - 70 * 60_000);
+
+        await writePlayerSyncState(SAMPLE_PROFILE_ID, {
+          since: new Date(now.getTime() - 180 * 60_000).toISOString(),
+          maxStartedAt: new Date(now.getTime() - 150 * 60_000).toISOString(),
+          lastSyncedAt: now.toISOString(),
+          historyTruncated: false,
+          abandonedCount: 0,
+          abandonedGameIds: [],
+          lastAbandonedAt: null,
+        });
+
+        await db.match.create({
+          data: {
+            gameId: "9000013",
+            playerId: player.id,
+            leaderboard: "rm_solo",
+            result: null,
+            startedAt,
+            finishedAt: null,
+            rawJson: fixture.live,
+          },
+        });
+
+        // La API la sigue dando sin desenlace: pasada la ventana, se abandona.
+        const details = new Map<string, Aoe4WorldGame>([
+          [
+            "9000013",
+            parsedGame({
+              ...fixture.live,
+              game_id: 9_000_013,
+              started_at: startedAt.toISOString(),
+            }),
+          ],
+        ]);
+
+        const summary = await syncApprovedPlayers({
+          profileIds: [SAMPLE_PROFILE_ID],
+          client: createFakeClient(games, details),
+        });
+
+        const playerResult = summary.players[0];
+        assert.equal(playerResult.matchesAbandoned, 1, "la partida fuera de la ventana se abandona");
+        assert.equal(
+          await db.match.count({ where: { playerId: player.id, gameId: "9000013" } }),
+          0,
+          "la fila abandonada no puede quedar con finishedAt = null",
+        );
+      },
+    );
+
     await check("la clave de Setting es la documentada", async () => {
       const setting = await db.setting.findUnique({
         where: { key: playerSyncKey(SAMPLE_PROFILE_ID) },
