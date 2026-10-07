@@ -8,7 +8,7 @@ import { rankedMatchSql, type ScoringWindow } from "@/lib/ranked-match";
 import type { ScoringMinimums, ScoringRuleset } from "@/lib/scoring";
 
 /**
- * Los 38 objetivos de `docs/PUNTUACION.md`.
+ * Los 38 objetivos de `docs/OBJETIVOS.md`.
  *
  * Este módulo no decide nada por su cuenta: recibe las partidas clasificatorias
  * ya cargadas y el ruleset activo, y devuelve qué objetivo posee cada jugador.
@@ -21,7 +21,7 @@ import type { ScoringMinimums, ScoringRuleset } from "@/lib/scoring";
  * mínimos.
  */
 
-/** Grupos de objetivos, en el orden en que se presentan (§3.1 del documento). */
+/** Grupos de objetivos, en el orden en que se presentan. */
 export type ObjectiveGroup =
   | "actividad"
   | "racha"
@@ -29,7 +29,7 @@ export type ObjectiveGroup =
   | "formato"
   | "civilizacion";
 
-/** Métrica que decide quién posee un objetivo (ver §5 de `docs/PUNTUACION.md`). */
+/** Métrica que decide quién posee un objetivo (ver `docs/OBJETIVOS.md`). */
 export type ObjectiveMetric = "partidas" | "winrate" | "racha" | "victorias";
 
 export type ObjectiveDefinition = {
@@ -91,7 +91,7 @@ export type ObjectiveOption = {
   /** Poseedor actual; `null` si nadie cumple (o si la carrera no se ha completado). */
   holder: ObjectiveContender | null;
   /**
-   * **Todos** los contendientes, ordenados por la cadena de desempate (§5).
+   * **Todos** los contendientes, ordenados por la cadena de desempate.
    *
    * Va entero, sin acotar: quien pinta decide cuánto enseña y con qué paginación,
    * y así no hay un número mágico repartido entre el servidor y el cliente. No se
@@ -108,7 +108,7 @@ export type ObjectiveView = {
   ruleSetVersion: number;
   /** Etiqueta de la regla activa, la misma que guarda el desglose. */
   rule: string;
-  /** Puntos por victoria clasificatoria del ruleset activo (§2). */
+  /** Puntos por victoria clasificatoria del ruleset activo. */
   pointsPerWin: number;
   /**
    * Ventana del torneo (`[from, to)` sobre `Match.startedAt`), tal cual está en el
@@ -116,11 +116,11 @@ export type ObjectiveView = {
    * abierta por la derecha.
    *
    * Se publica para que la interfaz pueda decir qué periodo cuenta sin escribir
-   * fechas en el copy, que es lo que hay que hacer con §1 de `PUNTUACION.md` cuando
-   * la organización fije las suyas.
+   * fechas en el copy, que es lo que hay que hacer con la ventana en `docs/PUNTUACION.md`
+   * cuando la organización fije las suyas.
    */
   window: ScoringWindow;
-  /** Mínimos del ruleset activo: de aquí sale el "mínimo de N partidas" (§3). */
+  /** Mínimos del ruleset activo: de aquí sale el "mínimo de N partidas". */
   minimums: ScoringMinimums;
   /**
    * En orden estable: por grupo (`actividad` → `civilizacion`) y, dentro de
@@ -146,10 +146,10 @@ export const FORMAT_IDS = ["1v1", "2v2", "3v3", "4v4"] as const;
 
 export type FormatId = (typeof FORMAT_IDS)[number];
 
-/** Puntos por división, en el orden de `DIVISIONS` (§3.4). */
+/** Puntos por división, en el orden de `DIVISIONS`. */
 const SENSEI_POINTS = [40, 40, 45, 50, 55, 60];
 
-/** Puntos por formato, en el orden de `FORMAT_IDS` (§3.5). */
+/** Puntos por formato, en el orden de `FORMAT_IDS`. */
 const REY_POINTS = [55, 45, 40, 40];
 
 const MASTERIZAR_POINTS = 70;
@@ -160,12 +160,12 @@ const MASTERIZAR_POINTS = 70;
  * Valen más que un `masterizar-*` (70) porque son mucho más difíciles: no basta
  * con llegar a 10 victorias con una civ, hay que **ganar al menos una** con cada
  * una, y al menos dos de ellas (Chinos y Japanes) son las que más se juego. El
- * total de puntos extra en juego pasa de 2320 a 2420 (§4 del documento).
+ * total de puntos extra en juego pasa de 2320 a 2420.
  */
 const MASTERIZAR_TODOS_POINTS = 100;
 
 /**
- * Id estable del objetivo "Masterízalos a todos" (§3.6).
+ * Id estable del objetivo "Masterízalos a todos".
  *
  * Va en el grupo `civilizacion` y al final de él, y es carrera como los
  * `masterizar-<civ>`: cobra el primero que la completa. Su id **no** empieza por
@@ -180,7 +180,7 @@ export const MASTERIZAR_TODOS_ID = "masterizarlos-a-todos";
  * Dentro de cada grupo el orden es el de esta lista: en `actividad`,
  * `loco-por-ganar` antes que `otp`; en `racha`, `golpe-de-suerte` antes que
  * `prohibido-perder` (el grupo se llama Racha, así que la racha se lee
- * primero). Es el orden que respeta `ObjectiveView.options` (§3.1).
+ * primero). Es el orden que respeta `ObjectiveView.options`.
  */
 const NON_CIVILIZATION_DEFINITIONS: ObjectiveDefinition[] = [
   {
@@ -305,15 +305,15 @@ export type ObjectivesComputation = {
 /**
  * Un objetivo con poseedor, visto desde el motor.
  *
- * `raceAt` es lo que separa las dos formas de resolver un objetivo (§6 del
- * documento): en el grupo `civilizacion` no es `null`, porque son carreras y su
+ * `raceAt` es lo que separa las dos formas de resolver un objetivo: en el grupo
+ * `civilizacion` no es `null`, porque son carreras y su
  * poseedor se decide por el instante en que las cerró (`CivRecord.completedAt` en
  * `masterizar-*`, `PlayerAggregate.allCivsAt` en `masterizarlos-a-todos`). En los
  * otros 14 es `null`: se resuelven en caliente y su poseedor puede cambiar en el
  * siguiente recálculo, así que no hay un instante de la hazaña que registrar.
  *
  * Va en **milisegundos epoch** porque es el mismo número que viaja en
- * `PlayerAggregate` y el que usa el desempate 3 (§5): no hace falta convertirlo
+ * `PlayerAggregate` y el que usa el desempate 3: no hace falta convertirlo
  * dos veces, y comparar dos instantes sin discutir con la zona de la sesión.
  */
 export type ObjectiveAwarded = {
@@ -414,7 +414,7 @@ type CivRecord = {
    * Primera victoria con esta civ.
    *
    * Marca cuándo el jugador descubrió esa civilización, que es lo que necesita
-   * el desempate 3 (§5) de `masterizarlos-a-todos`: el instante en que alcanzó
+   * el desempate 3 de `masterizarlos-a-todos`: el instante en que alcanzó
    * su número actual de civilizaciones dominadas es la de su última primera
    * victoria.
    */
@@ -526,7 +526,7 @@ function emptyPlayer(meta: PlayerMeta, rankLevel: string | null): PlayerAggregat
  *
  * El barrido también es el que anota **cuándo** se completó el catálogo de
  * civilizaciones, que es el orden de llegada de `masterizarlos-a-todos` y el
- * `achievedAt` del desempate 3 (§5): como las filas vienen ordenadas por
+ * `achievedAt` del desempate 3: como las filas vienen ordenadas por
  * `finishedAt`, la última "primera victoria con una civ nueva" es exactamente el
  * instante en que el jugador alcanzó su valor actual.
  */
@@ -576,8 +576,7 @@ function aggregatePlayer(
     }
 
     // Las partidas con civ aleatoria no dicen nada de la civilización de
-    // nadie: se excluyen de `otp`, de `masterizar-*` y de `masterizarlos-a-todos`
-    // (§3.2 del documento).
+    // nadie: se excluyen de `otp`, de `masterizar-*` y de `masterizarlos-a-todos`.
     if (row.civ === null || (!ruleset.countRandomizedCivs && row.civRandomized)) {
       continue;
     }
@@ -698,7 +697,7 @@ type ObjectiveCandidate = {
   /** Partidas de las que sale `value`. */
   matches: number;
   eligible: boolean;
-  /** Cuándo se completó el valor, para el desempate 3 (§5). */
+  /** Cuándo se completó el valor, para el desempate 3. */
   achievedAt: number;
   /** Cuándo se completó la carrera, solo en `masterizar-*`. */
   raceAt: number | null;
@@ -720,7 +719,7 @@ function candidate(
 }
 
 /**
- * Cadena de desempate de §5: métrica, victorias, antigüedad y `profileId`.
+ * Cadena de desempate: métrica, victorias, antigüedad y `profileId`.
  *
  * El ratio se compara como fracción (`a/b` frente a `c/d` haciendo
  * `a*d` frente a `c*b`): sin redondear, dos winrates distintos nunca empatan
@@ -765,7 +764,7 @@ function toContender(value: ObjectiveCandidate): ObjectiveContender {
 /**
  * La civilización con la que un jugador acumula más victorias, para `otp`.
  *
- * El objetivo se lo lleva el máximo, sin umbral de partidas (§3.2): un mínimo
+ * El objetivo se lo lleva el máximo, sin umbral de partidas: un mínimo
  * podría dejar el objetivo sin nadie que cogerlo. Como de cada jugador solo
  * sale un candidato, la civ elegida también fija `matches` y `achievedAt`, así
  * que el desempate interno tiene que ser determinista: más victorias y, si
@@ -912,7 +911,7 @@ function candidatesFor(
       let matches = 0;
       // Instante en que alcanzó su valor actual: la última de sus primeras
       // victorias con una civ del catálogo, que es lo que decide el desempate 3
-      // (§5) cuando dos jugadores tienen las mismas civilizaciones dominadas.
+      // cuando dos jugadores tienen las mismas civilizaciones dominadas.
       let achievedAt = 0;
 
       for (const civId of CIVILIZATION_IDS) {
@@ -980,7 +979,7 @@ function candidatesFor(
  * En el grupo `civilizacion` no gana el que más victorias tiene, sino el que
  * llegó primero a completar la carrera: a `minimums.masterizar` con su civ en
  * los `masterizar-<civ>` y a las 23 en `masterizarlos-a-todos`. Son carreras y
- * se resuelven una sola vez (§6). El resto se resuelven en caliente, con el
+ * se resuelven una sola vez. El resto se resuelven en caliente, con el
  * primero de la lista.
  */
 function pickHolder(

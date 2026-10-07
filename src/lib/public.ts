@@ -48,7 +48,7 @@ export type { PublicRead };
  * Capa de lectura de las páginas públicas.
  *
  * Es la **única** puerta de entrada a la base de datos para el frontend: la UI no
- * importa `db` directamente, solo estas funciones (las cuatro de abajo más los
+ * importa `db` directamente, solo estas funciones (las cinco de abajo más los
  * tipos que se reexportan). Cada una devuelve
  * exactamente los campos que necesita su pantalla, ya convertidos al tipo público,
  * para que ni la interfaz ni el cliente del navegador tengan que conocer la forma
@@ -893,4 +893,27 @@ export async function getTwitchChannels(): Promise<TwitchChannelRow[]> {
   }
 
   return channels;
+}
+
+/**
+ * La ventana del torneo, tal cual está configurada en el ruleset activo.
+ *
+ * Es una lectura **ligera** a propósito: `getObjectives()` también publica la
+ * ventana, pero arrastra el cálculo de los 38 objetivos. Las pantallas que solo
+ * necesitan el periodo —`/puntuacion` y el contador de la portada— no tienen por
+ * qué pagar ese cálculo.
+ *
+ * `from` y `to` son instantes ISO-8601 UTC y `to` puede ser `null` (ventana
+ * abierta por la derecha). Con la base caída devuelve
+ * `{ status: "degraded", data: null }`, y quien pinte decide si enseña el periodo
+ * o se queda con el texto genérico sin fechas.
+ */
+export type TournamentWindow = { from: string; to: string | null };
+
+export async function getTournamentWindow(): Promise<PublicRead<TournamentWindow>> {
+  return readFromDatabase("public/getTournamentWindow", async () => {
+    const ruleset = await readRuleset();
+
+    return { ...ruleset.window };
+  });
 }

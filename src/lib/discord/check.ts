@@ -214,8 +214,8 @@ function toErrorMessage(error: unknown): string {
  * información que el rastro tiene que poder decir y que con el filtro no se sabría.
  *
  * **Sin índice nuevo, y a propósito.** `Player` tiene decenas de filas y ya se
- * recorre entera en el listado del panel sin ningún índice en `status` (M-09 en
- * `docs/MODELO-DATOS.md`); los índices únicos de `discordUserId` y `discordUsername`
+ * recorre entera en el listado del panel sin ningún índice en `status`
+ * (`docs/MODELO-DATOS.md`, "Índices"); los índices únicos de `discordUserId` y `discordUsername`
  * son **restricciones** para que una cuenta o un nombre no estén en dos participantes,
  * no índices de filtro, y un recorrido secuencial de esta tabla sale más barato que
  * un índice que casi no se usaría. Es el mismo criterio que la purga de

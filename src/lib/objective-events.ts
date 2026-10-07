@@ -34,16 +34,16 @@ import type { ScoringRuleset } from "@/lib/scoring";
  * que deja de cumplirse, y por eso `ObjectiveEvent` tiene un único evento por
  * objetivo en vez de un historial de repeticiones.
  *
- * ## Por qué el reparto entre "ahora" y "al final" es el de §6
+ * ## Por qué el reparto entre "ahora" y "al final" es el del documento de objetivos
  *
- * `docs/PUNTUACION.md` §6 dice que todos los objetivos se resuelven en caliente
+ * `docs/OBJETIVOS.md` dice que todos los objetivos se resuelven en caliente
  * **excepto** el grupo `civilizacion`, que son carreras y se resuelven al
  * completarse. La organización pidió que el historial dijera cuándo se cumplió cada
  * uno, y la traducción literal de esa división es:
  *
  * - **Carreras** (`raceAt` informado): se registra en cuanto hay poseedor, con
  *   `achievedAt` = el instante de la hazaña, que el motor ya conoce (es el mismo
- *   `finishedAt` que decide el desempate 3 de §5).
+ *   `finishedAt` que decide el tercer desempate de `docs/OBJETIVOS.md`).
  * - **Los 14 en caliente**: como su poseedor cambia en cada recálculo, no se registra
  *   nada hasta que el torneo ha terminado —ventana con `to` informado y ya
  *   pasado—, y entonces con `achievedAt` = ese `to`. Con la ventana abierta no se

@@ -263,7 +263,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
         body="Solo tienen fila los jugadores aprobados que ya han terminado al menos una partida clasificatoria. En cuanto alguien cierre su primera partida de ranked, aparecerá aquí."
         action={
           <Link
-            href="/reglas"
+            href="/puntuacion"
             className="inline-block text-sm text-accent underline underline-offset-4 hover:text-accent-strong"
           >
             Ver qué cuenta como partida clasificatoria

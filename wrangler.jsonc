@@ -36,7 +36,7 @@
   // sustituye a los Previews (que viven en su propio bloque `previews`), y que un
   // despliegue con la lista declarada deja de publicar si esa llamada falla, asi
   // que conviene hacerlo en un push vigilado.
-  // Ver docs/DESPLIEGUE.md, "El dominio propio, y por que no esta en el archivo".
+  // Ver docs/DESPLIEGUE.md, "Dominio propio".
   //
   // Este hostname `workers.dev` **no** desaparece: es el que consumen los Previews
   // por rama y el que usa el workflow de GitHub como reloj de respaldo, asi que
@@ -57,8 +57,7 @@
   // comportamiento del runtime, y cambiarla en un Worker de produccion puede
   // cambiar como se ejecutan cosas que hoy funcionan (parcheos de workerd activados
   // por fecha). Es una decision de la organizacion, y el aviso se puede ignorar
-  // mientras siga siendo un aviso. Ver docs/DESPLIEGUE.md, "Como se construye el
-  // Worker".
+  // mientras siga siendo un aviso. Ver docs/DESPLIEGUE.md, "Del build al Worker".
   "compatibility_date": "2025-03-25",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   // Sin Cron Triggers, y declarado a proposito: un array vacio es lo unico que
@@ -100,15 +99,14 @@
   // en `env.HYPERDRIVE.connectionString`, y `src/lib/db.ts` la lee con
   // `readHyperdriveConnectionString()` de `src/lib/runtime-env.ts`. Si el binding
   // no esta, cae a `DATABASE_URL`, que es lo que usan `next dev` y los scripts de
-  // `scripts/`. Ver docs/DESPLIEGUE.md, "La base de datos en el Worker: Hyperdrive".
+  // `scripts/`. Ver docs/DESPLIEGUE.md, "Hyperdrive".
   //
   // La configuracion de Hyperdrive esta creada y el binding **activo** (septiembre
   // de 2026). Antes el bloque iba comentado y el Worker resolvia la base por el
   // `DATABASE_URL` del panel, que apunta al *Session pooler* de Supabase: ahi se le
   // cortaban las conexiones y el worker de sync se caia con
   // "Connection terminated unexpectedly" / "db/pool: Network connection lost", sin
-  // que nada lo reflejara (ver docs/DESPLIEGUE.md, "La base de datos en el Worker:
-  // Hyperdrive").
+  // que nada lo reflejara (ver docs/DESPLIEGUE.md, "Hyperdrive").
   //
   // El paso que no se puede saltar es la emulacion: `opennextjs-cloudflare deploy`
   // llama a `getPlatformProxy()` de wrangler para leer el entorno, y esa emulacion
@@ -135,8 +133,7 @@
   // emular el binding. Las build variables son **por configuracion de build** y no
   // heredan de nada: hay dos, la del trigger de `main` y la de *Previews Base*, y
   // cada una tiene su propia lista. Las demas variables de las que lee el build van
-  // ahi tambien, en la misma lista: ver docs/DESPLIEGUE.md, "Los dos sitios del panel:
-  // secretos del Worker y build variables".
+  // ahi tambien, en la misma lista: ver docs/DESPLIEGUE.md, "Variables: los dos sitios del panel".
   //
   // La cadena que se le da a Hyperdrive en el panel es la DIRECTA
   // (`db.<ref>.supabase.co`, puerto 5432, sin `?sslmode=require`: el TLS lo
@@ -177,8 +174,7 @@
   },
   // Previews: el despliegue aislado de una rama. Lo ejecuta Workers Builds en cada push a
   // una rama que no sea `main` (`previews_enabled: true`), con `npx opennextjs-cloudflare
-  // build` y despues `npx wrangler preview`. Ver docs/DESPLIEGUE.md, "Workers Builds:
-  // `main` despliega y las ramas hacen Preview".
+  // build` y despues `npx wrangler preview`. Ver docs/DESPLIEGUE.md, "Previews".
   //
   // El bloque se conserva porque `wrangler preview` **lo exige**: sin el, desde wrangler
   // 4.135 el comando muere con "Your Wrangler configuration is missing a `previews` block".

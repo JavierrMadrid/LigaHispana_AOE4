@@ -23,8 +23,8 @@ export function SiteFooter() {
             </p>
           </div>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            Competición no oficial organizada por y para la comunidad Hispanohablante del Age of Empires 4. 
-            Consulte las reglas del mismo en la seccion de reglas.
+            Competición no oficial organizada por y para la comunidad hispanohablante de Age of Empires IV.
+            Consulta las reglas del torneo en la sección de reglas.
           </p>
         </div>
 
@@ -39,6 +39,14 @@ export function SiteFooter() {
                 className="block py-3 text-muted transition-colors hover:text-accent"
               >
                 Objetivos especiales
+              </Link>
+            </li>
+            <li>
+              <Link
+                href="/puntuacion"
+                className="block py-3 text-muted transition-colors hover:text-accent"
+              >
+                Cómo se puntúa
               </Link>
             </li>
             <li>

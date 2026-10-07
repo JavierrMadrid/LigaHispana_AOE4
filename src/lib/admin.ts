@@ -38,7 +38,7 @@ import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/set
  * ventana del torneo. Los umbrales se leen del ruleset efectivo y no de una constante
  * del código porque la organización puede retocarlos sin desplegar: un texto de reglas
  * escrito a mano en la interfaz acabaría mintiendo en cuanto eso pasara, que es el mismo
- * pendiente que tienen `/reglas` y `/objetivos` con los números del ruleset de puntos.
+ * pendiente que tienen `/puntuacion` y `/objetivos` con los números del ruleset de puntos.
  *
  * El **informe descargable** no vive aquí: es un fichero entero que se genera con la
  * comprobación completa del motor por delante, y eso es `src/lib/alerts/report.ts`, que

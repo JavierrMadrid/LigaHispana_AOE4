@@ -268,7 +268,7 @@ model Player {
   // falta de información.
   //
   // **No reutiliza `createdAt`.** Una reinscripción de un `REJECTED` reutiliza la
-  // fila (ver F6 en `docs/PLAN.md`), así que `createdAt` se queda en el primer
+  // fila, así que `createdAt` se queda en el primer
   // envío —que la organización ya miró y rechazó— y no dice cuándo empezó a
   // contar la persona. Solo se escribe en el alta; el diálogo de edición del
   // panel no lo mueve.
@@ -463,7 +463,7 @@ model PlayerScore {
 /// `getAdminMatchHistory()`) y responde a lo que un feed de partidas no puede
 /// decir: que alguien se quedó un objetivo, y cuándo.
 ///
-/// ## Cuándo se registra (la traducción de `docs/PUNTUACION.md` §6)
+/// ## Cuándo se registra (la traducción de `docs/OBJETIVOS.md`)
 ///
 /// - **Carreras** (grupo `civilizacion`: los 23 `masterizar-<civ>` y
 ///   `masterizarlos-a-todos`): se resuelven al completarse y **no se reabren**, así

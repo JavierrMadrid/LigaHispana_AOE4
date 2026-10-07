@@ -4,7 +4,8 @@ import { EmptyState } from "@/components/empty-state";
 import { LiveDot } from "@/components/live-dot";
 import { PageHead } from "@/components/page-head";
 import { StandingsTable } from "@/components/standings-table";
-import { getLiveMatches, getStandings } from "@/lib/public";
+import { TournamentCountdown } from "@/components/tournament-countdown";
+import { getLiveMatches, getStandings, getTournamentWindow } from "@/lib/public";
 
 export const metadata: Metadata = {
   title: "Clasificación general",
@@ -18,7 +19,11 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function StandingsPage() {
-  const [standings, liveMatches] = await Promise.all([getStandings(), getLiveMatches()]);
+  const [standings, liveMatches, tournamentWindow] = await Promise.all([
+    getStandings(),
+    getLiveMatches(),
+    getTournamentWindow(),
+  ]);
 
   // `data` es `null` cuando la base de datos no ha podido leer. No se sustituye
   // por una lista vacía a propósito: un vacío aquí se leería como "no hay
@@ -76,8 +81,14 @@ export default async function StandingsPage() {
                   </span>{" "}
                   {rows.length === 1 ? "participante" : "participantes"}
                 </p>
+                {tournamentWindow.status === "ok" && tournamentWindow.data.to !== null ? (
+                  <TournamentCountdown
+                    to={tournamentWindow.data.to}
+                    serverNow={new Date().toISOString()}
+                  />
+                ) : null}
                 <Link
-                  href="/reglas"
+                  href="/puntuacion"
                   className="text-accent underline-offset-4 transition-colors hover:text-accent-strong hover:underline"
                 >
                   Cómo se puntúa

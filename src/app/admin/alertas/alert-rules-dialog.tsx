@@ -22,7 +22,7 @@ type AlertRulesDialogProps = {
  * Los números **no están escritos aquí**: llegan de los umbrales vivos
  * (`Setting["alerts.ruleset"]`, que la organización retoca sin desplegar). Un texto
  * con las cifras a mano mentiría en cuanto se cambiara un umbral, que es el mismo
- * pendiente que el proyecto ya tiene anotado para `/reglas` y `/objetivos`. El
+ * pendiente que el proyecto ya tiene anotado para `/puntuacion` y `/objetivos`. El
  * `fallback` solo afecta a la procedencia de los números: si la lectura de los
  * umbrales ha fallado, se usan los del código y la ventana lo dice.
  */

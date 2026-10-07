@@ -73,7 +73,14 @@ export default async function ParticipatePage({ searchParams }: PageProps<"/part
         >
           reglas
         </Link>{" "}
-        explican qué cuenta como partida clasificatoria y cómo se reparten los
+        explican cómo participar y las normas del torneo. En{" "}
+        <Link
+          href="/puntuacion"
+          className="text-accent underline underline-offset-4 hover:text-accent-strong"
+        >
+          Puntuación
+        </Link>{" "}
+        se detalla qué cuenta como partida clasificatoria y cómo se reparten los
         puntos.
       </p>
     </div>

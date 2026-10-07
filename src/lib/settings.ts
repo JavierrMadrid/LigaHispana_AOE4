@@ -31,7 +31,7 @@ export const ABANDONED_AUDIT_LIMIT = 20;
 export const PLAYER_SYNC_KEY_PREFIX = "aoe4world.sync.player.";
 
 /**
- * Rastro de la última pasada del motor (`docs/MODELO-DATOS.md` §3.4).
+ * Rastro de la última pasada del motor (ver `docs/MODELO-DATOS.md`, "Claves de Setting").
  *
  * Es una fila que se sobrescribe, no un histórico: `ScoreSnapshot` sigue diferido
  * porque con una sola versión de reglas activa no hay delta que conservar, y lo que

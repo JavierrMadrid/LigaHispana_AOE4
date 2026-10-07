@@ -5,8 +5,8 @@ import "server-only";
  * registrarlos, y cómo decidir si una lectura **degrada** la respuesta o la
  * tumba.
  *
- * Por qué existe. Las tres páginas públicas que leen Postgres (`/`,
- * `/partidas`, `/objetivos`) son la web del torneo, y un corte puntual de la base
+ * Por qué existe. Las páginas públicas que leen Postgres (`/`, `/partidas`,
+ * `/objetivos`, `/puntuacion`) son la web del torneo, y un corte puntual de la base
  * —límite de conexiones de Supabase, un reinicio, un pico de red— no puede
  * convertirse en un 500 con una traza en el log: lo que tiene que pasar es que la
  * página siga contestando y diga que no ha podido leer. El módulo da la forma de
