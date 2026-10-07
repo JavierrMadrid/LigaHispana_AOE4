@@ -4,7 +4,7 @@ import Link from "next/link";
 export function SiteFooter() {
   return (
     <footer className="thread-top relative border-t border-line bg-surface/40">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-4 py-10 sm:px-6 md:flex-row md:items-start md:justify-between">
+      <div className="mx-auto flex w-full max-w-[80rem] flex-col gap-10 px-4 py-10 sm:px-6 md:flex-row md:items-start md:justify-between">
         <div className="max-w-sm">
           <div className="flex items-center gap-3">
             {/* Decorativo: el nombre completo va justo al lado como texto. El
@@ -70,7 +70,7 @@ export function SiteFooter() {
       </div>
 
       {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`. */}
-      <div className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-6">
+      <div className="mx-auto w-full max-w-[80rem] px-4 pb-20 sm:px-6">
         <p className="border-t border-line pt-6 text-xs leading-relaxed text-muted">
           Perfiles y resultados de partidas obtenidos de AoE4World. La
           clasificación se recalcula cada pocos minutos a medida que la API publica

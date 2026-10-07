@@ -40,6 +40,7 @@ mismo y quién está en directo.
 | **Clasificación** (`/`) | La tabla del torneo: puesto, puntos, victorias, división, quién está en directo y cuánto queda de torneo. |
 | **Partidas** (`/partidas`) | Las partidas que están jugando los participantes en este momento. |
 | **Objetivos** (`/objetivos`) | Los 38 objetivos especiales, cuántos puntos da cada uno y quién lo posee. |
+| **Objetivos de un participante** (`/objetivos/<id>`) | El avance de un jugador en los 38 objetivos: qué ha conseguido, en cuál está al alcance y cuánto le falta para el primer puesto. |
 | **Puntuación** (`/puntuacion`) | Cuánto vale cada victoria, qué cuenta como partida clasificatoria, los objetivos especiales y los desempates. |
 | **Reglas** (`/reglas`) | Las normas del torneo: formato, participación, normas de obligado cumplimiento y organización. |
 | **Participar** (`/participar`) | La inscripción pública al torneo. |

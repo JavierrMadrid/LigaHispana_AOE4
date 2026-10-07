@@ -23,7 +23,10 @@ const SECTIONS: readonly DocSection[] = [
 
 export default function RulesPage() {
   return (
-    <div className="flex flex-col gap-10">
+    // Conserva el ancho anterior (`max-w-6xl`): el contenedor público subió a
+    // `max-w-[80rem]` para la clasificación, pero el bloque de lectura no gana
+    // nada con estirarse.
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-10">
       <PageHead title="Reglas" />
 
       <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">

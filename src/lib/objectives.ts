@@ -275,6 +275,58 @@ export const OBJECTIVE_POINTS: Record<string, number> = Object.fromEntries(
   OBJECTIVE_DEFINITIONS.map((definition) => [definition.id, definition.points]),
 );
 
+/**
+ * El mínimo que un objetivo exige para puntuar, o `null` si no exige ninguno.
+ *
+ * `unit` no es decorativo: sin él, quien pinte una barra de avance no sabe
+ * contra qué comparar el valor del objetivo. `winrate` y `racha` se miden en
+ * **partidas** (`ObjectiveContender.matches`), mientras que `masterizar-*` se
+ * mide en **victorias** con la civilización (`ObjectiveContender.value`). Los
+ * dos son números, así que la unidad tiene que viajar junto al valor.
+ */
+export type ObjectiveMinimum = {
+  unit: "partidas" | "victorias";
+  value: number;
+};
+
+/**
+ * Traduce el mínimo configurado del ruleset al que aplica a **un** objetivo.
+ *
+ * Solo tres objetivos exigen mínimo, y está en `docs/OBJETIVOS.md`:
+ * `prohibido-perder` (`winrate`, mínimo de partidas jugadas), `golpe-de-suerte`
+ * (`racha`, mínimo de partidas jugadas) y los `masterizar-*` (victorias con una
+ * civilización). El resto —divisiones, formatos, actividad y
+ * `masterizarlos-a-todos`— no exige nada: los primeros porque basta con una
+ * victoria, los últimos porque su umbral es el propio catálogo (ganar con las
+ * 23 civilizaciones), no un mínimo configurable.
+ *
+ * La discriminación de `masterizar-*` es por el **prefijo del id**, el mismo
+ * criterio que usa `ObjectiveIcon`; `masterizarlos-a-todos` no lo lleva a
+ * propósito, así que cae en el `null` que le corresponde. No se mira `group`
+ * porque `masterizarlos-a-todos` comparte grupo con los `masterizar-*` y sí
+ * tiene mínimo distinto.
+ *
+ * Es puro: recibe el objetivo y los mínimos, y no toca la base ni el ruleset.
+ */
+export function objectiveMinimum(
+  objective: Pick<ObjectiveDefinition, "id" | "metric">,
+  minimums: ScoringMinimums,
+): ObjectiveMinimum | null {
+  if (objective.metric === "winrate") {
+    return { unit: "partidas", value: minimums.winrate };
+  }
+
+  if (objective.metric === "racha") {
+    return { unit: "partidas", value: minimums.streak };
+  }
+
+  if (objective.id.startsWith("masterizar-")) {
+    return { unit: "victorias", value: minimums.masterizar };
+  }
+
+  return null;
+}
+
 export type ObjectiveAward = {
   /** Puntos que suma el jugador por objetivos. */
   points: number;
@@ -759,6 +811,76 @@ function toContender(value: ObjectiveCandidate): ObjectiveContender {
     eligible: value.eligible,
     detail: value.detail,
   };
+}
+
+export type ObjectiveStanding = {
+  /** Posición 1-based entre los aspirantes; `null` fuera del ranking. */
+  position: number | null;
+  /** Distancia al líder en la unidad de la métrica; `null` fuera del ranking. */
+  distance: number | null;
+};
+
+/**
+ * Posición y distancia al primero de un participante dentro del ranking de un
+ * objetivo.
+ *
+ * `position` es 1-based (`1` es el líder) y `distance` está en la unidad de la
+ * métrica (ver `objectiveDistance`). Los dos son `null` cuando el participante
+ * **no aparece** en el ranking: `ObjectiveOption.ranking` solo lleva a quien
+ * tiene al menos una partida dentro del objetivo (`candidatesFor`), así que su
+ * ausencia significa "no disputa este objetivo ahora mismo", no "va último".
+ * Devolver una posición inventada para quien no está sería mentir.
+ *
+ * Es puro: no toca la base ni el ruleset, solo el ranking ya ordenado que
+ * publica `computeObjectives`. Por eso se puede comprobar sin BBDD.
+ */
+export function objectiveStanding(
+  metric: ObjectiveMetric,
+  ranking: readonly ObjectiveContender[],
+  profileId: number,
+): ObjectiveStanding {
+  const index = ranking.findIndex((contender) => contender.profileId === profileId);
+
+  if (index === -1) {
+    return { position: null, distance: null };
+  }
+
+  return {
+    position: index + 1,
+    distance: objectiveDistance(metric, ranking[0], ranking[index]),
+  };
+}
+
+/**
+ * Distancia de un contendiente al líder de su objetivo, en la unidad de la
+ * métrica.
+ *
+ * - `partidas`, `victorias` y `racha` se comparan con una resta directa: son
+ *   cantidades enteras y el líder es el máximo, así que la diferencia es el
+ *   número de unidades que falta.
+ * - `winrate` no es una cantidad sino una **fracción** (`value` victorias de
+ *   `matches` partidas), así que la distancia es la diferencia de ratios
+ *   `líder.value/líder.matches − value/matches`: adimensional, en `[0, 1]` y con
+ *   el mismo criterio con el que `compareCandidates` ordena la lista (la
+ *   fracción exacta, sin redondear a porcentaje, que haría distar lo mismo a dos
+ *   aspirantes distintos).
+ *
+ * El `ranking` llega ordenado por la cadena de desempate (§5), así que el
+ * resultado nunca es negativo; si lo fuera, sería un ranking sin ordenar.
+ */
+function objectiveDistance(
+  metric: ObjectiveMetric,
+  leader: ObjectiveContender,
+  contender: ObjectiveContender,
+): number {
+  if (metric === "winrate") {
+    const leaderRate = leader.matches > 0 ? leader.value / leader.matches : 0;
+    const contenderRate = contender.matches > 0 ? contender.value / contender.matches : 0;
+
+    return leaderRate - contenderRate;
+  }
+
+  return leader.value - contender.value;
 }
 
 /**

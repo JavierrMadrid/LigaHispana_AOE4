@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { Prisma } from "@/generated/prisma/client";
 import { PlayerStatus } from "@/generated/prisma/enums";
 import { parseGamePlayer } from "@/lib/aoe4world/parse";
@@ -10,11 +11,22 @@ import { aoe4WorldProfileUrl, describeMode, describeTeamSize } from "@/lib/forma
 import { isRecord } from "@/lib/json";
 import {
   OBJECTIVE_DEFINITIONS,
+  computeObjectives,
+  loadObjectivePlayers,
+  objectiveStanding,
+  type ObjectiveContender,
+  type ObjectiveDetail,
   type ObjectiveGroup,
   type ObjectiveMetric,
+  type ObjectiveOption,
 } from "@/lib/objectives";
 import { rankedModesWhere } from "@/lib/ranked-match";
-import { RULESET_VERSION, readRuleset, type ScoringRuleset } from "@/lib/scoring";
+import {
+  RULESET_VERSION,
+  readRuleset,
+  type ScoringMinimums,
+  type ScoringRuleset,
+} from "@/lib/scoring";
 import {
   normalizeKickChannel,
   normalizeTwitchChannel,
@@ -28,10 +40,11 @@ export type {
   ObjectiveDetail,
   ObjectiveGroup,
   ObjectiveMetric,
+  ObjectiveMinimum,
   ObjectiveOption,
   ObjectiveView,
 } from "@/lib/objectives";
-export { MASTERIZAR_TODOS_ID, OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
+export { MASTERIZAR_TODOS_ID, OBJECTIVE_GROUP_LABELS, objectiveMinimum } from "@/lib/objectives";
 export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
 
@@ -441,6 +454,216 @@ async function loadStandings(): Promise<StandingRow[]> {
       objectives: earnedObjectives(row.breakdown, lookup),
     };
   });
+}
+
+/**
+ * Identidad de un participante en su ficha pública. Solo lo que el encabezado
+ * necesita para presentarlo; el `profileId` es el que ya viaja en los enlaces a
+ * AoE4World y el que identifica al jugador en la URL de la ficha.
+ */
+export type ParticipantIdentity = {
+  profileId: number;
+  /** Nombre de display, el que escribió quien se inscribió. */
+  name: string;
+  /** `Player.avatarUrl`; `null` si no hay foto y la UI dibuja un monograma. */
+  avatarUrl: string | null;
+  profileUrl: string;
+  /**
+   * División del jugador, derivada de `rankLevel`; `null` si no está
+   * clasificado. Se resuelve con `divisionFromRankLevel()`, igual que en
+   * `getStandings`, para que la cabecera pueda pintar su emblema.
+   */
+  division: DivisionId | null;
+  /**
+   * `Player.rankLevel` en crudo (`"gold_2"`), tal cual lo publica AoE4World.
+   * `null` si no está clasificado. Se publica sin traducir para que la
+   * subdivisión (el escalón dentro de la división) siga disponible.
+   */
+  rankLevel: string | null;
+};
+
+/**
+ * El avance de un participante en **un** objetivo del torneo.
+ *
+ * No es el ranking del objetivo (eso es `ObjectiveOption.ranking`) sino la
+ * proyección de ese ranking sobre un único jugador: qué valor tiene hoy, qué
+ * puesto ocupa entre los aspirantes y cuánto le falta para el primero.
+ *
+ * `value` y `matches` salen de la entrada del participante en el ranking y son
+ * `0` cuando no aparece en él: `ranking` solo lleva a quien tiene al menos una
+ * partida dentro del objetivo, así que un cero es la verdad ("no ha jugado nada
+ * que cuente para este objetivo") y no un valor inventado. En `winrate`, `value`
+ * es victorias y `matches` las partidas de las que sale el ratio, igual que en
+ * `ObjectiveContender`.
+ */
+export type ParticipantObjective = {
+  id: string;
+  group: ObjectiveGroup;
+  label: string;
+  description: string;
+  metric: ObjectiveMetric;
+  /** Puntos que otorga poseerlo, ya con los overrides del ruleset aplicados. */
+  points: number;
+  /** Valor actual en la métrica del objetivo (`0` si no disputa el objetivo). */
+  value: number;
+  /** Partidas de las que sale `value`; `0` si no disputa el objetivo. */
+  matches: number;
+  /** Detalle del objetivo (civilización en `otp`); `null` si no aporta nada. */
+  detail: ObjectiveDetail | null;
+  /**
+   * Posición 1-based entre los aspirantes, o `null` si no está en el ranking
+   * del objetivo (ver `objectiveStanding`).
+   */
+  position: number | null;
+  /**
+   * Distancia al primero, en la unidad de la métrica, o `null` si no está en el
+   * ranking. Para `winrate` es una fracción de `[0, 1]` (ver `objectiveStanding`).
+   */
+  distance: number | null;
+  /** Ya lo posee: es el `holder` actual del objetivo. */
+  achieved: boolean;
+  /**
+   * Poseedor actual del objetivo, o `null` si nadie cumple (o la carrera no se
+   * ha completado). Es el **mismo** `holder` que publica `/objetivos`, sin
+   * recalcular: la ficha no puede contradecir al ranking.
+   */
+  holder: ObjectiveContender | null;
+  /**
+   * **Todos** los contendientes del objetivo, ordenados por la cadena de
+   * desempate. Se publica entero igual que en `/objetivos` (que ya manda los 38
+   * rankings completos) para que la ficha pueda reutilizar
+   * `ObjectiveRankingDialog` sin pedir nada aparte. Es la **misma referencia**
+   * que el `ranking` del `ObjectiveOption` del que sale: no se copia por
+   * objetivo.
+   *
+   * Con `holder` y `ranking`, este tipo pasa a ser estructuralmente asignable a
+   * `ObjectiveOption` (los campos extra de aquí no estorban), que es lo que
+   * permite entregarlo al diálogo tal cual.
+   */
+  ranking: ObjectiveContender[];
+};
+
+/**
+ * La ficha pública de objetivos de un participante: quién es y cómo va en cada
+ * uno de los 38 objetivos del torneo.
+ *
+ * `options` va en el orden del catálogo, el mismo que publica `/objetivos`, para
+ * que la ficha se lea en el mismo orden que la pantalla de objetivos.
+ */
+export type ParticipantObjectives = {
+  player: ParticipantIdentity;
+  /**
+   * Mínimos del ruleset activo, copiados tal cual (igual que hace
+   * `loadObjectives`). Son los que la ficha necesita para saber contra qué
+   * compara cada objetivo sin volver a leer `Setting` ni recibir el ruleset
+   * entero.
+   */
+  minimums: ScoringMinimums;
+  options: ParticipantObjective[];
+};
+
+/**
+ * Avance de **un participante** en los objetivos, para su ficha pública.
+ *
+ * Reutiliza exactamente el mismo motor que `/objetivos` (`computeObjectives`
+ * sobre `loadObjectivePlayers`) en vez de recalcular nada: el avance de un
+ * jugador tiene que salir del mismo ranking que ve el resto del sitio, o la
+ * ficha podría contradecir a la clasificación del objetivo.
+ *
+ * Devuelve `null` —dentro de `PublicRead`, así que `{ status: "ok", data: null }`—
+ * cuando no hay ningún participante **aprobado** con ese `profileId`; la página
+ * lo traduce a `notFound()`. Es a propósito que el "no existe" no se mezcle con
+ * el "no lo hemos podido leer": este último es `status: "degraded"`, que la
+ * página tiene que distinguir para no decir que un jugador no existe cuando lo
+ * que pasa es que la base no responde.
+ *
+ * Lee en cada llamada, igual que `getStandings` y `getObjectives`, así que la
+ * página que la use tiene que ser dinámica.
+ *
+ * Va envuelta en `cache()` de React: la página la llama dos veces dentro de la
+ * misma petición —una para `generateMetadata` y otra para el render— y sin esto
+ * cada llamada volvería a leer la base. La firma pública no cambia; el memo es
+ * por petición, no entre peticiones, así que la lectura sigue siendo fresca.
+ */
+export const getParticipantObjectives = cache(
+  async (profileId: number): Promise<PublicRead<ParticipantObjectives | null>> => {
+    return readFromDatabase("public/getParticipantObjectives", () =>
+      loadParticipantObjectives(profileId),
+    );
+  },
+);
+
+async function loadParticipantObjectives(
+  profileId: number,
+): Promise<ParticipantObjectives | null> {
+  // La identidad y el ruleset son independientes entre sí, así que van en
+  // paralelo; las partidas clasificatorias dependen del ruleset.
+  const [player, ruleset] = await Promise.all([
+    db.player.findUnique({
+      where: { profileId },
+      select: { profileId: true, name: true, avatarUrl: true, status: true, rankLevel: true },
+    }),
+    readRuleset(),
+  ]);
+
+  // Solo los aprobados tienen ficha pública: un `PENDING` o un `REJECTED` no
+  // sale en la clasificación, así que publicar su avance sería abrir una puerta
+  // lateral a datos que el sitio no enseña en ningún otro sitio.
+  if (player === null || player.status !== PlayerStatus.APPROVED) {
+    return null;
+  }
+
+  const players = await loadObjectivePlayers(db, ruleset);
+  const { options } = computeObjectives(players, ruleset);
+
+  return {
+    player: {
+      profileId: player.profileId,
+      name: player.name,
+      avatarUrl: player.avatarUrl,
+      profileUrl: aoe4WorldProfileUrl(player.profileId),
+      division: divisionFromRankLevel(player.rankLevel),
+      rankLevel: player.rankLevel,
+    },
+    minimums: { ...ruleset.minimums },
+    options: options.map((option) => participantObjective(option, profileId)),
+  };
+}
+
+/**
+ * Proyecta el ranking de un objetivo sobre un participante concreto.
+ *
+ * La entrada del jugador en el ranking es la fuente de `value`, `matches` y
+ * `detail` de su avance; si no está, esos tres van a cero/null y la posición y
+ * la distancia las resuelve `objectiveStanding` (que es la parte pura).
+ *
+ * `holder` y `ranking` se copian tal cual del `ObjectiveOption` —`ranking` por
+ * referencia, sin clonar— para que el diálogo de clasificación del objetivo se
+ * pueda reutilizar desde la ficha sin pedir los datos por otra vía.
+ */
+function participantObjective(
+  option: ObjectiveOption,
+  profileId: number,
+): ParticipantObjective {
+  const entry = option.ranking.find((contender) => contender.profileId === profileId) ?? null;
+  const { position, distance } = objectiveStanding(option.metric, option.ranking, profileId);
+
+  return {
+    id: option.id,
+    group: option.group,
+    label: option.label,
+    description: option.description,
+    metric: option.metric,
+    points: option.points,
+    value: entry?.value ?? 0,
+    matches: entry?.matches ?? 0,
+    detail: entry?.detail ?? null,
+    position,
+    distance,
+    achieved: option.holder !== null && option.holder.profileId === profileId,
+    holder: option.holder,
+    ranking: option.ranking,
+  };
 }
 
 /**

@@ -25,13 +25,13 @@ export default function PublicLayout({
       </a>
 
       <header className="thread-bottom relative sticky top-0 z-20 border-b border-line bg-background/95 backdrop-blur">
-        {/* La cabecera es más ancha que `main` (`max-w-6xl`) a propósito: así el
+        {/* La cabecera es más ancha que `main` (`max-w-[80rem]`) a propósito: así el
             emblema y las acciones sobresalen de la columna donde empieza y acaba
             el contenido, mientras la navegación sigue centrada respecto a la página.
             La rejilla de tres columnas (`1fr auto 1fr`) es la que sostiene ese
             centrado: las dos laterales reparten el mismo ancho, así que ni el ancho
             de la marca ni el de las dos acciones de la derecha desplazan la nav.
-            Esa fila necesita el ancho completo del contenedor (1248 px), de ahí que
+            Esa fila necesita el ancho completo del contenedor (1376 px), de ahí que
             se active en `xl` y no en `lg`: por debajo, marca y acciones comparten la
             primera fila y la navegación baja a la segunda, a ancho completo, sin que
             el wordmark se recorte. En móvil (`< sm`) esa segunda fila desaparece: los
@@ -45,7 +45,7 @@ export default function PublicLayout({
             filete neutro (el porqué, en su componente). El contenedor las centra
             con `items-center` y las separa con el `gap-2` de entre controles; en
             `xl` la celda se estira para que el centrado sea el de la fila. */}
-        <div className="mx-auto grid w-full max-w-[78rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:gap-x-4 sm:px-6 sm:py-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-6 xl:gap-y-0">
+        <div className="mx-auto grid w-full max-w-[86rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:gap-x-4 sm:px-6 sm:py-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-6 xl:gap-y-0">
           <Link
             href="/"
             className="col-start-1 row-start-1 inline-flex min-w-0 items-center gap-2 transition-colors hover:text-accent sm:gap-3"
@@ -92,7 +92,7 @@ export default function PublicLayout({
 
       <main
         id="contenido"
-        className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6 sm:py-14"
+        className="mx-auto w-full max-w-[80rem] flex-1 px-4 py-10 sm:px-6 sm:py-14"
       >
         {children}
       </main>

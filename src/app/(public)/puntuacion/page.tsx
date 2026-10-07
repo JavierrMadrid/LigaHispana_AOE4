@@ -38,7 +38,10 @@ export default async function ScoringPage() {
   const tournamentWindow = windowRead.status === "ok" ? windowRead.data : null;
 
   return (
-    <div className="flex flex-col gap-10">
+    // Estas dos páginas de contenido conservan el ancho anterior (`max-w-6xl`):
+    // el contenedor público se ensanchó a `max-w-[80rem]` para la clasificación,
+    // pero el bloque de lectura no gana nada con estirarse.
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-10">
       <PageHead title="Puntuación" />
 
       <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">
