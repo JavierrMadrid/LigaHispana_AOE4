@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { CONTACT_EMAIL_MAX_LENGTH } from "@/lib/player-input";
 import { createPlayer, type PlayerFormState } from "./actions";
 
 const initialState: PlayerFormState = { error: null, message: null };
@@ -8,9 +9,9 @@ const initialState: PlayerFormState = { error: null, message: null };
 /**
  * Alta de jugador desde el panel.
  *
- * Conserva el comportamiento y el copy de siempre: mismos cuatro campos, misma
- * validación en servidor y un único mensaje de error que sustituye al formulario
- * sin decir nada del fallo real, que se queda en el log.
+ * Conserva el comportamiento y el copy de siempre: los ocho campos del
+ * participante, la validación en servidor y un único mensaje de error que no
+ * enseña el fallo real, que se queda en el log.
  *
  * El botón dice lo que está pasando de verdad, que ya no es solo guardar: si el
  * jugador queda aprobado, la acción le trae las partidas de AoE4World y recalcula
@@ -44,6 +45,18 @@ export function PlayerForm({ countries }: { countries: string[] }) {
           required
           placeholder="Beastyqt"
           maxLength={64}
+          autoComplete="off"
+          className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="text-muted">Correo de contacto (opcional)</span>
+        <input
+          name="email"
+          type="email"
+          placeholder="nombre@correo.com"
+          maxLength={CONTACT_EMAIL_MAX_LENGTH}
           autoComplete="off"
           className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
         />

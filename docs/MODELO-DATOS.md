@@ -176,7 +176,7 @@ esta tabla: está hecho, versionado en `scripts/db-security.ts` y se comprueba c
 | `ladderLastGameAt` | `DateTime?` | `last_game_at` de la misma entrada y por el mismo motivo. **Va por delante de lo que vemos**: medido el 2026-10-05 sobre 136 jugadores de `rm_solo`, entre 1 y 71 minutos por delante del `startedAt` de la partida más reciente que somos capaces de importar (la ladder se actualiza en tiempo real al empezar la partida y la fila se publica después). El margen con el que hay que comparar está en `LADDER_PUBLICATION_LAG_MINUTES` (`src/lib/history-visibility.ts`). |
 | `historyPublic` | `Boolean?` | **Si el historial de partidas del jugador es público en el juego** (F11). En AoE4 hay un toggle "Share History" y el FAQ de AoE4World dice que los *game summaries* solo existen con el toggle en "Public". La API **no expone el dato**: se comprueba con un `HEAD` a la ruta del sitio que sirve el summary. **Nullable a propósito, y no por descuido**: un timeout, un `5xx` o un error de red **no** significan "cerrado", así que de un `unknown` no se escribe nada y la fila se queda en `null` = "sin comprobar". |
 | `historyCheckedAt` | `DateTime?` | Cuándo se comprobó lo anterior. El veredicto se cachea **12 h** (`HISTORY_CHECK_TTL_HOURS`) porque el worker corre cada ~5 minutos: sin caché serían tres peticiones por jugador cada cinco minutos para no aprender nada nuevo. `null` = nunca comprobado. |
-| `contactEmail` | `String?` | **Correo de contacto** (F6). Lo exige el formulario público de `/participar` y lo valida `parseEmail` en `src/lib/player-input.ts`, con tope de 254 caracteres (el máximo de RFC 5321) y guardado en minúsculas. **Nullable a propósito:** el alta manual de admin no lo pide y las filas anteriores no lo tienen. El motor no lo lee: no entra en la clasificación ni en ningún desglose. |
+| `contactEmail` | `String?` | **Correo de contacto** (F6). Lo exige el formulario público de `/participar` y lo valida `parseEmail` en `src/lib/player-input.ts`, con tope de 254 caracteres (el máximo de RFC 5321) y guardado en minúsculas. **Nullable a propósito:** en el panel de administración es opcional (como `country`), igual que desde #29, y las filas anteriores no lo tienen. El motor no lo lee: no entra en la clasificación ni en ningún desglose. |
 | `status` | `PlayerStatus` (`PENDING`/`APPROVED`/`REJECTED`) | Filtro de la clasificación: solo `APPROVED` puntúa (requisito 11). |
 | `createdAt`, `updatedAt` | `DateTime` | |
 
@@ -623,8 +623,9 @@ Desde F6 hay **una** columna nueva, y no la pidió ninguna regla: `contactEmail`
 contacto que el formulario público de `/participar` exige para que la organización pueda responder
 dudas, y por eso se distingue de todo lo demás:
 
-- **Es nullable y sin valor por defecto.** El alta manual de admin no lo pide, y las filas que ya
-  existían no lo tienen. Hacerlo obligatorio obligaría a un *backfill* inventado sobre datos que
+- **Es nullable y sin valor por defecto.** Las filas que ya existían no lo tienen y no se van a
+  rellenar, y en el panel de administración es **opcional** (como `country`), aunque el panel sí lo
+  pida desde #29. Hacerlo obligatorio obligaría a un *backfill* inventado sobre datos que
   nadie tiene, que es justo lo que este diseño evita en todas partes.
 - **No lleva índice.** No se filtra por correo en ninguna consulta: se escribe una vez (al
   inscribirse o al reinscribirse) y se lee en el panel. La regla de §6 manda: un índice que no

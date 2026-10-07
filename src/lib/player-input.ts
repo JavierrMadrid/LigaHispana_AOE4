@@ -200,12 +200,20 @@ export function parseKickChannel(value: FormDataEntryValue | null) {
 }
 
 /**
- * Correo de contacto: obligatorio en la inscripción pública y se guarda en
- * minúsculas.
+ * Correo de contacto: obligatorio en la inscripción pública, opcional en el panel
+ * de administración, y guardado en minúsculas en los tres sitios.
  *
- * Solo lo usa hoy `/participar` (el alta de admin no lo pide, y por eso la
- * columna es nullable), pero vive aquí y no en la acción por la misma razón que
- * los otros: si el patrón cambia, cambian los dos sitios a la vez.
+ * Lo usan los tres formularios —la inscripción de `/participar` y el alta y la
+ * edición de `/admin/jugadores`—, y vive aquí y no en las acciones por la misma
+ * razón que los otros parsers: si el patrón cambia, cambian los tres a la vez.
+ *
+ * **Por qué la columna sigue siendo nullable.** Ya no es porque el panel no lo
+ * pida, que ahora lo pide en el alta y en la edición: es porque las filas que ya
+ * había en la base de producción se escribieron sin él y no se van a rellenar, y
+ * porque en el panel es **opcional** igual que el país. Que en un sitio sea
+ * obligatorio y en otro opcional no afloja la validación: vacío es `null` y un
+ * valor escrito que no vale sigue siendo un error, y eso lo decide quien llama
+ * (ver el final de este texto).
  *
  * **Por qué se guarda en minúsculas.** RFC 5321 dice que la parte local distingue
  * mayúsculas, pero ningún proveedor de correo las distingue y guardarlas en dos

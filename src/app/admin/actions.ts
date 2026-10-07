@@ -18,6 +18,7 @@ import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manua
 import {
   isLegacyYoutubeUrl,
   parseCountry,
+  parseEmail,
   parseKickChannel,
   parseName,
   parseProfileId,
@@ -74,7 +75,7 @@ export type AdminActionResult = {
  * "no hay error".
  *
  * Lo comparten `createPlayer` y `updatePlayer` porque son el mismo formulario con
- * campos distintos: el alta empieza una fila y la edición reescribe cinco campos de
+ * campos distintos: el alta empieza una fila y la edición reescribe seis campos de
  * una que ya existe. Los dos necesitan el mismo par de mensajes, y con el mismo
  * reparto: el `error` es lo que hay que corregir y se pinta en `role="alert"`
  * **sin perder lo escrito**, y el `message` es el aviso de que sí se ha hecho —el
@@ -243,6 +244,28 @@ const YOUTUBE_LEGACY_URL_ERROR =
 const KICK_INVALID_ERROR =
   "Ese canal de Kick no vale. Se puede escribir el nombre del canal o la dirección kick.com/nombre.";
 
+/**
+ * El correo de contacto, con el mismo criterio que el país y que los tres canales:
+ * un vacío es `null` ("no lo sabemos") y un valor escrito que no se puede guardar
+ * es un error, no un `null` silencioso. Guardar el `null` en ese caso diría "no
+ * tiene correo" cuando lo que pasó es que lo que escribió no era una dirección, y
+ * son dos cosas distintas para quien después busca a un participante para
+ * escribirle. Vacío sí es `null`, que es lo que la columna significa.
+ *
+ * **No es el texto de `/participar`**, y a propósito: los dos formularios validan
+ * con el mismo `parseEmail`, así que admiten las mismas formas, pero cada uno
+ * habla con quien lo rellena y sus textos tienen otro tono —allí se le habla de
+ * "te" a quien se inscribe, aquí a quien administra—. Lo que sí se comparte es la
+ * constante: el alta y la edición del mismo panel no pueden validar el mismo campo
+ * de dos maneras, que es la incoherencia que ya se corrigió una vez con los
+ * canales.
+ *
+ * No hay un texto aparte para el largo: el `maxLength` del campo lo corta antes de
+ * enviar, y si aun así llegara uno más largo, "no vale" sigue siendo cierto.
+ */
+const EMAIL_INVALID_ERROR =
+  "Ese correo no vale. Se puede escribir una dirección como nombre@correo.com, con algo antes y después de la arroba y el dominio acabando en una extensión de letras.";
+
 /** Junta frases sin que aparezca ni un espacio de más ni un doble espacio. */
 function frase(...partes: string[]): string {
   return partes
@@ -276,18 +299,20 @@ function actorEmail(user: User): string {
  * escribe **en la misma transacción** que el alta: o hay jugador y rastro, o no hay
  * ninguno de los dos.
  *
- * ## El país es opcional aquí y obligatorio en `/participar`
+ * ## El país y el correo son opcionales aquí y obligatorios en `/participar`
  *
- * El campo `country` lo **exige** el formulario público (es de los datos con los
- * que la organización organiza el torneo) y **admite** el alta de admin, que es el
- * mismo criterio que ya lleva el correo: se puede dar de alta a alguien sin
- * necesitar su país, y por eso la columna es nullable en el schema.
+ * Los dos los **exige** el formulario público —el país es de los datos con los que
+ * la organización organiza el torneo, y el correo es donde se responde a las
+ * dudas— y los dos los **admite** el alta de admin con el mismo criterio: se puede
+ * dar de alta a alguien sin saber su país o sin que nos hayan dado su correo, y
+ * por eso las dos columnas son nullable en el schema.
  *
- * Lo que no se admite en ningún caso es un país **mal escrito**: un valor que no
- * está en la lista vigente es un error, no algo que se ignore en silencio y se
- * guarde como `null`. Si se guardara, la fila diría "no lo sabemos" cuando en
- * realidad lo que pasó es que alguien escribió un país que no existe, y esas dos
- * cosas son distintas. Vacío sí es `null`, que es lo que la columna significa.
+ * Lo que no se admite en ningún caso es un valor **mal escrito**: un país que no
+ * está en la lista vigente y un correo que no es una dirección son errores, no
+ * algo que se ignore en silencio y se guarde como `null`. Si se guardara, la fila
+ * diría "no lo sabemos" cuando en realidad lo que pasó es que alguien escribió un
+ * país que no existe o un correo que no vale, y esas dos cosas son distintas.
+ * Vacío sí es `null`, que es lo que la columna significa.
  *
  * ## Qué se escribe y en qué orden
  *
@@ -319,6 +344,10 @@ export async function createPlayer(
   // escrito mal con otra forma. En el nombre eso además pasaba la validación.
   const profileId = parseProfileId(readField(formData, "profileId"));
   const name = parseName(readField(formData, "name"));
+  // El correo detrás del nombre y antes de los canales, que es el mismo sitio que en
+  // la inscripción pública: es un dato de la persona, no un canal.
+  const emailRaw = readField(formData, "email");
+  const contactEmail = parseEmail(emailRaw);
   const twitchRaw = readField(formData, "twitchChannel");
   const twitchChannel = parseTwitchChannel(twitchRaw);
   const youtubeRaw = readField(formData, "youtubeChannel");
@@ -355,6 +384,13 @@ export async function createPlayer(
 
   if (kickChannel === null && kickRaw !== "") {
     return { error: KICK_INVALID_ERROR, message: null };
+  }
+
+  // El correo, con el mismo criterio que los canales y que el país, y por el mismo
+  // motivo de sitio: es una validación gratuita, así que va antes de leer la lista
+  // de países.
+  if (contactEmail === null && emailRaw !== "") {
+    return { error: EMAIL_INVALID_ERROR, message: null };
   }
 
   // La lista se lee solo si el resto de lo obligatorio ya vale: es una lectura de
@@ -398,6 +434,7 @@ export async function createPlayer(
         data: {
           profileId,
           name,
+          contactEmail,
           twitchChannel,
           youtubeChannel,
           kickChannel,
@@ -452,9 +489,15 @@ export async function createPlayer(
 /* Edición de jugador                                                          */
 /* -------------------------------------------------------------------------- */
 
-/** Los cinco campos que la edición puede cambiar, tal y como están en la fila. */
+/**
+ * Los seis campos que la edición puede cambiar, tal y como están en la fila.
+ *
+ * El orden es el del formulario, no el de las columnas: el correo va detrás del
+ * nombre porque es un dato de la persona y no un canal, igual que en el alta.
+ */
 type CamposEditables = {
   name: string;
+  contactEmail: string | null;
   twitchChannel: string | null;
   youtubeChannel: string | null;
   kickChannel: string | null;
@@ -465,7 +508,7 @@ type CamposEditables = {
  * Qué campo editable ha cambiado de valor, con su rótulo y sus dos valores.
  *
  * Va en el mensaje de vuelta porque "se han guardado los cambios" no dice **qué** se
- * ha cambiado, y en una fila con cinco campos editables la diferencia entre "ha
+ * ha cambiado, y en una fila con seis campos editables la diferencia entre "ha
  * guardado" y "no había nada que guardar" es justo lo que no se ve. Además decide
  * si hace falta escribir: si la lista sale vacía, los valores ya eran estos y no hay
  * nada que hacer.
@@ -475,8 +518,12 @@ type CamposEditables = {
  * el nombre de la columna con el valor de antes y el de después.
  */
 function camposQueCambian(antes: CamposEditables, despues: CamposEditables): CampoEditado[] {
+  // El orden es el del formulario (ver `CampoEditables`): nombre, correo, canales y
+  // país. Lo que sale aquí es lo que se lee en el mensaje de vuelta y en la frase del
+  // historial, así que tiene que seguir el mismo recorrido que la pantalla.
   const cambios: CampoEditado[] = [
     ...campoSiCambia(antes.name, despues.name, "name", "nombre"),
+    ...campoSiCambia(antes.contactEmail, despues.contactEmail, "contactEmail", "correo de contacto"),
     ...campoSiCambia(
       antes.twitchChannel,
       despues.twitchChannel,
@@ -530,8 +577,9 @@ function filaInexistente(error: unknown): boolean {
  *
  * ## Qué escribe y qué no
  *
- * Escribe **cinco** campos —`name`, `twitchChannel`, `youtubeChannel`,
- * `kickChannel` y `country`— y nada más. Se quedan fuera a propósito:
+ * Escribe **seis** campos —`name`, `contactEmail`, `twitchChannel`,
+ * `youtubeChannel`, `kickChannel` y `country`— y nada más. Se quedan fuera a
+ * propósito:
  *
  * - **El estado**, que ya tiene su aprobar/rechazar/eliminar y cuya decisión tiene
  *   su propio recorrido en la cola de revisión.
@@ -544,7 +592,7 @@ function filaInexistente(error: unknown): boolean {
  * ## Por eso no recalcula ni trae partidas
  *
  * Al revés que el alta, que sí trae las partidas de un jugador recién aprobado.
- * Ninguno de los cinco campos entra en el motor de puntos ni en el de alertas —
+ * Ninguno de los seis campos entra en el motor de puntos ni en el de alertas —
  * `PlayerScore` y `Alert` hablan de partidas, no de cómo se llama alguien— así que
  * no hay nada derivado que se quede viejo y ninguna llamada a AoE4World que hacer.
  * Revalida solo `/admin`, donde vive la lista; la web pública es `force-dynamic` y
@@ -552,10 +600,11 @@ function filaInexistente(error: unknown): boolean {
  *
  * ## El formulario es una foto completa de la fila
  *
- * Los cinco campos se **reescriben** con lo que venga y un vacío es `null`: es el
+ * Los seis campos se **reescriben** con lo que venga y un vacío es `null`: es el
  * mismo criterio del alta, donde un canal vacío significa "no tiene canal" y un
- * país vacío "no lo sabemos". Aquí **no hay un "no tocado"**, y es deliberado: si
- * faltara el campo en el `FormData` contaría como vacío, igual que en el alta.
+ * correo o un país vacíos "no lo sabemos". Aquí **no hay un "no tocado"**, y es
+ * deliberado: si faltara el campo en el `FormData` contaría como vacío, igual que
+ * en el alta.
  *
  * La alternativa —escribir solo los campos que vinieran— daría dos contratos para
  * los mismos campos en el mismo panel, y el segundo tendría una trampolínea: un
@@ -566,12 +615,14 @@ function filaInexistente(error: unknown): boolean {
  *
  * ## Validación
  *
- * Los mismos parsers y los mismos textos del alta (`createPlayer`), con el país
- * **opcional**: vacío es `null` y un valor fuera de la lista admitida es un error,
- * no un `null` en silencio. Ni el país ni los canales de YouTube y Kick tienen
- * respaldo en el perfil de AoE4World, así que un valor guardado a escondidas no lo
- * arregla nadie en la siguiente pasada; del de Twitch hay `Player.twitchUrl` como
- * plan B, pero sale de la ladder y no de la columna que escribe el panel.
+ * Los mismos parsers y los mismos textos del alta (`createPlayer`), con el país y
+ * el correo **opcionales**: vacío es `null` y un valor mal escrito —fuera de la
+ * lista admitida en el caso del país, con una forma que no es de dirección en el del
+ * correo— es un error, no un `null` en silencio. Ni el país, ni el correo, ni los
+ * canales de YouTube y Kick tienen respaldo en el perfil de AoE4World, así que un
+ * valor guardado a escondidas no lo arregla nadie en la siguiente pasada; del de
+ * Twitch hay `Player.twitchUrl` como plan B, pero sale de la ladder y no de la
+ * columna que escribe el panel.
  *
  * Los **tres** canales, incluido el de Twitch, se rechazan aquí y en el alta con el
  * mismo criterio y la misma constante. La asimetría que hubo —el alta guardaba el
@@ -584,7 +635,7 @@ function filaInexistente(error: unknown): boolean {
  *
  * **Aprobar, rechazar y editar no se pisan**, y no hace falta ninguna
  * coordinación: cada acción escribe un **conjunto de columnas disjunto** —el
- * estado por un lado, los cinco campos por otro— así que el `UPDATE` de una no
+ * estado por un lado, los seis campos por otro— así que el `UPDATE` de una no
  * puede deshacer lo que escribió la otra. Es justo lo contrario del caso que sí
  * necesita cuidado, la reinscripción de `/participar`, donde el estado **cambia** y
  * por eso su `UPDATE` filtra por él para no pisar una aprobación.
@@ -605,10 +656,12 @@ function filaInexistente(error: unknown): boolean {
  * que el `UPDATE`: o se ven los dos o no se ve ninguno. Encaja en el criterio del
  * enum —cambia datos que alguien más ve— porque el nombre y los canales salen en la
  * clasificación y en `/partidas`, así que una edición no es una nota privada del
- * panel. La frase la redacta `admin-actions.ts` (que es donde se redactan todas, para
- * que el historial y la pantalla no puedan divergir) y lleva **qué campos** han
- * cambiado, que es lo que se viene a mirar cuando alguien pregunta por qué un
- * participante aparece con otro nombre.
+ * panel. El correo no sale de aquí —es un dato de contacto y la web pública no lo
+ * publica—, pero cambiarlo sigue siendo una edición del panel. La frase la redacta
+ * `admin-actions.ts` (que es donde se redactan todas, para que el historial y la
+ * pantalla no puedan divergir) y lleva **qué campos** han cambiado, que es lo que se
+ * viene a mirar cuando alguien pregunta por qué un participante aparece con otro
+ * nombre o con otro correo.
  *
  * Solo cuando hay cambios de verdad: abrir el formulario y cerrarlo sin tocar nada no
  * escribe ni el `UPDATE` ni la fila.
@@ -631,6 +684,10 @@ export async function updatePlayer(
   // `readField` en todos: `FormData.get` también puede devolver un `File`, y el
   // parser recibiría `"[object File]"`, que es un valor escrito mal con otra forma.
   const name = parseName(readField(formData, "name"));
+  // El correo detrás del nombre y antes de los canales, como en el alta y en la
+  // inscripción pública: es un dato de la persona, no un canal.
+  const emailRaw = readField(formData, "email");
+  const contactEmail = parseEmail(emailRaw);
   const twitchRaw = readField(formData, "twitchChannel");
   const twitchChannel = parseTwitchChannel(twitchRaw);
   const youtubeRaw = readField(formData, "youtubeChannel");
@@ -659,6 +716,13 @@ export async function updatePlayer(
 
   if (kickChannel === null && kickRaw !== "") {
     return { error: KICK_INVALID_ERROR, message: null };
+  }
+
+  // El correo, con el mismo criterio y el mismo texto que el alta: vacío es `null` y
+  // un valor escrito que no se puede guardar es un error de su campo. También es una
+  // validación gratuita, así que va antes de leer la lista de países.
+  if (contactEmail === null && emailRaw !== "") {
+    return { error: EMAIL_INVALID_ERROR, message: null };
   }
 
   /**
@@ -698,6 +762,7 @@ export async function updatePlayer(
       select: {
         name: true,
         profileId: true,
+        contactEmail: true,
         twitchChannel: true,
         youtubeChannel: true,
         kickChannel: true,
@@ -723,6 +788,7 @@ export async function updatePlayer(
 
   const despues: CamposEditables = {
     name,
+    contactEmail,
     twitchChannel,
     youtubeChannel,
     kickChannel,
@@ -749,7 +815,7 @@ export async function updatePlayer(
     // dice "Edición de X" sin cambio, o un cambio sin su línea, serían los dos estados
     // que el rastro no puede describir.
     await db.$transaction(async (tx) => {
-      // Solo los cinco campos, nunca el resto del `data` de un `Player`: lo que no se
+      // Solo los seis campos, nunca el resto del `data` de un `Player`: lo que no se
       // nombra aquí no lo toca esta acción.
       await tx.player.update({ where: { id: playerId }, data: despues });
 

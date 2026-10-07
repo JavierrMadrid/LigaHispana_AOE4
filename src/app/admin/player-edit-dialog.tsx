@@ -3,15 +3,17 @@
 import { useActionState, useId, useState } from "react";
 import { updatePlayer, type PlayerFormState } from "./actions";
 import type { AdminParticipant } from "@/lib/admin";
+import { CONTACT_EMAIL_MAX_LENGTH } from "@/lib/player-input";
 import { useActionFeedback } from "@/components/action-feedback";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Modal } from "@/components/modal";
 
 const initialState: PlayerFormState = { error: null, message: null };
 
-/** Los cinco campos que `updatePlayer` reescribe, ya como texto de formulario. */
+/** Los seis campos que `updatePlayer` reescribe, ya como texto de formulario. */
 type EditFields = {
   name: string;
+  contactEmail: string;
   twitchChannel: string;
   youtubeChannel: string;
   kickChannel: string;
@@ -21,6 +23,7 @@ type EditFields = {
 function fieldsFrom(player: AdminParticipant): EditFields {
   return {
     name: player.name,
+    contactEmail: player.contactEmail ?? "",
     twitchChannel: player.twitchChannel ?? "",
     youtubeChannel: player.youtubeChannel ?? "",
     kickChannel: player.kickChannel ?? "",
@@ -31,6 +34,7 @@ function fieldsFrom(player: AdminParticipant): EditFields {
 function fieldsDiffer(a: EditFields, b: EditFields): boolean {
   return (
     a.name !== b.name ||
+    a.contactEmail !== b.contactEmail ||
     a.twitchChannel !== b.twitchChannel ||
     a.youtubeChannel !== b.youtubeChannel ||
     a.kickChannel !== b.kickChannel ||
@@ -42,10 +46,10 @@ function fieldsDiffer(a: EditFields, b: EditFields): boolean {
  * Botón "Editar" de la columna de acciones y su formulario.
  *
  * Escribe un formulario propio y no reutiliza `player-form.tsx`, que es el alta:
- * aunque comparten cinco campos, el alta pide además el `profileId` y el estado,
+ * aunque comparten seis campos, el alta pide además el `profileId` y el estado,
  * llama a `createPlayer` y el servidor puede tardar segundos trayendo partidas.
  * Aquí el `profileId` y el estado no se tocan (el estado tiene su propio
- * aprobar/rechazar) y lo único que se manda es una foto de los cinco campos. Se
+ * aprobar/rechazar) y lo único que se manda es una foto de los seis campos. Se
  * copia el dialecto de los campos del alta (mismas clases, mismas pistas) en vez
  * de extraer un formulario genérico: parametrizar el alta obligaría a tocar un
  * componente estable fuera de este encargo para ganar unas pocas líneas.
@@ -185,6 +189,19 @@ export function PlayerEditDialog({
               autoFocus
             />
 
+            <TextField
+              id={`${titleId}-email`}
+              name="email"
+              label="Correo de contacto (opcional)"
+              hint="Solo para avisarle si hay dudas con su inscripción."
+              placeholder="nombre@correo.com"
+              type="email"
+              autoComplete="email"
+              value={fields.contactEmail}
+              onChange={(value) => setField("contactEmail", value)}
+              maxLength={CONTACT_EMAIL_MAX_LENGTH}
+            />
+
             <fieldset className="flex flex-col gap-4">
               <legend className="text-sm font-medium text-foreground">
                 Canales de directo
@@ -308,6 +325,10 @@ type TextFieldProps = {
   maxLength?: number;
   required?: boolean;
   autoFocus?: boolean;
+  /** Tipo del `input`; por defecto texto, como el resto de campos del panel. */
+  type?: "text" | "email";
+  /** `autoComplete` del `input`; por defecto apagado, como el resto de campos. */
+  autoComplete?: string;
 };
 
 function TextField({
@@ -321,6 +342,8 @@ function TextField({
   maxLength,
   required,
   autoFocus,
+  type = "text",
+  autoComplete = "off",
 }: TextFieldProps) {
   const hintId = hint !== undefined ? `${id}-hint` : undefined;
 
@@ -332,7 +355,7 @@ function TextField({
       <input
         id={id}
         name={name}
-        type="text"
+        type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -340,7 +363,7 @@ function TextField({
         required={required}
         data-autofocus={autoFocus ? true : undefined}
         aria-describedby={hintId}
-        autoComplete="off"
+        autoComplete={autoComplete}
         className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
       />
       {hint !== undefined ? (

@@ -478,9 +478,24 @@ Pendiente de F4:
       verificación en servidor con `fetch` inyectable, falla cerrado y **desactivado si no hay
       `TURNSTILE_SECRET_KEY`** (en producción hay que definir site key y secret). Cierra el hueco
       de rotar `x-forwarded-for` que dejaba el rate limit.
-- [x] **Email de contacto obligatorio** (`Player.contactEmail`, nullable en BD porque el alta de
-      admin no lo pide): validado en servidor y visible en la columna Contacto de
+- [x] **Email de contacto obligatorio** (`Player.contactEmail`, nullable en BD porque en el panel
+      es opcional): validado en servidor y visible en la columna Contacto de
       `/admin/jugadores`.
+  - **El panel también lo pide, y es opcional (#29)**: el alta de admin y el diálogo de edición
+      lo escriben con el **mismo criterio que el país** —vacío es `null` ("no lo sabemos") y un
+      valor escrito que no es una dirección es un error, no un `null` en silencio—, y con el
+      mismo `parseEmail` de `player-input.ts` que usa `/participar`. Es opcional, y no
+      obligatorio como en la inscripción pública, por el mismo motivo que el país: se puede dar
+      de alta a alguien cuyo correo no se conoce, y las filas que ya estaban en la base de
+      producción no lo tienen. La columna sigue siendo nullable y **no lleva `backfill`**.
+      - Se añadió también a la **edición** (`updatePlayer`, que pasa de cinco a seis campos) y no
+        solo al alta para que un correo mal escrito se pueda corregir sin borrar y rehacer el
+        alta. Entra en el mismo criterio que el resto de campos editables: vacío es `null`.
+      - El texto del error es **propio del panel** (`EMAIL_INVALID_ERROR`), como los de los
+        canales: los dos formularios validan con el mismo parser, pero cada uno habla con quien
+        lo rellena —en `/participar` se le habla de "te" a quien se inscribe, aquí a quien
+        administra—, y lo que sí se comparte entre alta y edición es la constante, para que el
+        mismo campo no se valide de dos maneras en el mismo panel.
 - [x] **Reinscripción de un `REJECTED`**: un envío nuevo actualiza la fila existente (nombre,
       Twitch, email, `aoe4WorldName`, avatar) y la devuelve a `PENDING`, con el `UPDATE` filtrado
       por estado para no pisar una aprobación concurrente. `APPROVED` y `PENDING` siguen
@@ -721,19 +736,20 @@ cuando hay pendientes.
       del sync son cosas distintas y no se mezclan.
 - [x] **Editar un participante que ya está en el panel** (`updatePlayer`, en
       `src/app/admin/actions.ts`, con la interfaz en la pestaña de participantes):
-      reescribe **cinco** campos —`name`, `twitchChannel`, `youtubeChannel`,
-      `kickChannel` y `country`— y nada más. Se quedan fuera a propósito el **estado**
-      (que ya tiene aprobar/rechazar/eliminar), el **`profileId`** (es la identidad
-      en AoE4World y único: cambiarlo sería cambiar de persona), el `aoe4WorldName`,
-      el avatar y todo lo que escribe el worker (elo, división, racha, `*IsLive`), y
-      por supuesto los puntos y el ranking, que ni se leen.
-  - **No recalcula ni trae partidas**, al revés que el alta: ninguno de los cinco
+      reescribe **seis** campos —`name`, `contactEmail`, `twitchChannel`,
+      `youtubeChannel`, `kickChannel` y `country`— y nada más. Se quedan fuera a
+      propósito el **estado** (que ya tiene aprobar/rechazar/eliminar), el
+      **`profileId`** (es la identidad en AoE4World y único: cambiarlo sería cambiar
+      de persona), el `aoe4WorldName`, el avatar y todo lo que escribe el worker
+      (elo, división, racha, `*IsLive`), y por supuesto los puntos y el ranking,
+      que ni se leen.
+  - **No recalcula ni trae partidas**, al revés que el alta: ninguno de los seis
       campos entra en el motor de puntos ni en el de alertas —`PlayerScore` y `Alert`
       hablan de partidas, no de cómo se llama alguien—, así que no hay nada derivado
       que se quede viejo. Revalida solo `/admin`; la web pública es `force-dynamic`.
-  - **El formulario es una foto completa de la fila**: los cinco campos se reescriben
+  - **El formulario es una foto completa de la fila**: los seis campos se reescriben
       con lo que venga y un vacío es `null` ("no tiene canal", "no lo sabemos del
-      país"), que es el criterio del alta. **No hay un "no tocado"** y es
+      correo o del país"), que es el criterio del alta. **No hay un "no tocado"** y es
       deliberado: un contrato de "escribe solo los campos que mande el formulario"
       daría dos formas de lo mismo en el mismo panel y dejaría que un `FormData` al
       que le faltara un campo borrara el canal sin que nadie lo pidiera. Quien llama
@@ -741,8 +757,9 @@ cuando hay pendientes.
       valores que ya trae `AdminParticipant`.
   - **Validación compartida con el alta**: los mismos parsers y los mismos textos
       (`YOUTUBE_INVALID_ERROR`, `YOUTUBE_LEGACY_URL_ERROR`, `KICK_INVALID_ERROR`,
-      `TWITCH_INVALID_ERROR`, `COUNTRY_UNKNOWN_ERROR`), y el país **opcional** —vacío es
-      `null` y un valor fuera de la lista vigente es un error—. La lista se lee de
+      `TWITCH_INVALID_ERROR`, `COUNTRY_UNKNOWN_ERROR`, `EMAIL_INVALID_ERROR`), y el
+      país y el correo **opcionales** —vacío es `null` y un valor mal escrito es un
+      error—. La lista se lee de
       `Setting` **solo si el envío trae país**, para que un corte al leerla no impida
       corregir el nombre o un canal. Los **tres** canales, el de Twitch incluido, se
       rechazan igual en el alta y en la edición: la asimetría que había —`createPlayer`
@@ -751,7 +768,7 @@ cuando hay pendientes.
       que peor salía era el alta, que es donde el valor se escribe la primera vez y
       donde guardarlo mal no lo vuelve a corregir nadie.
   - **Concurrencia**: aprobar, rechazar y editar escriben **conjuntos de columnas
-      disjuntos** —estado por un lado, los cinco campos por otro—, así que ninguna
+      disjuntos** —estado por un lado, los seis campos por otro—, así que ninguna
       puede deshacer lo que escribió la otra y no hace falta coordinarlas. Es lo
       contrario de la reinscripción de `/participar`, donde el estado **cambia** y su
       `UPDATE` filtra por él justamente para no pisar una aprobación. No se usa
@@ -765,7 +782,7 @@ cuando hay pendientes.
       en `muted`— porque es la de uso diario y no debe competir con aprobar, rechazar ni
       eliminar, que sí cambian el estado o borran. El alta (`player-form.tsx`, con
       `createPlayer`) pide además `profileId` y estado y puede tardar segundos trayendo
-      partidas; la edición no toca ninguno de esos dos y solo manda una foto de los cinco
+      partidas; la edición no toca ninguno de esos dos y solo manda una foto de los seis
       campos, así que compartir el componente obligaría a parametrizarlo entero para ganar
       unas pocas líneas, y se copia su dialecto de campos (mismas clases, mismas pistas).
       La capa es `Modal` (foco al abrir y devuelto al cerrar, `Esc`, clic en el fondo,
