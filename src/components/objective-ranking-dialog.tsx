@@ -19,6 +19,12 @@ type ObjectiveRankingDialogProps = {
   option: ObjectiveOption;
   minimums: ObjectiveView["minimums"];
   masterizarTodosId: string;
+  /**
+   * Participante a resaltar en la lista, para las vistas que abren el diálogo
+   * desde la ficha de un jugador concreto. Sin él (`null`/`undefined`), el
+   * resaltado recae en el poseedor, que es el comportamiento de `/objetivos`.
+   */
+  highlightProfileId?: number | null;
   onClose: () => void;
 };
 
@@ -38,6 +44,7 @@ export function ObjectiveRankingDialog({
   option,
   minimums,
   masterizarTodosId,
+  highlightProfileId = null,
   onClose,
 }: ObjectiveRankingDialogProps) {
   const [page, setPage] = useState(0);
@@ -185,6 +192,7 @@ export function ObjectiveRankingDialog({
                   contender={contender}
                   rank={start + index + 1}
                   masterizarTodosId={masterizarTodosId}
+                  highlightProfileId={highlightProfileId}
                 />
               ))}
             </ol>
@@ -261,20 +269,32 @@ function RankingRow({
   contender,
   rank,
   masterizarTodosId,
+  highlightProfileId,
 }: {
   option: ObjectiveOption;
   contender: ObjectiveContender;
   rank: number;
   masterizarTodosId: string;
+  highlightProfileId: number | null;
 }) {
   const isHolder = contender.profileId === option.holder?.profileId;
+  // Sin participante que resaltar (el caso de `/objetivos`) manda el poseedor;
+  // con él, el resaltado se muda a su fila y el poseedor deja de marcarse solo
+  // por fondo. La etiqueta "Poseedor" no depende de esto.
+  const highlighted =
+    highlightProfileId === null
+      ? isHolder
+      : contender.profileId === highlightProfileId;
 
   return (
-    <li className={`flex items-center gap-3 px-4 py-3 sm:px-6 ${isHolder ? "bg-accent/5" : ""}`}>
+    <li className={`flex items-center gap-3 px-4 py-3 sm:px-6 ${highlighted ? "bg-accent/5" : ""}`}>
       <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">{rank}</span>
       <PlayerAvatar name={contender.name} avatarUrl={contender.avatarUrl} className="size-8 text-xs" />
       <span className="min-w-0 flex-1">
         <ContenderName contender={contender} className="truncate text-sm text-foreground/90" />
+        {highlighted ? (
+          <span className="sr-only">(jugador de esta ficha)</span>
+        ) : null}
         {isHolder || contender.eligible ? null : (
           <span className="mt-0.5 block text-xs text-muted">{ineligibleTag(option)}</span>
         )}

@@ -263,6 +263,7 @@ export function ParticipantObjectivesView({
           option={active}
           minimums={minimums}
           masterizarTodosId={masterizarTodosId}
+          highlightProfileId={player.profileId}
           onClose={() => setActive(null)}
         />
       )}
