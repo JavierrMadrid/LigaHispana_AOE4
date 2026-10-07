@@ -11,6 +11,7 @@ export const metadata: Metadata = {
 const SECTIONS = [
   { id: "formato", label: "Formato" },
   { id: "historial", label: "Historial de partidas" },
+  { id: "discord", label: "Discord" },
   { id: "puntuacion", label: "Puntuación" },
   { id: "objetivos", label: "Objetivos especiales" },
   { id: "clasificatorias", label: "Partidas clasificatorias" },
@@ -122,6 +123,32 @@ export default function RulesPage() {
                 retrato del jugador, en el apartado del historial de partidas (en
                 inglés, <em>Share History</em>). Si no está en público, la organización
                 lo verá indicado en su panel y podrá pedir que se abra.
+              </p>
+            </div>
+          </section>
+
+          <section id="discord" className="scroll-mt-24">
+            <SectionHeading title="Discord" />
+            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
+              <p>
+                Para participar hay que estar en el{" "}
+                <strong className="font-semibold text-foreground">
+                  servidor de Discord del torneo
+                </strong>
+                . La propia inscripción incluye el botón para conectar la cuenta y
+                entrar, así que no hace falta que la organización te añada a mano.
+              </p>
+              <p>
+                El servidor es el canal por el que se comunica la organización:
+                allí se avisa de las jornadas, se resuelven las dudas y se toman
+                las decisiones del torneo. Por eso el paso es obligatorio para
+                completar la inscripción, y no una recomendación.
+              </p>
+              <p>
+                La pertenencia se comprueba cada cierto tiempo para que la
+                organización sepa con quién puede contar. Si en algún momento sales
+                del servidor, lo verá en su panel y podrá pedirte que vuelvas a
+                entrar.
               </p>
             </div>
           </section>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { DISCORD_USERNAME_FIELD_MAX_LENGTH } from "@/lib/player-input";
 import { createPlayer, type PlayerFormState } from "./actions";
 
 const initialState: PlayerFormState = { error: null, message: null };
@@ -8,14 +9,14 @@ const initialState: PlayerFormState = { error: null, message: null };
 /**
  * Alta de jugador desde el panel.
  *
- * Conserva el comportamiento y el copy de siempre: mismos cuatro campos, misma
+ * Conserva el comportamiento y el copy de siempre: los mismos campos, misma
  * validación en servidor y un único mensaje de error que sustituye al formulario
  * sin decir nada del fallo real, que se queda en el log.
  *
  * El botón dice lo que está pasando de verdad, que ya no es solo guardar: si el
  * jugador queda aprobado, la acción le trae las partidas de AoE4World y recalcula
  * la clasificación. Son varios segundos contra una API externa, y un "Guardando…"
- * sin más invites a pensar que se ha colgado.
+ * sin más invita a pensar que se ha colgado.
  *
  * Con el plazo cerrado (`disabled`) el formulario entero se apaga y una nota
  * explica por qué, en vez de desaparecer: el panel es una herramienta y un bloque
@@ -67,6 +68,34 @@ export function PlayerForm({
             className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
           />
         </label>
+
+        {/*
+          Obligatorio, y con la arroba **dentro** del valor: es lo que exige el parser
+          del servidor (`parseDiscordUsername`), que rechaza un nombre sin ella. Se pide
+          el nombre global —el único que identifica una cuenta en todo Discord— y no el
+          que la persona tenga puesto dentro del servidor. La pista va fuera del
+          `<label>` y enlazada con `aria-describedby` para que no forme parte del nombre
+          accesible del campo.
+        */}
+        <div className="flex flex-col gap-1 text-sm">
+          <label htmlFor="discord-username" className="text-muted">
+            Usuario de Discord
+          </label>
+          <input
+            id="discord-username"
+            name="discordUsername"
+            required
+            placeholder="@pepito"
+            maxLength={DISCORD_USERNAME_FIELD_MAX_LENGTH}
+            autoComplete="off"
+            aria-describedby="discord-username-hint"
+            className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
+          />
+          <span id="discord-username-hint" className="text-xs leading-relaxed text-muted">
+            El usuario global de Discord, con la arroba delante (@pepito): el que la
+            persona usa en todo Discord, no el nombre que tenga puesto dentro del servidor.
+          </span>
+        </div>
 
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted">País (opcional)</span>

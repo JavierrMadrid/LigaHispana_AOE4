@@ -107,6 +107,16 @@ código de servidor: ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md).
 | `STREAMS_MIN_REQUEST_INTERVAL_MS` | Separación mínima entre peticiones a esas dos APIs, en ms (200) |
 | `STREAMS_MAX_RETRIES` / `STREAMS_RETRY_BASE_MS` / `STREAMS_RETRY_MAX_MS` | Reintentos y *backoff* del módulo de directos (2 / 400 / 8000) |
 | `STREAMS_MAX_CHECKS_PER_RUN` | Tope de comprobaciones de directo por pasada (24 = 12 participantes con las dos plataformas) |
+| `DISCORD_CLIENT_ID` | Client ID de la aplicación OAuth2 de Discord. **Sin las credenciales de Discord el paso de la inscripción no se exige ni se pinta**: en producción son obligatorias |
+| `DISCORD_CLIENT_SECRET` | Client secret de esa aplicación. Solo el servidor lo ve: viaja en el cuerpo del canje y nunca en un log |
+| `DISCORD_BOT_TOKEN` | Token del bot. Hace el auto-unión al servidor (`CREATE_INSTANT_INVITE`) y, en la entrega 2, la comprobación de pertenencia |
+| `DISCORD_GUILD_ID` | Id del servidor de Discord del torneo |
+| `DISCORD_OAUTH_SECRET` | Secreto con el que se firma la cookie `discord_link` (HMAC-SHA-256, 20 min). Sin ella se usa `CRON_SECRET`, y **no hay valor de respaldo en el código** |
+| `DISCORD_REDIRECT_URI` | URI de redirección registrada en Discord. Opcional: si falta, se deriva del origen de la petición + `/api/discord/oauth/callback` |
+| `DISCORD_INVITE_URL` | Invitación al servidor, que el formulario enseña como respaldo cuando el auto-unión falla. Opcional |
+| `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Base, presupuesto por petición y `User-Agent` del cliente de Discord (`https://discord.com/api/v10`, 8000, `LigaHispanaAOE4/0.1 (inscripción Discord)`) |
+| `DISCORD_CHECK_MAX_PER_RUN` | Tope de comprobaciones de Discord por pasada del worker. Opcional (10) |
+| `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas por refresco de la lista de miembros del servidor y cuántas horas se cachea. Opcionales (20 y 12). La lista **exige el intent privilegiado `GUILD_MEMBERS`** en el Developer Portal: sin él Discord devuelve la lista vacía, el worker lo detecta y sigue con la comprobación por cuenta |
 
 ## Cómo funciona
 

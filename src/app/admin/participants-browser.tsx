@@ -190,8 +190,10 @@ export function ParticipantsBrowser({
       if (needle !== "") {
         const haystack = normalize(
           `${player.name} ${player.aoe4WorldName ?? ""} ${player.country ?? ""} ${
-            player.twitchChannel ?? ""
-          } ${player.youtubeChannel ?? ""} ${player.kickChannel ?? ""}`,
+            player.discordUsername ?? ""
+          } ${player.twitchChannel ?? ""} ${player.youtubeChannel ?? ""} ${
+            player.kickChannel ?? ""
+          }`,
         );
 
         if (!haystack.includes(needle)) {
@@ -265,7 +267,7 @@ export function ParticipantsBrowser({
                 setQuery(event.target.value);
                 setPage(1);
               }}
-              placeholder="Buscar por nombre, perfil, país o canal"
+              placeholder="Buscar por nombre, perfil, país, canal o Discord"
               autoComplete="off"
               className="h-10 w-full rounded-md border border-line bg-surface px-3 text-sm text-foreground transition-colors placeholder:text-muted"
             />
@@ -359,9 +361,12 @@ export function ParticipantsBrowser({
               <table className="w-full text-left text-sm">
                 <caption className="sr-only">
                   Jugadores del torneo: nombre, perfil de AoE4World, canales de directo,
-                  país, estado, partidas clasificatorias y puntos. Una raya significa que el
-                  jugador no tiene fila en la clasificación. Las columnas de jugador, perfil,
-                  país, estado, partidas y puntos se pueden ordenar.
+                  cuenta de Discord y su pertenencia al servidor, país, estado, partidas
+                  clasificatorias y puntos. Una raya significa que el jugador no tiene fila
+                  en la clasificación; un jugador sin cuenta de Discord aparece como Sin
+                  Discord, y su pertenencia se marca como En el servidor, Fuera del
+                  servidor o Sin comprobar. Las columnas de jugador, perfil, país, estado,
+                  partidas y puntos se pueden ordenar.
                 </caption>
                 <thead className="bg-surface text-muted">
                   <tr>
@@ -382,6 +387,12 @@ export function ParticipantsBrowser({
                     {/* Los canales son enlaces: no se ordenan, no hay un criterio único. */}
                     <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
                       Canales
+                    </th>
+                    {/* El Discord es de solo lectura y no se ordena: no hay un criterio
+                        de orden que signifique algo para quien administra. La columna
+                        muestra el @usuario y su estado de pertenencia al servidor. */}
+                    <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
+                      Discord
                     </th>
                     <SortableHeaderButton
                       column="country"
@@ -500,11 +511,19 @@ function ParticipantRow({
               {player.name}
             </span>
             {/* Por debajo de `lg` las columnas secundarias se leen aquí, bajo el
-                nombre, en vez de comprimir ocho columnas en un móvil. */}
+                nombre, en vez de comprimir nueve columnas en un móvil. */}
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted lg:hidden">
               <StatusBadge status={player.status} />
               <ProfileLink player={player} />
               {player.country !== null ? <span>{player.country}</span> : null}
+              {player.discordUsername !== null ? (
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="break-all">Discord @{player.discordUsername}</span>
+                  <DiscordGuildBadge inGuild={player.discordInGuild} />
+                </span>
+              ) : (
+                <span>Sin Discord</span>
+              )}
               {player.twitchChannel !== null ? (
                 <span className="break-all">Twitch {player.twitchChannel}</span>
               ) : null}
@@ -557,6 +576,24 @@ function ParticipantRow({
       </td>
 
       <td className={`${CELL} hidden lg:table-cell`}>
+        {player.discordUsername === null ? (
+          <span className="text-muted">Sin Discord</span>
+        ) : (
+          <div className="flex flex-col items-start gap-1.5">
+            <span className="block max-w-[12rem] break-words text-foreground">
+              @{player.discordUsername}
+            </span>
+            {/* El usuario puede partirse (`break-words`, nombres largos o con
+                puntos), pero el distintivo de al lado no: se queda en su línea
+                aunque la columna quede justa. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <DiscordGuildBadge inGuild={player.discordInGuild} />
+            </div>
+          </div>
+        )}
+      </td>
+
+      <td className={`${CELL} hidden lg:table-cell`}>
         {player.country === null ? <span className="text-muted">—</span> : player.country}
       </td>
 
@@ -588,7 +625,12 @@ function ParticipantRow({
       </td>
 
       <td className={`${CELL} text-right`}>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        {/* `flex-nowrap` y `whitespace-nowrap` en los botones: las cuatro acciones
+            (Editar, Aprobar, Rechazar y Eliminar) se leen en una sola línea, que
+            es como se comparan entre filas. Antes se partían en dos cuando la
+            tabla se estrechaba, y una fila con el botón de borrar en su propia
+            línea se lee peor que una que se desplaza. */}
+        <div className="flex flex-nowrap items-center justify-end gap-2">
           {/* Editar va primero y en tono neutro: es la acción que se usa a
               diario, y el filete tenue la deja cerca del nombre sin competir con
               aprobar, rechazar o eliminar, que sí cambian el estado o borran. */}
@@ -664,6 +706,38 @@ function StatusBadge({ status }: { status: PlayerStatus }) {
 }
 
 /**
+ * Pertenencia de la cuenta de Discord al servidor del torneo.
+ *
+ * `discordInGuild` es `boolean | null` y los **tres** valores tienen que leerse
+ * distintos: `true` es "comprobado y está", `false` es "comprobado y no está" y
+ * `null` es **sin comprobar**, que es el caso por defecto mientras el worker no ha
+ * mirado la lista de miembros. Por eso el desconocido va en neutro y con la
+ * palabra "Sin comprobar": pintarlo como "no está" sería afirmar algo que nadie ha
+ * comprobado. El color refuerza el rótulo, nunca lo sustituye, igual que en
+ * `StatusBadge`.
+ */
+function DiscordGuildBadge({ inGuild }: { inGuild: boolean | null }) {
+  const state =
+    inGuild === true
+      ? { label: "En el servidor", style: "border-win/40 text-win" }
+      : inGuild === false
+        ? { label: "Fuera del servidor", style: "border-loss/40 text-loss" }
+        : { label: "Sin comprobar", style: "border-line text-muted" };
+
+  return (
+    <span
+      // `whitespace-nowrap` porque el rótulo no puede partirse: "En el
+      // servidor" en dos líneas dentro de una píldora redonda se lee como dos
+      // cosas, y "Fuera del servidor" no cabe en la columna junto al usuario.
+      // Si la columna no da de sí, se desplaza la tabla, que ya lo hace.
+      className={`inline-block whitespace-nowrap rounded-full border px-2 py-0.5 text-xs ${state.style}`}
+    >
+      {state.label}
+    </span>
+  );
+}
+
+/**
  * Fórmula de aprobar o rechazar. Es un `<form>` de una Server Action, con el
  * `playerId` en un campo oculto; el botón se deshabilita mientras la acción
  * viaja para que dos clics seguidos no la envíen dos veces.
@@ -688,7 +762,7 @@ function StatusForm({
     <form action={action}>
       <input type="hidden" name="playerId" value={playerId} />
       <PendingButton
-        className={`h-10 rounded-md border px-3 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${style}`}
+        className={`h-10 whitespace-nowrap rounded-md border px-3 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${style}`}
       >
         {label}
       </PendingButton>

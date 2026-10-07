@@ -1,8 +1,9 @@
 "use client";
 
 import type { ComponentPropsWithoutRef } from "react";
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useId } from "react";
 import Link from "next/link";
+import type { DiscordStep } from "@/lib/discord/contract";
 import { CONTACT_EMAIL_MAX_LENGTH } from "@/lib/player-input";
 import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { registerPlayer, type RegistrationFormState } from "./actions";
@@ -42,14 +43,35 @@ const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "
  * motivo se lee a su lado, enlazado con `aria-describedby`. El servidor lo
  * rechaza igualmente: esto es la cara visible del mismo interruptor
  * (`Setting["registration.open"]`), no la defensa.
+ *
+ * ## El paso de Discord (F12)
+ *
+ * Llega con `discord` (`DiscordStep`, el contrato de `src/lib/discord/contract.ts`)
+ * y **no es un campo**: no hay `<input name="discord">` ni ningún `FormData` que lo
+ * lleve. El botón es un enlace a `/api/discord/oauth`, Discord manda a la persona a su
+ * pantalla de permisos y vuelve al callback, que deja la cookie firmada; la Server
+ * Action la verifica y escribe `Player.discordUserId`. Ese camino es precisamente lo
+ * que hace que `discordUserId` no se pueda escribir a mano.
+ *
+ * Con `discord.configured === false` (sin credenciales de Discord) **no se pinta
+ * nada**: es la degradación que permite que el proyecto funcione sin configurar nada
+ * nuevo. Con `linkedUsername` hay cuenta conectada y el error del campo `discord` ya
+ * no puede salir.
+ *
+ * El dialecto visual del paso vive en `DiscordStepPanel`: un bloque con la misma
+ * superficie y los mismos controles que los campos, que se marca con acento
+ * mientras exige algo y se apaga a neutro cuando ya está resuelto. Aquí está el
+ * funcionamiento y el contrato, que es lo que decide el servidor.
  */
 export function RegistrationForm({
   countries,
   registrationOpen,
+  discord,
 }: {
   countries: string[];
   /** Si el plazo está cerrado, el envío se desactiva y se explica por qué. */
   registrationOpen: boolean;
+  discord: DiscordStep;
 }) {
   const [state, formAction, pending] = useActionState(registerPlayer, initialState);
 
@@ -80,10 +102,10 @@ export function RegistrationForm({
         Inscripción
       </h2>
       <p className="mt-4 max-w-[58ch] text-sm leading-relaxed text-muted">
-        Necesitas el identificador de tu perfil de AoE4World. El país y el correo
-        son obligatorios; los canales de directo (Twitch, YouTube y Kick) son
-        opcionales y solo sirven para señalar tu emisión cuando juegas partidas de
-        la liga.
+        Necesitas el identificador de tu perfil de AoE4World. El país, el correo y
+        el Discord son obligatorios; los canales de directo (Twitch, YouTube y
+        Kick) son opcionales y solo sirven para señalar tu emisión cuando juegas
+        partidas de la liga.
       </p>
       {/* Requisito de participación (F11): se explica aquí, no como un campo
           aparte. No hay casilla de confirmación a propósito: no se pide un
@@ -100,6 +122,10 @@ export function RegistrationForm({
         </Link>
         .
       </p>
+
+      {discord.configured ? (
+        <DiscordStepPanel step={discord} error={fieldErrors.discord} />
+      ) : null}
 
       <form action={formAction} className="mt-6 flex flex-col gap-5">
         {state.status === "error" && state.message ? (
@@ -254,6 +280,111 @@ export function RegistrationForm({
         </div>
       </form>
     </section>
+  );
+}
+
+/**
+ * El paso de Discord: la acción obligatoria para conectar la cuenta, o la
+ * cuenta ya conectada.
+ *
+ * Los tres estados que puede tener, y los tres son distinguibles de un vistazo:
+ *
+ * - **Sin conectar** (el que exige algo): filete de acento, etiqueta
+ *   "Obligatorio" y un botón que lleva a `/api/discord/oauth`. Es el estado en el
+ *   que la Server Action rechazaría el envío, así que el panel lo dice antes de
+ *   que alguien lo descubra perdiendo el formulario entero. La acción va con el
+ *   tratamiento principal del formulario (oro), porque es el siguiente paso real.
+ * - **Conectado y dentro del servidor**: filete neutro, marca de verificación y
+ *   nada que hacer. El paso ya está resuelto.
+ * - **Conectado pero fuera del servidor**: filete de acento, verificación y la
+ *   invitación de respaldo. Es el caso en que el bot no pudo meter a la persona (le
+ *   falta el permiso `CREATE_INSTANT_INVITE`, o la cuenta ya estaba en otro servidor
+ *   en el que él no está). La inscripción **no se bloquea** por eso: el enlace está
+ *   para que entre a mano, y la comprobación de las 12 h lo detecta si no lo hace.
+ *   Sin invitación configurada no se pinta un enlace roto: se explica que hay que
+ *   entrar al servidor y que lo gestione la organización.
+ *
+ * El botón es un `<a>` y no un `button`: el viaje es a otro dominio, y el `form` de la
+ * inscripción no tiene que enterarse de nada.
+ *
+ * `linkedUsername` llega **sin arroba** —la forma canónica de la columna— y se enseña
+ * con ella (`@pepito`), que es como la persona lo reconoce. El paso **no tiene campo**:
+ * la cuenta se conecta con el botón de OAuth, nunca escribiendo el `@usuario`, que es
+ * el camino del panel de administración y otro distinto.
+ */
+function DiscordStepPanel({ step, error }: { step: DiscordStep; error?: string }) {
+  const conectado = step.linkedUsername !== null;
+  const dentro = conectado && step.joined;
+  const titleId = useId();
+
+  return (
+    <div
+      role="group"
+      aria-labelledby={titleId}
+      className={`mt-6 flex flex-col gap-3 rounded-lg border bg-background p-4 ${
+        dentro ? "border-line" : "border-accent/40"
+      }`}
+    >
+      <div className="flex flex-col gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {conectado ? <CheckIcon className="size-4 shrink-0 text-accent" /> : null}
+          <span id={titleId} className="text-sm font-medium text-foreground">
+            {conectado ? `Conectado como @${step.linkedUsername}` : "Discord"}
+          </span>
+          {conectado ? null : <RequiredBadge />}
+        </div>
+        <p className="max-w-[58ch] text-sm leading-relaxed text-muted">
+          {dentro
+            ? "Tu cuenta está enlazada y ya estás en el servidor del torneo."
+            : conectado
+              ? step.inviteUrl !== null
+                ? "Tu cuenta está enlazada, pero todavía no estás en el servidor del torneo. Entra con la invitación para no perderte los avisos."
+                : "Tu cuenta está enlazada, pero todavía no estás en el servidor del torneo. Pide a la organización que te envíe una invitación."
+              : "Conectar tu Discord es obligatorio: es el servidor donde la organización se comunica con los participantes del torneo."}
+        </p>
+      </div>
+
+      {!conectado ? (
+        // eslint-disable-next-line @next/next/no-html-link-for-pages -- tiene que ser una navegación completa: el destino es un Route Handler que devuelve una redirección a Discord, y con `<Link>` Next lo pediría como RSC en vez de seguirla.
+        <a
+          href="/api/discord/oauth"
+          className="inline-flex h-10 w-fit items-center justify-center rounded-md border border-accent-strong/70 bg-linear-to-b from-accent-strong to-accent px-5 text-sm font-semibold text-accent-ink transition-colors hover:border-accent-strong hover:to-accent-strong"
+        >
+          Conectar con Discord
+        </a>
+      ) : null}
+
+      {conectado && !step.joined && step.inviteUrl !== null ? (
+        <a
+          href={step.inviteUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex h-10 w-fit items-center justify-center rounded-md border border-line-strong bg-surface px-5 text-sm font-semibold text-foreground transition-colors hover:border-accent-strong/70 hover:text-accent"
+        >
+          Entrar al servidor
+        </a>
+      ) : null}
+
+      {error ? (
+        <p role="alert" className="text-sm leading-relaxed text-red-400">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Etiqueta de obligatoriedad del paso. No es un adorno: Discord no existe como
+ * `<input required>` en el formulario, así que la obligación tiene que leerse en
+ * el propio rótulo. Reutiliza el radio de píldora y el filete de las etiquetas de
+ * modo del panel, con el oro del acento para marcar la exigencia.
+ */
+function RequiredBadge() {
+  return (
+    <span className="inline-block rounded-full border border-accent/40 px-2 py-0.5 text-xs font-medium text-accent">
+      Obligatorio
+    </span>
   );
 }
 

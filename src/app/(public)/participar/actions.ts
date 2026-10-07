@@ -1,9 +1,12 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { findCountryIsoConflict, readCountries, type CountryIsoConflict } from "@/lib/countries";
 import { db } from "@/lib/db";
-import { logDatabaseFailure } from "@/lib/db-errors";
+import { logDatabaseFailure, uniqueViolationOn } from "@/lib/db-errors";
+import { DISCORD_LINK_TTL_SECONDS, getDiscordConfig, isDiscordOAuthConfigured } from "@/lib/discord/env";
+import { DISCORD_LINK_COOKIE, verifyDiscordLink, type DiscordLink } from "@/lib/discord/link";
 import { Prisma } from "@/generated/prisma/client";
 import { PlayerStatus } from "@/generated/prisma/enums";
 import {
@@ -43,6 +46,15 @@ import { readTurnstileToken, verifyTurnstile } from "@/lib/turnstile";
  * exactos. Los tres canales son **opcionales**: quien no emite puede dejarlos vacíos
  * y no pierde nada por ello.
  *
+ * Desde F12 hay una clave más, `discord`, y **no corresponde a ningún `input`**: es el
+ * paso de OAuth2, y su valor no lo escribe el formulario sino la cookie firmada
+ * `discord_link` que deja el callback (`src/app/api/discord/oauth/callback`). El
+ * formulario no manda nada de Discord —no hay campo de usuario, que es justo lo que
+ * se descartó para que nadie pueda escribir su propia identidad—, pero sí pinta el
+ * error con esa clave cuando el paso no se ha completado. Su error solo puede salir
+ * con `isDiscordOAuthConfigured()` en `true`: sin credenciales el paso no se exige y
+ * no hay clave que pueda aparecer.
+ *
  * Los dos canales nuevos (YouTube y Kick) usan los mismos parsers que el alta de
  * admin, y un valor escrito que no vale sale como error de campo en lugar de
  * guardarse como `null`: `Player.youtubeChannel` y `Player.kickChannel` no tienen
@@ -71,6 +83,8 @@ export type RegistrationFormState = {
     kickChannel?: string;
     country?: string;
     terms?: string;
+    /** Paso de Discord (F12). No hay `input`: lo aporta la cookie `discord_link`. */
+    discord?: string;
   };
 };
 
@@ -179,8 +193,88 @@ const YOUTUBE_LEGACY_URL_ERROR =
 const KICK_INVALID_ERROR =
   "Ese canal de Kick no parece válido. Escribe el nombre del canal o la dirección kick.com/nombre.";
 
-/** Lo que la escritura puede devolver. Ningún camino crea nada por la mitad. */
-type WriteOutcome = "created" | "resubmitted" | "duplicate" | "failed";
+/**
+ * Mensaje general del paso de Discord sin completar.
+ *
+ * Va aparte del error de campo porque quien lo lee ya sabe que le falta algo ("falta
+ * conectar tu Discord") y lo que necesita saber es **qué hacer**: el texto de campo,
+ * que va junto al botón, dice "pulsa el botón de arriba y vuelve a enviar".
+ */
+const DISCORD_REQUIRED_MESSAGE = "Antes de inscribirte tienes que conectar tu Discord.";
+
+/**
+ * Falta el paso de Discord.
+ *
+ * Es el **único** error de este bloque que no señala un campo que la persona haya
+ * escrito mal: no hay campo de Discord porque no lo hay, y el paso es un botón que
+ * lleva a otra pantalla y vuelve. El texto lo dice sin rodeos porque la persona no
+ * puede corregirlo en este formulario: lo que tiene que hacer es pulsar "Conectar con
+ * Discord" y volver.
+ */
+const DISCORD_REQUIRED_ERROR =
+  "Para inscribirte tienes que conectar tu Discord. Pulsa el botón de arriba y vuelve a enviar el formulario.";
+
+/**
+ * Esa cuenta de Discord ya está en la liga.
+ *
+ * Sale cuando el `P2002` es de `Player.discordUserId`, que es una unicidad distinta de
+ * la de `profileId` y un problema distinto: con `profileId` duplicado es la misma
+ * persona inscriéndose dos veces con el mismo perfil de AoE4World, y con
+ * `discordUserId` son **dos participantes distintos** que han conectado la misma
+ * cuenta de Discord. No se puede corregir desde este formulario, así que el texto lo
+ * dice tal cual.
+ *
+ * Y el mensaje general **no** es `DISCORD_REQUIRED_MESSAGE`: aquí la persona sí ha
+ * conectado su Discord, y decirle que lo conecte sería mentira y llevaría a repetir lo
+ * mismo.
+ */
+const DUPLICATE_DISCORD_MESSAGE =
+  "Esa cuenta de Discord ya está vinculada a otro participante.";
+
+/** El mismo aviso junto al paso, con la vía para avisar si se cree que es un error. */
+const DUPLICATE_DISCORD_ERROR =
+  "Esa cuenta de Discord ya está vinculada a otro participante. Si crees que es un error, escríbenos por el correo que pusiste.";
+
+/**
+ * Ese `@usuario` ya está en la liga.
+ *
+ * Sale cuando el `P2002` es de `Player.discordUsername`, que es una unicidad
+ * **distinta** de las otras dos y un problema distinto. Y aquí no puede ser solo un
+ * error de la cuenta: la unicidad es del **nombre**, así que puede saltar con un
+ * `@usuario` cuya cuenta es nueva y es de otra persona —porque un admin se lo
+ * escribió mal a otro participante al darlo de alta—. Quien se inscribe no puede
+ * corregir eso desde el formulario ni saber a qué fila pertenece, así que el mensaje
+ * **invita a hablar con la organización** en lugar de dar por hecho que se ha
+ * equivocado.
+ *
+ * Y no dice "conecta tu Discord": la persona sí lo ha conectado, y el `discordUserId`
+ * de este envío es libre. Lo que está en uso es el nombre.
+ */
+const DUPLICATE_DISCORD_USERNAME_MESSAGE =
+  "Ese usuario de Discord ya está en la liga.";
+
+const DUPLICATE_DISCORD_USERNAME_ERROR =
+  "Ese usuario de Discord ya está en la liga. Si crees que es un error, escríbenos por el correo que pusiste y lo revisamos.";
+
+/**
+ * Lo que la escritura puede devolver. Ningún camino crea nada por la mitad.
+ *
+ * `duplicate-discord` y `duplicate-discord-username` son estados más y no un
+ * capricho: los `P2002` de `discordUserId` y de `discordUsername` son unicidades
+ * **distintas** de la de `profileId`, dicen cosas distintas y no se arreglan igual. Si
+ * las tres se fusionaran en `duplicate`, alguien cuyo perfil de AoE4World es nuevo
+ * recibiría "ese perfil ya está registrado", que no lleva a ninguna corrección. Y
+ * fusionar las dos de Discord entre sí tampoco: una habla de la cuenta y la otra del
+ * nombre, y solo la segunda puede haber sido un error de la organización al dar de
+ * alta a otro participante.
+ */
+type WriteOutcome =
+  | "created"
+  | "resubmitted"
+  | "duplicate"
+  | "duplicate-discord"
+  | "duplicate-discord-username"
+  | "failed";
 
 type RegistrationInput = {
   /** Fila previa con el mismo `profileId`, o `null` si no había ninguna. */
@@ -190,6 +284,18 @@ type RegistrationInput = {
   contactEmail: string;
   /** Rótulo canónico de la lista admitida, ya resuelto por `parseCountry`. */
   country: string;
+  /**
+   * Identidad de Discord de la cookie firmada, o `null` si el paso no está
+   * configurado (que es lo único que permite que siga siendo `null`).
+   *
+   * `discordUsername` va siempre junto al id: un id sin nombre no sirve de nada en el
+   * panel, y Discord no tiene dos cuentas con el mismo `userId`. Llega ya **normalizado**
+   * (sin arroba y en minúsculas), porque el callback normaliza antes de firmar: es la
+   * forma canónica de la columna y la que el roster del servidor trae, así que
+   * compararlas es una igualdad y no una heurística.
+   */
+  discordUserId: string | null;
+  discordUsername: string | null;
   twitchChannel: string | null;
   /** Handle de YouTube sin arroba, ya resuelto por `parseYoutubeChannel`. */
   youtubeChannel: string | null;
@@ -220,13 +326,29 @@ type RegistrationInput = {
  * En la reinscripción se reescriben **los tres canales** junto al nombre y al
  * correo, por el mismo motivo que el país: quien se reinscribe dice cómo emite
  * ahora, y dejarlo como estaba sería guardar el dato de una solicitud que la
- * organización ya miró y rechazó.
+ * organización ya miró y rechazó. Lo mismo con **Discord**: la reinscripción
+ * escribe el `discordUserId` del envío nuevo, no el que tuviera la fila anterior, por
+ * la misma razón por la que se vuelven a pedir el nombre y el correo —puede que ahora
+ * sea otra cuenta la que la persona use—, y porque dejarlo sería guardar una
+ * identidad que la persona ya no reconoce.
  */
 async function persistRegistration(input: RegistrationInput): Promise<WriteOutcome> {
   // El retrato solo si la API lo trae: un `avatars.full` vacío no pisa el último
   // guardado (mismo criterio que el worker) y la interfaz dibuja el monograma de
   // reserva.
   const portrait = input.avatarUrl === null ? {} : { avatarUrl: input.avatarUrl };
+
+  // Discord también se escribe solo si lo hay, y con las dos columnas o con ninguna:
+  // un `discordUserId` sin `discordUsername` sería una fila que el panel no puede
+  // leer de un vistazo, y eso solo ocurre cuando el paso no está configurado.
+  //
+  // `discordUsername` sale de la cookie, ya normalizada por el callback. Se escribe
+  // tal cual porque su unicidad es la que impide que dos participantes acaben con el
+  // mismo `@usuario` (y el `P2002` de esa columna sale como su propio estado).
+  const discord =
+    input.discordUserId === null
+      ? {}
+      : { discordUserId: input.discordUserId, discordUsername: input.discordUsername };
 
   try {
     if (input.existing) {
@@ -245,6 +367,7 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
           // es ahora, y dejarlo como estaba sería guardar el dato de una solicitud
           // que la organización ya miró y rechazó.
           country: input.country,
+          ...discord,
           aoe4WorldName: input.aoe4WorldName,
           ...portrait,
           // `PENDING` fijo y no el que tuviera: reinscribirse es volver a pedir
@@ -270,6 +393,7 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
         kickChannel: input.kickChannel,
         contactEmail: input.contactEmail,
         country: input.country,
+        ...discord,
         // Cuándo se inscribió la persona, y no cuándo se apruebe: de esto depende
         // que no le cuenten las partidas que jugó antes de entrar al torneo. Por eso
         // se escribe **aquí**, con la fila `PENDING`, y no al aprobar. No es
@@ -286,6 +410,18 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
     return "created";
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      // Hay tres unicidades distintas y el código es el mismo para las tres, así que el
+      // mensaje sale de **qué** columna la saltó. Sin esto, un `P2002` de
+      // `discordUserId` le diría a alguien con el perfil de AoE4World nuevo que "ese
+      // perfil ya está registrado", que no es cierto y no lleva a ninguna corrección.
+      if (uniqueViolationOn(error, "discordUserId")) {
+        return "duplicate-discord";
+      }
+
+      if (uniqueViolationOn(error, "discordUsername")) {
+        return "duplicate-discord-username";
+      }
+
       return "duplicate";
     }
 
@@ -298,6 +434,53 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
 }
 
 /**
+ * Lee y verifica la cookie `discord_link`, o devuelve `null` si no hay una válida.
+ *
+ * **No lanza nunca**: una cookie manipulada, caducada, firmada con otro secreto o
+ * simplemente ausente sale igual que si no hubiera ninguna, que es lo que la acción
+ * necesita para poder decir "conecta tu Discord" sin distinguir por qué. Solo el motivo
+ * se queda en el log, con el prefijo `[discord]`, porque no le dice nada a quien está
+ * intentando inscribirse y sí le dice mucho a quien tiene que diagnosticar.
+ *
+ * Se relee la configuración en lugar de recibirla porque la acción no la tiene a mano:
+ * la obtiene aquí, la misma lectura que decide si el paso se exige, y así el estado
+ * de "Discord configurado" sale de un único sitio.
+ */
+async function readDiscordLink(): Promise<DiscordLink | null> {
+  const cookieStore = await cookies();
+  const value = cookieStore.get(DISCORD_LINK_COOKIE)?.value;
+  const { linkSecret } = getDiscordConfig();
+  const verificado = verifyDiscordLink(value, linkSecret, DISCORD_LINK_TTL_SECONDS);
+
+  if (verificado.ok) {
+    return verificado.link;
+  }
+
+  // "vacia" y "sin-secreto" son los dos casos normales (nadie ha pulsado el botón, o
+  // el módulo está apagado) y no merecen una línea en el log por cada envío.
+  if (verificado.reason !== "vacia" && verificado.reason !== "sin-secreto") {
+    console.warn(`[discord] La cookie del vínculo no vale (${verificado.reason}).`);
+  }
+
+  return null;
+}
+
+/**
+ * Borra la cookie `discord_link` al terminar.
+ *
+ * Va **después** de escribir, nunca antes: si la escritura falla y se le pide a la
+ * persona que reintente, necesita la cookie otra vez, y el error de la cuenta de
+ * Discord ya vinculada es de los pocos que se reintenta (corrigiendo el Discord, no el
+ * formulario). Con el alta buena se borra porque su trabajo ya está hecho: la fila
+ * tiene la identidad y una cookie de veinte minutos no tiene por qué seguir ahí.
+ */
+async function borrarDiscordLink(): Promise<void> {
+  const cookieStore = await cookies();
+
+  cookieStore.set(DISCORD_LINK_COOKIE, "", { path: "/participar", maxAge: 0 });
+}
+
+/**
  * Alta de una solicitud de participación desde la web pública.
  *
  * Es un endpoint público a propósito: no hay sesión ni `requireAdmin()` porque
@@ -306,7 +489,8 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
  * desde `/admin/jugadores`.
  *
  * Lo que la mantiene a salvo del abuso son cinco capas, en el orden en que se
- * aplican:
+ * aplican, y a partir de F12 hay una sexta que no es de abuso sino un **requisito
+ * del torneo**:
  *
  * Antes de todas está el **interruptor de plazo** (`readRegistrationOpen()`, que
  * lee `Setting["registration.open"]` y comparte contrato en
@@ -339,6 +523,18 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
  *    valida contra la lista por defecto en silencio sino que se pide reintentar,
  *    porque escribir el país de una lista que ya no es la vigente sería peor que no
  *    haber escrito nada.
+ * 4b. **Paso de Discord** (`src/lib/discord/link.ts`), que va con los validadores
+ *     porque también es gratis —leer una cookie y verificar una firma no sale a
+ *     nada— y no puede esperar: `discordUserId` se escribe en la misma línea que el
+ *     nombre, así que sin él no hay nada que guardar. Sale como error de campo
+ *     `discord` y **solo se exige si `isDiscordOAuthConfigured()`**: sin
+ *     credenciales el paso no se pinta, no se exige y el aviso va al log, que es la
+ *     degradación que permite que el proyecto funcione sin configurar nada (el
+ *     mismo patrón que el captcha con `TURNSTILE_SECRET_KEY`). Un fallo del
+ *     auto-unión **no** bloquea: si el bot no pudo meter a la persona en el
+ *     servidor, la inscripción se acepta con `discordInGuild` sin comprobar y la
+ *     invitación queda de respaldo en el formulario.
+ *
  * 5. **Comprobación del perfil contra AoE4World** (`src/lib/registration.ts`): si
  *    el `profileId` no existe no se escribe nada, y si existe se guarda el nombre
  *    oficial en `aoe4WorldName` junto al de display, que es el que escribió
@@ -445,6 +641,26 @@ export async function registerPlayer(
     }
 
     return { status: "error", message: CAPTCHA_MESSAGE, fieldErrors: {} };
+  }
+
+  // Paso de Discord (F12). Va aquí, **después** del captcha y **antes** de los
+  // validadores: es un requisito del torneo y no un campo más, así que no va mezclado
+  // entre los `parse*`; y comprobarlo antes de leer nada de la base de datos ni de
+  // llamar a AoE4World hace que quien no ha pulsado el botón no gaste ni una consulta
+  // ni una llamada.
+  //
+  // **Solo se exige si el OAuth está configurado.** Sin credenciales la inscripción
+  // sigue exactamente igual que antes de F12 —degradación documentada en
+  // `src/lib/discord/env.ts`— y el aviso sale del arranque del paso y de la página, no
+  // de cada envío.
+  const discordLink = await readDiscordLink();
+
+  if (discordLink === null && isDiscordOAuthConfigured()) {
+    return {
+      status: "error",
+      message: DISCORD_REQUIRED_MESSAGE,
+      fieldErrors: { discord: DISCORD_REQUIRED_ERROR },
+    };
   }
 
   const profileIdRaw = String(formData.get("profileId") ?? "").trim();
@@ -646,6 +862,8 @@ export async function registerPlayer(
     name,
     contactEmail,
     country,
+    discordUserId: discordLink?.userId ?? null,
+    discordUsername: discordLink?.username ?? null,
     twitchChannel,
     youtubeChannel,
     kickChannel,
@@ -661,9 +879,40 @@ export async function registerPlayer(
     };
   }
 
+  // La cuenta de Discord ya está en otro participante: sale como error del paso y no
+  // como del `profileId`, porque es otra persona con otro perfil de AoE4World y el
+  // mensaje del perfil no llevaría a ninguna corrección. La cookie **no** se borra en
+  // este camino (ver `borrarDiscordLink()`): el reintento, si lo hay, vuelve a
+  // necesitar la identidad.
+  if (outcome === "duplicate-discord") {
+    return {
+      status: "error",
+      message: DUPLICATE_DISCORD_MESSAGE,
+      fieldErrors: { discord: DUPLICATE_DISCORD_ERROR },
+    };
+  }
+
+  // El `@usuario` ya está en la liga: es un nombre, no la cuenta de esta persona, así
+  // que el error también sale en el paso (que es donde vive lo de Discord) pero el
+  // texto no habla de conectar nada. Suele ser un `@usuario` que la organización le
+  // escribió mal a otro participante al darlo de alta, y eso solo lo arregla la
+  // organización: por eso el mensaje invita a escribir.
+  if (outcome === "duplicate-discord-username") {
+    return {
+      status: "error",
+      message: DUPLICATE_DISCORD_USERNAME_MESSAGE,
+      fieldErrors: { discord: DUPLICATE_DISCORD_USERNAME_ERROR },
+    };
+  }
+
   if (outcome === "failed") {
     return { status: "error", message: FAILED_MESSAGE, fieldErrors: {} };
   }
+
+  // La fila ya tiene la identidad: la cookie ha hecho su trabajo y se borra. No se
+  // hace en ningún camino de error, ni siquiera en el de "no hemos podido guardar",
+  // porque en ese caso la persona va a reintentar y necesita la cookie otra vez.
+  await borrarDiscordLink();
 
   revalidatePath("/admin");
   revalidatePath("/admin/jugadores");
