@@ -2,7 +2,7 @@
 
 Seguimiento de la Liga Hispana de Age of Empires IV. Torneo **individual** con clasificación calculada a partir de las partidas de los participantes, obtenidas de la API de [AoE4World](https://aoe4world.com/api).
 
-> **Regla de puntos**: puntúa **cualquier partida clasificatoria**, no solo la ladder *ranked* 1v1 (`rm_solo`). Por eso `Match` guarda `leaderboard` y `rawJson`: el motor de F3 filtra y puede recalcular sin volver a pedir todo el histórico a la API. `rm_solo` es el valor por defecto porque hoy es el caso mayoritario, no porque sea el único válido. Desde F8 hay una **cuarta** condición: una partida marcada con `Match.revertedAt` por el panel de admin deja de puntuar, pero sigue en el histórico y se puede restaurar.
+> **Regla de puntos**: puntúa **cualquier partida clasificatoria**, no solo la ladder *ranked* 1v1 (`rm_solo`). Por eso `Match` guarda `leaderboard` y `rawJson`: el motor de F3 filtra y puede recalcular sin volver a pedir todo el histórico a la API. `rm_solo` es el valor por defecto porque hoy es el caso mayoritario, no porque sea el único válido. Desde F8 hay una **cuarta** condición: una partida marcada con `Match.revertedAt` por el panel de admin deja de puntuar, pero sigue en el histórico y se puede restaurar. Y hay una **quinta** condición, la más reciente: la partida tiene que ser **posterior al corte de inscripción** del jugador (`max(window.from, Player.registeredAt)`), para que a un alta de mitad de torneo no le cuenten las partidas de antes de entrar.
 
 ## Referencia funcional: ordreduwololo.fr
 
@@ -198,7 +198,8 @@ AoE4World API ──poll──► Worker/Cron ──► PostgreSQL (Supabase)
 ## Modelo de datos (schema actual)
 
 ```
-Player     (id, profileId unico, name, aoe4WorldName?, twitchChannel?, contactEmail?, status: PENDING|APPROVED|REJECTED, timestamps)
+Player     (id, profileId unico, name, aoe4WorldName?, twitchChannel?, contactEmail?, status: PENDING|APPROVED|REJECTED,
+             registeredAt? — corte de inscripción, null = desde el inicio de la ventana, timestamps)
 Match      (id, [playerId, gameId] unico, playerId FK, opponentProfileId?, opponentName?,
             civ?, opponentCiv?, civRandomized, map?, leaderboard="rm_solo", mode?,
             result?: WIN|LOSS (null = sin resolver),
@@ -219,6 +220,7 @@ Notas:
 - `leaderboard` es una `String` (no enum) precisamente para no tener que migrar cada vez que aparece un modo de juego nuevo en la API. `mode` es la **familia de ladder resuelta** (`rm_1v1` -> `rm_solo`, `rm_2v2`/`rm_3v3`/`rm_4v4` -> `rm_team`) y es por la que filtra el motor; `leaderboard` no se toca, porque es el registro literal de lo que dijo la API.
 - `result` admite `null`: significa que la partida aún no está resuelta por la API. El motor no puntúa esas filas.
 - `revertedAt` es la cuarta condición de "cuenta como clasificatoria" (F8): es la marca que pone el panel para que una partida deje de puntuar, y la regla la lee `src/lib/ranked-match.ts` en sus tres traducciones, así que no da ni victorias ni objetivos. **El worker no la toca**, y por eso la marca sobrevive a la reimportación.
+- `registeredAt` es la quinta: el **corte de inscripción**. La ventana del torneo es global, pero la de cada jugador es `max(window.from, registeredAt)`, así que a un alta de mitad de torneo no le cuentan las partidas anteriores. Va en las tres traducciones de la regla y **también en los 38 objetivos**, que son *winner-takes-all*: sin esto, un alta tardía con muchas partidas podría robarle un objetivo a quien lo tenía. **Nullable a propósito**: la base es producción y no hay *staging*, así que no lleva *backfill* y `null` —"cuenta desde el principio de la ventana"— es lo que les toca a las filas que ya estaban. No reutiliza `createdAt` porque una reinscripción de `REJECTED` reutiliza la fila, y se escribe en el alta (no al aprobar) para que apuntarse a tiempo no cueste partidas.
 - `AdminAction` es el historial **append-only** de lo que hace la organización (F8). `summary` se redacta en español en el momento de escribir la fila (`src/lib/admin-actions.ts`) y la interfaz lo pinta tal cual, para que el rastro y la pantalla no puedan divergir. El enum es corto a propósito —solo lo que **alguien más ve**: un jugador entra, sale o se le corrigen sus datos, una partida deja de puntuar o vuelve a puntuar—, y aprobar o rechazar una solicitud **no** se registra porque no cambia nada de lo que ve el público. Editar **sí**: el nombre y los canales salen en la clasificación y en `/partidas`.
 - `ObjectiveEvent` es un **espejo reconciliado** del cómputo de objetivos, no un log: una fila por objetivo cumplido (38 como mucho) y `achievedAt` = el instante de la hazaña en las carreras de `civilizacion` y el fin del torneo en los 14 objetivos "en caliente", que solo se registran cuando la ventana ya ha terminado. Lo escribe `recomputeScores()` dentro de su transacción (`src/lib/objective-events.ts`), y **se borra** si el objetivo deja de cumplirse: por eso no guarda etiqueta ni puntos (se resuelven al leer del catálogo y del ruleset activo) ni puede quedar apuntando a un poseedor al que ya le movieron los puntos. Detalle en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md) §1.6.
 - `PlayerScore` es el agregado **versionado** que lee la web. El modelo completo está en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md): la parte que no depende de las reglas ya está aplicada y la que depende (ruleset Wololo, snapshots, categorías) está diferida.
@@ -278,6 +280,29 @@ El sistema de puntuación real está definido e implementado. La rama antigua de
   y sin columnas ni índices nuevos. El worker sigue importando el histórico entero. Las
   fechas del código son **de pruebas** (15-sep-2026 → 15-oct-2026) y las oficiales se
   reconfiguran en `Setting` sin desplegar.
+- [x] **Corte de inscripción** (`Player.registeredAt`): el corte de cada jugador es
+  `max(window.from, registeredAt)`, así que a quien la organización da de alta **a mitad de
+  torneo** no le cuentan las partidas que jugó antes de entrar, por muchas que le importara
+  el worker de su histórico. **Los 38 objetivos van con el mismo corte**, para que no se
+  pueda robar un objetivo con partidas que no puntúan.
+  - **La fecha es la del envío del alta, no la de la aprobación**, así que apuntarse a tiempo
+    no cuesta partidas aunque la organización apruebe más tarde. Se escribe en el
+    `player.create` del formulario público y del alta de admin, **no** se toca al aprobar y el
+    diálogo de edición no lo mueve.
+  - **Nullable y sin *backfill***: la base es producción y no hay *staging*, así que
+    `db:push` no toca filas y `null` —"desde el principio de la ventana"— es lo que les toca a
+    los ya inscritos. **No se deduce de `createdAt`**, porque una reinscripción de `REJECTED`
+    reutiliza la fila. Requisito operativo: `npm run db:push`. **No** hace falta
+    `npm run db:security`: no se crea ninguna tabla.
+  - **El agregado de la clasificación pasó de `groupBy` a SQL crudo**: el corte compara
+    `Match.startedAt` con `Player.registeredAt` y un `where` de Prisma solo compara un campo con
+    un valor (la referencia a campo de Prisma 7 es entre campos del mismo modelo y rechaza la
+    del otro). El predicado sigue siendo el mismo `rankedMatchSql()`, con la fila de `Player`
+    delante, así que no nace una segunda definición de la regla.
+  - **Dos consumidores se apartan del corte, a propósito**: el historial del panel
+    (`classificatoryWhere`, con `registeredAt = null`), que enseña el recorrido entero de cada
+    participante con sus 0 puntos a la vista, y las dos reglas de transparencia del historial
+    de F11, que preguntan qué partidas existen y qué publica la API.
 - [x] **38 objetivos en 5 grupos** tras la reagrupación del cliente: Actividad
   (`loco-por-ganar`, `otp`), Racha (`golpe-de-suerte`, `prohibido-perder`), Divisiones
   (6 `sensei-*`), Formatos (4 `rey-*`) y Civilizaciones (23 `masterizar-*`, carreras a
@@ -485,6 +510,9 @@ Pendiente de F4:
       Twitch, email, `aoe4WorldName`, avatar) y la devuelve a `PENDING`, con el `UPDATE` filtrado
       por estado para no pisar una aprobación concurrente. `APPROVED` y `PENDING` siguen
       bloqueando.
+      - **`registeredAt` no se mueve en la reinscripción**: es el **envío del alta**, la fecha de
+        inscripción, y la fila es la misma persona desde su primera solicitud. Moverno solo
+        escribiría el alta y nadie lo pidió.
 - [x] **País del participante** (`Player.country`, nullable en BD por lo mismo que el correo):
       **obligatorio** en la inscripción pública y **opcional** en el alta de admin, que es donde se
       gestiona y donde sale en los listados. Es un `String` con el **rótulo canónico** ("República
@@ -888,10 +916,12 @@ el mismo" no significaría nada.
 
 **Qué cuenta como partida es la misma regla de siempre.** El motor no decide qué es clasificatoria:
 carga con `rankedMatchWhere()` (`src/lib/ranked-match.ts`), o sea familia del ruleset de puntos,
-partida resuelta, dentro de la ventana y **no revertida**. Por eso una alerta nunca puede acusar a
-alguien de una partida revertida, y no hay una segunda definición que se pueda desincronizar de la
-primera. Los umbrales de la ventana y la lista de modos **no** se duplican en el ruleset de
-alertas: se leen del de puntuación.
+partida resuelta, dentro de la ventana y **no revertida**, y le aplica además el **corte de
+inscripción** de cada jugador (`countsWithinWindow()` con su `Player.registeredAt`, porque un `where`
+de Prisma que abarca a todos no puede compararlo). Por eso una alerta nunca puede acusar a alguien de
+una partida revertida ni de una anterior a su alta, y no hay una segunda definición que se pueda
+desincronizar de la primera. Los umbrales de la ventana y la lista de modos **no** se duplican en el
+ruleset de alertas: se leen del de puntuación.
 
 **Los umbrales son configurables sin desplegar**: `Setting["alerts.ruleset"]`, versión 1, con
 `DEFAULT_ALERTS_RULESET` de respaldo y una validación que **nunca lanza** (mismo patrón que

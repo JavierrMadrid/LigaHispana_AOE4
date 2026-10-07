@@ -90,6 +90,7 @@ mapa de los deltas, para que nadie lea §3 y dé por hecho que `civsWonCount` ex
 | `Player.historyPublic`, `Player.historyCheckedAt` (columnas nuevas, F11) | `prisma/schema.prisma`, `src/lib/history-checks.ts` | **Ajenas a las reglas de puntuación** por lo mismo: son el resultado cacheado de una comprobación externa. `historyPublic` es nullable **a propósito**, porque `null` = "sin comprobar" y un `false` solo puede escribirse cuando una respuesta lo ha dicho (un `unknown` no escribe nada). Ver §1.1. |
 | `Match.points` con valor real | `src/lib/scoring.ts` | **Cambio de fondo respecto a §3.1.4**: allí la columna se quedaba a 0 porque ninguna regla repartía puntos por partida. Aquí sí: vale `ruleset.pointsPerWin` en cada victoria clasificatoria resuelta **y dentro de la ventana**, y 0 en el resto. Es justamente la "regla de puntos por partida" que §3.1.4 anticipaba, y por eso la columna ya existía y no hubo que crearla. |
 | Ventana de fechas del torneo | `src/lib/ranked-match.ts` (definición) y `src/lib/scoring.ts` (ruleset) | `Setting["scoring.ruleset"].window` = `{ from, to }`, instantes ISO-8601 UTC con zona explícita, `[from, to)` sobre `Match.startedAt`, con `to: null` como ventana abierta. **Aplicada**: una partida fuera de la ventana deja `Match.points = 0` y no entra ni en el agregado ni en los objetivos. El filtro vive en un solo módulo y lo consumen las tres consultas del motor. **Sin columnas ni índices nuevos**: el índice `(mode, startedAt)` de §3.1.3 ya lo cubría. |
+| Corte de inscripción | `Player.registeredAt` (`prisma/schema.prisma`), regla en `src/lib/ranked-match.ts` | `max(window.from, registeredAt)`: un alta posterior a mitad de torneo no puntúa las partidas anteriores al alta, y los 38 objetivos van con el mismo corte. **Las traducciones SQL** la llevan como columna de `Player` (`is null or startedAt >= registeredAt`), que es lo que permite que las tres consultas del motor abarquen a todos los jugadores; **las de Prisma y la de memoria** reciben el `registeredAt` como parámetro obligatorio, porque un `where` de Prisma no compara dos columnas. Por eso el agregado de la clasificación es SQL crudo y no un `groupBy`. Nullable y sin *backfill* (§1.1). |
 | `scoring.lastRun` en `Setting` | `writeScoringLastRun()` en `src/lib/settings.ts` | Rastro de la última pasada (§3.4). Lo escribe el motor **dentro** de su transacción, así que se confirma junto con la clasificación. |
 | `Match.revertedAt` (columna nueva) | `prisma/schema.prisma`, `src/lib/ranked-match.ts` | Marca de "esta partida no puntúa", nullable (`null` = cuenta). **No es un borrado**: el worker de sync volvería a importarla en su siguiente pasada, y el panel tiene que poder deshacer el cambio. Aplica a las tres traducciones de la regla (`countsAsRanked`, `rankedMatchWhere`, `rankedMatchSql`), así que una partida revertida no da ni victorias ni objetivos. El historial del panel la **lista** marcada, con `classificatoryWhere()`. |
 | `AdminAction` (tabla nueva) | `prisma/schema.prisma`, `src/lib/admin-actions.ts` | Rastro de lo que hace una persona administradora. **Ajena a las reglas de puntuación**, como `RateLimitCounter`: se escribe en la misma transacción que el cambio que registra. Aditiva, sin RLS propia más allá de la postura de §7 (`TABLES` en `scripts/db-security.ts`). |
@@ -178,6 +179,7 @@ esta tabla: está hecho, versionado en `scripts/db-security.ts` y se comprueba c
 | `historyCheckedAt` | `DateTime?` | Cuándo se comprobó lo anterior. El veredicto se cachea **12 h** (`HISTORY_CHECK_TTL_HOURS`) porque el worker corre cada ~5 minutos: sin caché serían tres peticiones por jugador cada cinco minutos para no aprender nada nuevo. `null` = nunca comprobado. |
 | `contactEmail` | `String?` | **Correo de contacto** (F6). Lo exige el formulario público de `/participar` y lo valida `parseEmail` en `src/lib/player-input.ts`, con tope de 254 caracteres (el máximo de RFC 5321) y guardado en minúsculas. **Nullable a propósito:** el alta manual de admin no lo pide y las filas anteriores no lo tienen. El motor no lo lee: no entra en la clasificación ni en ningún desglose. |
 | `status` | `PlayerStatus` (`PENDING`/`APPROVED`/`REJECTED`) | Filtro de la clasificación: solo `APPROVED` puntúa (requisito 11). |
+| `registeredAt` | `DateTime?` | **Cuándo se inscribió la persona**, no cuándo la aprobó la organización: es el envío del alta (formulario público o alta de admin) y **no se toca al aprobar**. Define el **corte de inscripción**, `max(window.from, registeredAt)`, con el que el motor no le cuenta a un alta posterior las partidas que jugó antes de entrar (los 38 objetivos van con el mismo corte). **Nullable a propósito y sin *backfill***: la base es la de producción y no hay *staging*, así que `db:push` no toca filas y `null` —"cuenta desde el principio de la ventana"— es justo lo que les toca a las que ya estaban. **No se deduce de `createdAt`**, porque una reinscripción de un `REJECTED` reutiliza la fila. Solo se escribe en el alta; la edición del panel no lo mueve. Ver `docs/PUNTUACION.md` §1. |
 | `createdAt`, `updatedAt` | `DateTime` | |
 
 Índices: `id` (pk) y `profileId` (único). **Ninguno más**, y está justificado en §6.
@@ -868,6 +870,7 @@ el modelo aguanta.
 | **Categoría 4** (coronas) | Agrupar victorias por civ, quedarse con el máximo de cada civ, con el mínimo de 10 | Derivado de `Match.civ` → `crownsCount` y `breakdown.crowns` | — |
 | **Categoría 5** (hitos) | `PlayerScore.wins` contra los escalones, y la fecha de la `n`-ésima victoria | `Match.finishedAt` + `PlayerScore.milestonesReached` | — |
 | **Ventana de fechas** | Ruleset `window.from` / `window.to` contra `Match.startedAt` | `Setting` + `Match.startedAt` | **Aplicada** (D-02 con fechas de trabajo; §0 bis.2). Sin columnas nuevas. |
+| **Corte de inscripción** | `max(window.from, Player.registeredAt)` contra `Match.startedAt` | `Player.registeredAt` + `Match.startedAt` | **Aplicada**. Columna nullable y sin *backfill* (§1.1); los objetivos van con el mismo corte. |
 | **Filtro de modo** | Ruleset `modes.include` / `modes.exclude` contra `Match.mode` | `Setting` + `Match.mode` | — |
 | **Filtro de resultado resuelto** | `Match.result is not null and finishedAt is not null` | `Match` | — |
 | **Filtro de duración** | Ruleset `minDurationSeconds` contra `Match.durationSeconds` | `Setting` + `Match.durationSeconds` | — |
@@ -928,11 +931,21 @@ Cada consulta con el índice que la sostiene. Un índice que no aparece aquí, n
 Las consultas 9 a 12 son las que corren en cada pasada del worker. Con el volumen de un torneo
 (30 jugadores, 30.000 a 50.000 partidas) son milisegundos: no es un problema de rendimiento, es un
 problema de **correctitud** (que el filtro se aplique en SQL y no se pierda nada por un `join`
-mal hecho). Las cuatro llevan hoy la ventana de fechas y la marca de revertida; y el filtro no está
-escrito cuatro veces: `src/lib/ranked-match.ts` lo construye una vez y lo reparte como filtro de
-Prisma (`rankedMatchWhere`), como predicado SQL (`rankedMatchSql`) y fila a fila
-(`countsAsRanked`). `classificatoryWhere()` es la misma regla sin la marca de revertida, y solo la
+mal hecho). Las cuatro llevan hoy la ventana de fechas, el corte de inscripción y la marca de
+revertida; y el filtro no está escrito cuatro veces: `src/lib/ranked-match.ts` lo construye una vez y
+lo reparte como filtro de Prisma (`rankedMatchWhere`), como predicado SQL (`rankedMatchSql`) y fila a
+fila (`countsAsRanked`). `classificatoryWhere()` es la misma regla sin la marca de revertida, y solo la
 consume el listado del panel (§5, fila 18).
+
+**El corte de inscripción cambia una de esas cuatro.** El `groupBy` del agregado pasó a **SQL
+crudo** (`scoring.ts`) porque la condición necesita comparar `Match.startedAt` con
+`Player.registeredAt`, y un `where` de Prisma solo compara un campo con un valor: la referencia a
+campo de Prisma 7 es *entre campos del modelo consultado* y rechaza la de otro modelo con
+*"Expected a referenced scalar field of model Match, but found a field of model Player"*. El predicado
+sigue siendo `rankedMatchSql()` —el mismo de las otras tres consultas—, con la referencia de `Player`
+añadida, de modo que no nace una segunda definición. El `join` es interior y sobre la clave foránea,
+que no admite nulos, así que no pierde partidas; y el filtro por `mode`/`startedAt` sigue siendo el
+que elige `@@index([mode, startedAt])`.
 
 ## 7. RLS y privilegios
 

@@ -437,6 +437,12 @@ export async function createPlayer(
           youtubeChannel,
           kickChannel,
           country,
+          // Cuándo lo da de alta la organización, que es lo mismo que cuando se
+          // habría inscrito si lo hubiera hecho por el formulario: el motor no le
+          // cuenta a un alta posterior las partidas que jugó antes de entrar. No es
+          // `createdAt` porque una reinscripción de un `REJECTED` reutiliza la fila
+          // y ese se queda en el primer envío.
+          registeredAt: new Date(),
           status: status as PlayerStatus,
         },
         select: { id: true },
@@ -1049,6 +1055,12 @@ type MatchForScoring = {
   result: MatchResult | null;
   startedAt: Date;
   finishedAt: Date | null;
+  /**
+   * `Player.registeredAt` del dueño, o `null` si no lo tiene: es la otra mitad del
+   * corte de la regla. Sin él, una partida anterior a la inscripción parecería
+   * clasificatoria y se podría marcar para siempre.
+   */
+  registeredAt: Date | null;
   playerName: string;
   playerProfileId: number;
 };
@@ -1162,7 +1174,7 @@ async function setMatchReverted(
         result: true,
         startedAt: true,
         finishedAt: true,
-        player: { select: { name: true, profileId: true } },
+        player: { select: { name: true, profileId: true, registeredAt: true } },
       },
     });
 
@@ -1179,6 +1191,10 @@ async function setMatchReverted(
             result: row.result,
             startedAt: row.startedAt,
             finishedAt: row.finishedAt,
+            // Sale en la fila plana, no como `player.registeredAt`, porque
+            // `countsAsRanked()` lo toma como un dato más de la partida y no como
+            // una relación.
+            registeredAt: row.player.registeredAt,
             playerName: row.player.name,
             playerProfileId: row.player.profileId,
           };
@@ -1209,18 +1225,24 @@ async function setMatchReverted(
    * respuesta en los dos sentidos**: solo tiene sentido tocar una partida que cuenta.
    * Al revertir, porque es lo que se le quita; al restaurar, porque es lo que vuelve.
    * Se pregunta siempre con `revertedAt: null`, que es lo que deja la decisión en las
-   * otras tres condiciones de la regla.
+   * otras cuatro condiciones de la regla.
    *
    * Sin esta guarda, un `FormData` hecho a mano podría dejar marcada para siempre una
    * partida que nunca llegó a puntuar, y el admin vería "revertida" en el histórico de
-   * algo que en realidad nunca contó.
+   * algo que en realidad nunca contó. Y al revés: una partida anterior al alta del
+   * jugador tiene `points = 0` porque no llegó a contar, así que marcarla sería
+   * inventar un estado que el torneo nunca tuvo.
    *
    * Que el criterio sea el mismo en ambos sentidos es deliberado. Con la guarda
    * invertida al restaurar, ninguna partida clasificatoria se podía devolver: se
    * exigía que no contara. El revert quedaba sin vuelta desde el panel.
    */
   const ruleset = await readRuleset();
-  const contariaSinMarca = countsAsRanked({ ...match, revertedAt: null }, ruleset.window);
+  const contariaSinMarca = countsAsRanked(
+    { ...match, revertedAt: null },
+    ruleset.window,
+    match.registeredAt,
+  );
 
   if (!contariaSinMarca) {
     return {

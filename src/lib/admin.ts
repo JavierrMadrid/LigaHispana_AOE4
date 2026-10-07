@@ -1354,8 +1354,17 @@ export async function getAdminMatchHistory(
     // Los filtros se suman, no se eligen: `where` es una conjunción, así que jugador
     // + fechas + resultado se combinan solos. No hace falta ninguna lógica de "si hay
     // dos, el segundo gana", que es justo donde estos filtros se suelen equivocar.
+    //
+    // El `null` del `registeredAt` es deliberado y es la excepción de este módulo:
+    // el historial enseña **el recorrido entero** de cada participante dentro de la
+    // ventana del torneo, con sus 0 puntos a la vista, no solo lo que le suma. Un
+    // historial del que desaparecieran las partidas anteriores al alta dejaría al
+    // panel contradiciendo la cuenta de AoE4World, que sí las enseña. Lo que puntúa
+    // lo dicen `Match.points` y la clasificación, y el botón de revertir ya solo
+    // aparece donde hay puntos (`setMatchReverted()` vuelve a preguntar por la regla
+    // entera, corte incluido).
     const where: Prisma.MatchWhereInput = {
-      ...classificatoryWhere(ruleset.modes, ruleset.window),
+      ...classificatoryWhere(ruleset.modes, ruleset.window, null),
       ...(playerId === null ? {} : { playerId }),
       ...(hasDateBounds(rango) ? { startedAt: rango } : {}),
       ...(resultado === null ? {} : { result: resultado }),

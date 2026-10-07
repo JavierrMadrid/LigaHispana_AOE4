@@ -3,7 +3,12 @@ import "dotenv/config";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { isRecord } from "@/lib/json";
-import { parseWindow, rankedMatchWhere, readInstant, type ScoringWindow } from "@/lib/ranked-match";
+import {
+  parseWindow,
+  rankedMatchSql,
+  readInstant,
+  type ScoringWindow,
+} from "@/lib/ranked-match";
 import {
   DEFAULT_RULESET,
   SCORING_RULESET_KEY,
@@ -145,13 +150,21 @@ async function writeWindow(window: ScoringWindow): Promise<void> {
   });
 }
 
-/** Cuántas partidas y cuántos puntos entran con una ventana dada. */
+/**
+ * Cuántas partidas y cuántos puntos entran con una ventana dada.
+ *
+ * SQL crudo y no un `findMany` con `rankedMatchWhere()` por el motivo de siempre: el
+ * corte de inscripción sale de `Player` y un `where` de Prisma no compara dos
+ * columnas. Además así solo vuelven las dos columnas que hacen falta, en vez de una
+ * fila por partida del torneo.
+ */
 async function impact(window: ScoringWindow): Promise<{ matches: number; wins: number }> {
-  const where = rankedMatchWhere(DEFAULT_RULESET.modes, window);
-  const rows = await db.match.findMany({
-    where,
-    select: { result: true, points: true },
-  });
+  const rows = await db.$queryRaw<{ result: string; points: number }[]>(Prisma.sql`
+    select m."result"::text as "result", m."points" as "points"
+    from "Match" m
+    join "Player" p on p."id" = m."playerId"
+    where ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, DEFAULT_RULESET.modes, window)}
+  `);
 
   return {
     matches: rows.length,

@@ -270,6 +270,12 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
         kickChannel: input.kickChannel,
         contactEmail: input.contactEmail,
         country: input.country,
+        // Cuándo se inscribió la persona, y no cuándo se apruebe: de esto depende
+        // que no le cuenten las partidas que jugó antes de entrar al torneo. Por eso
+        // se escribe **aquí**, con la fila `PENDING`, y no al aprobar. No es
+        // `createdAt` porque una reinscripción de un `REJECTED` reutiliza la fila y
+        // ese se queda en el primer envío.
+        registeredAt: new Date(),
         // `PENDING` fijo y no el que venga en el `FormData`: aprobar o rechazar
         // es una decisión de la organización, y un formulario público no puede
         // autoaprobar su propia solicitud por mucho que mida el campo.

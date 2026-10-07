@@ -220,6 +220,15 @@ export type HistoryProbeCandidatesOptions = {
  *
  * Un `rawJson` ilegible **no lanza**: esa partida no es candidata, y como se
  * descartan por filtro (no por excepción) el resto de la lista sigue siendo válida.
+ *
+ * ## El `registeredAt` que no se aplica
+ *
+ * `countsWithinWindow()` recibe `null` en las dos contraindicaciones de este
+ * módulo: aquí se pregunta **qué partidas existen**, no cuáles puntúan. Una partida
+ * anterior al alta del jugador es una partida de verdad de su cuenta de AoE4World y
+ * la ladder la cuenta igual, así que esconderla del sondeo haría que se preguntara
+ * por la más reciente de las de después. Es el mismo criterio con el que
+ * `history-checks.ts` deja fuera `revertedAt`.
  */
 export function historyProbeCandidates(
   matches: readonly HistoryProbeMatch[],
@@ -234,7 +243,7 @@ export function historyProbeCandidates(
         return false;
       }
 
-      if (!countsWithinWindow(match.startedAt, options.window)) {
+      if (!countsWithinWindow(match.startedAt, options.window, null)) {
         return false;
       }
 
@@ -463,7 +472,10 @@ export function ladderGapVerdict(input: LadderGapInput): LadderGapVerdict {
     return { status: "ok", reason: "pocas-partidas" };
   }
 
-  if (!countsWithinWindow(input.lastGameAt, input.window)) {
+  // `null` en el `registeredAt` por lo que dice el docblock del módulo: qué partidas
+  // nos ha publicado la API, no cuáles puntúan. Una ladder cuya última partida es de
+  // antes de que el jugador entrara es la de alguien que todavía no está jugando.
+  if (!countsWithinWindow(input.lastGameAt, input.window, null)) {
     return { status: "ok", reason: "fuera-de-ventana" };
   }
 
