@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import type {
   ObjectiveGroup,
@@ -17,13 +17,9 @@ import { ObjectiveIcon } from "@/components/objective-icon";
 import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
 import { PageHead } from "@/components/page-head";
 import { PlayerAvatar } from "@/components/player-avatar";
-import {
-  MobileSectionIndex,
-  SectionIndexAside,
-  type DocSection,
-} from "@/components/section-index";
+import { SectionIndexBar, type DocSection } from "@/components/section-index";
 
-/** Bloques de la ficha, en el orden en que se leen. Alimentan el índice lateral. */
+/** Bloques de la ficha, en el orden en que se leen. Alimentan el índice. */
 const SECTIONS: readonly DocSection[] = [
   { id: "al-alcance", label: "Al alcance" },
   { id: "en-posesion", label: "En posesión" },
@@ -73,7 +69,6 @@ export function ParticipantObjectivesView({
   masterizarTodosId: string;
 }) {
   const { player, minimums, options } = data;
-  const [group, setGroup] = useState<ObjectiveGroup | null>(null);
   const [active, setActive] = useState<ParticipantObjective | null>(null);
 
   // Tres bloques con intención: primero lo que está al alcance (mejor puesto
@@ -95,37 +90,6 @@ export function ParticipantObjectivesView({
     (option) => !option.achieved && option.position === null,
   );
 
-  // El orden de las familias se toma de los propios objetivos, que ya llegan en
-  // el orden de presentación de `docs/PUNTUACION.md`, igual que en `/objetivos`.
-  const groups = useMemo(() => {
-    const order: ObjectiveGroup[] = [];
-
-    for (const option of options) {
-      if (!order.includes(option.group)) {
-        order.push(option.group);
-      }
-    }
-
-    return order;
-  }, [options]);
-
-  const groupCounts = useMemo(() => {
-    const counts = new Map<ObjectiveGroup, number>();
-
-    for (const option of options) {
-      counts.set(option.group, (counts.get(option.group) ?? 0) + 1);
-    }
-
-    return counts;
-  }, [options]);
-
-  const inGroup = (items: ParticipantObjective[]) =>
-    group === null ? items : items.filter((option) => option.group === group);
-
-  const achievedShown = inGroup(achieved);
-  const contendingShown = inGroup(contending);
-  const waitingShown = inGroup(waiting);
-
   const earnedPoints = achieved.reduce((total, option) => total + option.points, 0);
   const contendingPoints = contending.reduce(
     (total, option) => total + option.points,
@@ -145,9 +109,6 @@ export function ParticipantObjectivesView({
   const league =
     rankLevelToLeague(player.rankLevel) ??
     (player.division === null ? null : leagueFilterRank(player.division));
-
-  const matchesFilter =
-    achievedShown.length + contendingShown.length + waitingShown.length;
 
   return (
     <div className="flex flex-col gap-8">
@@ -237,86 +198,64 @@ export function ParticipantObjectivesView({
         </p>
       </header>
 
-      <MobileSectionIndex sections={SECTIONS} ariaLabel={SECTION_INDEX_LABEL} />
+      <SectionIndexBar sections={SECTIONS} ariaLabel={SECTION_INDEX_LABEL} />
 
-      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_13rem] lg:gap-14">
-        <div className="flex min-w-0 flex-col gap-10">
-          <FilterBar
-            groups={groups}
-            group={group}
-            groupLabels={groupLabels}
-            countOf={(item) => groupCounts.get(item) ?? 0}
-            total={options.length}
-            matches={matchesFilter}
-            onGroupChange={setGroup}
-          />
+      <ObjectiveSection
+        id="al-alcance"
+        title="Al alcance"
+        note={
+          contending.length === 1
+            ? "1 objetivo en el que ya tienes puesto"
+            : `${contending.length} objetivos en los que ya tienes puesto`
+        }
+        pointsLabel="en juego"
+        items={contending}
+        groupLabels={groupLabels}
+        emptyMessage="Ahora mismo no apareces en la clasificación de ningún objetivo. En cuanto cierres una partida que cuente para uno, saldrá aquí tu puesto."
+        minimumsByObjective={minimumsByObjective}
+        onOpen={setActive}
+        highlight
+      />
 
-          {group === null || contendingShown.length > 0 ? (
-            <ObjectiveSection
-              id="al-alcance"
-              title="Al alcance"
-              note={
-                contendingShown.length === 1
-                  ? "1 objetivo en el que ya tienes puesto"
-                  : `${contendingShown.length} objetivos en los que ya tienes puesto`
-              }
-              pointsLabel="en juego"
-              items={contendingShown}
-              groupLabels={groupLabels}
-              emptyMessage="Ahora mismo no apareces en la clasificación de ningún objetivo. En cuanto cierres una partida que cuente para uno, saldrá aquí tu puesto."
-              minimumsByObjective={minimumsByObjective}
-              onOpen={setActive}
-              highlight
-            />
-          ) : null}
+      <ObjectiveSection
+        id="en-posesion"
+        title="En posesión"
+        note={
+          achieved.length === 1
+            ? "1 objetivo en tu haber"
+            : `${achieved.length} objetivos en tu haber`
+        }
+        pointsLabel="en tu haber"
+        items={achieved}
+        groupLabels={groupLabels}
+        emptyMessage="Todavía no has ganado ningún objetivo especial. Los tienes listados abajo, con lo que pide cada uno."
+        minimumsByObjective={minimumsByObjective}
+        onOpen={setActive}
+      />
 
-          {group === null || achievedShown.length > 0 ? (
-            <ObjectiveSection
-              id="en-posesion"
-              title="En posesión"
-              note={
-                achievedShown.length === 1
-                  ? "1 objetivo en tu haber"
-                  : `${achievedShown.length} objetivos en tu haber`
-              }
-              pointsLabel="en tu haber"
-              items={achievedShown}
-              groupLabels={groupLabels}
-              emptyMessage="Todavía no has ganado ningún objetivo especial. Los tienes listados abajo, con lo que pide cada uno."
-              minimumsByObjective={minimumsByObjective}
-              onOpen={setActive}
-            />
-          ) : null}
+      <ObjectiveSection
+        id="sin-disputar"
+        title="Sin disputar todavía"
+        note={
+          waiting.length === 1
+            ? "1 objetivo que aún no cuenta contigo"
+            : `${waiting.length} objetivos que aún no cuentan contigo`
+        }
+        pointsLabel="en juego"
+        items={waiting}
+        groupLabels={groupLabels}
+        emptyMessage="Estás en la carrera de todos los objetivos."
+        minimumsByObjective={minimumsByObjective}
+        onOpen={setActive}
+        compact
+      />
 
-          {group === null || waitingShown.length > 0 ? (
-            <ObjectiveSection
-              id="sin-disputar"
-              title="Sin disputar todavía"
-              note={
-                waitingShown.length === 1
-                  ? "1 objetivo que aún no cuenta contigo"
-                  : `${waitingShown.length} objetivos que aún no cuentan contigo`
-              }
-              pointsLabel="en juego"
-              items={waitingShown}
-              groupLabels={groupLabels}
-              emptyMessage="Estás en la carrera de todos los objetivos."
-              minimumsByObjective={minimumsByObjective}
-              onOpen={setActive}
-              compact
-            />
-          ) : null}
-
-          <SummarySection
-            leading={leading}
-            onPodium={onPodium}
-            oneAway={oneAway}
-            contendingPoints={contendingPoints}
-          />
-        </div>
-
-        <SectionIndexAside sections={SECTIONS} ariaLabel={SECTION_INDEX_LABEL} />
-      </div>
+      <SummarySection
+        leading={leading}
+        onPodium={onPodium}
+        oneAway={oneAway}
+        contendingPoints={contendingPoints}
+      />
 
       {active === null ? null : (
         <ObjectiveRankingDialog
@@ -428,7 +367,7 @@ function ObjectiveSection({
           {emptyMessage}
         </p>
       ) : compact ? (
-        <ul className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        <ul className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((objective) => (
             <li key={objective.id}>
               <ObjectiveChip
@@ -440,7 +379,7 @@ function ObjectiveSection({
           ))}
         </ul>
       ) : (
-        <ul className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <ul className="mt-3 grid gap-3 lg:grid-cols-2">
           {items.map((objective) => (
             <ObjectiveRow
               key={objective.id}
@@ -456,7 +395,13 @@ function ObjectiveSection({
   );
 }
 
-/** Una fila de objetivo: qué es, cuánto vale, cómo va el jugador en él. */
+/**
+ * Una tarjeta de objetivo. La jerarquía la fija el orden: arriba la identidad
+ * (emblema, nombre y puntos); debajo, como protagonista, el avance del jugador
+ * en sus tres datos; y al final, en tono apagado, lo accesorio (la regla) y la
+ * puerta a la clasificación. El pie va anclado abajo (`mt-auto`) para que las
+ * tarjetas de una misma fila lo alineen aunque su texto no ocupe lo mismo.
+ */
 function ObjectiveRow({
   objective,
   groupLabels,
@@ -474,18 +419,20 @@ function ObjectiveRow({
 
   return (
     <li
-      className={`flex flex-col rounded-lg border bg-surface p-4 ${
+      className={`flex flex-col rounded-lg border bg-surface p-5 ${
         objective.achieved ? "border-accent/35" : "border-line"
       }`}
     >
       <div className="flex items-start gap-4">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
-          <ObjectiveIcon option={objective} className="size-5 shrink-0" />
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
+          <ObjectiveIcon option={objective} className="size-6 shrink-0" />
         </span>
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 className="min-w-0 font-medium text-foreground">{objective.label}</h3>
+            <h3 className="min-w-0 font-display text-base font-semibold leading-snug text-foreground">
+              {objective.label}
+            </h3>
             {objective.detail !== null ? (
               <span className="text-xs text-muted">({objective.detail.label})</span>
             ) : null}
@@ -495,34 +442,33 @@ function ObjectiveRow({
               <PositionBadge position={objective.position} />
             )}
           </div>
-
           <p className="mt-0.5 text-xs text-muted">{groupLabels[objective.group]}</p>
-
-          <p className="mt-2 text-sm leading-relaxed text-muted">
-            {objective.description}
-          </p>
-
-          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3">
-            <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
-            <Fact
-              label="Posición"
-              value={objective.achieved ? "Poseído" : positionText(objective)}
-            />
-            <Fact label="Al primero" value={distance ?? "—"} />
-          </dl>
-
-          <MinimumProgress current={current} minimum={minimum} />
         </div>
 
         <PointsPlate points={objective.points} achieved={objective.achieved} />
       </div>
 
-      <div className="mt-3 flex justify-end border-t border-line pt-2">
+      <dl className="mt-4 grid grid-cols-3 gap-x-4 gap-y-2">
+        <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
+        <Fact
+          label="Posición"
+          value={objective.achieved ? "Poseído" : positionText(objective)}
+        />
+        <Fact label="Al primero" value={distance ?? "—"} />
+      </dl>
+
+      <MinimumProgress current={current} minimum={minimum} />
+
+      <p className="mt-3 text-xs leading-relaxed text-muted">
+        {objective.description}
+      </p>
+
+      <div className="mt-auto flex justify-end border-t border-line pt-3">
         <button
           type="button"
           onClick={() => onOpen(objective)}
           aria-label={`Ver la clasificación de ${objective.label}`}
-          className="-my-2 rounded-sm py-2 text-xs font-medium text-accent underline-offset-4 transition-colors hover:underline"
+          className="-mb-1 rounded-sm pb-1 text-xs font-medium text-accent underline-offset-4 transition-colors hover:underline"
         >
           Ver clasificación
         </button>
@@ -546,7 +492,7 @@ function ObjectiveChip({
       type="button"
       onClick={() => onOpen(objective)}
       aria-label={`Ver la clasificación de ${objective.label}`}
-      className="group flex w-full items-center gap-3 rounded-md border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-line-strong hover:bg-surface-raised"
+      className="group flex w-full items-center gap-3 rounded-md border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-line-strong hover:bg-surface-raised"
     >
       <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
         <ObjectiveIcon option={objective} className="size-4 shrink-0" />
@@ -565,95 +511,6 @@ function ObjectiveChip({
       </span>
     </button>
   );
-}
-
-/** Filtro por familia de objetivo. Agrupa los tres bloques a la vez. */
-function FilterBar({
-  groups,
-  group,
-  groupLabels,
-  countOf,
-  total,
-  matches,
-  onGroupChange,
-}: {
-  groups: ObjectiveGroup[];
-  group: ObjectiveGroup | null;
-  groupLabels: Record<ObjectiveGroup, string>;
-  countOf: (group: ObjectiveGroup) => number;
-  total: number;
-  matches: number;
-  onGroupChange: (group: ObjectiveGroup | null) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-        <span id="filtro-familias" className="shrink-0 text-xs font-semibold text-muted sm:w-20">
-          Familia
-        </span>
-        <div role="group" aria-labelledby="filtro-familias" className="flex flex-wrap items-center gap-2">
-          <FilterPill active={group === null} onClick={() => onGroupChange(null)}>
-            Todas
-            <Count value={total} />
-          </FilterPill>
-          {groups.map((item) => (
-            <FilterPill
-              key={item}
-              active={group === item}
-              onClick={() => onGroupChange(group === item ? null : item)}
-            >
-              {groupLabels[item]}
-              <Count value={countOf(item)} />
-            </FilterPill>
-          ))}
-        </div>
-      </div>
-
-      {group === null ? null : (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p role="status" className="text-xs text-muted">
-            {matches} de {total} {total === 1 ? "objetivo" : "objetivos"}
-          </p>
-          <button
-            type="button"
-            onClick={() => onGroupChange(null)}
-            className="text-xs font-medium text-muted underline-offset-4 transition-colors hover:text-accent hover:underline"
-          >
-            Quitar filtro
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FilterPill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-xs font-semibold transition-colors ${
-        active
-          ? "border-accent bg-accent text-accent-ink"
-          : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Count({ value }: { value: number }) {
-  return <span className="tabular-nums opacity-70">{value}</span>;
 }
 
 /**
@@ -695,7 +552,8 @@ function SummarySection({
 }
 
 /**
- * Dato de la fila: rótulo pequeño y valor debajo, en el orden de lectura visual.
+ * Dato del avance: rótulo pequeño arriba y valor debajo, con más peso. Sin
+ * recorte: el valor se lee entero y, si no cabe, hace wrap en vez de perderse.
  */
 function Fact({
   label,
@@ -708,12 +566,11 @@ function Fact({
 }) {
   return (
     <div className="min-w-0">
-      <dt className="truncate text-muted">{label}</dt>
+      <dt className="text-xs text-muted">{label}</dt>
       <dd
-        className={`truncate tabular-nums ${
-          strong ? "font-semibold text-foreground" : "text-foreground"
+        className={`mt-0.5 text-sm text-foreground tabular-nums ${
+          strong ? "font-semibold" : "font-medium"
         }`}
-        title={value}
       >
         {value}
       </dd>

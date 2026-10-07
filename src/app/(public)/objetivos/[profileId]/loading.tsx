@@ -41,14 +41,12 @@ export default function Loading() {
 
       <div
         aria-hidden="true"
-        className="rounded-lg border border-line bg-surface p-4"
+        className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-line pb-2"
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="h-10 w-20 rounded-full bg-surface-raised" />
-          <span className="h-10 w-24 rounded-full bg-surface-raised" />
-          <span className="h-10 w-20 rounded-full bg-surface-raised" />
-          <span className="h-10 w-28 rounded-full bg-surface-raised" />
-        </div>
+        <span className="h-4 w-24 rounded bg-surface-raised" />
+        <span className="h-7 w-20 rounded-md bg-surface-raised" />
+        <span className="h-7 w-24 rounded-md bg-surface-raised" />
+        <span className="h-7 w-24 rounded-md bg-surface-raised" />
       </div>
 
       {[0, 1].map((section) => (
@@ -57,11 +55,11 @@ export default function Loading() {
             <span className="h-5 w-36 rounded bg-surface-raised" />
             <span className="h-3 w-40 rounded bg-surface-raised" />
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {[0, 1, 2].map((card) => (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {[0, 1].map((card) => (
               <span
                 key={card}
-                className="h-44 rounded-lg border border-line bg-surface"
+                className="h-48 rounded-lg border border-line bg-surface"
               />
             ))}
           </div>
@@ -73,7 +71,7 @@ export default function Loading() {
           <span className="h-5 w-44 rounded bg-surface-raised" />
           <span className="h-3 w-40 rounded bg-surface-raised" />
         </div>
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2, 3, 4, 5].map((chip) => (
             <span
               key={chip}
