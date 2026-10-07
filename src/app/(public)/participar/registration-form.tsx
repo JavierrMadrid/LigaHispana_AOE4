@@ -65,13 +65,13 @@ const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "
  */
 export function RegistrationForm({
   countries,
-  discord,
   registrationOpen,
+  discord,
 }: {
   countries: string[];
-  discord: DiscordStep;
   /** Si el plazo está cerrado, el envío se desactiva y se explica por qué. */
   registrationOpen: boolean;
+  discord: DiscordStep;
 }) {
   const [state, formAction, pending] = useActionState(registerPlayer, initialState);
 
