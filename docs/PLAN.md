@@ -2,7 +2,7 @@
 
 Seguimiento de la Liga Hispana de Age of Empires IV. Torneo **individual** con clasificación calculada a partir de las partidas de los participantes, obtenidas de la API de [AoE4World](https://aoe4world.com/api).
 
-> **Regla de puntos**: puntúa **cualquier partida clasificatoria**, no solo la ladder *ranked* 1v1 (`rm_solo`). Por eso `Match` guarda `leaderboard` y `rawJson`: el motor de F3 filtra y puede recalcular sin volver a pedir todo el histórico a la API. `rm_solo` es el valor por defecto porque hoy es el caso mayoritario, no porque sea el único válido. Desde F8 hay una **cuarta** condición: una partida marcada con `Match.revertedAt` por el panel de admin deja de puntuar, pero sigue en el histórico y se puede restaurar.
+> **Regla de puntos**: puntúa **cualquier partida clasificatoria**, no solo la ladder *ranked* 1v1 (`rm_solo`). Por eso `Match` guarda `leaderboard` y `rawJson`: el motor de F3 filtra y puede recalcular sin volver a pedir todo el histórico a la API. `rm_solo` es el valor por defecto porque hoy es el caso mayoritario, no porque sea el único válido. Desde F8 hay una **cuarta** condición: una partida marcada con `Match.revertedAt` por el panel de admin deja de puntuar, pero sigue en el histórico y se puede restaurar. Y hay una **quinta** condición, la más reciente: la partida tiene que ser **posterior al corte de inscripción** del jugador (`max(window.from, Player.registeredAt)`), para que a un alta de mitad de torneo no le cuenten las partidas de antes de entrar.
 
 ## Referencia funcional: ordreduwololo.fr
 
@@ -198,7 +198,10 @@ AoE4World API ──poll──► Worker/Cron ──► PostgreSQL (Supabase)
 ## Modelo de datos (schema actual)
 
 ```
-Player     (id, profileId unico, name, aoe4WorldName?, twitchChannel?, contactEmail?, status: PENDING|APPROVED|REJECTED, timestamps)
+Player     (id, profileId unico, name, aoe4WorldName?, twitchChannel?, contactEmail?, country?,
+            registeredAt? — corte de inscripción, null = desde el inicio de la ventana,
+            discordUserId unico?, discordUsername unico?, discordInGuild?, discordCheckedAt?,
+            status: PENDING|APPROVED|REJECTED, timestamps)
 Match      (id, [playerId, gameId] unico, playerId FK, opponentProfileId?, opponentName?,
             civ?, opponentCiv?, civRandomized, map?, leaderboard="rm_solo", mode?,
             result?: WIN|LOSS (null = sin resolver),
@@ -219,6 +222,7 @@ Notas:
 - `leaderboard` es una `String` (no enum) precisamente para no tener que migrar cada vez que aparece un modo de juego nuevo en la API. `mode` es la **familia de ladder resuelta** (`rm_1v1` -> `rm_solo`, `rm_2v2`/`rm_3v3`/`rm_4v4` -> `rm_team`) y es por la que filtra el motor; `leaderboard` no se toca, porque es el registro literal de lo que dijo la API.
 - `result` admite `null`: significa que la partida aún no está resuelta por la API. El motor no puntúa esas filas.
 - `revertedAt` es la cuarta condición de "cuenta como clasificatoria" (F8): es la marca que pone el panel para que una partida deje de puntuar, y la regla la lee `src/lib/ranked-match.ts` en sus tres traducciones, así que no da ni victorias ni objetivos. **El worker no la toca**, y por eso la marca sobrevive a la reimportación.
+- `registeredAt` es la quinta: el **corte de inscripción**. La ventana del torneo es global, pero la de cada jugador es `max(window.from, registeredAt)`, así que a un alta de mitad de torneo no le cuentan las partidas anteriores. Va en las tres traducciones de la regla y **también en los 38 objetivos**, que son *winner-takes-all*: sin esto, un alta tardía con muchas partidas podría robarle un objetivo a quien lo tenía. **Nullable a propósito**: la base es producción y no hay *staging*, así que no lleva *backfill* y `null` —"cuenta desde el principio de la ventana"— es lo que les toca a las filas que ya estaban. No reutiliza `createdAt` porque una reinscripción de `REJECTED` reutiliza la fila, y se escribe en el alta (no al aprobar) para que apuntarse a tiempo no cueste partidas.
 - `AdminAction` es el historial **append-only** de lo que hace la organización (F8). `summary` se redacta en español en el momento de escribir la fila (`src/lib/admin-actions.ts`) y la interfaz lo pinta tal cual, para que el rastro y la pantalla no puedan divergir. El enum es corto a propósito —solo lo que **alguien más ve**: un jugador entra, sale o se le corrigen sus datos, una partida deja de puntuar o vuelve a puntuar—, y aprobar o rechazar una solicitud **no** se registra porque no cambia nada de lo que ve el público. Editar **sí**: el nombre y los canales salen en la clasificación y en `/partidas`.
 - `ObjectiveEvent` es un **espejo reconciliado** del cómputo de objetivos, no un log: una fila por objetivo cumplido (38 como mucho) y `achievedAt` = el instante de la hazaña en las carreras de `civilizacion` y el fin del torneo en los 14 objetivos "en caliente", que solo se registran cuando la ventana ya ha terminado. Lo escribe `recomputeScores()` dentro de su transacción (`src/lib/objective-events.ts`), y **se borra** si el objetivo deja de cumplirse: por eso no guarda etiqueta ni puntos (se resuelven al leer del catálogo y del ruleset activo) ni puede quedar apuntando a un poseedor al que ya le movieron los puntos. Detalle en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md) §1.6.
 - `PlayerScore` es el agregado **versionado** que lee la web. El modelo completo está en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md): la parte que no depende de las reglas ya está aplicada y la que depende (ruleset Wololo, snapshots, categorías) está diferida.
@@ -232,7 +236,7 @@ Notas:
   sale de ningún `join`. El `dedupeKey` es una **columna de texto** y no un índice único compuesto
   porque en Postgres los `NULL` de un índice único no colisionan, y el sujeto es opcional; sobre él
   va el `skipDuplicates` que hace la evaluación idempotente.
-- `Setting` no es solo configuración: también es la memoria del worker (`aoe4world.sync.player.<profileId>`) y el rastro del motor (`scoring.lastRun`). Añade `sync.lastRun`, el rastro de la última pasada del sincronizador, que es lo que hace visible un fallo suyo: contadores, errores y los jugadores que no se pudieron sincronizar, más un `lastSuccessAt` que solo avanza en las pasadas enteras. La simulación con jugadores reales añade `simulation.roster`, el **manifiesto de a quién dio de alta y con qué identidad**: es lo único que permite deshacerla sin borrar participantes de verdad.
+- `Setting` no es solo configuración: también es la memoria del worker (`aoe4world.sync.player.<profileId>`, `discord.roster`, que es la última lista de miembros del servidor que se ha podido leer) y el rastro del motor (`scoring.lastRun`). Añade `sync.lastRun`, el rastro de la última pasada del sincronizador, que es lo que hace visible un fallo suyo: contadores, errores y los jugadores que no se pudieron sincronizar, más un `lastSuccessAt` que solo avanza en las pasadas enteras. La simulación con jugadores reales añade `simulation.roster`, el **manifiesto de a quién dio de alta y con qué identidad**: es lo único que permite deshacerla sin borrar participantes de verdad. Y `registration.open` es el **interruptor manual del plazo de inscripción**: un booleano que el panel abre y cierra a mano y que comparten la inscripción pública y el alta de admin (ver F6).
 
 ## Integración con AoE4World
 
@@ -278,6 +282,29 @@ El sistema de puntuación real está definido e implementado. La rama antigua de
   y sin columnas ni índices nuevos. El worker sigue importando el histórico entero. Las
   fechas del código son **de pruebas** (15-sep-2026 → 15-oct-2026) y las oficiales se
   reconfiguran en `Setting` sin desplegar.
+- [x] **Corte de inscripción** (`Player.registeredAt`): el corte de cada jugador es
+  `max(window.from, registeredAt)`, así que a quien la organización da de alta **a mitad de
+  torneo** no le cuentan las partidas que jugó antes de entrar, por muchas que le importara
+  el worker de su histórico. **Los 38 objetivos van con el mismo corte**, para que no se
+  pueda robar un objetivo con partidas que no puntúan.
+  - **La fecha es la del envío del alta, no la de la aprobación**, así que apuntarse a tiempo
+    no cuesta partidas aunque la organización apruebe más tarde. Se escribe en el
+    `player.create` del formulario público y del alta de admin, **no** se toca al aprobar y el
+    diálogo de edición no lo mueve.
+  - **Nullable y sin *backfill***: la base es producción y no hay *staging*, así que
+    `db:push` no toca filas y `null` —"desde el principio de la ventana"— es lo que les toca a
+    los ya inscritos. **No se deduce de `createdAt`**, porque una reinscripción de `REJECTED`
+    reutiliza la fila. Requisito operativo: `npm run db:push`. **No** hace falta
+    `npm run db:security`: no se crea ninguna tabla.
+  - **El agregado de la clasificación pasó de `groupBy` a SQL crudo**: el corte compara
+    `Match.startedAt` con `Player.registeredAt` y un `where` de Prisma solo compara un campo con
+    un valor (la referencia a campo de Prisma 7 es entre campos del mismo modelo y rechaza la
+    del otro). El predicado sigue siendo el mismo `rankedMatchSql()`, con la fila de `Player`
+    delante, así que no nace una segunda definición de la regla.
+  - **Dos consumidores se apartan del corte, a propósito**: el historial del panel
+    (`classificatoryWhere`, con `registeredAt = null`), que enseña el recorrido entero de cada
+    participante con sus 0 puntos a la vista, y las dos reglas de transparencia del historial
+    de F11, que preguntan qué partidas existen y qué publica la API.
 - [x] **38 objetivos en 5 grupos** tras la reagrupación del cliente: Actividad
   (`loco-por-ganar`, `otp`), Racha (`golpe-de-suerte`, `prohibido-perder`), Divisiones
   (6 `sensei-*`), Formatos (4 `rey-*`) y Civilizaciones (23 `masterizar-*`, carreras a
@@ -478,13 +505,31 @@ Pendiente de F4:
       verificación en servidor con `fetch` inyectable, falla cerrado y **desactivado si no hay
       `TURNSTILE_SECRET_KEY`** (en producción hay que definir site key y secret). Cierra el hueco
       de rotar `x-forwarded-for` que dejaba el rate limit.
-- [x] **Email de contacto obligatorio** (`Player.contactEmail`, nullable en BD porque el alta de
-      admin no lo pide): validado en servidor y visible en la columna Contacto de
+- [x] **Email de contacto obligatorio** (`Player.contactEmail`, nullable en BD porque en el panel
+      es opcional): validado en servidor y visible en la columna Contacto de
       `/admin/jugadores`.
+  - **El panel también lo pide, y es opcional (#29)**: el alta de admin y el diálogo de edición
+      lo escriben con el **mismo criterio que el país** —vacío es `null` ("no lo sabemos") y un
+      valor escrito que no es una dirección es un error, no un `null` en silencio—, y con el
+      mismo `parseEmail` de `player-input.ts` que usa `/participar`. Es opcional, y no
+      obligatorio como en la inscripción pública, por el mismo motivo que el país: se puede dar
+      de alta a alguien cuyo correo no se conoce, y las filas que ya estaban en la base de
+      producción no lo tienen. La columna sigue siendo nullable y **no lleva `backfill`**.
+      - Se añadió también a la **edición** (`updatePlayer`, que con esto escribe siete campos) y
+        no solo al alta para que un correo mal escrito se pueda corregir sin borrar y rehacer
+        el alta. Entra en el mismo criterio que el resto de campos editables: vacío es `null`.
+      - El texto del error es **propio del panel** (`EMAIL_INVALID_ERROR`), como los de los
+        canales: los dos formularios validan con el mismo parser, pero cada uno habla con quien
+        lo rellena —en `/participar` se le habla de "te" a quien se inscribe, aquí a quien
+        administra—, y lo que sí se comparte entre alta y edición es la constante, para que el
+        mismo campo no se valide de dos maneras en el mismo panel.
 - [x] **Reinscripción de un `REJECTED`**: un envío nuevo actualiza la fila existente (nombre,
       Twitch, email, `aoe4WorldName`, avatar) y la devuelve a `PENDING`, con el `UPDATE` filtrado
       por estado para no pisar una aprobación concurrente. `APPROVED` y `PENDING` siguen
       bloqueando.
+      - **`registeredAt` no se mueve en la reinscripción**: es el **envío del alta**, la fecha de
+        inscripción, y la fila es la misma persona desde su primera solicitud. Moverno solo
+        escribiría el alta y nadie lo pidió.
 - [x] **País del participante** (`Player.country`, nullable en BD por lo mismo que el correo):
       **obligatorio** en la inscripción pública y **opcional** en el alta de admin, que es donde se
       gestiona y donde sale en los listados. Es un `String` con el **rótulo canónico** ("República
@@ -534,6 +579,18 @@ Pendiente de F4:
       para ver la vigente y `--dry-run` para ver el cambio sin escribir). Hasta que se siembre, todo
       funciona con `DEFAULT_COUNTRIES`. **No** hace falta `npm run db:security`: no se crea ninguna
       tabla.
+- [x] **Interruptor manual del plazo de inscripción** (`Setting["registration.open"]`): el cierre
+      deja de ser un flag hardcodeado en `src/lib/registration-open.ts` y pasa a ser un booleano
+      que la organización abre y cierra desde `/admin` (sección **Inscripciones**) sin desplegar.
+      Es el mismo dato para las dos puertas de entrada: `registerPlayer` lo rechaza en servidor en
+      cada envío real y `createPlayer` bloquea el alta de admin, mientras que aprobar/rechazar
+      solicitudes sigue siempre disponible. Sin fila publicada el plazo está **cerrado**
+      (`DEFAULT_REGISTRATION_OPEN = false`), que es el comportamiento que tenía el flag; en el
+      alta la lectura falla cerrando y se distingue "no hay dato" (default) de "no se ha podido
+      leer" (error de base). El contrato puro (clave, default, parser y mensaje compartido) vive en
+      `src/lib/registration-open.ts` y se comprueba en
+      `tests/unit/lib/registration-open.test.ts`; el botón y el aviso de `/participar` son su cara
+      visible, no la defensa. No hay cambio de schema.
 
 ### F7 — Reglas reales + pulido
 - [x] **Objetivos y reglas del torneo definidos y conectados al motor** (versión 2, ver F3 y
@@ -721,19 +778,21 @@ cuando hay pendientes.
       del sync son cosas distintas y no se mezclan.
 - [x] **Editar un participante que ya está en el panel** (`updatePlayer`, en
       `src/app/admin/actions.ts`, con la interfaz en la pestaña de participantes):
-      reescribe **cinco** campos —`name`, `twitchChannel`, `youtubeChannel`,
-      `kickChannel` y `country`— y nada más. Se quedan fuera a propósito el **estado**
-      (que ya tiene aprobar/rechazar/eliminar), el **`profileId`** (es la identidad
-      en AoE4World y único: cambiarlo sería cambiar de persona), el `aoe4WorldName`,
-      el avatar y todo lo que escribe el worker (elo, división, racha, `*IsLive`), y
-      por supuesto los puntos y el ranking, que ni se leen.
-  - **No recalcula ni trae partidas**, al revés que el alta: ninguno de los cinco
+      reescribe **siete** campos —`name`, `contactEmail`, `twitchChannel`,
+      `youtubeChannel`, `kickChannel`, `country` y `discordUsername`— y nada más. Se
+      quedan fuera a propósito el **estado** (que ya tiene aprobar/rechazar/eliminar),
+      el **`profileId`** (es la identidad en AoE4World y único: cambiarlo sería
+      cambiar de persona), el `aoe4WorldName`, el avatar y todo lo que escribe el
+      worker (elo, división, racha, `*IsLive`), el **`discordUserId`** (que solo
+      firma Discord) y por supuesto los puntos y el ranking, que ni se leen.
+  - **No recalcula ni trae partidas**, al revés que el alta: ninguno de los siete
       campos entra en el motor de puntos ni en el de alertas —`PlayerScore` y `Alert`
-      hablan de partidas, no de cómo se llama alguien—, así que no hay nada derivado
-      que se quede viejo. Revalida solo `/admin`; la web pública es `force-dynamic`.
-  - **El formulario es una foto completa de la fila**: los cinco campos se reescriben
+      hablan de partidas y de lo que se ha comprobado fuera del juego, no de cómo se
+      llama alguien—, así que no hay nada derivado que se quede viejo. Revalida solo
+      `/admin`; la web pública es `force-dynamic`.
+  - **El formulario es una foto completa de la fila**: los siete campos se reescriben
       con lo que venga y un vacío es `null` ("no tiene canal", "no lo sabemos del
-      país"), que es el criterio del alta. **No hay un "no tocado"** y es
+      correo o del país"), que es el criterio del alta. **No hay un "no tocado"** y es
       deliberado: un contrato de "escribe solo los campos que mande el formulario"
       daría dos formas de lo mismo en el mismo panel y dejaría que un `FormData` al
       que le faltara un campo borrara el canal sin que nadie lo pidiera. Quien llama
@@ -741,8 +800,11 @@ cuando hay pendientes.
       valores que ya trae `AdminParticipant`.
   - **Validación compartida con el alta**: los mismos parsers y los mismos textos
       (`YOUTUBE_INVALID_ERROR`, `YOUTUBE_LEGACY_URL_ERROR`, `KICK_INVALID_ERROR`,
-      `TWITCH_INVALID_ERROR`, `COUNTRY_UNKNOWN_ERROR`), y el país **opcional** —vacío es
-      `null` y un valor fuera de la lista vigente es un error—. La lista se lee de
+      `TWITCH_INVALID_ERROR`, `COUNTRY_UNKNOWN_ERROR`, `EMAIL_INVALID_ERROR`), y el
+      país, el correo y los tres canales **opcionales** —vacío es `null` y un valor
+      mal escrito es un error—. El `@usuario` de Discord es la excepción: obligatorio,
+      porque `null` en él no sería "no lo sabemos" sino una fila que no se puede
+      buscar en el servidor. La lista se lee de
       `Setting` **solo si el envío trae país**, para que un corte al leerla no impida
       corregir el nombre o un canal. Los **tres** canales, el de Twitch incluido, se
       rechazan igual en el alta y en la edición: la asimetría que había —`createPlayer`
@@ -751,7 +813,7 @@ cuando hay pendientes.
       que peor salía era el alta, que es donde el valor se escribe la primera vez y
       donde guardarlo mal no lo vuelve a corregir nadie.
   - **Concurrencia**: aprobar, rechazar y editar escriben **conjuntos de columnas
-      disjuntos** —estado por un lado, los cinco campos por otro—, así que ninguna
+      disjuntos** —estado por un lado, los siete campos por otro—, así que ninguna
       puede deshacer lo que escribió la otra y no hace falta coordinarlas. Es lo
       contrario de la reinscripción de `/participar`, donde el estado **cambia** y su
       `UPDATE` filtra por él justamente para no pisar una aprobación. No se usa
@@ -765,7 +827,7 @@ cuando hay pendientes.
       en `muted`— porque es la de uso diario y no debe competir con aprobar, rechazar ni
       eliminar, que sí cambian el estado o borran. El alta (`player-form.tsx`, con
       `createPlayer`) pide además `profileId` y estado y puede tardar segundos trayendo
-      partidas; la edición no toca ninguno de esos dos y solo manda una foto de los cinco
+      partidas; la edición no toca ninguno de esos dos y solo manda una foto de los siete
       campos, así que compartir el componente obligaría a parametrizarlo entero para ganar
       unas pocas líneas, y se copia su dialecto de campos (mismas clases, mismas pistas).
       La capa es `Modal` (foco al abrir y devuelto al cerrar, `Esc`, clic en el fondo,
@@ -876,10 +938,12 @@ el mismo" no significaría nada.
 
 **Qué cuenta como partida es la misma regla de siempre.** El motor no decide qué es clasificatoria:
 carga con `rankedMatchWhere()` (`src/lib/ranked-match.ts`), o sea familia del ruleset de puntos,
-partida resuelta, dentro de la ventana y **no revertida**. Por eso una alerta nunca puede acusar a
-alguien de una partida revertida, y no hay una segunda definición que se pueda desincronizar de la
-primera. Los umbrales de la ventana y la lista de modos **no** se duplican en el ruleset de
-alertas: se leen del de puntuación.
+partida resuelta, dentro de la ventana y **no revertida**, y le aplica además el **corte de
+inscripción** de cada jugador (`countsWithinWindow()` con su `Player.registeredAt`, porque un `where`
+de Prisma que abarca a todos no puede compararlo). Por eso una alerta nunca puede acusar a alguien de
+una partida revertida ni de una anterior a su alta, y no hay una segunda definición que se pueda
+desincronizar de la primera. Los umbrales de la ventana y la lista de modos **no** se duplican en el
+ruleset de alertas: se leen del de puntuación.
 
 **Los umbrales son configurables sin desplegar**: `Setting["alerts.ruleset"]`, versión 1, con
 `DEFAULT_ALERTS_RULESET` de respaldo y una validación que **nunca lanza** (mismo patrón que
@@ -1259,6 +1323,404 @@ que separa pintar el icono de no pintarlo), que un payload raro de YouTube avisa
 vez de leerse como "no hay directo", y que en Kick lo que no se entiende es `null`,
 un `404` es un canal que no existe y un fallo de red no se convierte en un `false`.
 
+### F12 — Discord obligatorio y pertenencia al servidor ✅ / por desplegar
+
+La organización se comunica con los participantes por su **servidor de Discord**, y hasta
+aquí no había ninguna relación entre el torneo y ese servidor: el site guardaba canales
+de Twitch, YouTube y Kick para señalar la emisión de alguien, pero no decía quién es esa
+persona en el único sitio donde la organización puede hablar con ella. F12 ata las dos
+cosas, y empieza por la inscripción porque es el punto en el que se puede atar sin
+romper nada de lo que ya funciona.
+
+La fase se hizo en **tres entregas y un ajuste** (las cuatro hechas):
+
+- **Entrega 1.** El vínculo por OAuth2 en la inscripción pública, el modelo de
+  datos y el panel como solo lectura.
+- **Entrega 2.** El worker que comprueba cada 12 h si la cuenta sigue en el
+  servidor (`Player.discordInGuild` / `discordCheckedAt`) y la alerta
+  `DISCORD_NOT_IN_GUILD`. El enum, las columnas y el rótulo de la regla se aplicaron
+  en la entrega 1, para que el `db push` fuera uno solo.
+- **Entrega 3 (interfaz).** El paso de Discord en `/participar` con sus tres
+  estados (sin conectar, conectado y dentro, conectado y fuera con invitación de
+  respaldo), el aviso del resultado del OAuth por `?discord=`, la sección "Discord"
+  de `/reglas`, la columna de solo lectura en el listado de participantes (con su
+  buscador) y el copy de la ventana "Reglas" de `/admin/alertas`, que pasa de dos a
+  tres reglas de estado.
+- **Ajuste (acordado con el cliente).** El `@usuario` como campo **obligatorio** que
+  escribe la organización —con su unicidad— y la comprobación de pertenencia por
+  **lista de miembros del servidor** en vez de una petición por cuenta. Está en
+  [El `@usuario` obligatorio y el roster](#el-usuario-obligatorio-y-el-roster).
+
+#### El paso es obligatorio y no es un campo
+
+**No hay ningún `input` de Discord en el formulario.** Es la decisión que sostiene todo
+lo demás: un campo de texto donde escribir un usuario de Discord es un campo que
+cualquiera rellena, y `Player.discordUserId` es justo el dato que no puede escribirse a
+mano —es la prueba de que esa cuenta es de esa persona, porque lo firma Discord—, así
+que dejarlo en un `<input>` sería dejar de comprobar lo único que hay que comprobar.
+
+Lo que hay es un botón que lleva a la pantalla de permisos de Discord y vuelve:
+
+```
+/participar  ──(botón)──►  /api/discord/oauth  ──►  discord.com/oauth2/authorize
+                                                                   │  identify guilds.join
+                                                                   ▼
+/participar ◄── ?discord=ok ◄── /api/discord/oauth/callback ◄── Discord
+   (cookie discord_link firmada)         (canje + /users/@me + auto-unión)
+```
+
+**Scopes `identify guilds.join`** y nada más. `identify` es el mínimo para saber quién
+es la persona; `guilds.join` es lo que autoriza al bot a meterla en el servidor sin que
+tenga que usar una invitación a mano. `guilds` no se pide porque leer los servidores de
+la persona no lo necesita nadie aquí.
+
+#### La identidad viaja en una cookie firmada
+
+Del callback al formulario hay que pasar un `userId`, y las dos formas cómodas de pasarlo
+son las que se descartaron: un campo del formulario (que cualquiera puede escribir) y una
+fila en la base de datos antes de tener la inscripción (que deja filas a medias de gente
+que empezó a rellenar y se fue). Lo que hay es una **cookie firmada con HMAC-SHA-256**,
+de vida corta (20 minutos), `httpOnly`, `sameSite: "lax"` y `secure` en producción, con
+el payload `{ userId, username, joined, iat }`.
+
+La caducidad se comprueba **dentro** de la firma y no con el `maxAge` del navegador: un
+`maxAge` que el cliente decide no cumplir no es un plazo. La firma se compara en tiempo
+constante, y la comprobación va en este orden: forma → firma → contenido → caducidad,
+para que una cookie manipulada y vieja salga como "firma" y no como "caducada" (decir que
+está caducada es afirmar algo sobre un contenido que nadie ha autenticado).
+
+`tests/unit/lib/discord/link.test.ts` cubre ese módulo entero: válida, caducada,
+manipulada (cambiar el id, cambiar `joined`), firmada con otro secreto, sin secreto y con
+contenido que no es un vínculo.
+
+#### El `state` va en cookie, y se borra siempre
+
+Es el patrón estándar de OAuth y está en los dos Route Handlers: el arranque genera un
+`crypto.randomUUID()`, lo deja en la cookie `discord_oauth_state` (10 minutos, `httpOnly`,
+`path` del callback) y lo manda en la URL; el callback lo compara con el de la cookie **y
+borra la cookie antes de decidir nada, en todos los caminos**. Sin esa cookie, un callback
+lanzado desde otra pestaña o desde otro sitio se engancharía a esta inscripción.
+
+#### El auto-unión no bloquea la inscripción
+
+`PUT /guilds/{guild_id}/members/{user_id}` con el `access_token` de la persona en el cuerpo
+y `Authorization: Bot <token>`. El bot necesita el permiso `CREATE_INSTANT_INVITE` y el
+usuario el scope `guilds.join`; si falta cualquiera de los dos, Discord contesta 4xx.
+
+**Un fallo ahí no bloquea la inscripción.** Se marca `joined: false`, se escribe la cookie
+igualmente, se redirige a `?discord=ok` y el formulario enseña la invitación de respaldo
+(`DISCORD_INVITE_URL`). El motivo es el mismo que en `findCountryIsoConflict()` y en
+`probeHistoryVisibility()`: bloquear por un problema de configuración **nuestro** deja
+fuera a alguien que sí cumple. Lo que sí bloquea es un fallo de **identidad** (sin
+`GET /users/@me` no hay `userId`, y sin eso no hay nada que guardar): eso sale como
+`?discord=error`.
+
+#### El `P2002` de `discordUserId` es un error propio
+
+`Player.discordUserId` es `@unique` (una cuenta de Discord no puede quedar en dos
+participantes) y eso hace que **haya dos `P2002` distintos** con el mismo código: el de
+`profileId` ("ese perfil ya está registrado") y el de `discordUserId` ("esa cuenta de
+Discord ya está vinculada a otro participante"). `persistRegistration()` lee
+`error.meta.target` para distinguirlos y devuelve `duplicate-discord`, que es un estado
+del `WriteOutcome` propio. Sin esa distinción, alguien con el perfil de AoE4World
+**nuevo** recibiría un mensaje que habla de un perfil que no tiene.
+
+#### La degradación: sin credenciales el paso no existe
+
+Mismo patrón que `TURNSTILE_SECRET_KEY` y que `YOUTUBE_API_KEY`: `getDiscordConfig()` no
+lanza, `isDiscordOAuthConfigured()` responde si están las cinco cosas (client id, client
+secret, token del bot, id del servidor y el secreto de firma) y, si falta cualquiera, el
+formulario **no pinta el paso**, la acción **no lo exige** y el aviso sale al log del
+servidor. En desarrollo el proyecto funciona sin configurar nada; **en producción las
+credenciales son obligatorias**, y sin el secreto de firma el vínculo no se puede habilitar
+(a diferencia de la sal de reserva del rate limit, aquí **no hay valor de respaldo en el
+código**: firmar una identidad con una clave pública del repositorio no impide
+falsificarla, solo la hace más cómoda).
+
+#### Lo que el admin puede y lo que no
+
+El panel **no toca la identidad de Discord**: `discordUserId` sigue fuera de
+`CamposEditables`, de `PlayerFormState`, de `createPlayer` y de `updatePlayer`, y solo
+se **muestra** en `AdminParticipant`. Es la misma decisión que ya estaba tomada para el
+`profileId` —cambiarlo sería cambiar de persona— y por el mismo motivo: un `userId`
+escrito a mano no es una identidad comprobada.
+
+Lo que el panel **sí** hace desde el ajuste de abajo es escribir el **`@usuario`**, que
+no es una identidad sino un dato de contacto con el servidor, y que es obligatorio en
+las dos acciones. La excepción a "el panel no añade ni edita Discord" es exactamente
+esa columna, y solo esa.
+
+#### Contrato de la interfaz (para `@design-ux`)
+
+La capa de datos está hecha y el formulario ya funciona con un marcado mínimo que **no** es
+una decisión de diseño. Lo que queda es el dialecto visual, en
+`src/app/(public)/participar/registration-form.tsx` (`DiscordStep`):
+
+| Estado | Qué recibe el formulario | Qué hay que pintar |
+|---|---|---|
+| Sin configurar | `configured: false` | **Nada.** El paso no existe (degradación) |
+| Sin conectar | `configured: true`, `linkedUsername: null` | Botón "Conectar con Discord" a `/api/discord/oauth`, con el texto de que es obligatorio, y el error de `fieldErrors.discord` cuando el servidor lo rechaza |
+| Conectado y dentro | `linkedUsername`, `joined: true` | El nombre de usuario y nada más |
+| Conectado y fuera | `linkedUsername`, `joined: false`, `inviteUrl` | El nombre y el enlace de invitación de respaldo |
+
+`linkedUsername` llega **sin arroba** (`pepito`), porque es la forma canónica de la
+columna: el callback normaliza antes de firmar la cookie. Quien lo pinte lo enseña
+**con arroba** (`@pepito`), que es como se escribe y como la persona lo reconoce; esa
+decisión es de la interfaz y no cambia lo que se guarda.
+
+La página sigue dejando `?discord=ok|cancel|error|no-config` en la URL y **hoy no lo lee**:
+si hay que avisar de que el paso terminó, se canceló o falló, ese aviso se pinta a partir
+de `searchParams` en `page.tsx`. La copia de `/reglas` (qué se hace en el servidor, para
+qué y qué pasa si no se entra) también es de `@design-ux`.
+
+Un detalle que hay que decidir en la interfaz: si quien vuelve al formulario después de
+20 minutos ve otra vez el botón, **sin error**. Es lo correcto —el error de caducidad no
+lleva a ninguna corrección—, pero la pregunta es si basta con el texto de que es
+obligatorio o si hace falta además un aviso de "tu conexión ha caducado".
+
+#### Entrega 2 — la comprobación de pertenencia, en el worker
+
+El vínculo de la entrega 1 dice **quién** es la persona en Discord; no dice que esa
+cuenta **siga** en el servidor. Se puede salir en cualquier momento, y desde entonces la
+organización no tiene por dónde hablar con quien se inscribió. La comprobación es
+`GET /guilds/{guild_id}/members/{user_id}` con `Authorization: Bot <token>`, a través
+del cliente único de `src/lib/discord/http.ts`.
+
+| Decisión | Cómo |
+|---|---|
+| **Cadencia** | Una comprobación por jugador **cada 12 h**, con el plazo cacheado en `Player.discordCheckedAt` (`DISCORD_CHECK_TTL_HOURS`). El worker corre cada ~5 minutos, así que sin caché serían 288 peticiones por jugador al día para no aprender nada nuevo |
+| **A quién** | Solo participantes `APPROVED` **con `discordUserId` informado** (`src/lib/discord/check.ts`). A quien no lo tenga —altas de admin, filas anteriores a F12, torneo simulado— **se le ignora: ni se comprueba ni alerta** |
+| **Tope por pasada** | `DISCORD_CHECK_MAX_PER_RUN`, **10** por defecto, configurable con la variable de entorno del mismo nombre (`DiscordConfig.maxChecksPerRun`). Existe por el despliegue: al ponerlo en marcha todas las filas tienen `discordCheckedAt = null`, así que la primera pasada tendría al torneo entero venciendo la caché a la vez; con diez, treinta participantes se escalonan en tres pasadas |
+| **Veredicto** | `200` = está; `DiscordError` con `404` = no está; **cualquier otra cosa** (red, timeout, `401`, `5xx`) = `unknown`. El mapeo vive en `src/lib/discord/membership.ts`, que es **puro** y se prueba entero sin red |
+| **Qué escribe** | `200` → `discordInGuild = true` + `discordCheckedAt`. `404` → `discordInGuild = false` + `discordCheckedAt` **y** alerta `DISCORD_NOT_IN_GUILD` (`AlertKind.STATE_DETECTED`, `SELF_SUBJECT`, `count`/`threshold` 1/1, con la evidencia en `details`: `discordUserId`, `discordCheckedAt` en ISO y el estado HTTP) |
+| **Un `unknown`** | **No escribe nada**, ni columnas ni alerta, igual que `checkPlayerHistory()`: un `5xx` no significa "no está en el servidor". El jugador vuelve a la cola en la siguiente pasada, porque su `discordCheckedAt` sigue viejo |
+| **Sin resolución** | `Alert` es *append-only* y **no hay** "esta alerta ya está resuelta": si alguien vuelve a entrar, lo que cambia es `Player.discordInGuild`, no la fila del aviso. Con la `dedupeKey` estable por (regla, tipo, jugador), la segunda comprobación inserta 0 filas |
+| **Degradación** | Sin `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` no se comprueba nada: no se lee ni una fila de `Player` ni se sale a la red, y sale un aviso permanente en el rastro (`discordError`), que es el único sitio donde se ve que la comprobación lleva apagada |
+| **Nunca tumba la pasada** | Cada jugador en su `try`, los fallos de base a `warnings` y las alertas de golpe con `createMany({ skipDuplicates: true })` al final, como en `history-checks.ts` |
+
+**Dos filas de esta tabla cambiaron con el ajuste** que viene después: **a quién** se
+comprueba (ahora también a quien solo tiene `@usuario`, y son las altas de admin las que
+ganan) y **qué escribe** cuando la comprobación sale de la lista de miembros en vez de
+una petición por cuenta. El resto —la cadencia de 12 h, el `unknown` que no escribe
+nada, el `append-only` sin resolución, la degradación por credenciales— sigue igual,
+porque el roster es un camino **alternativo**, no uno nuevo que sustituya al otro.
+
+**Reparto de responsabilidades, y por qué está donde está.** Lo que decide qué se
+afirma —el TTL y el veredicto— es un módulo **puro** (`src/lib/discord/membership.ts`,
+sin `server-only`, sin red y sin base de datos) y lo que escribe es el worker
+(`src/lib/discord/check.ts`, `server-only`), igual que el reparto de F11 entre
+`history-visibility.ts` y `history-checks.ts`. La frase y el valor del enum siguen en
+`src/lib/alerts/rules.ts`, cuyo `switch` es exhaustivo.
+
+**La alerta no lleva la ventana del torneo.** `AlertTriggerInput.window` es **opcional**
+a partir de esta entrega y `alertDetails()` solo escribe `windowFrom`/`windowTo` cuando
+viene: esta regla se evalúa contra la API de Discord y no mira ninguna partida, así que
+ponerle la ventana afirmaría un alcance que no tiene. Las reglas de partidas la pasan
+todas y su `details` sale igual que siempre.
+
+**El rastro.** `SyncSummary` gana `discord` (los contadores) y `discordError` (la línea
+con lo que hay que saber), y `Setting["sync.lastRun"]` gana `discordError`, con el
+**mismo tratamiento que `historyError` y `streamsError`**: avisa con `console.warn`, sale
+en el rastro **aunque no haya fallo** (es donde se ve que la comprobación corre, cuántos
+participantes quedaron para la siguiente pasada y si está apagada por credenciales) y
+**no mueve `lastSuccessAt`**. Que no se sepa si alguien se ha salido del servidor no ha
+parado ni una partida.
+
+**Verificación**: `tests/unit/lib/discord/membership.test.ts` cubre el TTL en sus
+bordes (`null` vencido, un milisegundo antes de las doce horas no, exactamente a las doce
+sí) y el mapeo del veredicto (200 → `member`, 404 → `not-member`, y el resto —`401`,
+`429`, `5xx`, un `2xx` distinto y `null` sin respuesta— → `unknown`), sin red ni base de
+datos. `rules.test.ts` fija que una regla sin ventana no escribe fechas en su `details`.
+La comprobación contra la base de verdad es una pasada del worker, y su idempotencia se
+ve en que la segunda comprobación inserta 0 filas.
+
+**Requisito operativo, al desplegar**: `npm run db:push` (las cuatro columnas de `Player` y
+el valor `DISCORD_NOT_IN_GUILD` de `AlertRule`, **al final** del enum por lo de siempre).
+**No** hace falta `npm run db:security`: no se crea ninguna tabla. Y la entrega 2 **no
+añade nada que aplicar**: no hay columnas ni tabla nuevas, y `DISCORD_CHECK_MAX_PER_RUN`
+se ajusta por variable de entorno si algún día el tope por defecto de 10 se queda corto.
+Lo único que hace falta es que el bot esté en el servidor con el
+`DISCORD_BOT_TOKEN`/`DISCORD_GUILD_ID` definidos, que ya era requisito de la entrega 1.
+Las variables de entorno y los pasos manuales de Discord están en
+[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md) y en
+[`docs/OPERACION.md`](./OPERACION.md#requisitos-operativos-de-un-despliegue).
+
+#### Entrega 2, ajuste — el `@usuario` obligatorio y el roster
+
+Dos cosas que se cambiaron juntas porque son el mismo problema: **el alta de admin
+tenía una fila de la que el worker no podía decir nada**, y **comprobar por cuenta era
+una petición por jugador**. El arreglo es el mismo dato de las dos veces: el
+`@usuario` que escribe la organización y la lista de miembros del servidor donde se
+busca.
+
+##### El `@usuario`: dos formas, y solo se guarda una
+
+| | Forma | Dónde |
+|---|---|---|
+| **Lo que se guarda** | `pepito` — sin arroba, en minúsculas | `Player.discordUsername` |
+| **Lo que se escribe** | `@pepito` — con arroba, **obligatoria** | los dos formularios |
+
+Lo guardado es la forma canónica porque es **exactamente lo que devuelve la API**
+(`user.username` de `GET /users/@me`) y lo que trae la lista de miembros del servidor:
+con las dos cosas en la misma forma, comparar es una igualdad y no una heurística.
+
+Lo escrito lleva arroba y no puede dejarla fuera porque **es lo único que hace
+inequívoco que se está dando el nombre global**. En un servidor Discord hay muchas
+cuentas con el mismo nombre y cualquiera se puede llamar como quiera dentro; el
+`@usuario` es lo único único en todo el servicio. Si se aceptara `pepito` a secas, un
+**nombre de display** acabaría guardado como si fuera una identidad, que es justo lo
+que el paso de OAuth existe para evitar. Por eso `parseDiscordUsername()` devuelve
+`null` cuando el valor no empieza por `@`, y el alta y la edición tienen su propio
+mensaje para eso.
+
+Los dos parsers viven juntos en `src/lib/player-input.ts` (puro, sin imports) y son
+**dos funciones y no una**:
+
+- `canonicalDiscordUsername(value)` — solo normaliza (quita `@`, quita el `#0000`
+  antiguo y lo que venga detrás, baja a minúsculas) y **no juzga**. La usan lo que ya
+  validó Discord: el `username` del OAuth, que se normaliza **en el callback antes de
+  firmar la cookie**, y cada miembro del roster. Si esta rechazara un `username` raro,
+  el paso del OAuth fallaría por una regla pensada para un formulario.
+- `parseDiscordUsername(value)` — valida lo que **escribe una persona**: exige la
+  arroba, normaliza y exige el rango de Discord (`2` a `32` de `[a-z0-9._]`).
+  Devuelve el nombre pelado o `null`, y quien llama distingue el vacío del mal escrito
+  mirando el valor crudo, como con los canales.
+
+`DISCORD_USERNAME_MAX_LENGTH` (32) y `DISCORD_USERNAME_FIELD_MAX_LENGTH` (33, con la
+arroba) se exportan para el `maxLength` del input.
+
+##### `discordUsername` pasa a ser única
+
+**Por qué:** el `@usuario` identifica a una persona en todo Discord, así que dos
+participantes con el mismo nombre serían **la misma cuenta escrita de dos maneras** —
+el alta de admin con lo que le dicen a la organización y la inscripción pública con lo
+que resolvió Discord—, y la organización no sabría a cuál de las dos filas hablarle por
+su servidor. Y sin unicidad el worker **no podría resolver un `discordUserId`**: dos
+coincidencias exactas en el roster serían indistinguibles.
+
+Los `null` no colisionan en Postgres (como en el índice único de `Alert.dedupeKey`),
+así que las filas anteriores a F12 siguen conviviendo con las nuevas.
+
+Con esto `Player` tiene **tres** unicidades (`profileId`, `discordUserId`,
+`discordUsername`) y los tres `P2002` posibles se distinguen por **qué** columna saltó
+(`uniqueViolationOn()` en `src/lib/db-errors.ts`). En la inscripción pública el del
+`@usuario` sale con su propio mensaje, que **invita a hablar con la organización**:
+puede ocurrir de verdad —alguien se inscribe por OAuth con un `@usuario` que un admin
+ya le escribió mal a otro participante— y no lo puede arreglar quien escribe el
+formulario.
+
+##### El campo es obligatorio en el alta y en la edición
+
+En las dos acciones, con el mismo parser y los mismos mensajes
+(`DISCORD_USERNAME_REQUIRED_ERROR`, `DISCORD_USERNAME_INVALID_ERROR`,
+`DISCORD_USERNAME_TAKEN_ERROR`). En la **edición** un vacío es un error y no un `null`,
+que es la excepción al criterio de "el formulario es una foto completa de la fila":
+`null` ahí significaría una fila que no se puede buscar en el servidor ni comprobar. La
+unicidad se comprueba **excluyendo la fila que se está editando** —si no, guardar sin
+tocar nada se rechazaría a sí mismo— y se captura el `P2002` por si dos admins
+guardan a la vez. Lo único editable de Discord sigue siendo el `@usuario`:
+`discordUserId` es intocable desde el panel.
+
+El coste de hacerlo obligatorio es que una fila anterior a F12 —sin `@usuario`— no se
+puede editar sin escribirlo, y es el precio de que el formulario sea una foto de la
+fila.
+
+##### El roster: una lectura decide sobre todos
+
+`GET /guilds/{guild_id}/members?limit=1000&after=…`, paginado hasta
+`DISCORD_ROSTER_MAX_PAGES` (20 por defecto), cacheado en `Setting["discord.roster"]` con
+`{ fetchedAt, members }` y su propio TTL de 12 h (`DISCORD_ROSTER_TTL_HOURS`). Con esa
+única lectura:
+
+| Situación | Qué decide |
+|---|---|
+| Tiene `discordUserId` | Su presencia en la lista: escribe `discordInGuild` + `discordCheckedAt`, y alerta si no está |
+| Solo `@usuario`, y aparece | Se escribe el `discordUserId` **resuelto** + `discordInGuild = true` + `discordCheckedAt`, **solo si ese id no está enlazado a otro participante** |
+| Solo `@usuario`, y no aparece o aparece dos veces | Alerta con `resolvedBy: "username"` y **sin** escribir el id |
+
+Lo segundo es lo que hacía falta y no se podía hacer: es el caso de las altas de admin,
+donde **nadie ha pasado por OAuth** y sin roster esa fila no se comprobaría nunca.
+
+##### La guarda que manda: una lista vacía no es "no hay nadie"
+
+`GET /guilds/{guild_id}/members` exige el **intent privilegiado `GUILD_MEMBERS`**, que
+solo se activa a mano en el Developer Portal. **Sin él Discord no da error: contesta
+`200` con `[]`.** Leer eso como "el servidor está vacío" afirmaría que las treinta
+cuentas están fuera del servidor y llenaría la pestaña de Alertas de una tacada.
+
+Por eso el resultado del roster está modelado como el `unknown` de la pertenencia:
+`{ status: "roster", members }` o `{ status: "unknown", reason }`, y ante un `unknown`
+**no se escribe ni columna ni alerta** y se cae al **sistema actual por id**
+(`GET /guilds/{id}/members/{user}`), que no necesita el intent. Lo mismo con una lista
+que sale **incompleta** —se ha llegado al tope de páginas sin ver la última— o a la que
+se le cae una entrada ilegible: un roster con un hueco no puede afirmar que alguien no
+está en el servidor. Un roster viejo tampoco se usa como reserva, por el mismo motivo:
+usarlo sería afirmar "no está" de la mitad de los miembros.
+
+El resultado es que **activar el intent es una mejora, nunca un requisito**: sin él el
+comportamiento es el de antes de este ajuste, y las altas de admin se quedan sin
+comprobar hasta activarlo.
+
+##### Sigue siendo **una sola** regla de alerta
+
+`DISCORD_NOT_IN_GUILD` y la frase estática no cambian. Lo que distingue los dos casos
+va en `details`:
+
+| Clave | Qué dice |
+|---|---|
+| `resolvedBy` | `"discordUserId"` (tenía la cuenta y ya no está) o `"username"` (no aparece con su `@usuario`) |
+| `discordUsername` | El `@usuario` guardado, sin arroba |
+| `discordHttpStatus` | El estado HTTP si hubo respuesta; `null` si la comprobación salió del roster |
+| `discordRosterMembers` | Con cuántos miembros salió el roster, si salió de él |
+
+Separarlas en dos reglas llenaría la pestaña de Alertas de lo mismo dos veces, con dos
+textos que habría que mantener en paralelo y dos `dedupeKey` que explicar.
+
+##### El rastro
+
+`SyncSummary.discord` (los contadores) y `discordError` (la línea) **siguen igual de
+sitio**: `Setting["sync.lastRun"].discordError`, sin mover `lastSuccessAt`. Lo que
+cambia es el contenido, que ahora incluye **con cuántos miembros salió el roster y si se
+ha podido leer**, cuántos se han resuelto por `@usuario`, cuántos no aparecen, cuántos
+no tienen Discord y cuántos se han quedado sin comprobar por no haber lista.
+
+**Verificación**: `tests/unit/lib/player-input.test.ts` cubre los dos parsers —válidos
+(`@pepito`, `@PEPITO`, `@pepito#1234`, con espacios alrededor), inválidos (sin `@`,
+que es el caso importante; vacío; solo `@`; demasiado corto o largo; espacios o
+caracteres dentro) y que el `maxLength` del campo tiene en cuenta la arroba— y
+`tests/unit/lib/discord/membership.test.ts` el TTL del roster y `matchRosterUsername()`
+(coincidencia exacta, sin distinguir mayúsculas, sin prefijos ni sufijos, y
+`"ambiguo"` con dos coincidencias). Sin red y sin base de datos.
+
+**Requisito operativo, al desplegar**: además de lo de la entrega 2,
+`npm run db:push` por el **`@unique` de `discordUsername`**, y el **paso manual del
+intent `GUILD_MEMBERS`** (Developer Portal -> Bot -> Privileged Gateway Intents ->
+`SERVER MEMBERS INTENT`; comprobar además que el bot está en el servidor). Sin el
+intent todo sigue funcionando y el rastro lo dice; con él, las altas de admin se
+comprueban y se enlazan solas. Las dos opcionales son
+`DISCORD_ROSTER_MAX_PAGES` y `DISCORD_ROSTER_TTL_HOURS` (12 por defecto). Detalle en
+[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md) y en
+[`docs/OPERACION.md`](./OPERACION.md#discord-obligatorio-f12).
+
+#### Lo que tiene que pintar `@design-ux` con esto
+
+El servidor ya valida; lo que falta es el dialecto. En el panel:
+
+| Dónde | Qué hay que pintar | Detalle |
+|---|---|---|
+| `player-form.tsx` (alta) | Un campo **obligatorio** `@usuario de Discord` | `name="discordUsername"`, `required`, `maxLength={DISCORD_USERNAME_FIELD_MAX_LENGTH}` (33) y la pista de que se escribe **con la arroba** (`@pepito`). Sin él, `createPlayer` devuelve "El usuario de Discord es obligatorio" |
+| `player-edit-dialog.tsx` (edición) | El mismo campo, **controlado**, dentro de `EditFields` | El valor que se pinta y se manda es `@` + `player.discordUsername`; si la fila no tiene (anterior a este ajuste), el campo sale vacío con la pista de que hay que escribirlo para poder comprobarlo. Suma al campo en `fieldsDiffer()` |
+| `participants-browser.tsx` | `@` delante del `discordUsername` y el **estado de pertenencia** | `AdminParticipant` gana `discordInGuild: boolean | null`, que son **tres** estados: en el servidor / no aparece / sin comprobar. Un `null` **nunca** es "no está" |
+
+Dos cosas de los formularios del panel que no son de estilo y conviene no perder: la
+**arroba va dentro del valor** (no como prefijo pintado, porque lo que se manda es lo
+que se valida) y los campos tienen que ser **controlados**, porque React resetea los
+formularios de una Server Action al enviarlos y con valores no controlados un error de
+unicidad llegaría con lo escrito borrado.
+
+En `/participar` no hay campo nuevo (sigue siendo el paso de OAuth), pero `linkedUsername`
+llega sin arroba y hay que enseñarlo con ella.
+
 ## Requisitos del cliente (frozen)
 
 Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes de tocar el código.
@@ -1302,7 +1764,7 @@ Vienen del encargo inicial. Si alguno cambia, se actualiza esta sección antes d
 - **Supabase + migraciones**: no soporta *shadow database* → usamos `db push` en dev (en producción convendrá `prisma migrate` con cadena directa o revisar estrategia).
 - **La base de datos es la de producción y no hay migraciones**: no hay entorno de staging, así que un cambio de datos va con copia de seguridad previa y una forma de volver atrás. `pg_dump` no viene con el proyecto (no hay cliente de Postgres instalado): se usó el de los binarios de PostgreSQL 17 de EDB, descargados fuera del repo.
 - **`db push` no gestiona RLS ni GRANTs**, solo el schema de Prisma. La postura de seguridad de `public` vive en `scripts/db-security.ts` y hay que comprobarla con `npm run db:security -- --check` después de cada `db push` (y volver a aplicar el script si se creara una tabla nueva). Detalle en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md) §7.
-- **Prisma 7**: usa `prisma7.config.ts`, generador `prisma-client` (ESM), carga `DATABASE_URL` desde `.env` vía `dotenv/config` y requiere *driver adapter* (`@prisma/adapter-pg`) para instanciar el cliente (`src/lib/db.ts`).
+- **Prisma 7**: usa `prisma7.config.ts`, generador `prisma-client` (ESM), carga `DATABASE_URL` desde `.env.local` o `.env` (y nunca sobreescribe lo que ya esté en el entorno) con el cargador compartido `scripts/load-env.mjs`, y requiere *driver adapter* (`@prisma/adapter-pg`) para instanciar el cliente (`src/lib/db.ts`). Los scripts de `scripts/` usan ese mismo cargador, así que los comandos de Prisma y ellos no necesitan que se exporte nada a mano. Ver [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#de-dónde-salen-las-variables-en-la-cli-y-en-los-scripts).
 - **Next.js 16**: *middleware* → **Proxy** (`src/proxy.ts`). Los helpers de tipos `LayoutProps<"/ruta">` se generan con `next dev/build/typegen`.
 - **Supabase Auth**: sesiones en cookies SSR; el Proxy refresca el token y aplica las cabeceras anti-caché, el DAL hace la verificación segura.
 - **Rate limits AoE4World**: resueltos en F2 (backoff exponencial con jitter, separación mínima entre peticiones, pausa global ante `Retry-After`). Pendiente solo el ritmo del cron en producción y si hace falta cacheo.

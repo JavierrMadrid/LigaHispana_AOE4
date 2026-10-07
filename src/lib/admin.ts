@@ -615,6 +615,42 @@ export type AdminParticipant = {
   kickChannel: string | null;
   contactEmail: string | null;
   /**
+   * Identidad de Discord del participante (F12), **solo lectura**.
+   *
+   * No está en `CamposEditables` ni en `PlayerFormState`, y no es un descuido: el
+   * panel **no** añade ni edita Discord. `discordUserId` es la prueba de que una
+   * persona es quien dice ser —lo firma Discord con el paso OAuth2 de la
+   * inscripción—, y una caja de texto en la que un admin escribiera un id sería un
+   * campo de identidad que se rellena a mano, que es justo lo que el paso de OAuth
+   * existe para evitar. Quien necesite corregir algo aquí lo hace desde Discord y
+   * vuelve a hacer el paso.
+   *
+   * Llega **sin normalizar**, como los canales: `discordUsername` es el nombre de
+   * usuario en el momento del vínculo y Discord permite renombrarse, así que aquí se
+   * muestra tal cual está en la fila y no se "arregla" al leer.
+   */
+  discordUserId: string | null;
+  /** Nombre de usuario de Discord, o `null` si la fila no tiene Discord vinculado. */
+  discordUsername: string | null;
+  /**
+   * ¿Está la cuenta de Discord en el servidor del torneo? **Tres estados**, y la
+   * distinción es lo que importa:
+   *
+   * - `true`: el worker lo ha comprobado con la lista de miembros del servidor.
+   * - `false`: comprobado, y **no está**. Es el estado que genera la alerta
+   *   `DISCORD_NOT_IN_GUILD`.
+   * - `null`: sin comprobar. O no se ha comprobado nunca (el alta de admin, hasta que
+   *   el worker encuentre la cuenta por el `@usuario`), o no se ha podido comprobar
+   *   (un fallo de la API de Discord, o una lista de miembros vacía porque al bot le
+   *   falta el intent privilegiado). **Nunca** significa "no está": eso solo puede
+   *   salir de una respuesta de Discord.
+   *
+   * Llega junto a `discordUsername` porque con las dos columnas la interfaz puede
+   * distinguir "nunca comprobado" de "comprobado y no se ha podido identificar", que
+   * es la diferencia entre no tener nada y tener una avería.
+   */
+  discordInGuild: boolean | null;
+  /**
    * `Player.country`: el rótulo canónico de la lista admitida
    * (`Setting["registration.countries"]`), o `null` si el alta no lo trajo. El
    * panel no lo resuelve ni lo normaliza —lo hace `parseCountry()` al validarlo—,
@@ -639,6 +675,9 @@ const PARTICIPANT_SELECT = {
   youtubeChannel: true,
   kickChannel: true,
   contactEmail: true,
+  discordUserId: true,
+  discordUsername: true,
+  discordInGuild: true,
   country: true,
   status: true,
   avatarUrl: true,
@@ -1328,8 +1367,17 @@ export async function getAdminMatchHistory(
     // Los filtros se suman, no se eligen: `where` es una conjunción, así que jugador
     // + fechas + resultado se combinan solos. No hace falta ninguna lógica de "si hay
     // dos, el segundo gana", que es justo donde estos filtros se suelen equivocar.
+    //
+    // El `null` del `registeredAt` es deliberado y es la excepción de este módulo:
+    // el historial enseña **el recorrido entero** de cada participante dentro de la
+    // ventana del torneo, con sus 0 puntos a la vista, no solo lo que le suma. Un
+    // historial del que desaparecieran las partidas anteriores al alta dejaría al
+    // panel contradiciendo la cuenta de AoE4World, que sí las enseña. Lo que puntúa
+    // lo dicen `Match.points` y la clasificación, y el botón de revertir ya solo
+    // aparece donde hay puntos (`setMatchReverted()` vuelve a preguntar por la regla
+    // entera, corte incluido).
     const where: Prisma.MatchWhereInput = {
-      ...classificatoryWhere(ruleset.modes, ruleset.window),
+      ...classificatoryWhere(ruleset.modes, ruleset.window, null),
       ...(playerId === null ? {} : { playerId }),
       ...(hasDateBounds(rango) ? { startedAt: rango } : {}),
       ...(resultado === null ? {} : { result: resultado }),

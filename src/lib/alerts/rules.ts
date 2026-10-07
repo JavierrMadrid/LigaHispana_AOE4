@@ -77,16 +77,20 @@ export type TotalAlertRule =
  * Reglas que miran un **estado**, no una secuencia.
  *
  * No tienen racha ni acumulado: se comprueba una cosa (el historial de partidas del
- * jugador, la ladder por delante de lo que nos llega) y, mientras siga siendo cierto,
- * el mismo hecho. Se evalúan en `src/lib/history-checks.ts`, desde el worker del
- * sincronizador, porque no leen `Match` sino columnas de `Player` y una ruta del sitio
- * de AoE4World.
+ * jugador, la ladder por delante de lo que nos llega, si su cuenta de Discord está en
+ * el servidor) y, mientras siga siendo cierto, el mismo hecho. Se evalúan en
+ * `src/lib/history-checks.ts` y `src/lib/discord/check.ts`, desde el worker del
+ * sincronizador, porque no leen `Match` sino columnas de `Player`, una ruta del sitio de
+ * AoE4World y la API de Discord.
  *
  * Su `dedupeKey` es estable por (regla, tipo, jugador) —sin partida ancla ni número—,
  * porque si no, reevaluarlas cada 5 minutos insertaría una fila nueva cada 12 horas
  * para siempre. Ver el docblock de `alertDedupeKey()`.
  */
-export type StateAlertRule = "HISTORY_NOT_PUBLIC" | "MISSING_LADDER_MATCHES";
+export type StateAlertRule =
+  | "HISTORY_NOT_PUBLIC"
+  | "MISSING_LADDER_MATCHES"
+  | "DISCORD_NOT_IN_GUILD";
 
 export type AlertsRuleName = StreakAlertRule | TotalAlertRule | StateAlertRule;
 
@@ -121,6 +125,7 @@ export const ALERT_RULE_LABELS = {
   LOW_DIVISION_TEAM_GAME: "Equipo por debajo de la división",
   HISTORY_NOT_PUBLIC: "Historial de partidas no público",
   MISSING_LADDER_MATCHES: "Partidas de ladder que no nos llegan",
+  DISCORD_NOT_IN_GUILD: "Discord sin estar en el servidor",
 } as const satisfies Record<AlertsRuleName, string>;
 
 /**
@@ -296,6 +301,16 @@ export type AlertSubject = {
 export const SELF_SUBJECT: AlertSubject = { key: "yo", profileId: null, name: null };
 
 /**
+ * Cómo se resolvió que la cuenta de Discord de un participante no está en el
+ * servidor del torneo (`DISCORD_NOT_IN_GUILD`).
+ *
+ * Va en el `details` y **no** es un valor de `AlertRule`: los dos casos comparten
+ * regla, frase y `dedupeKey`, y separarlos en dos reglas llenaría la pestaña de
+ * Alertas de lo mismo dos veces con dos textos que hay que mantener en paralelo.
+ */
+export type DiscordNotInGuildResolvedBy = "discordUserId" | "username";
+
+/**
  * Datos estructurados que van en `Alert.details`, por encima de los comunes.
  *
  * El nombre viene del uso mayoritario —lo que se sabe de la partida que ancla una
@@ -330,6 +345,48 @@ export type AlertAnchorDetail = {
   newestImportedAt?: string | null;
   /** Minutos que la ladder va por delante de esa partida. */
   lagMinutes?: number;
+
+  /** Evidencia de `DISCORD_NOT_IN_GUILD`, la tercera regla de estado. */
+
+  /**
+   * Cómo se resolvió que la cuenta no está en el servidor.
+   *
+   * La regla es **una sola** para los dos casos y la frase es la misma, así que la
+   * diferencia va aquí y no en un enum de regla nuevo:
+   *
+   * - `discordUserId`: la fila ya tenía la cuenta (por el vínculo OAuth2 de la
+   *   inscripción) y el roster —o la consulta por id— ha dicho que esa cuenta no está.
+   * - `username`: la fila solo tenía el `@usuario` que escribió la organización al
+   *   dar de alta, y **ese `@usuario` no aparece** en la lista de miembros (o aparece
+   *   dos veces). Aquí no se sabe de qué cuenta se trata, solo que no se la ha
+   *   encontrado.
+   *
+   * Sin esta clave las dos alertas serían indistinguibles en el informe, y quien
+   * mirase «su Discord no está en el servidor» no podría saber si es una cuenta que
+   * se ha ido del servidor o un `@usuario` que nunca se ha podido emparejar.
+   */
+  resolvedBy?: DiscordNotInGuildResolvedBy;
+  /** `Player.discordUserId` que se comprobó, o el que se resolvió con el `@usuario`. */
+  discordUserId?: string;
+  /**
+   * `Player.discordUsername` en el momento de la comprobación, que es como lo trae
+   * la fila: el nombre global **sin arroba** (`canonicalDiscordUsername()`).
+   *
+   * Va aunque haya `discordUserId`, porque es el dato que quien tiene que arreglarlo
+   * necesita para buscar a esa persona en Discord.
+   */
+  discordUsername?: string;
+  /** `Player.discordCheckedAt` en ISO-8601 UTC: el instante de la comprobación. */
+  discordCheckedAt?: string;
+  /**
+   * Estado HTTP con el que respondió Discord, si hubo respuesta.
+   *
+   * `null` cuando la comprobación salió del roster y no de una petición por cuenta:
+   * es la diferencia entre "la API dijo que no" y "no estaba en la lista que se leyó".
+   */
+  discordHttpStatus?: number | null;
+  /** Miembros que tenía el roster cuando se comprobó, si la comprobación salió de él. */
+  discordRosterMembers?: number;
 };
 
 export type AlertTriggerInput = {
@@ -345,7 +402,17 @@ export type AlertTriggerInput = {
   anchorStartedAt: Date | null;
   /** Ladder de la partida, que es la de la que salen los cortes de R5. */
   anchorLadder?: string | null;
-  window: { from: string; to: string | null };
+  /**
+   * Ventana del torneo, **solo para las reglas que miran partidas**.
+   *
+   * Es opcional, y no por descuido: `DISCORD_NOT_IN_GUILD` se evalúa contra la API
+   * de Discord y no tiene nada que ver con fechas de partidas, así que escribir una
+   * ventana en su `details` afirmaría un alcance que no tiene —"esto se comprobó
+   * dentro del torneo"— y quien leyera el informe se llevaría una conclusión
+   * falsa. Las reglas de partidas la pasan todas, y el `details` sale igual que
+   * siempre (`alertDetails()` solo la escribe cuando viene).
+   */
+  window?: { from: string; to: string | null };
   detail?: AlertAnchorDetail;
 };
 
@@ -490,6 +557,12 @@ export function alertSummary(input: AlertTriggerInput): string {
       return "Su historial de partidas no es público";
     case "MISSING_LADDER_MATCHES":
       return "La ladder registra partidas que no nos llegan";
+    // La tercera de estado (F12). Como las otras dos, la frase dice **qué se ha
+    // comprobado** y no por qué: la cuenta puede no estar porque la persona no se ha
+    // unido, porque el bot no pudo meterla o porque la comprobación no se ha podido
+    // hacer, y el equipo de Alertas no puede distinguir eso desde aquí.
+    case "DISCORD_NOT_IN_GUILD":
+      return "Su Discord no está en el servidor del torneo";
   }
 }
 
@@ -501,6 +574,11 @@ export function alertSummary(input: AlertTriggerInput): string {
  * solo frases, y **no lleva datos que ya no sean ciertos**: el nombre del
  * sujeto va en su propia columna, y el del jugador tampoco (el panel lo saca de
  * `Player`, que es donde vive y donde puede estar actualizado).
+ *
+ * La ventana del torneo va solo si quien dispara la trae: `DISCORD_NOT_IN_GUILD`
+ * se comprueba contra la API de Discord y no tiene fechas, así que en esa fila no se
+ * escriben `windowFrom` ni `windowTo`, porque una ventana que no aplica es una
+ * afirmación que alguien acabaría creyendo.
  */
 export function alertDetails(input: AlertTriggerInput): Prisma.InputJsonObject {
   const detail = input.detail ?? {};
@@ -519,8 +597,12 @@ export function alertDetails(input: AlertTriggerInput): Prisma.InputJsonObject {
     ...(input.anchorLadder === undefined || input.anchorLadder === null
       ? {}
       : { anchorLadder: input.anchorLadder }),
-    windowFrom: input.window.from,
-    ...(input.window.to === null ? {} : { windowTo: input.window.to }),
+    ...(input.window === undefined
+      ? {}
+      : {
+          windowFrom: input.window.from,
+          ...(input.window.to === null ? {} : { windowTo: input.window.to }),
+        }),
     ...detail,
   };
 }

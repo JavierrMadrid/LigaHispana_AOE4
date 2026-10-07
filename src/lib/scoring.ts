@@ -16,7 +16,6 @@ import {
   RANKED_MODES,
   parseWindow,
   rankedMatchSql,
-  rankedMatchWhere,
   type ScoringWindow,
 } from "@/lib/ranked-match";
 import { writeScoringLastRun } from "@/lib/settings";
@@ -31,9 +30,10 @@ import { writeScoringLastRun } from "@/lib/settings";
  *
  * Qué cuenta como partida clasificatoria **no** está aquí: vive en
  * `src/lib/ranked-match.ts`, que es donde se puede definir sin que `scoring.ts` y
- * `objectives.ts` se importen mutuamente. De ahí vienen los dos filtros que usan
- * las consultas de abajo (`rankedMatchWhere` para el agregado y `rankedMatchSql`
- * para el SQL crudo), así que el modo, el resultado, la ventana y la marca de
+ * `objectives.ts` se importen mutuamente. De ahí viene `rankedMatchSql()`, el
+ * predicado que usan **las tres** consultas de abajo —el `UPDATE` de
+ * `Match.points`, el agregado y la carga de objetivos—, así que el modo, el
+ * resultado, el corte de inscripción, el final de la ventana y la marca de
  * revertida se filtran igual en todas partes.
  *
  * Cosas que no cambian entre versiones de las reglas y ya estaban resueltas:
@@ -474,6 +474,24 @@ type AggregatedRow = {
 };
 
 /**
+ * Una fila del agregado de la clasificación, tal y como la devuelve el SQL crudo.
+ *
+ * Los dos `cast` son los que hace falta para no pelearse con el adaptador: el
+ * `status` de `Player` es un enum y un parámetro llega como texto, así que hay que
+ * castearlo a `"PlayerStatus"` para que la comparación sea válida; y `result`
+ * sale como texto porque en la fila de arriba es lo que se compara con el enum de
+ * Prisma. `count`/`sum` van a `int` porque en `bigint` Prisma devolvería un
+ * `BigInt` que después hay que convertir en cada suma.
+ */
+type AggregatedMatchRow = {
+  playerId: string;
+  mode: string | null;
+  result: string;
+  partidas: number;
+  points: number;
+};
+
+/**
  * Nombre del cerrojo de la clasificación.
  *
  * `hashtext()` lo convierte en la clave que `pg_advisory_xact_lock` espera, así que
@@ -530,11 +548,21 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       //
       // El predicado del `case` es el de `rankedMatchSql()`, o sea **el mismo** que
       // usa el agregado y la carga de objetivos: familia del ruleset, partida
-      // resuelta, `startedAt` dentro de `[window.from, window.to)` y no revertida.
-      // Una partida fuera de la ventana —o revertida— acaba con `points = 0` sin más
-      // que por no pasar el filtro, y por eso deshacer un revert devuelve los
-      // puntos sin tener que tocar esta fila a mano.
-      const clasificatoria = rankedMatchSql(Prisma.sql`m`, ruleset.modes, ruleset.window);
+      // resuelta, `startedAt` después del corte del jugador y antes de `window.to`,
+      // y no revertida. Una partida anterior a la inscripción del jugador, o fuera
+      // de la ventana, o revertida, acaba con `points = 0` sin más que por no pasar
+      // el filtro, y por eso deshacer un revert devuelve los puntos sin tener que
+      // tocar esta fila a mano.
+      //
+      // El `join` con `Player` no es decorativo: el corte de inscripción sale de
+      // `p."registeredAt"`. Es un `join` interior sobre la clave foránea, que no
+      // admite nulos, así que no deja fuera ninguna partida.
+      const clasificatoria = rankedMatchSql(
+        Prisma.sql`m`,
+        Prisma.sql`p`,
+        ruleset.modes,
+        ruleset.window,
+      );
 
       const updated = await tx.$executeRaw`
         with deseados as (
@@ -546,6 +574,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
               else 0
             end as puntos
           from "Match" m
+          join "Player" p on p."id" = m."playerId"
         )
         update "Match" m
         set points = d.puntos
@@ -571,18 +600,34 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       await reconcileObjectiveEvents(tx, ruleset, objectives.awarded);
 
       // Mismo filtro que el `UPDATE` de arriba y que la carga de objetivos (y por
-      // tanto también `revertedAt is null`), y con el estado del jugador, que aquí
-      // sí se puede filtrar sin `join`. Es `mode = any(...)` y `startedAt` en rango,
-      // así que lo cubre el índice `@@index([mode, startedAt])`.
-      const aggregated = await tx.match.groupBy({
-        by: ["playerId", "mode", "result"],
-        where: {
-          ...rankedMatchWhere(ruleset.modes, ruleset.window),
-          player: { status: PlayerStatus.APPROVED },
-        },
-        _count: { _all: true },
-        _sum: { points: true },
-      });
+      // tanto también `revertedAt is null`), y con el estado del jugador.
+      //
+      // **Es SQL crudo y no un `groupBy`, y el motivo es el corte de inscripción.**
+      // El filtro necesita `m."startedAt" >= p."registeredAt"`, y el `where` de
+      // Prisma compara un campo con un valor, nunca dos columnas: una referencia a
+      // campo solo vale entre campos del modelo que se consulta (probado en esta
+      // versión de Prisma, que responde *"Expected a referenced scalar field of
+      // model Match, but found a field of model Player"*). Como esta consulta
+      // abarca a todos los jugadores, el corte solo se puede escribir trayendo la
+      // fila de `Player`, y entonces lo natural es que el predicado sea el mismo
+      // `rankedMatchSql()` de las otras dos consultas y no una traducción nueva.
+      //
+      // El plan sigue siendo el mismo: `mode = any(...)` y `startedAt` en rango lo
+      // cubre el índice `@@index([mode, startedAt])`, y el `join` con `Player` es
+      // sobre su clave primaria con muy pocas filas.
+      const aggregated = await tx.$queryRaw<AggregatedMatchRow[]>`
+        select
+          m."playerId" as "playerId",
+          m."mode" as "mode",
+          m."result"::text as "result",
+          count(*)::int as "partidas",
+          coalesce(sum(m."points"), 0)::int as "points"
+        from "Match" m
+        join "Player" p on p."id" = m."playerId"
+        where p."status" = ${PlayerStatus.APPROVED}::"PlayerStatus"
+          and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window)}
+        group by m."playerId", m."mode", m."result"
+      `;
 
       const totals = new Map<string, AggregatedRow>();
 
@@ -594,8 +639,8 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         }
 
         const mode = row.mode;
-        const count = row._count._all;
-        const points = row._sum.points ?? 0;
+        const count = row.partidas;
+        const points = row.points;
         const won = row.result === MatchResult.WIN;
         const current = totals.get(row.playerId) ?? {
           matchPoints: 0,

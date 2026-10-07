@@ -290,7 +290,8 @@ De ahí las dos consecuencias:
 ## Inscripción pública
 
 `/participar` es un endpoint público y sin autenticación, así que la Server Action `registerPlayer`
-(`src/app/(public)/participar/actions.ts`) tiene cinco capas, en este orden:
+(`src/app/(public)/participar/actions.ts`) tiene cinco capas contra el abuso y un requisito de
+producto, en este orden:
 
 1. **Campo trampa** (`website`): no escribe nada y devuelve la misma confirmación que un alta bueno,
    para que un bot no pueda aprender a esquivarla.
@@ -314,10 +315,141 @@ De ahí las dos consecuencias:
    crea nada y devuelve un mensaje reintentable. Si el perfil existe, se guarda el nombre oficial en
    `Player.aoe4WorldName` y `Player.name` conserva el de display que escribió la persona.
 
+Y entre la 3 y la 4, como **requisito y no como capa de defensa**, el **paso de Discord** (F12): si
+`isDiscordOAuthConfigured()` es `true` se lee y verifica la cookie `discord_link` y, sin ella, sale un
+error de campo `discord` sin escribir nada. Va ahí porque es gratis (leer una cookie y verificar una
+firma no sale a nada) y porque `discordUserId` se escribe en la misma línea que el nombre: sin él no
+hay nada que guardar. Los pasos están en [Discord obligatorio (F12)](#discord-obligatorio-f12).
+
 El resultado siempre se deja en `PENDING`: aprobar o rechazar es decisión de la organización. Lo único
 que se **reescribe** es un envío de un perfil que estaba `REJECTED`: actualiza esa misma fila (nombre,
 canal, correo, nombre oficial y retrato) y la devuelve a `PENDING`, en vez de crear una segunda
 solicitud. Un perfil `APPROVED` o `PENDING` sigue bloqueando el envío.
+
+## Discord obligatorio (F12)
+
+La inscripción de `/participar` **exige** conectar la cuenta de Discord cuando el OAuth
+está configurado. No hay campo de texto: hay un botón que va a la pantalla de permisos
+de Discord y vuelve con la identidad en una cookie firmada. El detalle del diseño está
+en [`docs/PLAN.md`](./PLAN.md#f12--discord-obligatorio-y-pertenencia-al-servidor-entrega-2).
+
+**Sin credenciales el paso no existe**, no falla: `isDiscordOAuthConfigured()` es `false`,
+el formulario no pinta el botón y la acción no exige la cookie. Es el mismo patrón que el
+captcha con `TURNSTILE_SECRET_KEY`. **En producción las credenciales son obligatorias**, y
+si falta alguna de las cinco (o el secreto de firma) lo que se ve es un formulario de
+inscripción sin el paso y un aviso `[discord]` en el log.
+
+### Las variables, y dónde va cada una
+
+| Variable | Para qué | ¿Obligatoria? |
+|---|---|---|
+| `DISCORD_CLIENT_ID` | Client ID de la aplicación OAuth2 | Sí, en producción |
+| `DISCORD_CLIENT_SECRET` | Canje del `code` por un token | Sí, en producción. **Nunca** en el cliente ni en un log |
+| `DISCORD_BOT_TOKEN` | `Authorization: Bot …` del auto-unión y de la comprobación de pertenencia | Sí, en producción |
+| `DISCORD_GUILD_ID` | Servidor del torneo | Sí, en producción |
+| `DISCORD_OAUTH_SECRET` | Firma de la cookie `discord_link`. Sin ella se usa `CRON_SECRET`; **no hay valor de respaldo en el código** | Sí, en producción |
+| `DISCORD_REDIRECT_URI` | URI de redirección registrada en Discord. Si falta, se deriva del origen de la petición + `/api/discord/oauth/callback` | No, pero conviene fijarla en producción |
+| `DISCORD_INVITE_URL` | Invitación de respaldo cuando el auto-unión falla | No |
+| `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Base, presupuesto y `User-Agent` del cliente | No (valores por defecto) |
+| `DISCORD_CHECK_MAX_PER_RUN` | Tope de cuentas comprobadas por pasada en el worker. Por defecto 10 | No (valor por defecto) |
+| `DISCORD_ROSTER_MAX_PAGES` | Páginas de `GET /guilds/{guild_id}/members` por refresco de la lista de miembros (mil por página). Por defecto 20. Alcanzarlo **sin** haber visto la última página hace que la lista se descarte: se vuelve a la comprobación por cuenta | No (valor por defecto) |
+| `DISCORD_ROSTER_TTL_HOURS` | Horas que se cachea la lista de miembros del servidor. Por defecto 12, igual que el veredicto por jugador pero **por separado**: uno es un dato compartido y el otro uno por fila | No (valor por defecto) |
+
+Van en el panel del Worker (Settings → Variables and Secrets) **y además** en *Build
+variables and secrets* del trigger, que es otra lista distinta (ver
+[`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables)).
+Los secretos van como **secretos**, no como *vars*.
+
+### Los pasos manuales, una sola vez
+
+1. **Crear la aplicación** en el [portal de Discord para desarrolladores](https://discord.com/developers/applications)
+   (OAuth2 → General Information): client id y client secret. El secret **solo se muestra
+   una vez**; es el `DISCORD_CLIENT_SECRET`.
+2. **OAuth2 → Redirects**: añadir `https://laligahispana.es/api/discord/oauth/callback`
+   (y el del `*.workers.dev` del Preview si se prueba ahí). Con `DISCORD_REDIRECT_URI`
+   definida tiene que ser exactamente la misma cadena.
+3. **OAuth2 → Scopes**: añadir `identify` y `guilds.join`.
+4. **Crear el bot** (Bot → Add Bot) y copiar su token: es el `DISCORD_BOT_TOKEN`. Es el
+   mismo token que se puede "Regenerate"; si se regenera, hay que actualizar la variable.
+5. **Invitar el bot al servidor** con el **bot** autorizado y con el permiso
+   `CREATE_INSTANT_INVITE` en el contexto `Use Application Commands` / al añadirlo, o
+   granting scopes afterwards. Sin ese permiso el `PUT …/members/{user_id}` responde 403
+   y **el paso no bloquea**: la inscripción se acepta con `joined: false` y el
+   formulario enseña `DISCORD_INVITE_URL`.
+6. **Abrir el servidor al bot** con la opción que lo deja ver la lista de miembros (o
+   darle el rol que corresponda). Es lo que necesita la comprobación de la entrega 2
+   (`GET /guilds/{guild_id}/members/{user_id}`).
+7. **Activar el intent privilegiado `GUILD_MEMBERS`** (Bot → Privileged Gateway Intents →
+   **SERVER MEMBERS INTENT** → Save Changes). Es **manual** y no se puede pedir por API,
+   y es lo que hace que el worker pueda leer la **lista de miembros del servidor**
+   (`GET /guilds/{guild_id}/members`), que es lo que comprueba a todos de una vez y lo que
+   **enlaza la cuenta de las altas de admin** a partir de su `@usuario`. Sin este paso el
+   sistema funciona igual, pero por el camino corto: ver "Sin lista de miembros" más
+   abajo. El botón desaparece solo en servidores de más de cien miembros; es un límite
+   de Discord y no hay que hacer nada.
+8. Copiar el **id del servidor** (Developer Mode → clic derecho sobre el servidor →
+   "Copiar id de servidor") al bot: es el `DISCORD_GUILD_ID`.
+
+### Si algo falla, dónde se mira
+
+- El log del Worker, con el prefijo `[discord]`. **El motivo nunca va en la URL**: el
+  callback solo redirige a `/participar?discord=ok|cancel|error|no-config`, y
+  `?discord=no-config` no dice qué variable falta.
+- Un `?discord=error` casi siempre es el `state` (cookie caducada o viaje empezado en
+  otro navegador) o un canje rechazado (`invalid_grant`, que pasa cuando el `code` ya se
+  usó o el `redirect_uri` no coincide con el registrado).
+- Un `?discord=ok` con el formulario pidiendo la cuenta otra vez es una cookie caducada
+  (20 min) o un enlace de invitación sin `DISCORD_INVITE_URL` definido.
+- `discordUserId` o `discordUsername` duplicados en dos filas son imposibles por los
+  índices únicos; lo que sí sale es el `P2002` en el envío o en el panel, con su propio
+  mensaje.
+- Un `P2002` de `discordUsername` al **inscribirse** casi siempre es un `@usuario` que la
+  organización le escribió mal a otro participante al darlo de alta. El mensaje pide
+  escribir por el correo: hay que mirar la fila del otro y corregir su `@usuario`.
+
+### Sin lista de miembros
+
+Es el estado normal **mientras no se haya activado el intent `GUILD_MEMBERS`**, y no es
+un fallo: la comprobación por cuenta (`GET /guilds/{guild_id}/members/{user_id}`) **no lo
+necesita** y sigue funcionando. Discord no da ningún error en ese caso —contesta `200`
+con la lista vacía—, así que el worker lo trata como "no se ha podido comprobar":
+
+| | Qué hace |
+|---|---|
+| Columnas | No escribe ni `discordInGuild` ni `discordCheckedAt` por la lista, ni ninguna alerta. Decir "no está en el servidor" con una lista vacía sería afirmar algo falso de todo el torneo |
+| Comprobación | Cae a la consulta por cuenta para quien tenga `discordUserId`. Quien solo tenga `@usuario` (altas de admin) **no se comprueba** y sale como omitido, con su contador |
+| Rastro | `discordError` lo dice en todas las pasadas: "sin lista de miembros (...)" con el motivo, y cuántos quedaron sin comprobar |
+| `lastSuccessAt` | **No** se mueve. No saber si alguien sigue en el servidor no ha parado ninguna partida |
+
+Para que las altas de admin se comprueben, hay que activar el intent (paso 7 de arriba);
+no hay nada más que configurar. Y **un roster viejo no se usa como reserva**: si la
+lectura falla, se vuelve a la consulta por cuenta, porque una lista a la que le falta la
+mitad afirmaría "no está" de la mitad del servidor.
+
+**Si la lista sale vacía pero el intent sí está activo**, mirar (a) que el token del bot
+sea el de la aplicación correcta y no uno regenerado, (b) que el bot siga en el servidor,
+y (c) el `DiscordError` del rastro, que trae la ruta y el estado y nunca el token.
+
+### Requisito operativo
+
+`npm run db:push` (las cuatro columnas de `Player`, el valor `DISCORD_NOT_IN_GUILD` de
+`AlertRule` y el **`@unique` de `discordUsername`**). **No** hace falta
+`npm run db:security`: no se crea ninguna tabla y las columnas nuevas heredan la postura
+de `Player`.
+
+**Si el `db push` falla con una violación de unicidad en `discordUsername`**, es que dos
+filas anteriores al ajuste comparten nombre con el discriminador antiguo (`pepito#1234` y
+`pepito#5678`), que sin él son el mismo `@usuario`. No es un despliegue roto: hay que
+decidir qué fila se queda con el `@usuario`, **corregir o vaciar el de la otra por SQL**
+con el panel cerrado, y repetir. Para verlo antes:
+
+```sql
+select lower(split_part(discord_username, '#', 1)) as canonico, count(*)
+from "Player"
+where discord_username is not null
+group by 1
+having count(*) > 1;
+```
 
 ## Alertas de comportamiento
 
@@ -369,7 +501,7 @@ mismos datos no crea nada, así que `npm run alerts:check` dos veces seguidas es
 comprobar que el dedupe no se ha roto. Los **umbrales** son configurables sin desplegar en
 `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo); `window` y `modes`
 **no** se duplican ahí: se leen del ruleset de puntuación, y el filtro de clasificatorias es el mismo
-`rankedMatchWhere()` que usa el motor de puntos.
+`rankedMatchWhere()` que usa el motor de puntos, más el corte de inscripción del jugador.
 
 ## Transparencia del historial de partidas
 
@@ -411,6 +543,47 @@ Con `AOE4WORLD_MOCK=1` (la simulación de abajo) este paso **no sale a la red** 
 ruta del sitio no tiene fixtures, y preguntar por los `profileId` de la simulación daría 404 para
 todo, o sea, acusaciones contra jugadores que no existen. `syncApprovedPlayers({ history: false })`
 lo apaga del todo.
+
+## Pertenencia al servidor de Discord
+
+La tercera regla de estado (`DISCORD_NOT_IN_GUILD`, F12) se comprueba en
+`syncApprovedPlayers()`, **después** del historial y antes de los directos, y su resultado va al
+resumen (`discord` y `discordError` de `SyncSummary`) y a `Setting["sync.lastRun"]`. El detalle de
+la regla está en [`docs/PLAN.md`](./PLAN.md#f12--discord-obligatorio-y-pertenencia-al-servidor-entrega-2).
+
+| Qué | Cuánto |
+|---|---|
+| Peticiones a la API de Discord, **con lista de miembros** | `ceil(miembros / 1000)` cada **12 h** (`DISCORD_ROSTER_TTL_HOURS`, cacheado en `Setting["discord.roster"]`), y **cero** en las pasadas donde el roster está al día |
+| Peticiones a la API de Discord, **sin lista de miembros** | una por cuenta, `GET /guilds/{id}/members/{user}` con `Authorization: Bot …` |
+| Cada cuánto por jugador | una vez cada **12 h** (`DISCORD_CHECK_TTL_HOURS`, cacheado en `Player.discordCheckedAt`) |
+| Cuántos jugadores por pasada | **10** (`DISCORD_CHECK_MAX_PER_RUN`, ajustable con la variable de entorno del mismo nombre) |
+| Con 30 participantes y el intent activo | **2 peticiones al día** en total (las dos de la lista de miembros), en vez de unas 60 |
+
+**Se comprueba a quien tiene cuenta vinculada o `@usuario`.** El filtro es `APPROVED` y
+(`discordUserId` **o** `discordUsername`) informado. A quien no tenga ninguno —filas
+anteriores a F12 y el torneo simulado— no se le pregunta y **no se le avisa**: no hay nada
+con qué preguntarle ni por quién. Con el roster es además donde se **resuelve** la cuenta
+de las altas de admin, que solo tienen `@usuario`.
+
+**Sin credenciales no se comprueba, y no es un fallo.** Si faltan `DISCORD_BOT_TOKEN` o
+`DISCORD_GUILD_ID`, el paso no lee ni una fila de `Player`, no sale a la red y deja un aviso
+permanente en `discordError`. Es el mismo patrón que la falta de `YOUTUBE_API_KEY` en los
+directos, y el motivo es el mismo: si no sale en el rastro no hay ningún sitio donde se vea que
+la comprobación lleva apagada.
+
+**Dónde mirar si deja de funcionar.** En `discordError`, que sale también en el log como
+`[sync] Discord: …`. **No mueve el `lastSuccessAt`**, igual que `historyError`: no saber si
+alguien se ha salido del servidor no ha parado ni una partida. Un `unknown` —un timeout, un
+`5xx`, un `401` de un token caducado, **o una lista de miembros vacía**— **no escribe
+nada**: ni columnas ni alerta, y el jugador vuelve a la cola en la siguiente pasada. Solo
+un `404` (o una lista de miembros de verdad en la que el id no aparece) afirma algo, y por
+eso un `5xx` de Discord no pondría a todo el torneo en la lista de alertas.
+
+**La línea del rastro dice qué se ha hecho**, y es lo primero que hay que leer:
+`roster de 47 miembros, recién leída`, `sin lista de miembros (…GUILD_MEMBERS…)`, cuántos
+enlazados por `@usuario`, cuántos sin aparecer por su `@usuario`, cuántos sin Discord y
+cuántos se han quedado sin comprobar por no haber lista. Ver
+[Sin lista de miembros](#sin-lista-de-miembros).
 
 ## Simulaciones
 
@@ -601,6 +774,12 @@ npm run db:cron                  # programa el job de sincronización cada 5 min
 - `YOUTUBE_API_KEY` va **además** en *Build variables and secrets* del trigger de Workers Builds, que
   es otra lista distinta y es la única que existe durante el build. Igual que el resto de secretos que
   lee el código de servidor.
+- Las **cinco** variables de Discord (`DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+  `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` y `DISCORD_OAUTH_SECRET`) van en el panel del Worker
+  **y** en *Build variables and secrets*, igual que `YOUTUBE_API_KEY`. Sin ellas la inscripción
+  pública sigue funcionando, pero **sin el paso de Discord**: no es un error, es la degradación
+  documentada, y en producción el paso es obligatorio. El detalle y los pasos manuales para crear
+  la aplicación y el bot están en [Discord obligatorio (F12)](#discord-obligatorio-f12).
 - `NEXT_PUBLIC_SITE_URL` va **también** en *Build variables and secrets*, en las **dos**
   configuraciones de build, y vale `https://laligahispana.es`: sin ella, los canónicos y las rutas
   absolutas de las imágenes caen al `localhost` de desarrollo, que es lo que se veía en producción antes

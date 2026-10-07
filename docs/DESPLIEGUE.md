@@ -357,6 +357,38 @@ se ha pasado a hablar con `pg` directamente. Ese script es el que aplica y compr
 RLS de la base de datos, así que perderlo habría sido perder el control de la seguridad del torneo.
 Sigue funcionando entero, con su comprobación previa y sus códigos de salida.
 
+## De dónde salen las variables en la CLI y en los scripts
+
+`next dev` y `next build` **no necesitan que nadie cargue nada**: Next lee `.env` y `.env.local` por su
+cuenta, y por eso la web no nota cuál de los dos tiene la `DATABASE_URL`. La CLI de Prisma
+(`generate`, `db:push`, `migrate`, `studio`) y los scripts de `tsx` no pasan por ahí, y para ellos
+**no hace falta exportar nada a mano**.
+
+Las dos rutas comparten el cargador [`scripts/load-env.mjs`](../scripts/load-env.mjs), importado desde
+`prisma7.config.ts` y desde la primera línea de cada script de `scripts/`. Antes cada una tenía su
+propio `import "dotenv/config"` —que es lo que Prisma y Next hacen por su cuenta— y ese solo mira
+`.env`, así que con la `DATABASE_URL` en `.env.local` los comandos de Prisma morían con
+`Environment variable not found: DATABASE_URL` y los scripts con
+`DATABASE_URL no está definida y el Worker no tiene el binding HYPERDRIVE de Hyperdrive`, que además
+señala al sitio equivocado.
+
+| Origen | Prioridad | Comentario |
+|---|---|---|
+| entorno (shell, CI, panel) | 1 | Una variable ya presente **gana siempre**. |
+| `.env.local` | 2 | Valores locales de la máquina. |
+| `.env` | 3 | Respaldo, para lo que no se quisiste pisar en local. |
+
+Que `.env.local` vaya antes que `.env` es el criterio de Next, de modo que la CLI y la web coinciden en
+qué valor manda; y `override: false` (explícito, aunque sea el valor por defecto de `dotenv`) es lo que
+garantiza que un `DATABASE_URL` exportado a mano siga mandando sobre los ficheros. Estos se resuelven
+desde la ruta del propio cargador y no desde `process.cwd()`, así que el resultado no depende del
+directorio desde el que se invoque el comando.
+
+**Cuando no hay ficheros, el cargador no hace nada y no rompe nada.** Es el caso de CI, donde no existe
+ni `.env` ni `.env.local`: por eso `npm ci` sigue haciendo su `prisma generate` sin `DATABASE_URL`. Si
+tras el cambio un comando de Prisma dice `Environment variable not found: DATABASE_URL`, el problema ya
+no está en la carga de ficheros sino en que la variable no está en ninguno de los tres sitios.
+
 ## Cómo se lee la configuración en el Worker
 
 En un Worker `process.env` **no** es el entorno del proceso. Cloudflare lo dice sin rodeos: *"In the
@@ -544,7 +576,8 @@ arriba son las de producción; un Preview tiene su propio par, en *Previews Base
   cambia el dominio, hay que cambiar el valor en **las dos** listas (ver
   [El dominio propio, y por qué no está en el archivo](#el-dominio-propio-y-por-qué-no-está-en-el-archivo)).
 - **Los secretos que lee el código de servidor** (`YOUTUBE_API_KEY`, `CRON_SECRET`,
-  `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`): también están, y deben estarlo. Ojo con el matiz, que
+  `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`,
+  `DISCORD_OAUTH_SECRET`): también están, y deben estarlo. Ojo con el matiz, que
   es lo que distingue este caso de los dos anteriores: hoy sus lecturas son **perezosas** (dentro
   del módulo que las usa, nunca al importar), así que el build no las necesita para pasar. La razón
   de tenerlas no es esa, sino que **el entorno del build no es el entorno del Worker**: en cuanto un
@@ -783,6 +816,86 @@ así que el orden era el que hacía que un fallo se viera. Está **hecho**:
 El orden era **build variable primero, reloj después**, y no al revés: los metadatos no rompen nada si
 fallan, el reloj sí. Los dos primeros se pueden deshacer igual de fácil.
 
+## El paso de Discord: variables y pasos manuales
+
+La inscripción de `/participar` exige conectar la cuenta de Discord (F12) cuando el OAuth está
+configurado, así que hay **cinco variables obligatorias en producción** que no existían antes:
+
+| Variable | Qué es |
+|---|---|
+| `DISCORD_CLIENT_ID` | Client ID de la aplicación OAuth2 (público) |
+| `DISCORD_CLIENT_SECRET` | Client secret. **Solo se muestra una vez** al crearla y nunca debe salir del servidor |
+| `DISCORD_BOT_TOKEN` | Token del bot, que hace el auto-unión al servidor y la comprobación de pertenencia |
+| `DISCORD_GUILD_ID` | Id del servidor del torneo |
+| `DISCORD_OAUTH_SECRET` | Secreto con el que se firma la cookie del vínculo. Sin él se usa `CRON_SECRET` |
+
+Y opcionales: `DISCORD_REDIRECT_URI` (si falta se deriva del origen de la petición),
+`DISCORD_INVITE_URL` (respaldo cuando el auto-unión falla), las de ajuste del cliente
+(`DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT`),
+`DISCORD_CHECK_MAX_PER_RUN` (tope de comprobaciones por pasada, 10 por defecto) y las dos de
+la lista de miembros del servidor: `DISCORD_ROSTER_MAX_PAGES` (páginas por refresco, 20 por
+defecto, que son veinte mil miembros) y `DISCORD_ROSTER_TTL_HOURS` (cuánto se cachea esa
+lista, 12 por defecto).
+
+**Las cinco van en los dos sitios**, como el resto de secretos que lee el servidor: en
+*Settings → Variables and Secrets* del Worker (y como **secretos**, no como *vars*) **y** en
+*Build variables and secrets* del trigger, en las dos configuraciones de build. El detalle de
+por qué son dos listas está en
+[Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables).
+
+### Qué hay que hacer en Discord, una sola vez
+
+1. Crear la **aplicación** en el portal de desarrolladores de Discord y anotar client id y
+   client secret.
+2. En **OAuth2 → Redirects**, añadir `https://laligahispana.es/api/discord/oauth/callback`.
+   Si se define `DISCORD_REDIRECT_URI`, tiene que ser **exactamente** la misma cadena.
+3. Crear el **bot** (Bot → Add Bot) y copiar su token. Si se regenera después, hay que
+   actualizar `DISCORD_BOT_TOKEN`.
+4. **Invitar el bot al servidor** con el permiso `CREATE_INSTANT_INVITE`, que es lo que
+   habilita `PUT /guilds/{guild_id}/members/{user_id}`. Se hace con el **URL Generator**
+   del final de la página de OAuth2: marca `bot` y ese permiso, y abre el enlace copiado.
+   Ese generador **no tiene botón de guardar** porque no guarda nada: solo compone una
+   URL, y perder las casillas al navegar es lo normal.
+5. Los scopes `identify` y `guilds.join` **no se configuran en ningún sitio**. Discord no
+   tiene una lista de scopes permitidos por aplicación: se piden en cada redirección, y los
+   pone el código (`DISCORD_OAUTH_SCOPES` en `src/lib/discord/env.ts`) al construir la URL
+   de autorización. Por eso no hay nada que guardar en el portal.
+6. Copiar el **id del servidor** a `DISCORD_GUILD_ID` (Developer Mode → clic derecho sobre
+   el servidor → "Copiar id de servidor").
+7. **Activar el intent privilegiado `GUILD_MEMBERS`** (Bot → Privileged Gateway Intents →
+   **SERVER MEMBERS INTENT** → Save Changes). Es un paso **manual y necesario para la lista
+   de miembros**, y no se puede pedir por API. Sin él,
+   `GET /guilds/{guild_id}/members` **contesta `200` con la lista vacía**, y el sistema lo
+   detecta y cae a la comprobación por cuenta (que no necesita el intent); lo que se pierde
+   sin activarlo es que **las altas de admin no se comprueban ni se enlazan solas**, porque
+   son filas que solo tienen `@usuario` y no hay `discordUserId` con el que preguntar. El
+   rastro lo dice siempre (`discordError`, con "sin lista de miembros" y el motivo), así que
+   no hace falta buscar el síntoma.
+   El botón **desaparece solo** cuando el bot está en un servidor con más de cien miembros,
+   por un límite de Discord; eso también es normal y no hay que hacer nada.
+
+### Si el paso no aparece
+
+No es un error de la web: `isDiscordOAuthConfigured()` es `false` y el formulario no pinta el
+paso, con un aviso `[discord]` en el log. Falta alguna de las cinco variables **en el Worker en
+runtime** —tenerla solo en *Build variables and secrets* es el caso típico, porque la de runtime
+es la que llega en `ctx.env` (ver
+[Cómo se lee la configuración en el Worker](#cómo-se-lee-la-configuración-en-el-worker))—.
+
+### Y antes de esto, en la base de datos
+
+`npm run db:push` (las cuatro columnas de Discord de `Player`, el valor
+`DISCORD_NOT_IN_GUILD` de `AlertRule` y el **`@unique` de `discordUsername`**). No hace
+falta `npm run db:security`: no se crea ninguna tabla.
+
+**Ojo con el `@unique` de `discordUsername`.** Si el `db push` se queja de una violación de
+unicidad en esa columna, es que dos filas anteriores a este ajuste comparten nombre con el
+discriminador antiguo (`pepito#1234` y `pepito#5678`), que al quitarlo son el mismo
+`@usuario`. No es un fallo del despliegue: hay que decidir cuál de las dos filas se queda
+con el `@usuario` y **cambiarle o vaciarle el nombre en la otra** (por SQL, con el panel
+cerrado para no escribir en caliente), y repetir. Ver
+[`docs/OPERACION.md`](./OPERACION.md#discord-obligatorio-f12).
+
 ## Publicar
 
 ```bash
@@ -860,7 +973,7 @@ necesita el build:
 | `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` | `wrangler preview` emula Hyperdrive igual que `deploy`, y sin ella el build muere al ver el binding |
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Next las sustituye por un literal al compilar, y en runtime ningún binding puede llegar al bundle del navegador |
 | `NEXT_PUBLIC_SITE_URL` | Lo mismo, y además es lo que hace que un Preview anuncie el dominio de producción y no el suyo: es el mismo valor que en la del *trigger* de `main`, y por eso tiene que ir en las dos listas. Ver [El dominio propio](#el-dominio-propio-y-por-qué-no-está-en-el-archivo) |
-| `CRON_SECRET`, `DATABASE_URL`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `YOUTUBE_API_KEY` | No las necesita el build: están por si algún día un módulo de servidor las lee al importar. Ver [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables) |
+| `CRON_SECRET`, `DATABASE_URL`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `YOUTUBE_API_KEY`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_OAUTH_SECRET` | No las necesita el build: están por si algún día un módulo de servidor las lee al importar. Ver [Los dos sitios del panel](#los-dos-sitios-del-panel-secretos-del-worker-y-build-variables) |
 
 **Las build variables no están en runtime**, solo en el proceso de build (eso dice la documentación de
 Cloudflare, sin excepciones). Lo que un Preview tiene en runtime sale de su *Preview settings*, que en

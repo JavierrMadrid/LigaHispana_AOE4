@@ -13,11 +13,13 @@ import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { requireAdmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
-import { logDatabaseFailure } from "@/lib/db-errors";
+import { logDatabaseFailure, uniqueViolationOn } from "@/lib/db-errors";
 import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
 import {
   isLegacyYoutubeUrl,
   parseCountry,
+  parseDiscordUsername,
+  parseEmail,
   parseKickChannel,
   parseName,
   parseProfileId,
@@ -25,7 +27,9 @@ import {
   parseYoutubeChannel,
 } from "@/lib/player-input";
 import { countsAsRanked } from "@/lib/ranked-match";
+import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
+import { readRegistrationOpen, writeRegistrationOpen } from "@/lib/settings";
 
 /**
  * Server Actions del panel de administración.
@@ -74,7 +78,7 @@ export type AdminActionResult = {
  * "no hay error".
  *
  * Lo comparten `createPlayer` y `updatePlayer` porque son el mismo formulario con
- * campos distintos: el alta empieza una fila y la edición reescribe cinco campos de
+ * campos distintos: el alta empieza una fila y la edición reescribe siete campos de
  * una que ya existe. Los dos necesitan el mismo par de mensajes, y con el mismo
  * reparto: el `error` es lo que hay que corregir y se pinta en `role="alert"`
  * **sin perder lo escrito**, y el `message` es el aviso de que sí se ha hecho —el
@@ -214,6 +218,17 @@ const SAVE_FAILED_MESSAGE = "No se ha podido guardar. Inténtalo de nuevo en uno
 const COUNTRIES_UNAVAILABLE_MESSAGE =
   "No se ha podido leer la lista de países admitidos. Inténtalo de nuevo en unos minutos.";
 
+/**
+ * Fallo al leer el estado del plazo de inscripción.
+ *
+ * Igual que `COUNTRIES_UNAVAILABLE_MESSAGE`: en ese punto no se ha intentado
+ * guardar nada, así que no es un `SAVE_FAILED_MESSAGE`. Se falla **cerrando** —no
+ * se da de alta— porque el interruptor existe justo para bloquear el alta y un
+ * fallo de lectura no es una razón para saltárselo.
+ */
+const REGISTRATION_UNAVAILABLE_MESSAGE =
+  "No se ha podido leer el estado de las inscripciones. Inténtalo de nuevo en unos minutos.";
+
 const COUNTRY_UNKNOWN_ERROR =
   "Ese país no está en la lista de los que admite el torneo. Elígelo en el desplegable o déjalo vacío.";
 
@@ -242,6 +257,65 @@ const YOUTUBE_LEGACY_URL_ERROR =
 
 const KICK_INVALID_ERROR =
   "Ese canal de Kick no vale. Se puede escribir el nombre del canal o la dirección kick.com/nombre.";
+
+/**
+ * El correo de contacto, con el mismo criterio que el país y que los tres canales:
+ * un vacío es `null` ("no lo sabemos") y un valor escrito que no se puede guardar
+ * es un error, no un `null` silencioso. Guardar el `null` en ese caso diría "no
+ * tiene correo" cuando lo que pasó es que lo que escribió no era una dirección, y
+ * son dos cosas distintas para quien después busca a un participante para
+ * escribirle. Vacío sí es `null`, que es lo que la columna significa.
+ *
+ * **No es el texto de `/participar`**, y a propósito: los dos formularios validan
+ * con el mismo `parseEmail`, así que admiten las mismas formas, pero cada uno
+ * habla con quien lo rellena y sus textos tienen otro tono —allí se le habla de
+ * "te" a quien se inscribe, aquí a quien administra—. Lo que sí se comparte es la
+ * constante: el alta y la edición del mismo panel no pueden validar el mismo campo
+ * de dos maneras, que es la incoherencia que ya se corrigió una vez con los
+ * canales.
+ *
+ * No hay un texto aparte para el largo: el `maxLength` del campo lo corta antes de
+ * enviar, y si aun así llegara uno más largo, "no vale" sigue siendo cierto.
+ */
+const EMAIL_INVALID_ERROR =
+  "Ese correo no vale. Se puede escribir una dirección como nombre@correo.com, con algo antes y después de la arroba y el dominio acabando en una extensión de letras.";
+
+/**
+ * El usuario de Discord es obligatorio, y se escribe **con la arroba**.
+ *
+ * Los tres mensajes del `@usuario` los comparten el alta y la edición, por el mismo
+ * motivo que los de los canales: los dos formularios del panel validan el mismo campo
+ * con las mismas reglas, y uno que enseñara a escribirlo de una manera y el otro
+ * aceptara otra sería un panel que enseña algo falso.
+ *
+ * ## Por qué la arroba es obligatoria
+ *
+ * Porque en un servidor de Discord hay muchas cuentas con el mismo nombre y **el
+ * `@usuario` es lo único único en todo el servicio**. Sin la arroba, lo que se
+ * guardaría sería un nombre de display —algo que alguien se ha puesto dentro del
+ * servidor y que no prueba nada—, y con él el worker no podría encontrar la cuenta ni
+ * el alta podría chocar con otra por un nombre repetido. El parser
+ * (`parseDiscordUsername()`) es el que lo exige, y lo que sale de ahí es el nombre
+ * **sin** arroba, que es la forma en que se guarda.
+ */
+const DISCORD_USERNAME_REQUIRED_ERROR =
+  "El usuario de Discord es obligatorio: se escribe con su arroba, como @pepito.";
+
+const DISCORD_USERNAME_INVALID_ERROR =
+  "Ese usuario de Discord no vale. Se escribe con la arroba y después de 2 a 32 letras, números, puntos o guiones bajos, como @pepito.";
+
+/**
+ * Ese `@usuario` ya está en la liga.
+ *
+ * `Player.discordUsername` es única, así que dos participantes no pueden tener el
+ * mismo `@usuario`: si lo tuvieran, serían la misma cuenta escrita de dos maneras —
+ * el alta de admin con lo que le dicen a la organización y la inscripción pública con
+ * lo que resolvió Discord— y la organización no sabría a cuál de las dos filas
+ * hablarle. En el alta y en la edición el mensaje lo pone quien mira la fila y, si lo
+ * sabe, **nombra a quien lo tiene**: aquí corregir es inmediato.
+ */
+const DISCORD_USERNAME_TAKEN_ERROR =
+  "Ese usuario de Discord ya está en la liga. No puede haber dos participantes con el mismo @usuario.";
 
 /** Junta frases sin que aparezca ni un espacio de más ni un doble espacio. */
 function frase(...partes: string[]): string {
@@ -276,18 +350,39 @@ function actorEmail(user: User): string {
  * escribe **en la misma transacción** que el alta: o hay jugador y rastro, o no hay
  * ninguno de los dos.
  *
- * ## El país es opcional aquí y obligatorio en `/participar`
+ * ## El usuario de Discord es obligatorio y se escribe con arroba
  *
- * El campo `country` lo **exige** el formulario público (es de los datos con los
- * que la organización organiza el torneo) y **admite** el alta de admin, que es el
- * mismo criterio que ya lleva el correo: se puede dar de alta a alguien sin
- * necesitar su país, y por eso la columna es nullable en el schema.
+ * El alta de admin **exige** el `@usuario` global de la persona (es el dato que hace
+ * que la organización la pueda encontrar en el servidor), mientras que la inscripción
+ * pública lo resuelve sola por el paso de OAuth. Aquí lo escribe un humano, así que el
+ * parser exige que empiece por `@` y devuelve `null` si no —un nombre de display no
+ * es una identidad— y lo que se guarda es el nombre **sin** arroba, que es la forma
+ * canónica y la única que el roster del servidor trae.
  *
- * Lo que no se admite en ningún caso es un país **mal escrito**: un valor que no
- * está en la lista vigente es un error, no algo que se ignore en silencio y se
- * guarde como `null`. Si se guardara, la fila diría "no lo sabemos" cuando en
- * realidad lo que pasó es que alguien escribió un país que no existe, y esas dos
- * cosas son distintas. Vacío sí es `null`, que es lo que la columna significa.
+ * Lo que se guarda no es una identidad comprobada: es un dato que la organización le
+ * pide a alguien. Lo que lo convierte en identidad es el worker, que lo busca en la
+ * lista de miembros del servidor y guarda el `discordUserId` que encuentre. Por eso
+ * `updatePlayer` no toca el `discordUserId`.
+ *
+ * Y como `discordUsername` es única, el alta comprueba contra la base si el `@usuario`
+ * ya está en la liga **y** captura el `P2002` de esa columna para el caso de que dos
+ * admins den de alta a la vez. El `P2002` de `discordUserId` no puede saltar aquí —el
+ * alta no escribe id— pero el de `profileId` sí, y son dos mensajes distintos.
+ *
+ * ## El país y el correo son opcionales aquí y obligatorios en `/participar`
+ *
+ * Los dos los **exige** el formulario público —el país es de los datos con los que
+ * la organización organiza el torneo, y el correo es donde se responde a las
+ * dudas— y los dos los **admite** el alta de admin con el mismo criterio: se puede
+ * dar de alta a alguien sin saber su país o sin que nos hayan dado su correo, y
+ * por eso las dos columnas son nullable en el schema.
+ *
+ * Lo que no se admite en ningún caso es un valor **mal escrito**: un país que no
+ * está en la lista vigente y un correo que no es una dirección son errores, no
+ * algo que se ignore en silencio y se guarde como `null`. Si se guardara, la fila
+ * diría "no lo sabemos" cuando en realidad lo que pasó es que alguien escribió un
+ * país que no existe o un correo que no vale, y esas dos cosas son distintas.
+ * Vacío sí es `null`, que es lo que la columna significa.
  *
  * ## Qué se escribe y en qué orden
  *
@@ -314,17 +409,45 @@ export async function createPlayer(
 ): Promise<PlayerFormState> {
   const admin = await requireAdmin();
 
+  // El cierre de inscripciones bloquea también el alta de admin, no solo el
+  // formulario público: es el mismo interruptor (`Setting["registration.open"]`) y
+  // se comprueba en servidor aunque la acción se llame a mano. Va lo primero,
+  // antes de validar nada, porque con el plazo cerrado no se va a escribir: no
+  // tiene sentido pagar validaciones ni lecturas para un alta descartada.
+  //
+  // Aprobar y rechazar solicitudes **no** pasan por aquí y siguen funcionando
+  // siempre: el interruptor cierra el alta, no la gestión de lo ya recibido.
+  let registrationOpen: boolean;
+
+  try {
+    registrationOpen = await readRegistrationOpen();
+  } catch (error) {
+    logDatabaseFailure("admin/createPlayer/plazo", error);
+
+    return { error: REGISTRATION_UNAVAILABLE_MESSAGE, message: null };
+  }
+
+  if (!registrationOpen) {
+    return { error: REGISTRATION_CLOSED_MESSAGE, message: null };
+  }
+
   // `readField` en todos, como en la edición: `formData.get` también puede
   // devolver un `File`, y el parser recibiría `"[object File]"`, que es un valor
   // escrito mal con otra forma. En el nombre eso además pasaba la validación.
   const profileId = parseProfileId(readField(formData, "profileId"));
   const name = parseName(readField(formData, "name"));
+  // El correo detrás del nombre y antes de los canales, que es el mismo sitio que en
+  // la inscripción pública: es un dato de la persona, no un canal.
+  const emailRaw = readField(formData, "email");
+  const contactEmail = parseEmail(emailRaw);
   const twitchRaw = readField(formData, "twitchChannel");
   const twitchChannel = parseTwitchChannel(twitchRaw);
   const youtubeRaw = readField(formData, "youtubeChannel");
   const youtubeChannel = parseYoutubeChannel(youtubeRaw);
   const kickRaw = readField(formData, "kickChannel");
   const kickChannel = parseKickChannel(kickRaw);
+  const discordRaw = readField(formData, "discordUsername");
+  const discordUsername = parseDiscordUsername(discordRaw);
   const countryRaw = readField(formData, "country");
   const statusRaw = readField(formData, "status") || "APPROVED";
   const status =
@@ -336,6 +459,16 @@ export async function createPlayer(
 
   if (!name) {
     return { error: "El nombre es obligatorio (máx. 64 caracteres).", message: null };
+  }
+
+  // El `@usuario` es obligatorio en el alta —es el único dato de Discord que la
+  // organización da de alta a mano— y el parser distingue los dos fallos con el valor
+  // crudo: un vacío es "falta", y algo que no vale es "está mal escrito".
+  if (discordUsername === null) {
+    return {
+      error: discordRaw === "" ? DISCORD_USERNAME_REQUIRED_ERROR : DISCORD_USERNAME_INVALID_ERROR,
+      message: null,
+    };
   }
 
   // Los tres canales, con el mismo criterio y en el mismo orden que la edición: un
@@ -355,6 +488,13 @@ export async function createPlayer(
 
   if (kickChannel === null && kickRaw !== "") {
     return { error: KICK_INVALID_ERROR, message: null };
+  }
+
+  // El correo, con el mismo criterio que los canales y que el país, y por el mismo
+  // motivo de sitio: es una validación gratuita, así que va antes de leer la lista
+  // de países.
+  if (contactEmail === null && emailRaw !== "") {
+    return { error: EMAIL_INVALID_ERROR, message: null };
   }
 
   // La lista se lee solo si el resto de lo obligatorio ya vale: es una lectura de
@@ -393,15 +533,42 @@ export async function createPlayer(
       };
     }
 
+    // Unicidad del `@usuario`, contra la base y **antes** de escribir. Es una
+    // comprobación barata (un índice único) y da un mensaje que nombra a quien lo
+    // tiene, que un `P2002` no puede dar porque solo sabe que se saltó. La carrera
+    // entre dos altas simultáneas la cubre igualmente el `P2002` de más abajo.
+    const discordOcupado = await db.player.findUnique({
+      where: { discordUsername },
+      select: { name: true },
+    });
+
+    if (discordOcupado !== null) {
+      return {
+        error: frase(
+          DISCORD_USERNAME_TAKEN_ERROR,
+          `Ya lo usa ${discordOcupado.name}.`,
+        ),
+        message: null,
+      };
+    }
+
     await db.$transaction(async (tx) => {
       const created = await tx.player.create({
         data: {
           profileId,
           name,
+          contactEmail,
           twitchChannel,
           youtubeChannel,
           kickChannel,
           country,
+          discordUsername,
+          // Cuándo lo da de alta la organización, que es lo mismo que cuando se
+          // habría inscrito si lo hubiera hecho por el formulario: el motor no le
+          // cuenta a un alta posterior las partidas que jugó antes de entrar. No es
+          // `createdAt` porque una reinscripción de un `REJECTED` reutiliza la fila
+          // y ese se queda en el primer envío.
+          registeredAt: new Date(),
           status: status as PlayerStatus,
         },
         select: { id: true },
@@ -419,6 +586,15 @@ export async function createPlayer(
       });
     });
   } catch (error) {
+    // Dos admins que den de alta a la vez el mismo `@usuario` (o el mismo perfil) no
+    // los ve la comprobación anterior, y los para la unicidad. El mensaje es el
+    // mismo que ya habría salido de la comprobación, porque es el mismo problema: sin
+    // esta captura saldría "no se ha podido guardar", que no dice que el conflicto es
+    // el `@usuario` ni se puede corregir desde el formulario.
+    if (uniqueViolationOn(error, "discordUsername")) {
+      return { error: DISCORD_USERNAME_TAKEN_ERROR, message: null };
+    }
+
     logDatabaseFailure("admin/createPlayer", error);
 
     return { error: SAVE_FAILED_MESSAGE, message: null };
@@ -452,20 +628,45 @@ export async function createPlayer(
 /* Edición de jugador                                                          */
 /* -------------------------------------------------------------------------- */
 
-/** Los cinco campos que la edición puede cambiar, tal y como están en la fila. */
+/**
+ * Los siete campos que la edición puede cambiar, tal y como están en la fila.
+ *
+ * El orden es el del formulario, no el de las columnas: el correo va detrás del
+ * nombre porque es un dato de la persona y no un canal, igual que en el alta, y el
+ * `@usuario` de Discord se queda al final por el motivo que dice `camposQueCambian()`.
+ */
 type CamposEditables = {
   name: string;
+  /**
+   * Correo de contacto, que es `null` cuando no se sabe.
+   *
+   * A diferencia de `discordUsername`, aquí sí admite `null` y el vacío lo escribe:
+   * el correo es un dato de contacto que se puede no tener, y "no lo sabemos" es una
+   * información, no una fila a medias. Es el mismo criterio que el país.
+   */
+  contactEmail: string | null;
   twitchChannel: string | null;
   youtubeChannel: string | null;
   kickChannel: string | null;
   country: string | null;
+  /**
+   * `@usuario` de Discord en su forma canónica (**sin arroba**).
+   *
+   * Nunca `null`: a diferencia de los canales y del país, aquí no hay un campo
+   * opcional, porque una fila sin `@usuario` no se puede comprobar ni buscar en el
+   * servidor. Las filas anteriores a F12 sí lo tienen a `null`, y ese `null` no es
+   * editable: es un dato que no se sabe, y esta acción no inventa datos. Para esas
+   * filas hay que dar de alta a la persona en Discord otra vez, que es lo que hace
+   * quien pulse el botón.
+   */
+  discordUsername: string | null;
 };
 
 /**
  * Qué campo editable ha cambiado de valor, con su rótulo y sus dos valores.
  *
  * Va en el mensaje de vuelta porque "se han guardado los cambios" no dice **qué** se
- * ha cambiado, y en una fila con cinco campos editables la diferencia entre "ha
+ * ha cambiado, y en una fila con siete campos editables la diferencia entre "ha
  * guardado" y "no había nada que guardar" es justo lo que no se ve. Además decide
  * si hace falta escribir: si la lista sale vacía, los valores ya eran estos y no hay
  * nada que hacer.
@@ -477,6 +678,12 @@ type CamposEditables = {
 function camposQueCambian(antes: CamposEditables, despues: CamposEditables): CampoEditado[] {
   const cambios: CampoEditado[] = [
     ...campoSiCambia(antes.name, despues.name, "name", "nombre"),
+    ...campoSiCambia(
+      antes.contactEmail,
+      despues.contactEmail,
+      "contactEmail",
+      "correo de contacto",
+    ),
     ...campoSiCambia(
       antes.twitchChannel,
       despues.twitchChannel,
@@ -491,6 +698,15 @@ function camposQueCambian(antes: CamposEditables, despues: CamposEditables): Cam
     ),
     ...campoSiCambia(antes.kickChannel, despues.kickChannel, "kickChannel", "canal de Kick"),
     ...campoSiCambia(antes.country, despues.country, "country", "país"),
+    // El `@usuario` va al final porque es el campo que más se toca por una regla (dar
+    // de alta, corregir un nombre mal escrito) y el mensaje tiene que leerlo en ese
+    // orden: primero lo que es el jugador y después su identidad en Discord.
+    ...campoSiCambia(
+      antes.discordUsername,
+      despues.discordUsername,
+      "discordUsername",
+      "usuario de Discord",
+    ),
   ];
 
   return cambios;
@@ -530,8 +746,9 @@ function filaInexistente(error: unknown): boolean {
  *
  * ## Qué escribe y qué no
  *
- * Escribe **cinco** campos —`name`, `twitchChannel`, `youtubeChannel`,
- * `kickChannel` y `country`— y nada más. Se quedan fuera a propósito:
+ * Escribe **siete** campos —`name`, `contactEmail`, `twitchChannel`,
+ * `youtubeChannel`, `kickChannel`, `country` y `discordUsername`— y nada más. Se
+ * quedan fuera a propósito:
  *
  * - **El estado**, que ya tiene su aprobar/rechazar/eliminar y cuya decisión tiene
  *   su propio recorrido en la cola de revisión.
@@ -539,23 +756,36 @@ function filaInexistente(error: unknown): boolean {
  *   cambiarlo sería cambiar de persona, y todas sus partidas vienen colgadas de él.
  * - **`aoe4WorldName`, el avatar y todo lo que escribe el worker** (elo, división,
  *   racha, `*IsLive`): son datos de la API, y quien los trae es el sincronizador.
+ * - **`discordUserId`**, que sigue siendo **intocable**: es la prueba de que esa
+ *   persona es quien dice ser, y solo Discord la firma. De Discord lo único editable
+ *   es el `@usuario`, que es un dato de contacto con el servidor y no una identidad.
+ *   Corregir una cuenta mal vinculada se hace rehaciendo el paso por Discord.
  * - **Puntos y ranking**, que ni se leen.
  *
  * ## Por eso no recalcula ni trae partidas
  *
  * Al revés que el alta, que sí trae las partidas de un jugador recién aprobado.
- * Ninguno de los cinco campos entra en el motor de puntos ni en el de alertas —
- * `PlayerScore` y `Alert` hablan de partidas, no de cómo se llama alguien— así que
- * no hay nada derivado que se quede viejo y ninguna llamada a AoE4World que hacer.
- * Revalida solo `/admin`, donde vive la lista; la web pública es `force-dynamic` y
- * relee en cada visita.
+ * Ninguno de los siete campos entra en el motor de puntos ni en el de alertas —
+ * `PlayerScore` y `Alert` hablan de partidas y de lo que se ha comprobado fuera del
+ * juego, no de cómo se llama alguien—, así que no hay nada derivado que se quede
+ * viejo y ninguna llamada a AoE4World que hacer. Revalida solo `/admin`, donde vive la
+ * lista; la web pública es `force-dynamic` y relee en cada visita.
  *
  * ## El formulario es una foto completa de la fila
  *
- * Los cinco campos se **reescriben** con lo que venga y un vacío es `null`: es el
+ * Los siete campos se **reescriben** con lo que venga y un vacío es `null`: es el
  * mismo criterio del alta, donde un canal vacío significa "no tiene canal" y un
- * país vacío "no lo sabemos". Aquí **no hay un "no tocado"**, y es deliberado: si
- * faltara el campo en el `FormData` contaría como vacío, igual que en el alta.
+ * correo o un país vacíos "no lo sabemos". Aquí **no hay un "no tocado"**, y es
+ * deliberado: si faltara el campo en el `FormData` contaría como vacío, igual que
+ * en el alta.
+ *
+ * **El `@usuario` es la excepción: es obligatorio y un vacío es un error**, porque en
+ * su caso `null` no significa "no lo sabemos" sino "esta fila no se puede buscar en
+ * el servidor ni comprobar". El coste es que una fila anterior a F12 —que no tiene
+ * `@usuario`— no se puede editar sin escribirlo, y es el precio de que el formulario
+ * sea una foto de la fila: quien edita tiene que saber el `@usuario` de ese
+ * participante. La unicidad se comprueba **excluyendo la fila que se está
+ * editando**, porque si no, guardar sin tocar nada se rechazaría a sí mismo.
  *
  * La alternativa —escribir solo los campos que vinieran— daría dos contratos para
  * los mismos campos en el mismo panel, y el segundo tendría una trampolínea: un
@@ -566,12 +796,15 @@ function filaInexistente(error: unknown): boolean {
  *
  * ## Validación
  *
- * Los mismos parsers y los mismos textos del alta (`createPlayer`), con el país
- * **opcional**: vacío es `null` y un valor fuera de la lista admitida es un error,
- * no un `null` en silencio. Ni el país ni los canales de YouTube y Kick tienen
- * respaldo en el perfil de AoE4World, así que un valor guardado a escondidas no lo
- * arregla nadie en la siguiente pasada; del de Twitch hay `Player.twitchUrl` como
- * plan B, pero sale de la ladder y no de la columna que escribe el panel.
+ * Los mismos parsers y los mismos textos del alta (`createPlayer`), con el país y
+ * el correo **opcionales**: vacío es `null` y un valor mal escrito —fuera de la
+ * lista admitida en el caso del país, con una forma que no es de dirección en el del
+ * correo— es un error, no un `null` en silencio. Ni el país, ni el correo, ni los
+ * canales de YouTube y Kick tienen respaldo en el perfil de AoE4World, así que un
+ * valor guardado a escondidas no lo arregla nadie en la siguiente pasada; del de
+ * Twitch hay `Player.twitchUrl` como plan B, pero sale de la ladder y no de la
+ * columna que escribe el panel. Del `@usuario` no hay plan B en ningún sitio, y por
+ * eso tampoco se admite escrito mal.
  *
  * Los **tres** canales, incluido el de Twitch, se rechazan aquí y en el alta con el
  * mismo criterio y la misma constante. La asimetría que hubo —el alta guardaba el
@@ -584,7 +817,7 @@ function filaInexistente(error: unknown): boolean {
  *
  * **Aprobar, rechazar y editar no se pisan**, y no hace falta ninguna
  * coordinación: cada acción escribe un **conjunto de columnas disjunto** —el
- * estado por un lado, los cinco campos por otro— así que el `UPDATE` de una no
+ * estado por un lado, los siete campos por otro— así que el `UPDATE` de una no
  * puede deshacer lo que escribió la otra. Es justo lo contrario del caso que sí
  * necesita cuidado, la reinscripción de `/participar`, donde el estado **cambia** y
  * por eso su `UPDATE` filtra por él para no pisar una aprobación.
@@ -605,7 +838,9 @@ function filaInexistente(error: unknown): boolean {
  * que el `UPDATE`: o se ven los dos o no se ve ninguno. Encaja en el criterio del
  * enum —cambia datos que alguien más ve— porque el nombre y los canales salen en la
  * clasificación y en `/partidas`, así que una edición no es una nota privada del
- * panel. La frase la redacta `admin-actions.ts` (que es donde se redactan todas, para
+ * panel. El correo no sale de aquí —es un dato de contacto y la web pública no lo
+ * publica—, pero cambiarlo sigue siendo una edición del panel. La frase la redacta
+ * `admin-actions.ts` (que es donde se redactan todas, para
  * que el historial y la pantalla no puedan divergir) y lleva **qué campos** han
  * cambiado, que es lo que se viene a mirar cuando alguien pregunta por qué un
  * participante aparece con otro nombre.
@@ -631,16 +866,32 @@ export async function updatePlayer(
   // `readField` en todos: `FormData.get` también puede devolver un `File`, y el
   // parser recibiría `"[object File]"`, que es un valor escrito mal con otra forma.
   const name = parseName(readField(formData, "name"));
+  // El correo detrás del nombre y antes de los canales, como en el alta y en la
+  // inscripción pública: es un dato de la persona, no un canal.
+  const emailRaw = readField(formData, "email");
+  const contactEmail = parseEmail(emailRaw);
   const twitchRaw = readField(formData, "twitchChannel");
   const twitchChannel = parseTwitchChannel(twitchRaw);
   const youtubeRaw = readField(formData, "youtubeChannel");
   const youtubeChannel = parseYoutubeChannel(youtubeRaw);
   const kickRaw = readField(formData, "kickChannel");
   const kickChannel = parseKickChannel(kickRaw);
+  const discordRaw = readField(formData, "discordUsername");
+  const discordUsername = parseDiscordUsername(discordRaw);
   const countryRaw = readField(formData, "country");
 
   if (!name) {
     return { error: "El nombre es obligatorio (máx. 64 caracteres).", message: null };
+  }
+
+  // El `@usuario` es obligatorio y a diferencia de los canales y del país **un vacío
+  // es un error**, no un `null`: `null` aquí significaría una fila que no se puede
+  // buscar en el servidor. Ver el docblock de la acción.
+  if (discordUsername === null) {
+    return {
+      error: discordRaw === "" ? DISCORD_USERNAME_REQUIRED_ERROR : DISCORD_USERNAME_INVALID_ERROR,
+      message: null,
+    };
   }
 
   // Los tres canales, con el criterio del alta: vacíos son `null` y un valor escrito
@@ -659,6 +910,13 @@ export async function updatePlayer(
 
   if (kickChannel === null && kickRaw !== "") {
     return { error: KICK_INVALID_ERROR, message: null };
+  }
+
+  // El correo, con el mismo criterio y el mismo texto que el alta: vacío es `null` y
+  // un valor escrito que no se puede guardar es un error de su campo. También es una
+  // validación gratuita, así que va antes de leer la lista de países.
+  if (contactEmail === null && emailRaw !== "") {
+    return { error: EMAIL_INVALID_ERROR, message: null };
   }
 
   /**
@@ -690,18 +948,21 @@ export async function updatePlayer(
     }
   }
 
-  let actual: ({ profileId: number } & CamposEditables) | null;
+  let actual: ({ id: string; profileId: number } & CamposEditables) | null;
 
   try {
     actual = await db.player.findUnique({
       where: { id: playerId },
       select: {
+        id: true,
         name: true,
         profileId: true,
+        contactEmail: true,
         twitchChannel: true,
         youtubeChannel: true,
         kickChannel: true,
         country: true,
+        discordUsername: true,
       },
     });
   } catch (error) {
@@ -721,12 +982,50 @@ export async function updatePlayer(
   // estrecha un `let` si no puede haber sido reasignado entre medias.
   const player = actual;
 
+  /**
+   * Unicidad del `@usuario`, **excluyendo la fila que se está editando**.
+   *
+   * Sin la exclusión, guardar el formulario sin tocar nada se rechazaría a sí mismo
+   * por tener su propio `@usuario`, que es el caso más normal que hay. Solo se
+   * pregunta cuando el valor **cambia**, que es cuando puede aparecer el conflicto:
+   * sin cambio no hay nada que comprobar y no se gasta una lectura.
+   *
+   * La carrera con otro admin que guarde el mismo `@usuario` a la vez la cubre el
+   * `P2002` del `UPDATE`, mapeado al mismo mensaje.
+   */
+  if (discordUsername !== player.discordUsername) {
+    let ocupado: { name: string } | null = null;
+
+    try {
+      ocupado = await db.player.findUnique({
+        where: { discordUsername },
+        select: { name: true },
+      });
+    } catch (error) {
+      logDatabaseFailure("admin/updatePlayer/discord", error);
+
+      return { error: SAVE_FAILED_MESSAGE, message: null };
+    }
+
+    // `findUnique` por `discordUsername` solo puede devolver **otra** fila: si fuera
+    // esta misma, `discordUsername` ya sería igual a `player.discordUsername` y no
+    // estaríamos aquí. Por eso no hace falta el `NOT: { id }` de la consulta.
+    if (ocupado !== null) {
+      return {
+        error: frase(DISCORD_USERNAME_TAKEN_ERROR, `Ya lo usa ${ocupado.name}.`),
+        message: null,
+      };
+    }
+  }
+
   const despues: CamposEditables = {
     name,
+    contactEmail,
     twitchChannel,
     youtubeChannel,
     kickChannel,
     country,
+    discordUsername,
   };
 
   const cambios = camposQueCambian(player, despues);
@@ -749,8 +1048,9 @@ export async function updatePlayer(
     // dice "Edición de X" sin cambio, o un cambio sin su línea, serían los dos estados
     // que el rastro no puede describir.
     await db.$transaction(async (tx) => {
-      // Solo los cinco campos, nunca el resto del `data` de un `Player`: lo que no se
-      // nombra aquí no lo toca esta acción.
+      // Solo los siete campos, nunca el resto del `data` de un `Player`: lo que no se
+      // nombra aquí no lo toca esta acción. En particular, `discordUserId` no se
+      // escribe nunca desde aquí.
       await tx.player.update({ where: { id: playerId }, data: despues });
 
       await recordAdminAction(tx, {
@@ -765,6 +1065,13 @@ export async function updatePlayer(
   } catch (error) {
     if (filaInexistente(error)) {
       return { error: "Ese jugador ya no está en el panel.", message: null };
+    }
+
+    // La carrera con otro admin que haya guardado el mismo `@usuario` entre la
+    // comprobación y esta escritura. Es el mismo problema que ya habría salido
+    // antes, así que es el mismo mensaje.
+    if (uniqueViolationOn(error, "discordUsername")) {
+      return { error: DISCORD_USERNAME_TAKEN_ERROR, message: null };
     }
 
     logDatabaseFailure("admin/updatePlayer", error);
@@ -846,6 +1153,46 @@ export async function approvePlayer(formData: FormData) {
 
 export async function rejectPlayer(formData: FormData) {
   await setPlayerStatus(readField(formData, "playerId"), PlayerStatus.REJECTED);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Plazo de inscripción                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Abre o cierra las inscripciones del torneo.
+ *
+ * Es el interruptor manual del plazo: escribe `Setting["registration.open"]`, que
+ * es lo que comprueban `registerPlayer` (formulario público) y `createPlayer`
+ * (alta de admin). **No** se registra en `AdminAction` —igual que los cambios de
+ * `scoring.ruleset`—: la fila de `Setting` ya lleva su `updatedAt` como rastro, y
+ * el enum de acciones es corto a propósito.
+ *
+ * Lee el valor deseado de un campo `open` con `"true"`/`"false"`. Cualquier otra
+ * cosa —incluido el campo ausente— se interpreta como `false`, que es el estado
+ * seguro: un `FormData` hecho a mano no puede abrir el plazo por accidente.
+ *
+ * No devuelve estado: es un interruptor. Si la escritura falla, el motivo queda
+ * en el log y el panel relee el valor real en el siguiente render, que es donde
+ * se ve que no ha cambiado.
+ */
+export async function setRegistrationOpen(formData: FormData): Promise<void> {
+  await requireAdmin();
+
+  const open = readField(formData, "open") === "true";
+
+  try {
+    await writeRegistrationOpen(open);
+  } catch (error) {
+    logDatabaseFailure("admin/setRegistrationOpen", error);
+
+    return;
+  }
+
+  // Las dos caras del interruptor: el panel donde se cambia y el formulario
+  // público donde se nota.
+  revalidatePath("/admin");
+  revalidatePath("/participar");
 }
 
 /* -------------------------------------------------------------------------- */
@@ -974,6 +1321,12 @@ type MatchForScoring = {
   result: MatchResult | null;
   startedAt: Date;
   finishedAt: Date | null;
+  /**
+   * `Player.registeredAt` del dueño, o `null` si no lo tiene: es la otra mitad del
+   * corte de la regla. Sin él, una partida anterior a la inscripción parecería
+   * clasificatoria y se podría marcar para siempre.
+   */
+  registeredAt: Date | null;
   playerName: string;
   playerProfileId: number;
 };
@@ -1087,7 +1440,7 @@ async function setMatchReverted(
         result: true,
         startedAt: true,
         finishedAt: true,
-        player: { select: { name: true, profileId: true } },
+        player: { select: { name: true, profileId: true, registeredAt: true } },
       },
     });
 
@@ -1104,6 +1457,10 @@ async function setMatchReverted(
             result: row.result,
             startedAt: row.startedAt,
             finishedAt: row.finishedAt,
+            // Sale en la fila plana, no como `player.registeredAt`, porque
+            // `countsAsRanked()` lo toma como un dato más de la partida y no como
+            // una relación.
+            registeredAt: row.player.registeredAt,
             playerName: row.player.name,
             playerProfileId: row.player.profileId,
           };
@@ -1134,18 +1491,24 @@ async function setMatchReverted(
    * respuesta en los dos sentidos**: solo tiene sentido tocar una partida que cuenta.
    * Al revertir, porque es lo que se le quita; al restaurar, porque es lo que vuelve.
    * Se pregunta siempre con `revertedAt: null`, que es lo que deja la decisión en las
-   * otras tres condiciones de la regla.
+   * otras cuatro condiciones de la regla.
    *
    * Sin esta guarda, un `FormData` hecho a mano podría dejar marcada para siempre una
    * partida que nunca llegó a puntuar, y el admin vería "revertida" en el histórico de
-   * algo que en realidad nunca contó.
+   * algo que en realidad nunca contó. Y al revés: una partida anterior al alta del
+   * jugador tiene `points = 0` porque no llegó a contar, así que marcarla sería
+   * inventar un estado que el torneo nunca tuvo.
    *
    * Que el criterio sea el mismo en ambos sentidos es deliberado. Con la guarda
    * invertida al restaurar, ninguna partida clasificatoria se podía devolver: se
    * exigía que no contara. El revert quedaba sin vuelta desde el panel.
    */
   const ruleset = await readRuleset();
-  const contariaSinMarca = countsAsRanked({ ...match, revertedAt: null }, ruleset.window);
+  const contariaSinMarca = countsAsRanked(
+    { ...match, revertedAt: null },
+    ruleset.window,
+    match.registeredAt,
+  );
 
   if (!contariaSinMarca) {
     return {

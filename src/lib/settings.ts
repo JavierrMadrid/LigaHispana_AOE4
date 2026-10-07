@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { isRecord } from "@/lib/json";
+import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration-open";
 
 /**
  * Lectura y escritura de la tabla `Setting`.
@@ -19,6 +20,9 @@ import { isRecord } from "@/lib/json";
  *
  * Clave que introduce el arreglo del sync invisible:
  * - `sync.lastRun`: rastro de la última pasada del sincronizador, con sus fallos.
+ *
+ * Clave que introduce el cierre manual de inscripciones:
+ * - `registration.open`: booleano; si falta o no es legible, el plazo está cerrado.
  */
 
 /** Cuántos `gameId` de partidas abandonadas se guardan como rastro. */
@@ -240,6 +244,23 @@ export type SyncRunTrace = {
    */
   historyError: string | null;
   /**
+   * Por qué no se pudo comprobar la pertenencia al servidor de Discord de los
+   * participantes, o qué hubo que avisar aunque no fuera un fallo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, por el mismo motivo que
+   * `alertsError`: que no se sepa si alguien sigue en el servidor de Discord **no ha
+   * parado ni una partida**. Lo que falta es poder avisar a la organización de que
+   * una cuenta se ha ido del servidor, que es un aviso para ella, no salud del
+   * sincronizador.
+   *
+   * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que la
+   * comprobación está corriendo, cuántos participantes quedaron para la siguiente pasada
+   * por el tope, **con cuántos miembros salió la lista de miembros del servidor** —y si
+   * se ha podido leer o no— y, si faltan las credenciales, que la comprobación **no se
+   * está haciendo**, igual que el aviso de `YOUTUBE_API_KEY` en `streamsError`.
+   */
+  discordError: string | null;
+  /**
    * Por qué no se pudo comprobar el estado de directo de YouTube o de Kick, si no se
    * pudo.
    *
@@ -337,6 +358,7 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     scoringError: readText(value["scoringError"]),
     alertsError: readText(value["alertsError"]),
     historyError: readText(value["historyError"]),
+    discordError: readText(value["discordError"]),
     streamsError: readText(value["streamsError"]),
     failures: readFailures(value["failures"]),
     lastSuccessAt: readText(value["lastSuccessAt"]),
@@ -376,7 +398,10 @@ export async function writeSyncRunTrace(
   // dijera que el torneo lleva horas roto cuando lo que se ha caído es un informe.
   // Lo mismo con `streamsError`: no saber si un canal está emitiendo tampoco para
   // nada del torneo, y con `historyError`: no saber si un participante tiene el
-  // historial de partidas abierto tampoco.
+  // historial de partidas abierto tampoco. Y con `discordError`: no saber si la cuenta
+  // de alguien sigue en el servidor de Discord tampoco, y además la falta de
+  // `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` es permanente, así que si contara un
+  // torneo entero con la comprobación apagada se publicaría como sincronizador roto.
 
   const value = {
     ...trace,
@@ -409,4 +434,38 @@ export function isSyncTraceStale(trace: SyncRunTrace | null, now: Date = new Dat
   }
 
   return now.getTime() - finished > SYNC_STALE_MINUTES * 60_000;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Plazo de inscripción                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * ¿Están abiertas las inscripciones ahora mismo?
+ *
+ * Lee `Setting["registration.open"]` y aplica el parser puro de
+ * `src/lib/registration-open.ts`, que cae al valor por defecto (cerrada) cuando
+ * la clave no existe o el valor no es un booleano. Un **fallo de la base sí se
+ * propaga**, como en `readCountries()`: "no hay nada publicado" tiene su valor
+ * por defecto y "no se ha podido leer" no, y quien comprueba un envío tiene que
+ * poder distinguir la segunda para no validar contra un estado inventado.
+ */
+export async function readRegistrationOpen(): Promise<boolean> {
+  const setting = await db.setting.findUnique({ where: { key: REGISTRATION_OPEN_KEY } });
+
+  return parseRegistrationOpen(setting?.value);
+}
+
+/**
+ * Publica el plazo. La usa el interruptor de `/admin`.
+ *
+ * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
+ * `Setting.updatedAt`, que es justo el rastro que deja el cambio.
+ */
+export async function writeRegistrationOpen(open: boolean): Promise<void> {
+  await db.setting.upsert({
+    where: { key: REGISTRATION_OPEN_KEY },
+    create: { key: REGISTRATION_OPEN_KEY, value: open },
+    update: { value: open },
+  });
 }
