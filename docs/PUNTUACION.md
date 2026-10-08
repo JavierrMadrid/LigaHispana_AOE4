@@ -43,7 +43,7 @@ entrar. `registeredAt` es la fecha del envío del alta (no la de la aprobación)
 
 | Hecho | Puntos |
 |---|---|
-| Victoria clasificatoria | `pointsPerWin` del ruleset (hoy **10**) |
+| Victoria clasificatoria | `pointsPerWin` del ruleset (hoy **2**) |
 | Derrota clasificatoria | 0 (cuenta para las partidas jugadas y los ratios, no para la suma) |
 | Partida en curso, abandonada o revertida | 0 |
 
@@ -64,12 +64,12 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
 ```json
 {
   "version": 3,
-  "label": "10 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+  "label": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
   "modes": ["rm_solo", "rm_team"],
   "window": { "from": "2026-09-15T00:00:00.000Z", "to": "2026-10-15T00:00:00.000Z" },
-  "pointsPerWin": 10,
+  "pointsPerWin": 2,
   "countRandomizedCivs": false,
-  "objectives": { "loco-por-ganar": 50, "bienhadado": 200, "rey-1v1": 180 }
+  "objectives": { "loco-por-ganar": 50, "bienhadado": 200, "rey-1v1": 240 }
 }
 ```
 
@@ -89,10 +89,10 @@ aplican.
 ```json
 {
   "ruleSetVersion": 3,
-  "rule": "10 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+  "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
   "byMode": {
-    "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
-    "rm_team": { "wins": 1, "points": 10, "matches": 2 }
+    "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
+    "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
   "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1", "lider-french"] }
 }
@@ -102,9 +102,9 @@ aplican.
 
 Jugador con 140 clasificatorias y 84 victorias (60 %):
 
-- Partidas: 84 × 10 = **840 puntos**.
+- Partidas: 84 × 2 = **168 puntos**.
 - Objetivos: 185 puntos (ver [`OBJETIVOS.md`](./OBJETIVOS.md)).
-- Total: **1025 puntos**.
+- Total: **353 puntos**.
 
-Los objetivos buscan pesar entre el 15 % y el 30 % del total de un jugador fuerte: rompen empates y
-premian el estilo, sin pesar más que jugar partidas.
+Los objetivos rompen empates y premian el estilo; con 2 puntos por victoria, completarlos pesa más que
+sumar victorias en el total de un jugador fuerte.

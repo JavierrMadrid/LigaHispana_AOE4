@@ -126,10 +126,10 @@ siempre presentes, con ceros si no aplican.
 ```json
 {
   "ruleSetVersion": 3,
-  "rule": "10 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+  "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
   "byMode": {
-    "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
-    "rm_team": { "wins": 1, "points": 10, "matches": 2 }
+    "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
+    "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
   "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1", "lider-french"] }
 }

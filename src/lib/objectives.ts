@@ -203,14 +203,14 @@ export const FORMAT_IDS = ["1v1", "2v2", "3v3", "4v4"] as const;
 export type FormatId = (typeof FORMAT_IDS)[number];
 
 /** Puntos de un `rey-*`, los mismos para los cuatro formatos. */
-const REY_POINTS = 180;
+const REY_POINTS = 240;
 
 /** Puntos de un `masterizando-<civ>`. */
-const MASTERIZANDO_POINTS = 60;
+const MASTERIZANDO_POINTS = 120;
 
 /** Puntos de un `lider-<civ>` y de un `acolito-<civ>`. */
-const LIDER_POINTS = 3;
-const ACOLITO_POINTS = 4;
+const LIDER_POINTS = 12;
+const ACOLITO_POINTS = 6;
 
 /** Ids de familia y de los logros globales. */
 export const POLIFACETICO_ID = "polifacetico";
@@ -351,7 +351,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Polifacético",
     description: `Gana al menos ${WINS_PER_CIV} partidas con cada una de las ${CIVILIZATIONS.length} civilizaciones.`,
     metric: "civilizaciones",
-    points: 36,
+    points: 96,
     parent: null,
     target: CIVILIZATION_IDS.length,
   },

@@ -23,7 +23,7 @@ import { readMapPool, writeScoringLastRun } from "@/lib/settings";
 /**
  * Motor de puntuación (reglas v3).
  *
- * La regla completa está en `docs/PUNTUACION.md`: 10 puntos por victoria
+ * La regla completa está en `docs/PUNTUACION.md`: 2 puntos por victoria
  * clasificatoria más los objetivos de `objectives.ts`, que son de dos formas:
  * competiciones (un único poseedor) y logros (los cobra quien los cumple). Aquí
  * vive lo que no es cálculo: el ruleset (configurable en `Setting`), el agregado
@@ -93,7 +93,7 @@ export const RULESET_VERSION = 3;
  * guardada para que un lector directo de la tabla no vea texto de otra versión.
  */
 export const RULE_LABEL =
-  "10 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros";
+  "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros";
 
 export type ScoringRuleset = {
   version: number;
@@ -127,7 +127,7 @@ export const DEFAULT_RULESET: ScoringRuleset = {
   label: RULE_LABEL,
   modes: [...RANKED_MODES],
   window: { from: "2026-09-15T00:00:00.000Z", to: "2026-10-15T00:00:00.000Z" },
-  pointsPerWin: 10,
+  pointsPerWin: 2,
   countRandomizedCivs: false,
   objectives: { ...OBJECTIVE_POINTS },
 };
@@ -337,10 +337,10 @@ export type ScoreBreakdownMode = {
  * ```json
  * {
  *   "ruleSetVersion": 3,
- *   "rule": "10 puntos por victoria clasificatoria más 82 objetivos…",
+ *   "rule": "2 puntos por victoria clasificatoria más 82 objetivos…",
  *   "byMode": {
- *     "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
- *     "rm_team": { "wins": 1, "points": 10, "matches": 2 }
+ *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
+ *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
  *   },
  *   "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1"] }
  * }

@@ -36,8 +36,8 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 |---|---|---|---|
 | Bienhadado | 200 | racha | La racha de victorias seguidas más larga. |
 | Loco por ganar | 50 | partidas | Quien más partidas clasificatorias ha jugado. Sin mínimo. |
-| Masterizando `<civ>` (×23) | 60 | victorias | Quien más victorias tiene con esa civilización. Sin mínimo. |
-| Rey del 1v1 / 2v2 / 3v3 / 4v4 | 180 | victorias | Quien más victorias tiene en ese formato. |
+| Masterizando `<civ>` (×23) | 120 | victorias | Quien más victorias tiene con esa civilización. Sin mínimo. |
+| Rey del 1v1 / 2v2 / 3v3 / 4v4 | 240 | victorias | Quien más victorias tiene en ese formato. |
 
 - El `id` de `masterizando-*` es el de AoE4World de la civilización (`masterizando-japanese`), que es
   lo que guarda `Match.civ`. El catálogo con los nombres en español es `src/lib/civs.ts`.
@@ -55,10 +55,10 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 | Agresor | 24 | Ganar al menos 3 partidas de menos de 10 minutos. |
 | Estratega | 24 | Ganar al menos 3 partidas de más de 20 minutos. |
 | Por tierra y agua | 81 | Jugar al menos 3 partidas en **cada** mapa del pool activo. |
-| Polifacético | 36 | Ganar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
-| Líder `<civ>` (×23) | 3 | Ganar al menos 3 partidas con esa civilización. |
+| Polifacético | 96 | Ganar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
+| Líder `<civ>` (×23) | 12 | Ganar al menos 3 partidas con esa civilización. |
 | Jugón | 24 | Jugar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
-| Acólito `<civ>` (×23) | 4 | Jugar al menos 3 partidas con esa civilización. |
+| Acólito `<civ>` (×23) | 6 | Jugar al menos 3 partidas con esa civilización. |
 
 - En `agresor`/`estratega` las partidas sin duración quedan fuera. Umbrales: `< 600 s` y `> 1200 s`.
 - En `imparable` el valor del ranking es el número real de días; los puntos van con tope (14).
