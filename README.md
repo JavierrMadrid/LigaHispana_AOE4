@@ -39,7 +39,8 @@ mismo y quién está en directo.
 |---|---|
 | **Clasificación** (`/`) | La tabla del torneo: puesto, puntos, victorias, división, quién está en directo y cuánto queda de torneo. |
 | **Partidas** (`/partidas`) | Las partidas que están jugando los participantes en este momento. |
-| **Objetivos** (`/objetivos`) | Los 38 objetivos especiales, cuántos puntos da cada uno y quién lo posee. |
+| **Objetivos** (`/objetivos`) | Los 82 objetivos (29 competiciones y 53 logros), con sus puntos y quién los cobra. Los de civilización se agrupan por familia (la cabeza y sus subobjetivos, con un filtro de banderas para saltar a cada uno y un riel que se recorre con la rueda, el gesto táctil o dos botones de flecha). La tarjeta de la cabeza explica cómo puntúa el conjunto y cada tarjeta abre a tamaño ventana la clasificación, con el avance de cada participante (`12/23` civilizaciones, `2/3` victorias o el valor de su métrica en una competición), un check en quien lo ha completado y el recuento de completadores sobre el total («3 de 12 lo han completado»). Las tarjetas encienden un halo dorado al pasar el ratón; las que ya tienen poseedor o completador —y siempre la de "Por tierra y agua"— lo mantienen encendido, sin filete dorado en el borde. |
+| **Objetivos de un participante** (`/objetivos/<id>`) | El avance de un jugador en los 82 objetivos. Los individuales se leen en tres bloques —Al alcance (ordenado de más a menos cerca de cobrarlo), En posesión y Sin disputar— y dentro de "Al alcance", tras sus tarjetas, los de civilización se agrupan en los carruseles de Líder y Acólito, con el mismo riel y filtro de banderas que `/objetivos` pero con el avance del jugador y ordenados de mayor a menor porcentaje de consecución. |
 | **Puntuación** (`/puntuacion`) | Cuánto vale cada victoria, qué cuenta como partida clasificatoria, los objetivos especiales y los desempates. |
 | **Reglas** (`/reglas`) | Las normas del torneo: formato, participación, normas de obligado cumplimiento y organización. |
 | **Participar** (`/participar`) | La inscripción pública al torneo. |
@@ -51,8 +52,8 @@ partidas y alertas, y gestionar el torneo.
 
 - **Individual, en la ladder *ranked*** del juego: 1v1 y ranked por equipos. El resto de modos no
   puntúa.
-- **10 puntos por victoria**, más **38 objetivos especiales** que reparten puntos extra a quien va
-  primero en cada uno.
+- **2 puntos por victoria**, más **82 objetivos** que reparten puntos extra: **competiciones** (los
+  cobra quien va primero) y **logros** (los cobra quien cumple la condición).
 - **Ventana de fechas**: solo cuentan las partidas jugadas dentro del periodo del torneo.
 - **Transparencia**: la organización vigila comportamientos que podrían inflar la clasificación
   (abandonar para bajar de elo, rivales repetidos, equipos por debajo de la división…) y avisa para
@@ -146,7 +147,7 @@ su propia URL. GitHub Actions comprueba lint, build y tests en cada pull request
 |---|---|
 | [`docs/REGLAS.md`](docs/REGLAS.md) | Normas para participar y reglas internas del torneo. |
 | [`docs/PUNTUACION.md`](docs/PUNTUACION.md) | El sistema de puntuación: qué cuenta y cuánto vale. |
-| [`docs/OBJETIVOS.md`](docs/OBJETIVOS.md) | Los 38 objetivos especiales, con sus puntos. |
+| [`docs/OBJETIVOS.md`](docs/OBJETIVOS.md) | Los 82 objetivos, con sus puntos. |
 | [`docs/MODELO-DATOS.md`](docs/MODELO-DATOS.md) | El esquema de la base de datos, tabla por tabla. |
 | [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md) | Producción y previews, variables, Hyperdrive y problemas conocidos. |
 | [`docs/OPERACION.md`](docs/OPERACION.md) | Sincronización, alertas, simulaciones y operativa diaria. |

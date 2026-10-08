@@ -2,9 +2,8 @@
  * Divisiones de la ladder.
  *
  * Estaban en `src/lib/public.ts`, que es la capa de lectura de las páginas
- * públicas; ahora las necesita también el motor de objetivos (`sensei-*`) y
- * `public.ts` solo las reexporta, para no romper a la UI que ya las importa de
- * ahí.
+ * públicas; ahora también las usa la clasificación y `public.ts` solo las
+ * reexporta, para no romper a la UI que ya las importaba de ahí.
  *
  * `rankLevel` llega de AoE4World como string libre (`"gold_2"`, `"bronze_1"`),
  * así que la correspondencia vive **aquí**, en datos: la UI y el motor solo

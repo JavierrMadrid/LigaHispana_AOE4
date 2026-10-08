@@ -26,6 +26,7 @@ import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
 import { Aoe4WorldError, Aoe4WorldNotFoundError } from "./http";
 import { syncLadderSnapshot, type LadderSyncResult } from "./ladder";
+import { refreshMapPool, type MapPoolRefreshResult } from "./map-pool";
 import { normalizeGame, reconciliationCutoff, type NormalizedMatch } from "./normalize";
 import type { Aoe4WorldGame } from "./types";
 
@@ -47,6 +48,11 @@ import type { Aoe4WorldGame } from "./types";
  * que cumple el requisito de "siempre actualizada" sin que nadie tenga que
  * recargar: cada pasada del worker deja la tabla de puntos al día y el historial
  * de alertas al día.
+ *
+ * Y justo **antes del recálculo** —que es quien lo lee— se refresca el pool de mapas
+ * del objetivo `por-tierra-y-agua` (`src/lib/aoe4world/map-pool.ts`), como mucho una
+ * vez al día y desde el homepage de AoE4World, porque la API no lo expone. Un fallo
+ * de ese parseo deja `Setting` como estaba y no rompe nada.
  *
  * Después, y antes de los directos, se comprueba **el historial de partidas en el
  * juego** de los participantes (`src/lib/history-checks.ts`): si alguien tiene el
@@ -144,6 +150,17 @@ export type SyncSummary = {
    * al principio de la pasada. Su fallo no afecta al resto del resumen.
    */
   ladder: LadderSyncResult;
+  /**
+   * Refresco del pool de mapas del objetivo `por-tierra-y-agua` desde el homepage
+   * de AoE4World. `null` solo si ni siquiera se pudo intentar por un fallo de la
+   * base leyendo la contabilidad; el motivo va en `mapPoolError`.
+   */
+  mapPool: MapPoolRefreshResult | null;
+  /**
+   * Por qué no se pudo refrescar el pool de mapas, si no se pudo. Un fallo **no**
+   * mueve `lastSuccessAt`: el motor sigue con el último pool bueno.
+   */
+  mapPoolError: string | null;
   /**
    * Recálculo de la clasificación al final de la pasada. `null` solo si la
    * versión de reglas leída no existe, lo que no debería ocurrir.
@@ -744,6 +761,28 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     }
   }
 
+  // El pool de mapas del objetivo `por-tierra-y-agua` se refresca **antes** del
+  // recálculo, que es quien lo lee, y como mucho una vez al día: el pool rota una vez
+  // al mes y el homepage no es la API (ver `map-pool.ts`). Un fallo no toca `Setting`
+  // —el motor sigue con el último pool bueno—, así que se trata como los demás pasos
+  // tolerantes: el motivo va al rastro y **no** mueve `lastSuccessAt`.
+  let mapPool: MapPoolRefreshResult | null = null;
+  let mapPoolError: string | null = null;
+
+  try {
+    mapPool = await refreshMapPool({ signal });
+
+    if (mapPool.status === "failed") {
+      mapPoolError = mapPool.warning;
+      console.warn(`[sync] No se ha podido refrescar el pool de mapas: ${mapPoolError}`);
+    } else if (mapPool.status === "updated") {
+      console.info(`[sync] Pool de mapas refrescado desde AoE4World: ${mapPool.mapCount} mapas.`);
+    }
+  } catch (error) {
+    mapPoolError = toErrorMessage(error);
+    console.error(`[sync] No se ha podido refrescar el pool de mapas: ${mapPoolError}`);
+  }
+
   // La clasificación se recalcula al final y en su propia transacción. Si falla,
   // las partidas ya están guardadas: la web serviría la clasificación anterior
   // hasta la próxima pasada, que es preferible a tumbar la sincronización entera.
@@ -930,6 +969,8 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     rateLimitResponses: client.stats.rateLimitResponses,
     rateLimitPausesMs: client.stats.rateLimitPausesMs,
     ladder,
+    mapPool,
+    mapPoolError,
     scoring,
     scoringError,
     alerts,
@@ -993,6 +1034,7 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       historyError: summary.historyError,
       discordError: summary.discordError,
       streamsError: summary.streamsError,
+      mapPoolError: summary.mapPoolError,
       failures: summary.players
         .filter((result) => result.status !== "ok")
         .map((result) => ({

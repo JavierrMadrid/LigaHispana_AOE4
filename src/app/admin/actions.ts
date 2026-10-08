@@ -1404,8 +1404,8 @@ async function deshacerMarcaDePartida(
  *
  * La alternativa —propagar el error y dejar la partida marcada— dejaría el torneo en
  * un estado que nadie puede ver desde ningún sitio: el historial de acciones diría
- * "revertidos 10 puntos", la pestaña de partidas la mostraría marcada y la
- * clasificación pública seguiría contando esos 10 puntos. Y no durarían mucho: el
+ * "revertidos 2 puntos", la pestaña de partidas la mostraría marcada y la
+ * clasificación pública seguiría contando esos 2 puntos. Y no durarían mucho: el
  * cron lo arreglaría en su siguiente pasada, pero mientras dure es una clasificación
  * que no cuadra con los datos que el propio panel enseña.
  *

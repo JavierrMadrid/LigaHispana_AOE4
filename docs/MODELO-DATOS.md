@@ -15,7 +15,7 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `Player` | Un participante, por identidad de AoE4World. | `id`; `profileId` único |
 | `Match` | Una fila por (jugador, partida). | `id`; único `(playerId, gameId)` |
 | `PlayerScore` | La clasificación agregada, por version de reglas. | pk `(playerId, ruleSetVersion)` |
-| `ObjectiveEvent` | Un objetivo cumplido y cuándo. | único `objectiveId` |
+| `ObjectiveEvent` | Un objetivo cobrado por un jugador y cuándo. | único `(objectiveId, playerId)` |
 | `Alert` | Un comportamiento anómalo detectado (append-only). | `id`; único `dedupeKey` |
 | `AdminAction` | Una acción del panel (append-only). | `id` |
 | `RateLimitCounter` | Un contador de frecuencia por IP hasheada. | `key` |
@@ -125,32 +125,35 @@ siempre presentes, con ceros si no aplican.
 
 ```json
 {
-  "ruleSetVersion": 2,
-  "rule": "10 puntos por victoria clasificatoria más 38 objetivos especiales; solo el primero los cobra",
+  "ruleSetVersion": 3,
+  "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
   "byMode": {
-    "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
-    "rm_team": { "wins": 1, "points": 10, "matches": 2 }
+    "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
+    "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
-  "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1"] }
+  "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1", "lider-french"] }
 }
 ```
 
 ## `ObjectiveEvent`
 
-Un objetivo cumplido y **cuándo**. Como mucho **38 filas** en toda la vida del torneo. Lo lee el
-historial del panel (`/admin/historial`); no alimenta la clasificación.
+Un objetivo **cobrado por un jugador** y **cuándo**. Un evento por objetivo y jugador: en una
+competición hay uno (el poseedor) y en un logro puede haber muchos (todos los que lo completan). Lo lee
+el historial del panel (`/admin/historial`); no alimenta la clasificación.
 
 | Campo | Tipo | Nota |
 |---|---|---|
-| `objectiveId` | `String` **único** | Id del catálogo (`loco-por-ganar`, `masterizar-japanese`…). |
+| `objectiveId` | `String` | Id del catálogo (`loco-por-ganar`, `lider-japanese`…). |
 | `playerId` | `String` | FK a `Player.id`, cascada. |
-| `achievedAt` | `DateTime` | El instante de la hazaña: en las carreras, el `finishedAt` de la partida que las cerró; en los objetivos "en caliente", el fin del torneo. |
+| `achievedAt` | `DateTime` | Fin de la ventana del torneo (todos los objetivos se resuelven en caliente). |
 | `recordedAt` | `DateTime` | Cuándo lo registró el motor. |
 
-Índices: `objectiveId` (único, para el `upsert`), `achievedAt` y `playerId` (feed y cascada).
+Índices: `(objectiveId, playerId)` (único, para la reconciliación), `achievedAt` y `playerId` (feed y
+cascada).
 
-Es un **espejo del cómputo, no un log**: si cambia el poseedor o se revierte la partida que cerró
-una carrera, la fila se actualiza o se borra. Por eso es un `upsert` por objetivo y no un historial.
+Es un **espejo del cómputo, no un log**: si cambia el poseedor de una competición, o quien completa un
+logro, la fila se actualiza o se borra. Todo el catálogo se registra al cerrar la ventana; mientras está
+abierta no se escribe nada.
 
 ## `Alert`
 
@@ -226,7 +229,9 @@ Claves vivas en producción, con quién las escribe:
 
 | Clave | Qué es | La escribe |
 |---|---|---|
-| `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana, mínimos y objetivos). | `ensureRuleset()` en `src/lib/scoring.ts` |
+| `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana y objetivos). | `ensureRuleset()` en `src/lib/scoring.ts` |
+| `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
+| `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
@@ -253,7 +258,7 @@ aparece en una consulta, no se crea.**
 | `Match` | `(mode, startedAt)` | Clasificatorias dentro de la ventana (igualdad + rango). |
 | `PlayerScore` | pk `(playerId, ruleSetVersion)` | Ficha del jugador; de paso indexa la FK para el `Cascade`. |
 | `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, sin `sort`. |
-| `ObjectiveEvent` | `objectiveId` (único), `achievedAt`, `playerId` | `upsert`, feed del historial, filtro por jugador y cascada. |
+| `ObjectiveEvent` | `(objectiveId, playerId)` (único), `achievedAt`, `playerId` | Reconciliación, feed del historial, filtro por jugador y cascada. |
 | `Alert` | `dedupeKey` (único), `createdAt`, `(playerId, rule)` | Idempotencia, listado, detalle por jugador. |
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
 | `RateLimitCounter` | `key` (pk) | El `INSERT ... ON CONFLICT`. |

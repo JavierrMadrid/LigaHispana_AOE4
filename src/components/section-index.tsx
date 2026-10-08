@@ -101,3 +101,39 @@ export function SectionIndexAside({
     </nav>
   );
 }
+
+/**
+ * Índice de sección en horizontal.
+ *
+ * Para páginas que van a una sola columna y no tienen ancho para la columna
+ * fija: una fila discreta de enlaces bajo un filete, que se desplaza en
+ * horizontal cuando no cabe (móvil estrecho) en vez de partirse en varias
+ * líneas. Es el mismo dato que `SectionIndexAside`, en otro eje.
+ */
+export function SectionIndexBar({
+  sections,
+  ariaLabel,
+}: {
+  sections: readonly DocSection[];
+  ariaLabel: string;
+}) {
+  return (
+    <nav
+      aria-label={ariaLabel}
+      className="flex items-center gap-1 overflow-x-auto border-b border-line pb-2 text-sm"
+    >
+      <span className="shrink-0 pr-2 text-xs font-medium text-muted">
+        En esta página
+      </span>
+      {sections.map((section) => (
+        <a
+          key={section.id}
+          href={`#${section.id}`}
+          className="shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+        >
+          {section.label}
+        </a>
+      ))}
+    </nav>
+  );
+}

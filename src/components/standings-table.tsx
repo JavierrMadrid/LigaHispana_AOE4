@@ -32,7 +32,7 @@ import {
 const HEADING = "px-3 pb-2 text-xs font-medium text-muted";
 const CELL = "bg-surface px-3 py-2.5 transition-colors group-hover:bg-surface-raised";
 /** La fila desplegable de objetivos ocupa el ancho de toda la tabla. */
-const OBJECTIVE_COLUMNS = 7;
+const OBJECTIVE_COLUMNS = 8;
 
 /** Podio: el oro de la casa para el 1.º, plata y bronce para el 2.º y el 3.º. */
 const RANK_CLASS: Record<number, string> = {
@@ -52,7 +52,7 @@ const RANK_CLASS: Record<number, string> = {
 const GROUP_LABELS: Record<ObjectiveGroup, string> = {
   actividad: "Actividad",
   racha: "Racha",
-  division: "Divisiones",
+  hazanas: "Hazañas",
   formato: "Formatos",
   civilizacion: "Civilizaciones",
 };
@@ -367,7 +367,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                   Clasificación de la liga: puesto, jugador, partidas jugadas,
                   puntos totales con su desglose por victorias y objetivos, elo,
                   victorias y derrotas y racha. El nombre de cada jugador enlaza
-                  con su perfil de AoE4World.
+                  con su perfil de AoE4World y la última columna con su ficha de
+                  objetivos.
                 </caption>
                 <thead>
                   <tr>
@@ -426,6 +427,12 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                       onSort={toggleSort}
                       className="w-20"
                     />
+                    {/* Columna de acción, no de dato: enlaza con la ficha de
+                        objetivos del jugador. No es ordenable, así que no pasa
+                        por `SortableHeader`; solo lleva el `scope` de columna. */}
+                    <th scope="col" className={`${HEADING} w-24 text-center`}>
+                      Objetivos
+                    </th>
                   </tr>
                 </thead>
                 {sorted.map((row) => (
@@ -773,12 +780,16 @@ function StandingsRow({
           <span className="text-loss">{row.losses}</span>
         </td>
 
+        <td className={`${CELL} text-center tabular-nums`}>
+          <StreakValue streak={row.streak} />
+        </td>
+
         <td
           className={`${CELL} ${
             objectivesExpanded ? "rounded-tr-lg" : "rounded-r-lg"
-          } text-center tabular-nums`}
+          } text-center`}
         >
-          <StreakValue streak={row.streak} />
+          <ObjectivesLink profileId={row.profileId} name={row.name} />
         </td>
       </tr>
 
@@ -1015,15 +1026,81 @@ function CompactStats({ row }: { row: StandingRow }) {
  * En la tabla lo explica el subtítulo de la columna; en la tarjeta, sin columna,
  * hace falta el rótulo. Es texto explicativo y no una cifra que se compare de
  * una tarjeta a otra, así que puede partirse en varias líneas: lo que no puede
- * es recortarse.
+ * es recortarse. Comparte fila con el enlace a la ficha de objetivos, que en
+ * móvil es la única puerta a esa página (la tabla y su columna de acción no se
+ * pintan aquí).
  */
 function CompactPointsBreakdown({ row }: { row: StandingRow }) {
   return (
-    <p className="mt-2.5 flex flex-wrap items-baseline gap-x-1.5 border-t border-line pt-2 text-xs text-muted">
+    <p className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-line pt-2 text-xs text-muted">
       <span>{row.pointsByWins} de victorias</span>
       <span aria-hidden="true">+</span>
       <span>{row.pointsByObjectives} de objetivos</span>
+      <ObjectivesLink
+        profileId={row.profileId}
+        name={row.name}
+        showLabel
+        className="ml-auto"
+      />
     </p>
+  );
+}
+
+/**
+ * Enlace a la ficha de objetivos de un jugador.
+ *
+ * Es la única acción de navegación de la fila, aparte del nombre: lleva a
+ * `/objetivos/<profileId>`, la página que desarrolla el avance del participante
+ * en los 82 objetivos. El icono (una diana) es el mismo en escritorio y en la
+ * tarjeta de móvil, donde además se acompaña del texto para que no dependa de
+ * que se reconozca el glifo. Siempre lleva `aria-label` con el nombre, porque en
+ * la tabla el enlace es solo el icono.
+ */
+function ObjectivesLink({
+  profileId,
+  name,
+  showLabel = false,
+  className = "",
+}: {
+  profileId: number;
+  name: string;
+  /** Pinta el texto "Ver objetivos" junto al icono (tarjeta de móvil). */
+  showLabel?: boolean;
+  className?: string;
+}) {
+  return (
+    <Link
+      href={`/objetivos/${profileId}`}
+      aria-label={`Ver los objetivos de ${name}`}
+      title={`Ver los objetivos de ${name}`}
+      className={`inline-flex items-center rounded-md text-muted underline-offset-4 transition-colors hover:text-accent focus-visible:text-accent ${
+        showLabel
+          ? "gap-1.5 py-1 text-xs font-medium"
+          : "size-9 justify-center hover:bg-surface-raised"
+      } ${className}`}
+    >
+      <TargetIcon className="size-4 shrink-0" />
+      {showLabel ? <span>Ver objetivos</span> : null}
+    </Link>
+  );
+}
+
+/** Diana: el glifo de "objetivos", concéntrico y con las cuatro marcas. */
+function TargetIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="7.5" />
+      <circle cx="12" cy="12" r="3.25" />
+      <path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22" />
+    </svg>
   );
 }
 

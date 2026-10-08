@@ -38,8 +38,8 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * | `PLAYER_CREATED` | `Alta de BeastWizard (AoE4World 123456)` |
  * | `PLAYER_EDITED` | `Edición de BeastWizard (AoE4World 123456): nombre, canal de Twitch` |
  * | `PLAYER_REMOVED` | `Baja de BeastWizard y sus 87 partidas` |
- * | `MATCH_POINTS_REVERTED` | `Revertidos 10 puntos de la partida G-12345 de BeastWizard` |
- * | `MATCH_POINTS_RESTORED` | `Restaurados 10 puntos de la partida G-12345 de BeastWizard` |
+ * | `MATCH_POINTS_REVERTED` | `Revertidos 2 puntos de la partida G-12345 de BeastWizard` |
+ * | `MATCH_POINTS_RESTORED` | `Restaurados 2 puntos de la partida G-12345 de BeastWizard` |
  *
  * En las dos últimas el nombre del jugador va al final y no escondido en `details`:
  * es la parte que se lee, y un historial de "G-12345" a secas obligaría a ir al filtro

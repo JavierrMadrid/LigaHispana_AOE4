@@ -3,6 +3,13 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { isRecord } from "@/lib/json";
+import {
+  MAP_POOL_KEY,
+  MAP_POOL_SYNC_KEY,
+  parseMapPool,
+  parseMapPoolSync,
+  type MapPoolSyncState,
+} from "@/lib/map-pool";
 import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration-open";
 
 /**
@@ -23,6 +30,12 @@ import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration
  *
  * Clave que introduce el cierre manual de inscripciones:
  * - `registration.open`: booleano; si falta o no es legible, el plazo está cerrado.
+ *
+ * Clave que introduce el catálogo de objetivos nuevo:
+ * - `scoring.mapPool`: lista de mapas del objetivo `por-tierra-y-agua`.
+ *
+ * Clave que introduce el refresco del pool desde AoE4World:
+ * - `scoring.mapPoolSync`: cuándo se escribió el pool y qué metadatos publicó AoE4World.
  */
 
 /** Cuántos `gameId` de partidas abandonadas se guardan como rastro. */
@@ -164,6 +177,65 @@ export async function writeScoringLastRun(
 }
 
 /* -------------------------------------------------------------------------- */
+/* Pool de mapas del objetivo `por-tierra-y-agua`                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Pool de mapas activo.
+ *
+ * Lee `Setting["scoring.mapPool"]` y aplica el parser puro de
+ * `src/lib/map-pool.ts`, que cae al pool por defecto cuando la clave no existe o
+ * no es válida. Igual que el resto de configuraciones, un valor guardado inútil
+ * no puede dejar un objetivo sin resolver: `parseMapPool` devuelve siempre una
+ * lista con al menos un mapa.
+ *
+ * La clave la escribe `refreshMapPool()` (worker) con el pool que lee del homepage
+ * de AoE4World, y la puede reescribir la organización a mano. La lectura no cambia.
+ */
+export async function readMapPool(): Promise<string[]> {
+  const setting = await db.setting.findUnique({ where: { key: MAP_POOL_KEY } });
+
+  return parseMapPool(setting?.value);
+}
+
+/**
+ * Contabilidad del último refresco del pool (fecha y metadatos de AoE4World).
+ *
+ * `null` significa "nunca se ha refrescado" o "el valor no es legible", que son el
+ * mismo caso para `mapPoolRefreshDue`: toca refrescar.
+ */
+export async function readMapPoolSync(): Promise<MapPoolSyncState | null> {
+  const setting = await db.setting.findUnique({ where: { key: MAP_POOL_SYNC_KEY } });
+
+  return setting === null ? null : parseMapPoolSync(setting.value);
+}
+
+/**
+ * Publica el pool y su contabilidad.
+ *
+ * Las dos claves van en la misma transacción: `scoring.mapPool` es lo que lee el
+ * motor y `scoring.mapPoolSync` lo que decide cuándo volver a refrescar, y no puede
+ * quedar la lista nueva con una fecha vieja (se reescribiría en cada pasada) ni la
+ * fecha nueva con la lista vieja (no se refrescaría hasta mañana).
+ */
+export async function writeMapPool(state: MapPoolSyncState): Promise<void> {
+  const value = state as unknown as Prisma.InputJsonObject;
+
+  await db.$transaction([
+    db.setting.upsert({
+      where: { key: MAP_POOL_KEY },
+      create: { key: MAP_POOL_KEY, value: state.maps },
+      update: { value: state.maps },
+    }),
+    db.setting.upsert({
+      where: { key: MAP_POOL_SYNC_KEY },
+      create: { key: MAP_POOL_SYNC_KEY, value },
+      update: { value },
+    }),
+  ]);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Rastro del sincronizador                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -275,6 +347,17 @@ export type SyncRunTrace = {
    * hay texto de aviso aunque no haya fallo, y sigue sin mover el marcador.
    */
   streamsError: string | null;
+  /**
+   * Por qué no se pudo refrescar el pool de mapas del objetivo `por-tierra-y-agua`
+   * desde el homepage de AoE4World, si no se pudo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, igual que `streamsError`:
+   * que no se haya podido refrescar el pool **no ha parado ni una partida**; el motor
+   * sigue con el último pool bueno (o el de por defecto). El parseo del homepage es
+   * frágil por definición, así que este campo es donde se ve que AoE4World cambió el
+   * formato antes de que nadie se diera cuenta por el objetivo.
+   */
+  mapPoolError: string | null;
   /** Jugadores que no se pudieron sincronizar, con su motivo. */
   failures: SyncRunFailure[];
   /**
@@ -360,6 +443,7 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     historyError: readText(value["historyError"]),
     discordError: readText(value["discordError"]),
     streamsError: readText(value["streamsError"]),
+    mapPoolError: readText(value["mapPoolError"]),
     failures: readFailures(value["failures"]),
     lastSuccessAt: readText(value["lastSuccessAt"]),
   };
@@ -402,6 +486,9 @@ export async function writeSyncRunTrace(
   // de alguien sigue en el servidor de Discord tampoco, y además la falta de
   // `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` es permanente, así que si contara un
   // torneo entero con la comprobación apagada se publicaría como sincronizador roto.
+  // Y con `mapPoolError`: no poder refrescar el pool solo deja el objetivo con el
+  // último valor bueno, y el formato del homepage puede cambiar cualquier día sin
+  // que eso sea un fallo del sincronizador.
 
   const value = {
     ...trace,
