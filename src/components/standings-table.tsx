@@ -961,13 +961,12 @@ function StandingsCard({
  * el desplegable de objetivos.
  *
  * Las tres plataformas se pintan con `ChannelLinks`, que resuelve el icono, la URL
- * y el color de cada una, y solo aparece la plataforma que tiene canal. El
- * distintivo "En directo" lo pinta el propio componente **junto a la plataforma que
- * está emitiendo**, con su color: si alguien emite a la vez por dos, se ven los dos
- * distintivos, que es lo que está pasando.
+ * y el color de cada una, y solo aparece la plataforma que tiene canal. La plataforma
+ * que está emitiendo se ilumina con su color, así que si alguien emite a la vez por
+ * dos, se ven las dos iluminadas, que es lo que está pasando.
  *
  * Vive aparte porque la fila de la tabla y la tarjeta de móvil comparten
- * exactamente los mismos distintivos; solo cambia a qué panel de objetivos apunta el
+ * exactamente los mismos indicadores; solo cambia a qué panel de objetivos apunta el
  * botón.
  */
 function PlayerChips({
@@ -1006,7 +1005,6 @@ function PlayerChips({
             ? null
             : { channel: row.kickChannel, isLive: row.kickIsLive }
         }
-        showLive
       />
       {row.objectives.length > 0 ? (
         <ObjectivesToggle

@@ -89,11 +89,8 @@
      estado "en directo". Son colores de terceros: no son marca de la liga ni
      señal de emisión, así que no se reutilizan en ningún otro sitio. */
   --twitch: #a970ff;
-  --twitch-soft: #c9a6ff;
   --youtube: #ff4d4d;
-  --youtube-soft: #ff9a9a;
   --kick: #53fc18;
-  --kick-soft: #9bf877;
 
   /* Hilo dorado del chrome. */
   --thread: color-mix(in oklab, var(--accent) 30%, transparent);
@@ -121,11 +118,8 @@
   --color-live: var(--live);
   --color-live-soft: var(--live-soft);
   --color-twitch: var(--twitch);
-  --color-twitch-soft: var(--twitch-soft);
   --color-youtube: var(--youtube);
-  --color-youtube-soft: var(--youtube-soft);
   --color-kick: var(--kick);
-  --color-kick-soft: var(--kick-soft);
   --font-sans: var(--font-geist-sans);
   /* Roles de tipografía: Cinzel (capital romana inscripcional) para titulares
      y wordmark; Geist para lectura y cifras tabulares. */

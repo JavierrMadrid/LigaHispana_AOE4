@@ -20,8 +20,6 @@ type PlatformMeta = {
   url: (channel: string) => string;
   /** Color del icono cuando la plataforma está emitiendo. */
   live: string;
-  /** Fondo y texto del distintivo "En directo" de la plataforma. */
-  badge: string;
 };
 
 /** Orden de presentación de las tres plataformas. */
@@ -32,7 +30,6 @@ const PLATFORMS: readonly PlatformMeta[] = [
     Icon: TwitchIcon,
     url: twitchChannelUrl,
     live: "text-twitch hover:opacity-80",
-    badge: "bg-twitch/10 text-twitch-soft",
   },
   {
     id: "youtube",
@@ -40,7 +37,6 @@ const PLATFORMS: readonly PlatformMeta[] = [
     Icon: YoutubeIcon,
     url: youtubeChannelUrl,
     live: "text-youtube hover:opacity-80",
-    badge: "bg-youtube/10 text-youtube-soft",
   },
   {
     id: "kick",
@@ -48,7 +44,6 @@ const PLATFORMS: readonly PlatformMeta[] = [
     Icon: KickIcon,
     url: kickChannelUrl,
     live: "text-kick hover:opacity-80",
-    badge: "bg-kick/10 text-kick-soft",
   },
 ];
 
@@ -87,8 +82,6 @@ type ChannelLinksProps = {
   twitch?: ChannelValue | null;
   youtube?: ChannelValue | null;
   kick?: ChannelValue | null;
-  /** Pinta el distintivo "En directo" junto a la plataforma que está emitiendo. */
-  showLive?: boolean;
   className?: string;
 };
 
@@ -97,17 +90,16 @@ type ChannelLinksProps = {
  * de su plataforma cuando está emitiendo.
  *
  * Es el único sitio que conoce los tres glifos y las tres URL: la clasificación
- * pública (con el distintivo de directo), el listado de participantes y cualquier
- * otra pantalla que los muestre pasan por aquí, de modo que un canal no puede
- * salir como enlace en un sitio y como texto en otro. Las plataformas sin canal
- * **no se pintan**: un hueco vacío no dice nada.
+ * pública, el listado de participantes y cualquier otra pantalla que los muestre
+ * pasan por aquí, de modo que un canal no puede salir como enlace en un sitio y
+ * como texto en otro. Las plataformas sin canal **no se pintan**: un hueco vacío
+ * no dice nada.
  */
 export function ChannelLinks({
   name,
   twitch,
   youtube,
   kick,
-  showLive = false,
   className,
 }: ChannelLinksProps) {
   const channels: Record<PlatformMeta["id"], ChannelValue | null | undefined> = {
@@ -137,18 +129,7 @@ export function ChannelLinks({
           return null;
         }
 
-        return (
-          <span key={meta.id} className="inline-flex items-center gap-1">
-            <ChannelLink meta={meta} value={value} name={name} />
-            {showLive && value.isLive ? (
-              <span
-                className={`inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-xs font-semibold leading-none ${meta.badge}`}
-              >
-                En directo
-              </span>
-            ) : null}
-          </span>
-        );
+        return <ChannelLink key={meta.id} meta={meta} value={value} name={name} />;
       })}
     </span>
   );
