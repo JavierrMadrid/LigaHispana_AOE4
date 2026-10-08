@@ -919,25 +919,19 @@ function StandingsCard({
   onToggleObjectives: (profileId: number) => void;
 }) {
   const objectivesPanelId = `objetivos-movil-${row.profileId}`;
-  // La bandera es la marca de país del borde derecho de la tarjeta; sin país
-  // resoluble no se pinta.
+  // La bandera es la marca de país de la tarjeta. Se estira a todo el ancho en
+  // vez de quedarse en el borde derecho: en una tarjeta estrecha una franja
+  // lateral solo cubriría media fila. Sin país resoluble no se pinta.
   const flagSvg = countryFlagSvgUrl(row.country);
 
   return (
     <li className="relative overflow-hidden rounded-lg border border-line bg-surface p-3 transition-colors">
       {flagSvg !== null ? (
-        <>
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-28 z-0 w-20 opacity-25"
-            style={flagTintStyle(flagSvg)}
-          />
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 z-0 w-28 opacity-25"
-            style={flagStyle(flagSvg)}
-          />
-        </>
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-0 opacity-40"
+          style={flagStyle(flagSvg)}
+        />
       ) : null}
       <div className="relative z-10 flex items-start gap-3">
         <RankBadge rank={row.rank} />

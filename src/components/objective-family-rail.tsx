@@ -87,7 +87,11 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
   filterLabel = "Salta a una civilización",
   itemsLabel = "subobjetivos",
   flagsLabel = "Civilizaciones de la familia",
-  itemClassName = "w-[17rem] shrink-0 snap-start sm:w-[18rem]",
+  // 19rem en móvil: el ancho que necesita la tarjeta más larga (`Masterizando
+  // <civ>`, con su etiqueta y su pie de poseedor) para que el contenido no
+  // desborde el borde de la tarjeta; desde `sm`, 20rem, el mismo que ya usa la
+  // ficha de participante.
+  itemClassName = "w-[19rem] shrink-0 snap-start sm:w-[20rem]",
 }: ObjectiveFamilyRailProps<T>) {
   const [activeCiv, setActiveCiv] = useState<string | null>(null);
   const [atStart, setAtStart] = useState(true);

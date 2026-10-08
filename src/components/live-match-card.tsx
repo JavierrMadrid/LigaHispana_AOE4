@@ -42,14 +42,14 @@ export function LiveMatchCard({ match }: { match: LiveMatch }) {
             : ""}
       </h2>
 
-      <div className="relative aspect-[4/3] w-full overflow-hidden bg-surface-raised">
+      <div className="relative aspect-[16/7] w-full overflow-hidden bg-surface-raised">
         {image !== null ? (
           <Image
             src={image}
             alt=""
             fill
-            sizes="(min-width: 1024px) 20rem, (min-width: 640px) 50vw, 100vw"
-            className="object-contain"
+            sizes="(min-width: 1280px) 19rem, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+            className="object-cover"
           />
         ) : (
           // Sin asset no se deja un hueco: la retícula recuerda a un plano y el

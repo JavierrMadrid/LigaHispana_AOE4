@@ -139,6 +139,13 @@
   flex-direction: column;
   height: 100%;
   overflow: visible;
+  /*
+   * El ítem del grid arranca con `min-width: auto`, así que su min-content (un
+   * nombre de poseedor largo, sin poder partir) ensancharía la pista por encima
+   * del ancho de la tarjeta y el contenido desbordaría aunque el nombre lleve
+   * `truncate`. Con `min-width: 0` el ítem puede encogerse y el recorte funciona.
+   */
+  min-width: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
