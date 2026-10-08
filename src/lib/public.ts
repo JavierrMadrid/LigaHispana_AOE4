@@ -14,17 +14,20 @@ import {
   computeObjectives,
   loadObjectivePlayers,
   objectiveStanding,
+  type ObjectiveBeneficiary,
   type ObjectiveContender,
   type ObjectiveDetail,
   type ObjectiveGroup,
+  type ObjectiveKind,
   type ObjectiveMetric,
   type ObjectiveOption,
+  type ObjectiveTarget,
 } from "@/lib/objectives";
 import { rankedModesWhere } from "@/lib/ranked-match";
+import { readMapPool } from "@/lib/settings";
 import {
   RULESET_VERSION,
   readRuleset,
-  type ScoringMinimums,
   type ScoringRuleset,
 } from "@/lib/scoring";
 import {
@@ -35,16 +38,24 @@ import {
 
 export { getObjectives } from "@/lib/scoring";
 export type {
+  ObjectiveBeneficiary,
   ObjectiveContender,
   ObjectiveDefinition,
   ObjectiveDetail,
   ObjectiveGroup,
+  ObjectiveKind,
   ObjectiveMetric,
-  ObjectiveMinimum,
   ObjectiveOption,
+  ObjectiveTarget,
   ObjectiveView,
 } from "@/lib/objectives";
-export { MASTERIZAR_TODOS_ID, OBJECTIVE_GROUP_LABELS, objectiveMinimum } from "@/lib/objectives";
+export {
+  IMPARABLE_ID,
+  JUGON_ID,
+  OBJECTIVE_GROUP_LABELS,
+  POLIFACETICO_ID,
+  POR_TIERRA_ID,
+} from "@/lib/objectives";
 export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
 
@@ -129,7 +140,7 @@ export type { PublicRead };
  * se puede pintar con el mismo icono que su tarjeta en `/objetivos`.
  */
 export type StandingObjective = {
-  /** Id estable del objetivo (`loco-por-ganar`, `rey-1v1`, `masterizar-…`). */
+  /** Id estable del objetivo (`loco-por-ganar`, `rey-1v1`, `lider-…`). */
   id: string;
   label: string;
   group: ObjectiveGroup;
@@ -231,7 +242,7 @@ export type StandingRow = {
 };
 
 /**
- * Índice `id -> objetivo` de los 38 del catálogo, con los puntos del ruleset
+ * Índice `id -> objetivo` del catálogo, con los puntos del ruleset
  * activo ya aplicados.
  *
  * Se construye en cada llamada (no en el módulo) porque depende de la
@@ -492,23 +503,24 @@ export type ParticipantIdentity = {
  * `value` y `matches` salen de la entrada del participante en el ranking y son
  * `0` cuando no aparece en él: `ranking` solo lleva a quien tiene al menos una
  * partida dentro del objetivo, así que un cero es la verdad ("no ha jugado nada
- * que cuente para este objetivo") y no un valor inventado. En `winrate`, `value`
- * es victorias y `matches` las partidas de las que sale el ratio, igual que en
- * `ObjectiveContender`.
+ * que cuente para este objetivo") y no un valor inventado.
  */
 export type ParticipantObjective = {
   id: string;
   group: ObjectiveGroup;
+  kind: ObjectiveKind;
   label: string;
   description: string;
   metric: ObjectiveMetric;
-  /** Puntos que otorga poseerlo, ya con los overrides del ruleset aplicados. */
+  /** Puntos que otorga cobrarlo, ya con los overrides del ruleset aplicados. */
   points: number;
+  /** Cabeza de familia del objetivo (`ObjectiveOption.parent`). */
+  parent: string | null;
   /** Valor actual en la métrica del objetivo (`0` si no disputa el objetivo). */
   value: number;
   /** Partidas de las que sale `value`; `0` si no disputa el objetivo. */
   matches: number;
-  /** Detalle del objetivo (civilización en `otp`); `null` si no aporta nada. */
+  /** Detalle del objetivo; `null` si no aporta nada. */
   detail: ObjectiveDetail | null;
   /**
    * Posición 1-based entre los aspirantes, o `null` si no está en el ranking
@@ -517,35 +529,35 @@ export type ParticipantObjective = {
   position: number | null;
   /**
    * Distancia al primero, en la unidad de la métrica, o `null` si no está en el
-   * ranking. Para `winrate` es una fracción de `[0, 1]` (ver `objectiveStanding`).
+   * ranking.
    */
   distance: number | null;
-  /** Ya lo posee: es el `holder` actual del objetivo. */
+  /**
+   * Ya lo cobra el participante: posee la competición, o ha completado el logro.
+   * Es el check que pinta la ficha.
+   */
   achieved: boolean;
   /**
-   * Poseedor actual del objetivo, o `null` si nadie cumple (o la carrera no se
-   * ha completado). Es el **mismo** `holder` que publica `/objetivos`, sin
-   * recalcular: la ficha no puede contradecir al ranking.
+   * Poseedor actual del objetivo en una **competición**, o `null` si nadie
+   * cumple. En un logro es siempre `null` (lo cobra cualquiera que cumpla: ver
+   * `beneficiaries`).
    */
   holder: ObjectiveContender | null;
+  /** Quién ha completado un logro, con sus puntos; vacío en las competiciones. */
+  beneficiaries: ObjectiveBeneficiary[];
+  /** Umbral del logro, para la barra de avance; `null` en las competiciones. */
+  target: ObjectiveTarget | null;
   /**
    * **Todos** los contendientes del objetivo, ordenados por la cadena de
-   * desempate. Se publica entero igual que en `/objetivos` (que ya manda los 38
-   * rankings completos) para que la ficha pueda reutilizar
-   * `ObjectiveRankingDialog` sin pedir nada aparte. Es la **misma referencia**
-   * que el `ranking` del `ObjectiveOption` del que sale: no se copia por
-   * objetivo.
-   *
-   * Con `holder` y `ranking`, este tipo pasa a ser estructuralmente asignable a
-   * `ObjectiveOption` (los campos extra de aquí no estorban), que es lo que
-   * permite entregarlo al diálogo tal cual.
+   * desempate. Es la **misma referencia** que el `ranking` del `ObjectiveOption`
+   * del que sale, para reutilizar `ObjectiveRankingDialog` sin pedir nada aparte.
    */
   ranking: ObjectiveContender[];
 };
 
 /**
  * La ficha pública de objetivos de un participante: quién es y cómo va en cada
- * uno de los 38 objetivos del torneo.
+ * objetivo del torneo.
  *
  * `options` va en el orden del catálogo, el mismo que publica `/objetivos`, para
  * que la ficha se lea en el mismo orden que la pantalla de objetivos.
@@ -553,12 +565,11 @@ export type ParticipantObjective = {
 export type ParticipantObjectives = {
   player: ParticipantIdentity;
   /**
-   * Mínimos del ruleset activo, copiados tal cual (igual que hace
-   * `loadObjectives`). Son los que la ficha necesita para saber contra qué
-   * compara cada objetivo sin volver a leer `Setting` ni recibir el ruleset
-   * entero.
+   * Pool de mapas activo, copiado tal cual de `Setting` (igual que hace
+   * `loadObjectives`). La ficha lo necesita para explicar `por-tierra-y-agua` sin
+   * volver a leer la configuración.
    */
-  minimums: ScoringMinimums;
+  mapPool: string[];
   options: ParticipantObjective[];
 };
 
@@ -598,12 +609,13 @@ async function loadParticipantObjectives(
 ): Promise<ParticipantObjectives | null> {
   // La identidad y el ruleset son independientes entre sí, así que van en
   // paralelo; las partidas clasificatorias dependen del ruleset.
-  const [player, ruleset] = await Promise.all([
+  const [player, ruleset, mapPool] = await Promise.all([
     db.player.findUnique({
       where: { profileId },
       select: { profileId: true, name: true, avatarUrl: true, status: true, rankLevel: true },
     }),
     readRuleset(),
+    readMapPool(),
   ]);
 
   // Solo los aprobados tienen ficha pública: un `PENDING` o un `REJECTED` no
@@ -614,7 +626,7 @@ async function loadParticipantObjectives(
   }
 
   const players = await loadObjectivePlayers(db, ruleset);
-  const { options } = computeObjectives(players, ruleset);
+  const { options } = computeObjectives(players, ruleset, mapPool);
 
   return {
     player: {
@@ -625,7 +637,7 @@ async function loadParticipantObjectives(
       division: divisionFromRankLevel(player.rankLevel),
       rankLevel: player.rankLevel,
     },
-    minimums: { ...ruleset.minimums },
+    mapPool: [...mapPool],
     options: options.map((option) => participantObjective(option, profileId)),
   };
 }
@@ -637,31 +649,40 @@ async function loadParticipantObjectives(
  * `detail` de su avance; si no está, esos tres van a cero/null y la posición y
  * la distancia las resuelve `objectiveStanding` (que es la parte pura).
  *
- * `holder` y `ranking` se copian tal cual del `ObjectiveOption` —`ranking` por
- * referencia, sin clonar— para que el diálogo de clasificación del objetivo se
- * pueda reutilizar desde la ficha sin pedir los datos por otra vía.
+ * `holder`, `beneficiaries` y `ranking` se copian tal cual del `ObjectiveOption`
+ * —`ranking` y `beneficiaries` por referencia, sin clonar— para que el diálogo de
+ * clasificación del objetivo se pueda reutilizar desde la ficha sin pedir los
+ * datos por otra vía.
  */
 function participantObjective(
   option: ObjectiveOption,
   profileId: number,
 ): ParticipantObjective {
   const entry = option.ranking.find((contender) => contender.profileId === profileId) ?? null;
-  const { position, distance } = objectiveStanding(option.metric, option.ranking, profileId);
+  const { position, distance } = objectiveStanding(option.ranking, profileId);
+  const achieved =
+    option.kind === "competition"
+      ? option.holder !== null && option.holder.profileId === profileId
+      : option.beneficiaries.some((beneficiary) => beneficiary.profileId === profileId);
 
   return {
     id: option.id,
     group: option.group,
+    kind: option.kind,
     label: option.label,
     description: option.description,
     metric: option.metric,
     points: option.points,
+    parent: option.parent,
     value: entry?.value ?? 0,
     matches: entry?.matches ?? 0,
     detail: entry?.detail ?? null,
     position,
     distance,
-    achieved: option.holder !== null && option.holder.profileId === profileId,
+    achieved,
     holder: option.holder,
+    beneficiaries: option.beneficiaries,
+    target: option.target,
     ranking: option.ranking,
   };
 }
@@ -1122,7 +1143,7 @@ export async function getTwitchChannels(): Promise<TwitchChannelRow[]> {
  * La ventana del torneo, tal cual está configurada en el ruleset activo.
  *
  * Es una lectura **ligera** a propósito: `getObjectives()` también publica la
- * ventana, pero arrastra el cálculo de los 38 objetivos. Las pantallas que solo
+ * ventana, pero arrastra el cálculo de todos los objetivos. Las pantallas que solo
  * necesitan el periodo —`/puntuacion` y el contador de la portada— no tienen por
  * qué pagar ese cálculo.
  *

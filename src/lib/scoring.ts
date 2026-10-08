@@ -18,15 +18,16 @@ import {
   rankedMatchSql,
   type ScoringWindow,
 } from "@/lib/ranked-match";
-import { writeScoringLastRun } from "@/lib/settings";
+import { readMapPool, writeScoringLastRun } from "@/lib/settings";
 
 /**
- * Motor de puntuación (reglas v2).
+ * Motor de puntuación (reglas v3).
  *
  * La regla completa está en `docs/PUNTUACION.md`: 10 puntos por victoria
- * clasificatoria más los 38 objetivos winner-takes-all de `objectives.ts`.
- * Aquí vive lo que no es cálculo: el ruleset (configurable en `Setting`),
- * el agregado (`PlayerScore`) y el orden final de la clasificación.
+ * clasificatoria más los objetivos de `objectives.ts`, que son de dos formas:
+ * competiciones (un único poseedor) y logros (los cobra quien los cumple). Aquí
+ * vive lo que no es cálculo: el ruleset (configurable en `Setting`), el agregado
+ * (`PlayerScore`) y el orden final de la clasificación.
  *
  * Qué cuenta como partida clasificatoria **no** está aquí: vive en
  * `src/lib/ranked-match.ts`, que es donde se puede definir sin que `scoring.ts` y
@@ -75,14 +76,14 @@ export const SCORING_RULESET_KEY = "scoring.ruleset";
  *
  * La fija **el código**, no el documento guardado: cambiar un número de
  * `scoring.ruleset` no requiere despliegue, pero un cambio estructural sí
- * (nuevos mínimos, nueva familia de modos, …) y para eso sube esta constante.
+ * (nuevos objetivos, nueva familia de modos, …) y para eso sube esta constante.
  *
  * La ventana de fechas **no** sube la versión: es una reconfiguración, igual que
  * `pointsPerWin` o un mínimo. Lo que sí exigiría subirla es cambiar la forma de la
  * ventana (por ejemplo, pasar de un intervalo a una lista de Ventanas), porque
  * entonces un documento guardado dejaría de describir lo que el código espera.
  */
-export const RULESET_VERSION = 2;
+export const RULESET_VERSION = 3;
 
 /**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
@@ -92,16 +93,7 @@ export const RULESET_VERSION = 2;
  * guardada para que un lector directo de la tabla no vea texto de otra versión.
  */
 export const RULE_LABEL =
-  "10 puntos por victoria clasificatoria más 38 objetivos especiales; solo el primero los cobra";
-
-export type ScoringMinimums = {
-  /** Mínimo de partidas clasificatorias para `prohibido-perder`. */
-  winrate: number;
-  /** Mínimo de partidas para `golpe-de-suerte`. */
-  streak: number;
-  /** Victorias con una civilización para `masterizar-*`. */
-  masterizar: number;
-};
+  "10 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros";
 
 export type ScoringRuleset = {
   version: number;
@@ -114,8 +106,7 @@ export type ScoringRuleset = {
    */
   window: ScoringWindow;
   pointsPerWin: number;
-  minimums: ScoringMinimums;
-  /** ¿Las partidas con civ aleatoria cuentan para `otp` y `masterizar-*`? */
+  /** ¿Las partidas con civ aleatoria cuentan para los objetivos de civilización? */
   countRandomizedCivs: boolean;
   /** Puntos de cada objetivo por id; los que no aparecen usan los suyos. */
   objectives: Record<string, number>;
@@ -137,7 +128,6 @@ export const DEFAULT_RULESET: ScoringRuleset = {
   modes: [...RANKED_MODES],
   window: { from: "2026-09-15T00:00:00.000Z", to: "2026-10-15T00:00:00.000Z" },
   pointsPerWin: 10,
-  minimums: { winrate: 10, streak: 10, masterizar: 10 },
   countRandomizedCivs: false,
   objectives: { ...OBJECTIVE_POINTS },
 };
@@ -147,7 +137,6 @@ function defaultRuleset(): ScoringRuleset {
     ...DEFAULT_RULESET,
     modes: [...DEFAULT_RULESET.modes],
     window: { ...DEFAULT_RULESET.window },
-    minimums: { ...DEFAULT_RULESET.minimums },
     objectives: { ...DEFAULT_RULESET.objectives },
   };
 }
@@ -229,28 +218,6 @@ export function mergeRuleset(stored: unknown): RulesetMergeResult {
 
     ruleset.window = parsed.window;
     warnings.push(...parsed.warnings);
-  }
-
-  if (stored.minimums !== undefined) {
-    if (isRecord(stored.minimums)) {
-      for (const key of ["winrate", "streak", "masterizar"] as const) {
-        const raw = stored.minimums[key];
-
-        if (raw === undefined) {
-          continue;
-        }
-
-        const parsed = positiveInt(raw);
-
-        if (parsed === null) {
-          warnings.push(`minimums.${key} no es un entero positivo: ${JSON.stringify(raw)}`);
-        } else {
-          ruleset.minimums[key] = parsed;
-        }
-      }
-    } else {
-      warnings.push("minimums no es un objeto");
-    }
   }
 
   if (typeof stored.countRandomizedCivs === "boolean") {
@@ -369,8 +336,8 @@ export type ScoreBreakdownMode = {
  *
  * ```json
  * {
- *   "ruleSetVersion": 2,
- *   "rule": "10 puntos por victoria clasificatoria más 38 objetivos…",
+ *   "ruleSetVersion": 3,
+ *   "rule": "10 puntos por victoria clasificatoria más 82 objetivos…",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 10, "matches": 2 }
@@ -405,37 +372,38 @@ function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode
 /* -------------------------------------------------------------------------- */
 
 /**
- * Los 38 objetivos con sus poseedores, listos para pintar.
+ * El catálogo de objetivos con sus poseedores y beneficiarios, listo para pintar.
  *
  * Dos consultas y ninguna por fila: una para el ruleset (una clave de
  * `Setting`) y una para las partidas clasificatorias. Se lee en cada llamada,
  * igual que `getStandings`, así que la página que la use tiene que ser
  * dinámica.
  *
- * `window` se publica para que `/puntuacion` y `/objetivos` puedan decir qué periodo
- * cuenta, sin que el copy de la interfaz tenga que escribir fechas a mano que
- * acabarían mintiendo el día que se cambien en `Setting`.
+ * `window` y `mapPool` se publican para que `/puntuacion` y `/objetivos` puedan
+ * decir qué periodo cuenta y qué mapas entran, sin que el copy de la interfaz
+ * tenga que escribir datos a mano que acabarían mintiendo el día que se cambien
+ * en `Setting`.
  *
- * Con la base de datos caída devuelve `{ status: "degraded", data: null }`: los
- * 38 objetivos existen siempre (es el catálogo), pero **quién posee cada uno**
- * solo existe en la base, y publicar una tabla de objetivos sin poseedores
- * serían los 38 sin dueño, que no es lo que hay.
+ * Con la base de datos caída devuelve `{ status: "degraded", data: null }`: el
+ * catálogo existe siempre (es código), pero **quién cobra cada objetivo** solo
+ * existe en la base, y publicar una tabla de objetivos sin cobradores sería una
+ * tabla de nadie, que no es lo que hay.
  */
 export async function getObjectives(): Promise<PublicRead<ObjectiveView>> {
   return readFromDatabase("public/getObjectives", loadObjectives);
 }
 
 async function loadObjectives(): Promise<ObjectiveView> {
-  const ruleset = await readRuleset();
+  const [ruleset, mapPool] = await Promise.all([readRuleset(), readMapPool()]);
   const players = await loadObjectivePlayers(db, ruleset);
-  const { options } = computeObjectives(players, ruleset);
+  const { options } = computeObjectives(players, ruleset, mapPool);
 
   return {
     ruleSetVersion: ruleset.version,
     rule: ruleset.label,
     pointsPerWin: ruleset.pointsPerWin,
     window: { ...ruleset.window },
-    minimums: { ...ruleset.minimums },
+    mapPool: [...mapPool],
     options,
   };
 }
@@ -459,7 +427,7 @@ export type RecomputeScoresResult = {
   playersUnranked: number;
   /** Suma de `PlayerScore.total`: partidas y objetivos. */
   totalPoints: number;
-  /** Objetivos con poseedor en este recálculo (de 38). */
+  /** Objetivos con al menos un cobrador en este recálculo. */
   objectivesAwarded: number;
   /** Puntos repartidos por objetivos. */
   objectivesPoints: number;
@@ -519,8 +487,10 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
   const startedAtMs = Date.now();
 
   // El ruleset se lee fuera de la transacción: es configuración, no datos de la
-  // clasificación, y su publicación no debe quedarse esperando al resto.
+  // clasificación, y su publicación no debe quedarse esperando al resto. El pool de
+  // mapas, igual.
   const ruleset = await ensureRuleset();
+  const mapPool = await readMapPool();
 
   const result = await db.$transaction(
     async (tx) => {
@@ -583,7 +553,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       `;
 
       const objectivePlayers = await loadObjectivePlayers(tx, ruleset);
-      const objectives = computeObjectives(objectivePlayers, ruleset);
+      const objectives = computeObjectives(objectivePlayers, ruleset, mapPool);
 
       // Registro de hitos, en esta misma transacción y a continuación del cómputo:
       // el feed del historial de `/admin/historial` mezcla partidas y objetivos, y

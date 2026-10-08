@@ -10,7 +10,6 @@ import {
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { db } from "@/lib/db";
 import { unwrapRead } from "@/lib/db-errors";
-import { OBJECTIVE_POINTS } from "@/lib/objectives";
 import { DIVISIONS, getStandings } from "@/lib/public";
 import { DEFAULT_RULESET, RULESET_VERSION } from "@/lib/scoring";
 import { playerSyncKey } from "@/lib/settings";
@@ -399,18 +398,17 @@ async function runMockTournament(): Promise<void> {
 
     const objectives = breakdown?.objectives ?? { points: 0, earned: [] };
     const objectivesPoints = objectives.points ?? 0;
-    const earned = objectives.earned ?? [];
-    const sumados = earned.reduce(
-      (sum, id) => sum + (OBJECTIVE_POINTS[id] ?? -1),
-      0,
-    );
+    // No se reconstruye el reparto de objetivos desde `earned`: `imparable`
+    // reparte puntos variables (1 por día, con tope), así que el catálogo no
+    // basta para rehacer la suma. Lo que sí tiene que cuadrar es que el total sea
+    // los puntos por victoria más los de objetivos, y que los modos sumen el
+    // resto.
     const porModos = Object.values(breakdown?.byMode ?? {}).reduce(
       (sum, mode) => sum + (mode.points ?? 0),
       0,
     );
 
     return (
-      sumados !== objectivesPoints ||
       porModos !== score.total - objectivesPoints ||
       score.total !== score.wins * DEFAULT_RULESET.pointsPerWin + objectivesPoints
     );
@@ -425,7 +423,7 @@ async function runMockTournament(): Promise<void> {
   }
 
   if (scores.length === MOCK_PROFILE_IDS.length && conObjetivos.length === 0) {
-    problems.push("ningún participante suma puntos de objetivos en la v2");
+    problems.push("ningún participante suma puntos de objetivos");
   }
 
   if (standings.length > 0) {

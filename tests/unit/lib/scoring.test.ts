@@ -46,7 +46,7 @@ function partida(overrides: Partial<Parameters<typeof countsAsRanked>[0]> = {}) 
   };
 }
 
-describe("reglas v2 (constantes del motor)", () => {
+describe("reglas v3 (constantes del motor)", () => {
   it("el ruleset por defecto es el de la versión que declara el código", () => {
     expect(DEFAULT_RULESET.version).toBe(RULESET_VERSION);
     expect(SCORING_RULESET_KEY).toBe("scoring.ruleset");
@@ -57,16 +57,15 @@ describe("reglas v2 (constantes del motor)", () => {
     expect(DEFAULT_RULESET.modes).toEqual(["rm_solo", "rm_team"]);
   });
 
-  it("los tres mínimos del documento son los acordados", () => {
+  it("los valores por defecto son los acordados", () => {
     expect(DEFAULT_RULESET.pointsPerWin).toBe(10);
-    expect(DEFAULT_RULESET.minimums).toEqual({ winrate: 10, streak: 10, masterizar: 10 });
     // Por defecto la civ aleatoria no cuenta: no dice nada de la civilización de
-    // nadie, así que no puede contar para `otp` ni completar una `masterizar-*`.
+    // nadie, así que no puede contar para los objetivos de civilización.
     expect(DEFAULT_RULESET.countRandomizedCivs).toBe(false);
   });
 
-  it("el catálogo sigue siendo el de 38 objetivos de docs/OBJETIVOS.md", () => {
-    expect(OBJECTIVE_COUNT).toBe(38);
+  it("el catálogo sigue siendo el de 82 objetivos de docs/OBJETIVOS.md", () => {
+    expect(OBJECTIVE_COUNT).toBe(82);
     // El desglose de `PlayerScore` y `Setting["scoring.ruleset"].objectives` se
     // indexan por id, así que un objetivo sin puntos o con un id repetido
     // desaparecería de la clasificación sin que nada fallara.
@@ -96,27 +95,14 @@ describe("mergeRuleset: lo que se puede reconfigurar", () => {
     expect(ruleset).toEqual(DEFAULT_RULESET);
   });
 
-  it("aplica los puntos por victoria y los tres mínimos", () => {
+  it("aplica los puntos por victoria", () => {
     const { ruleset, warnings } = mergeRuleset({
       ...VALIDO,
       pointsPerWin: 12,
-      minimums: { winrate: 5, streak: 6, masterizar: 7 },
     });
 
     expect(warnings).toEqual([]);
     expect(ruleset.pointsPerWin).toBe(12);
-    expect(ruleset.minimums).toEqual({ winrate: 5, streak: 6, masterizar: 7 });
-  });
-
-  it("aplica solo los mínimos que vienen, sin tocar los demás", () => {
-    // Editar un número suelto de `Setting` no puede resettingar los otros dos.
-    const { ruleset } = mergeRuleset({ ...VALIDO, minimums: { streak: 3 } });
-
-    expect(ruleset.minimums).toEqual({
-      winrate: DEFAULT_RULESET.minimums.winrate,
-      streak: 3,
-      masterizar: DEFAULT_RULESET.minimums.masterizar,
-    });
   });
 
   it("aplica la lista de familias del ruleset", () => {
@@ -149,13 +135,16 @@ describe("mergeRuleset: lo que se puede reconfigurar", () => {
   });
 
   it("aplica los puntos de un objetivo existente por su id", () => {
-    const { ruleset, warnings } = mergeRuleset({ ...VALIDO, objectives: { otp: 90 } });
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      objectives: { "loco-por-ganar": 90 },
+    });
 
     expect(warnings).toEqual([]);
-    expect(ruleset.objectives.otp).toBe(90);
+    expect(ruleset.objectives["loco-por-ganar"]).toBe(90);
     // El resto del catálogo no se toca.
-    expect(ruleset.objectives["loco-por-ganar"]).toBe(
-      DEFAULT_RULESET.objectives["loco-por-ganar"],
+    expect(ruleset.objectives["bienhadado"]).toBe(
+      DEFAULT_RULESET.objectives["bienhadado"],
     );
   });
 });
@@ -179,7 +168,7 @@ describe("mergeRuleset: lo que se rechaza, siempre con aviso", () => {
       version: RULESET_VERSION + 1,
       pointsPerWin: 99,
       modes: ["custom_1v1"],
-      objectives: { otp: 1 },
+      objectives: { "loco-por-ganar": 1 },
     });
 
     expect(ruleset).toEqual(DEFAULT_RULESET);
@@ -191,7 +180,7 @@ describe("mergeRuleset: lo que se rechaza, siempre con aviso", () => {
     const { ruleset, warnings } = mergeRuleset({ pointsPerWin: 99 });
 
     expect(ruleset).toEqual(DEFAULT_RULESET);
-    expect(warnings.some((w) => w.includes("no es 2"))).toBe(true);
+    expect(warnings.some((w) => w.includes(`no es ${RULESET_VERSION}`))).toBe(true);
   });
 
   it("la etiqueta la fija el código, no el documento guardado", () => {
@@ -221,25 +210,6 @@ describe("mergeRuleset: lo que se rechaza, siempre con aviso", () => {
     }
   });
 
-  it("un mínimo que no es entero positivo avisa y deja el de por defecto", () => {
-    const { ruleset, warnings } = mergeRuleset({
-      ...VALIDO,
-      minimums: { winrate: 0, streak: "muchas", masterizar: 4 },
-    });
-
-    expect(ruleset.minimums.winrate).toBe(DEFAULT_RULESET.minimums.winrate);
-    expect(ruleset.minimums.streak).toBe(DEFAULT_RULESET.minimums.streak);
-    expect(ruleset.minimums.masterizar).toBe(4);
-    expect(warnings.filter((w) => w.startsWith("minimums."))).toHaveLength(2);
-  });
-
-  it("`minimums` que no es un objeto se descarta entero", () => {
-    const { ruleset, warnings } = mergeRuleset({ ...VALIDO, minimums: [10, 10, 10] });
-
-    expect(ruleset.minimums).toEqual(DEFAULT_RULESET.minimums);
-    expect(warnings).toContain("minimums no es un objeto");
-  });
-
   it("`countRandomizedCivs` que no es booleano se descarta", () => {
     const { ruleset, warnings } = mergeRuleset({ ...VALIDO, countRandomizedCivs: "true" });
 
@@ -249,18 +219,26 @@ describe("mergeRuleset: lo que se rechaza, siempre con aviso", () => {
 
   it("los puntos de un objetivo que no existe se ignoran sin tumbar el resto", () => {
     const id = "objetivo-inventado";
-    const { ruleset, warnings } = mergeRuleset({ ...VALIDO, objectives: { [id]: 50, otp: 90 } });
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      objectives: { [id]: 50, "loco-por-ganar": 90 },
+    });
 
-    expect(ruleset.objectives.otp).toBe(90);
+    expect(ruleset.objectives["loco-por-ganar"]).toBe(90);
     expect(ruleset.objectives[id]).toBeUndefined();
     expect(warnings.some((w) => w.includes("no existe"))).toBe(true);
   });
 
   it("los puntos de un objetivo que no son un entero positivo se ignoran", () => {
-    const { ruleset, warnings } = mergeRuleset({ ...VALIDO, objectives: { otp: -1 } });
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      objectives: { "loco-por-ganar": -1 },
+    });
 
-    expect(ruleset.objectives.otp).toBe(DEFAULT_RULESET.objectives.otp);
-    expect(warnings.some((w) => w.includes('objectives["otp"]'))).toBe(true);
+    expect(ruleset.objectives["loco-por-ganar"]).toBe(
+      DEFAULT_RULESET.objectives["loco-por-ganar"],
+    );
+    expect(warnings.some((w) => w.includes('objectives["loco-por-ganar"]'))).toBe(true);
   });
 
   it("`objectives` que no es un objeto se descarta entero", () => {
@@ -315,9 +293,8 @@ describe("mergeRuleset: no toca el documento por defecto", () => {
       pointsPerWin: 99,
       modes: ["custom_1v1"],
       window: { from: "2027-01-01T00:00:00Z", to: null },
-      minimums: { winrate: 1, streak: 2, masterizar: 3 },
       countRandomizedCivs: true,
-      objectives: { otp: 1 },
+      objectives: { "loco-por-ganar": 1 },
     });
 
     expect(DEFAULT_RULESET).toEqual(antes);
@@ -327,7 +304,7 @@ describe("mergeRuleset: no toca el documento por defecto", () => {
     const guardado = {
       ...VALIDO,
       pointsPerWin: 15,
-      objectives: { otp: 75, "loco-por-ganar": 80 },
+      objectives: { "bienhadado": 75, "loco-por-ganar": 80 },
     };
 
     expect(mergeRuleset(guardado).ruleset).toEqual(mergeRuleset(guardado).ruleset);

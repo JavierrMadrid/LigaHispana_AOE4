@@ -328,6 +328,31 @@ la web a dos APIs externas. El DAL solo lee lo que el worker escribió. Twitch n
 - Los `channelId` de YouTube resueltos se cachean en `Setting["streams.youtube.channel.<handle>"]`.
 - Un fallo **no** mueve `lastSuccessAt`; sale en `streamsError`.
 
+## Pool de mapas
+
+El objetivo `por-tierra-y-agua` se resuelve contra `Setting["scoring.mapPool"]`. El worker lo refresca
+**como mucho una vez al día** desde el **homepage de AoE4World**, no desde su API: la API pública no
+expone el pool (`/stats/rm_solo/maps` es el catálogo con estadísticas, no la rotación en curso). El
+estado inicial va incrustado en el HTML de `https://aoe4world.com/`, en el atributo `:initial-state`
+de `<home-leaderboard>` con el JSON escapado.
+
+| Qué | Cuánto |
+|---|---|
+| Petición | Una a `https://aoe4world.com/`, HTML, mismo `User-Agent` y plazo que el cliente de AoE4World |
+| Cadencia | Una vez cada **24 h** (`MAP_POOL_REFRESH_INTERVAL_HOURS`); la rotación es mensual y el worker corre cada 5 min |
+| Claves | `scoring.mapPool` (lo que lee el motor) y `scoring.mapPoolSync` (fecha y metadatos) |
+
+- **Parseo frágil, fallo contenido**: `parseMapPoolHomepage()` es puro y **nunca lanza**; si el HTML no
+  cuadra devuelve `null` y `Setting` **no se toca**. El motor sigue con el último pool bueno (o con el
+  valor por defecto de `src/lib/map-pool.ts`, los 9 mapas reales) — un cambio de formato en el homepage
+  no deja el objetivo sin mapas ni con la lista vacía.
+- Con `AOE4WORLD_MOCK=1` **no sale a la red** (no hay fixture para el homepage): se conserva el último
+  valor y no cuenta como fallo.
+- La organización puede seguir reescribiendo `scoring.mapPool` a mano; el worker lo reemplazará en el
+  siguiente refresco.
+- Dónde mirar: `mapPoolError` en el rastro (`[sync] No se ha podido refrescar el pool de mapas: …`).
+  **No** mueve `lastSuccessAt`.
+
 ## Transparencia del historial
 
 Las dos reglas `HISTORY_NOT_PUBLIC` y `MISSING_LADDER_MATCHES` se comprueban en

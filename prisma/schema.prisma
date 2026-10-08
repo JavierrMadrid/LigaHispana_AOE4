@@ -458,22 +458,19 @@ model PlayerScore {
 
 /// Un objetivo del torneo que alguien cumplió, con **cuándo** se cumplió.
 ///
-/// Un evento por objetivo del catálogo y como mucho 38 filas en toda la vida del
-/// torneo. Es el registro que lee el historial del panel (`/admin/historial`,
-/// `getAdminMatchHistory()`) y responde a lo que un feed de partidas no puede
-/// decir: que alguien se quedó un objetivo, y cuándo.
+/// Un evento por **objetivo y jugador**: en una competición hay uno (el
+/// poseedor), y en un logro puede haber muchos (todos los que lo completan). El
+/// historial del panel (`/admin/historial`) lo lee como un feed; no alimenta la
+/// clasificación.
 ///
 /// ## Cuándo se registra (la traducción de `docs/OBJETIVOS.md`)
 ///
-/// - **Carreras** (grupo `civilizacion`: los 23 `masterizar-<civ>` y
-///   `masterizarlos-a-todos`): se resuelven al completarse y **no se reabren**, así
-///   que el evento se escribe en cuanto hay poseedor, con `achievedAt` = el
-///   `finishedAt` de la partida que cerró la carrera.
-/// - **Los 14 "en caliente"**: su poseedor cambia en cada recálculo, así que solo
-///   tienen sentido al final del torneo. Se registran cuando la ventana ya tiene
-///   `to` informado **y** ha pasado, con `achievedAt` = ese `window.to`. Con la
-///   ventana abierta (`to: null`) no se registra nada todavía, que es justo lo que
-///   significa "solo se añaden una vez termina el torneo".
+/// El catálogo nuevo **no tiene carreras**: competiciones y logros se resuelven en
+/// caliente y pueden cambiar en cada recálculo. Por eso todos se registran igual:
+/// solo cuando la ventana ya tiene `to` informado **y** ha pasado, con
+/// `achievedAt` = ese `window.to`. Con la ventana abierta (`to: null`) no se
+/// registra nada todavía, que es justo lo que significa "solo se añaden una vez
+/// termina el torneo".
 ///
 /// Lo escribe `reconcileObjectiveEvents()` (`src/lib/objective-events.ts`) dentro de
 /// la transacción de `recomputeScores()`, así que o hay evento o no hay nada, y los
@@ -489,15 +486,16 @@ model PlayerScore {
 /// punto o un nombre en `Setting` o en el catálogo, y el historial enseñaría unos
 /// puntos que ya no son los del torneo.
 ///
-/// ## Por qué un único evento por objetivo, y por qué se puede borrar
+/// ## Por qué un único evento por objetivo y jugador, y por qué se puede borrar
 ///
 /// La fila es un **espejo reconciliado del cómputo**, no un log *append-only* (la
 /// diferencia con `AdminAction`, que sí es un log: allí el rastro vale aunque el
 /// cambio se deshaga). La reconciliación borra lo que deja de cumplirse, porque el
-/// escenario es real: si se revierte la partida que cerró una carrera, los puntos se
-/// mueven al siguiente y un evento que nombrara al poseedor antiguo estaría
-/// mintiendo. `@@unique([objectiveId])` es lo que hace que esa reconciliación quepa
-/// en un `upsert` por id en lugar de un historial de repeticiones.
+/// escenario es real: si se revierte la partida que cerró una competición o que
+/// completó un logro, los puntos se mueven y un evento que nombrara al beneficiario
+/// antiguo estaría mintiendo. `@@unique([objectiveId, playerId])` es lo que hace que
+/// esa reconciliación quepa en un `update` por esa clave en lugar de un historial
+/// de repeticiones.
 ///
 /// ## El borrado en cascada
 ///
@@ -506,21 +504,20 @@ model PlayerScore {
 /// las FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra los
 /// hitos por jugador).
 model ObjectiveEvent {
-  /// Id estable del catálogo (`loco-por-ganar`, `masterizar-japanese`…).
+  /// Id estable del catálogo (`loco-por-ganar`, `lider-japanese`…).
   objectiveId String
-  /// Quien lo cumplió.
+  /// Quien lo cobró.
   playerId    String
   player      Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-  /// Instante de la hazaña en las carreras; el fin del torneo en los "en caliente".
+  /// Fin del torneo (la ventana ya cerrada) cuando se registra el objetivo.
   achievedAt DateTime
   /// Cuándo se escribió la fila. `achievedAt` es el dato del torneo; esto es solo
   /// el rastro de que alguien lo registró (el motor corre cada 5 minutos).
   recordedAt DateTime @default(now())
 
-  // Un evento por objetivo, y no (objetivo, jugador): el poseedor de un objetivo en
-  // caliente es el final, no una secuencia de interim.
-  @@unique([objectiveId])
+  // Un evento por objetivo y jugador: un logro tiene varios beneficiarios.
+  @@unique([objectiveId, playerId])
   // El feed del historial ordena y filtra por `achievedAt`.
   @@index([achievedAt])
   // Índice de la FK: el panel filtra los hitos por jugador y el `Cascade` al borrar

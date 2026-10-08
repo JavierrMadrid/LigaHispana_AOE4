@@ -26,29 +26,27 @@ import type { ScoringRuleset } from "@/lib/scoring";
  *
  * `AdminAction` y `Alert` son registros **append-only**: describen que alguien hizo
  * algo, y aunque después se deshaga, el rastro sigue siendo cierto. Aquí es al
- * revés: la fila describe **quién posee el objetivo ahora mismo**, y en eso no puede
+ * revés: la fila describe **quién cobra el objetivo ahora mismo**, y en eso no puede
  * haber pasado. El caso que lo obliga: si el panel revierte la partida que cerró una
- * carrera de `masterizar-*`, los puntos se mueven al siguiente jugador, y un evento
- * que nombrara al poseedor antiguo estaría mintiendo en la pantalla que la
+ * competición, o la que completó un logro, los puntos se mueven, y un evento que
+ * nombrara al beneficiario antiguo estaría mintiendo en la pantalla que la
  * organización usa para revisar el torneo. Por eso la reconciliación **borra** lo
- * que deja de cumplirse, y por eso `ObjectiveEvent` tiene un único evento por
- * objetivo en vez de un historial de repeticiones.
+ * que deja de cumplirse, y por eso `ObjectiveEvent` es un espejo y no un historial
+ * de repeticiones.
  *
  * ## Por qué el reparto entre "ahora" y "al final" es el del documento de objetivos
  *
- * `docs/OBJETIVOS.md` dice que todos los objetivos se resuelven en caliente
- * **excepto** el grupo `civilizacion`, que son carreras y se resuelven al
- * completarse. La organización pidió que el historial dijera cuándo se cumplió cada
- * uno, y la traducción literal de esa división es:
+ * El catálogo nuevo **no tiene carreras**: tanto las competiciones como los logros
+ * se resuelven en caliente y su poseedor o sus beneficiarios pueden cambiar en
+ * cada recálculo (una competición porque cambia el líder, un logro porque se
+ * revierte la partida que lo cerró). Por eso **todos** los objetivos se registran
+ * igual: solo cuando el torneo ha terminado —ventana con `to` informado y ya
+ * pasado—, con `achievedAt` = ese `to`. Con la ventana abierta no se registra
+ * nada todavía, que es lo que significa "solo se añaden una vez termina el
+ * torneo".
  *
- * - **Carreras** (`raceAt` informado): se registra en cuanto hay poseedor, con
- *   `achievedAt` = el instante de la hazaña, que el motor ya conoce (es el mismo
- *   `finishedAt` que decide el tercer desempate de `docs/OBJETIVOS.md`).
- * - **Los 14 en caliente**: como su poseedor cambia en cada recálculo, no se registra
- *   nada hasta que el torneo ha terminado —ventana con `to` informado y ya
- *   pasado—, y entonces con `achievedAt` = ese `to`. Con la ventana abierta no se
- *   registra nunca todavía, que es exactamente lo que significa "solo se añaden una
- *   vez termina el torneo".
+ * Un logro tiene **varios beneficiarios**, así que hay un evento por objetivo y
+ * jugador (`@@unique([objectiveId, playerId])`), no uno por objetivo.
  */
 
 /** Cliente con la única tabla que necesita esta reconciliación (`db` o una `tx`). */
@@ -113,8 +111,13 @@ export function resolveObjective(id: string, ruleset: ScoringRuleset): ResolvedO
   };
 }
 
-/** Lo que hay que escribir, por id de objetivo. */
-type ExpectedEvent = { playerId: string; achievedAt: Date };
+/** Lo que hay que escribir, indexado por (objetivo, jugador). */
+type ExpectedEvent = { objectiveId: string; playerId: string; achievedAt: Date };
+
+/** Clave compuesta del mapa: un evento por objetivo y jugador. */
+function eventKey(objectiveId: string, playerId: string): string {
+  return `${objectiveId}\u0000${playerId}`;
+}
 
 /**
  * El fin del torneo, o `null` si todavía no ha terminado.
@@ -131,14 +134,12 @@ function finDelTorneo(ruleset: ScoringRuleset): Date | null {
 }
 
 /**
- * El estado esperado: un evento por objetivo con poseedor, con el instante en que se
- * cumplió.
+ * El estado esperado: un evento por objetivo cobrado y jugador, con el instante en
+ * que se cumple.
  *
- * Un objetivo **sin** poseedor no aparece, y como el mapa no lo contiene, la
- * reconciliación de abajo lo borra de la tabla si estaba. Es la parte de la regla que
- * se suele olvidar: si se revierte la partida que cerró una carrera, la carrera se
- * reabre, los puntos se mueven y el evento del poseedor anterior tiene que irse con
- * ellos.
+ * Como ningún objetivo del catálogo es una carrera, todos se registran con el fin
+ * del torneo: mientras la ventana esté abierta el mapa se queda vacío y la
+ * reconciliación de abajo borra lo que hubiera.
  */
 function eventosEsperados(
   ruleset: ScoringRuleset,
@@ -147,21 +148,16 @@ function eventosEsperados(
   const fin = finDelTorneo(ruleset);
   const esperados = new Map<string, ExpectedEvent>();
 
-  for (const objetivo of awarded) {
-    if (objetivo.raceAt !== null) {
-      // Carrera (`civilizacion`): se cumple en cuanto alguien la cierra, y el
-      // motor ya sabe en qué instante fue.
-      esperados.set(objetivo.id, {
-        playerId: objetivo.playerId,
-        achievedAt: new Date(objetivo.raceAt),
-      });
-      continue;
-    }
+  if (fin === null) {
+    return esperados;
+  }
 
-    // Objetivo "en caliente": sin fin de torneo no hay poseedor que registrar.
-    if (fin !== null) {
-      esperados.set(objetivo.id, { playerId: objetivo.playerId, achievedAt: fin });
-    }
+  for (const objetivo of awarded) {
+    esperados.set(eventKey(objetivo.id, objetivo.playerId), {
+      objectiveId: objetivo.id,
+      playerId: objetivo.playerId,
+      achievedAt: fin,
+    });
   }
 
   return esperados;
@@ -188,15 +184,16 @@ export type ObjectiveEventsResult = {
  *
  * ## Por qué lee antes de escribir
  *
- * El coste de la comparación es una lectura de ≤38 filas y el ahorro es no escribir
- * nada en una pasada sin novedades (el worker corre 288 veces al día): el `upsert`
- * tal cual reescribiría las 38 filas en cada pasada y llenaría el *WAL* para no
- * cambiar nada. Se lee, se compara y solo se escribe lo que de verdad difiere:
+ * El coste de la comparación es una lectura pequeña (como mucho un evento por
+ * objetivo y jugador) y el ahorro es no escribir nada en una pasada sin novedades
+ * (el worker corre 288 veces al día): el `upsert` tal cual reescribiría las filas
+ * en cada pasada y llenaría el *WAL* para no cambiar nada. Se lee, se compara y
+ * solo se escribe lo que de verdad difiere:
  *
- * - **altas** (`createMany`): el objetivo tiene poseedor y no había evento.
- * - **cambios** (`update`): hay evento, pero de otro poseedor o de otro instante.
- * - **bajas** (`deleteMany`): el objetivo ya no se cumple con los datos de ahora, o
- *   su ventana se ha reabierto (`to: null`). Es el caso de una partida revertida.
+ * - **altas** (`createMany`): el objetivo lo cobra alguien y no había evento.
+ * - **cambios** (`update`): hay evento, pero de otro instante.
+ * - **bajas** (`deleteMany`): el objetivo ya no lo cobra quien lo cobraba, o su
+ *   ventana se ha reabierto (`to: null`). Es el caso de una partida revertida.
  *
  * Con las filas ya contadas, el caso "nada esperado y nada que borrar" no ejecuta
  * ninguna escritura: es lo que pasa en casi todas las pasadas.
@@ -211,29 +208,32 @@ export async function reconcileObjectiveEvents(
     select: { objectiveId: true, playerId: true, achievedAt: true },
   });
 
-  const porId = new Map(actuales.map((fila) => [fila.objectiveId, fila]));
-  const altas: { objectiveId: string; playerId: string; achievedAt: Date }[] = [];
+  const porClave = new Map(
+    actuales.map((fila) => [eventKey(fila.objectiveId, fila.playerId), fila]),
+  );
+  const altas: ExpectedEvent[] = [];
   const cambios: { objectiveId: string; playerId: string; achievedAt: Date }[] = [];
 
-  for (const [objectiveId, esperado] of esperados) {
-    const actual = porId.get(objectiveId);
+  for (const [clave, esperado] of esperados) {
+    const actual = porClave.get(clave);
 
     if (actual === undefined) {
-      altas.push({ objectiveId, ...esperado });
+      altas.push(esperado);
       continue;
     }
 
-    if (
-      actual.playerId !== esperado.playerId ||
-      actual.achievedAt.getTime() !== esperado.achievedAt.getTime()
-    ) {
-      cambios.push({ objectiveId, ...esperado });
+    if (actual.achievedAt.getTime() !== esperado.achievedAt.getTime()) {
+      cambios.push({
+        objectiveId: esperado.objectiveId,
+        playerId: esperado.playerId,
+        achievedAt: esperado.achievedAt,
+      });
     }
   }
 
   const bajas = actuales
-    .filter((fila) => !esperados.has(fila.objectiveId))
-    .map((fila) => fila.objectiveId);
+    .filter((fila) => !esperados.has(eventKey(fila.objectiveId, fila.playerId)))
+    .map((fila) => ({ objectiveId: fila.objectiveId, playerId: fila.playerId }));
 
   if (altas.length > 0) {
     await client.objectiveEvent.createMany({ data: altas });
@@ -241,13 +241,18 @@ export async function reconcileObjectiveEvents(
 
   for (const cambio of cambios) {
     await client.objectiveEvent.update({
-      where: { objectiveId: cambio.objectiveId },
-      data: { playerId: cambio.playerId, achievedAt: cambio.achievedAt },
+      where: {
+        objectiveId_playerId: {
+          objectiveId: cambio.objectiveId,
+          playerId: cambio.playerId,
+        },
+      },
+      data: { achievedAt: cambio.achievedAt },
     });
   }
 
   if (bajas.length > 0) {
-    await client.objectiveEvent.deleteMany({ where: { objectiveId: { in: bajas } } });
+    await client.objectiveEvent.deleteMany({ where: { OR: bajas } });
   }
 
   const resultado: ObjectiveEventsResult = {
@@ -260,7 +265,7 @@ export async function reconcileObjectiveEvents(
   // Solo se escribe cuando algo ha cambiado de verdad, que en un torneo son unas
   // cuantas veces en toda su vida. Merece la pena que quede en el log: es lo primero
   // que se mira cuando alguien pregunta por qué un hito no sale en el historial o
-  // por qué un objetivo tiene el poseedor que tiene.
+  // por qué un objetivo lo cobra quien lo cobra.
   if (resultado.created > 0 || resultado.updated > 0 || resultado.removed > 0) {
     console.info(
       `[objective-events] ${resultado.created} nuevos, ${resultado.updated} actualizados, ` +

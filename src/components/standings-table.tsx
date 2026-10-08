@@ -52,7 +52,7 @@ const RANK_CLASS: Record<number, string> = {
 const GROUP_LABELS: Record<ObjectiveGroup, string> = {
   actividad: "Actividad",
   racha: "Racha",
-  division: "Divisiones",
+  hazanas: "Hazañas",
   formato: "Formatos",
   civilizacion: "Civilizaciones",
 };
@@ -1051,7 +1051,7 @@ function CompactPointsBreakdown({ row }: { row: StandingRow }) {
  *
  * Es la única acción de navegación de la fila, aparte del nombre: lleva a
  * `/objetivos/<profileId>`, la página que desarrolla el avance del participante
- * en los 38 objetivos. El icono (una diana) es el mismo en escritorio y en la
+ * en los 82 objetivos. El icono (una diana) es el mismo en escritorio y en la
  * tarjeta de móvil, donde además se acompaña del texto para que no dependa de
  * que se reconozca el glifo. Siempre lleva `aria-label` con el nombre, porque en
  * la tabla el enlace es solo el icono.

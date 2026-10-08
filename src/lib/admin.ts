@@ -877,7 +877,7 @@ export type AdminMatchHistoryQuery = AdminPageQuery &
  * todo resuelto, para que pintar un hito no obligue a mirar el catálogo.
  */
 export type AdminObjectiveEvent = {
-  /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`masterizar-japanese`…). */
+  /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`lider-japanese`…). */
   id: string;
   /** Rótulo público del objetivo (`ObjectiveDefinition.label`). */
   label: string;

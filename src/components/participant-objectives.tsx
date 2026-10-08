@@ -1,23 +1,39 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import type {
   ObjectiveGroup,
   ParticipantObjective,
   ParticipantObjectives,
 } from "@/lib/public";
+import { BorderGlow } from "@/components/border-glow";
 import { divisionColor } from "@/components/division-icon";
 import {
   LeagueIcon,
   leagueFilterRank,
   rankLevelToLeague,
 } from "@/components/league-icon";
+import { MapPool } from "@/components/objective-card";
+import { ObjectiveFamilyRail } from "@/components/objective-family-rail";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
 import { PageHead } from "@/components/page-head";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { SectionIndexBar, type DocSection } from "@/components/section-index";
+import { objectiveCloseness, orderByObjectiveProgress } from "@/lib/objective-format";
+
+/**
+ * Las familias de objetivos de civilización, en el orden en que se leen: la
+ * cabeza (que sigue en las secciones, porque es un objetivo que se consigue) y
+ * el rótulo del carrusel de sus subobjetivos. Los ids de las cabezas van como
+ * literales: son contrato estable (ver `src/lib/objectives.ts`), pero este
+ * componente es de cliente y no puede importar de `@/lib/public`.
+ */
+const FAMILIES: readonly { headId: string; id: string; title: string }[] = [
+  { headId: "polifacetico", id: "lider", title: "Líder" },
+  { headId: "jugon", id: "acolito", title: "Acólito" },
+];
 
 /** Bloques de la ficha, en el orden en que se leen. Alimentan el índice. */
 const SECTIONS: readonly DocSection[] = [
@@ -30,18 +46,6 @@ const SECTIONS: readonly DocSection[] = [
 const SECTION_INDEX_LABEL = "Secciones de los objetivos del participante";
 
 /**
- * Mínimo de un objetivo, ya resuelto en el servidor con `objectiveMinimum`.
- *
- * El cliente no puede importar `@/lib/public` (es `server-only`), así que la
- * página calcula este dato —que sí es serializable— y entra como prop. Así la
- * regla del mínimo sigue teniendo una sola fuente.
- */
-export type ObjectiveMinimumView = {
-  unit: "partidas" | "victorias";
-  value: number;
-};
-
-/**
  * Ficha pública de objetivos de un participante.
  *
  * Es la vista de detalle de la columna "Objetivos" de la clasificación: la
@@ -49,47 +53,66 @@ export type ObjectiveMinimumView = {
  * —el DAL reutiliza el motor de objetivos—, así que lo que se lee aquí no puede
  * contradecir al ranking de cada objetivo.
  *
- * Tres bloques con intención: lo primero es lo que está al alcance (mejor puesto
- * entre los aspirantes, desempata la distancia al líder), luego el botín ya
- * conseguido y al final lo que todavía no se disputa, que por mayoría aplasta la
- * página si se pinta con tarjetas: por eso ese último bloque es un índice
- * compacto. La clasificación completa de un objetivo se abre en el mismo diálogo
+ * Los objetivos **individuales** se leen en tres bloques, en este orden: lo
+ * primero es lo que está al alcance —ordenado de más a menos cerca de cobrarlo—
+ * y después el botín ya conseguido y lo que todavía no se disputa. Los dos
+ * últimos van en fichas compactas: en conjunto aplastarían la página si se
+ * pintaran con tarjetas completas.
+ *
+ * Los subobjetivos de civilización (`lider-*`, `acolito-*`) no van sueltos por
+ * las secciones: se agrupan, uno por familia, en los carruseles de `Líder` y
+ * `Acólito`, **dentro de "Al alcance"** y justo después de sus tarjetas
+ * individuales, porque su avance se sigue igual que el de ellas. Las tarjetas de
+ * cada carrusel van de mayor a menor porcentaje de consecución. La cabeza de cada
+ * familia (`polifacetico`, `jugon`) sí es un objetivo individual y sigue en su
+ * sección. La clasificación completa de un objetivo se abre en el mismo diálogo
  * que usa `/objetivos`, reutilizando `ObjectiveRankingDialog`.
  */
 export function ParticipantObjectivesView({
   data,
   groupLabels,
-  minimumsByObjective,
-  masterizarTodosId,
 }: {
   data: ParticipantObjectives;
   groupLabels: Record<ObjectiveGroup, string>;
-  /** Mínimo de cada objetivo, por id; `null` cuando no tiene umbral. */
-  minimumsByObjective: Record<string, ObjectiveMinimumView | null>;
-  masterizarTodosId: string;
 }) {
-  const { player, minimums, options } = data;
+  const { player, options, mapPool } = data;
   const [active, setActive] = useState<ParticipantObjective | null>(null);
 
-  // Tres bloques con intención: primero lo que está al alcance (mejor puesto
-  // entre los aspirantes, desempata la distancia al líder), luego lo ya
-  // conseguido y al final lo que todavía no se disputa. `options` llega en el
-  // orden del catálogo, así que los dos bloques no ordenados lo conservan.
-  const achieved = options.filter((option) => option.achieved);
-  const contending = options
+  // Las secciones y los carruseles se reparten los objetivos: los hijos de una
+  // familia van al carrusel de su cabeza; todo lo demás, a las secciones.
+  const individual = options.filter((option) => option.parent === null);
+  const achievedIndividual = individual.filter((option) => option.achieved);
+  // "Al alcance" se ordena por cercanía a cobrarlo (ver `objectiveCloseness`):
+  // más avance o mejor puesto, más arriba. `options` llega en el orden del
+  // catálogo, así que las secciones no ordenadas lo conservan.
+  const contending = individual
     .filter((option) => !option.achieved && option.position !== null)
-    .sort(
-      (a, b) =>
-        (a.position ?? Number.POSITIVE_INFINITY) -
-          (b.position ?? Number.POSITIVE_INFINITY) ||
-        (a.distance ?? Number.POSITIVE_INFINITY) -
-          (b.distance ?? Number.POSITIVE_INFINITY) ||
-        a.label.localeCompare(b.label, "es"),
-    );
-  const waiting = options.filter(
+    .sort(compareCloseness);
+  const waiting = individual.filter(
     (option) => !option.achieved && option.position === null,
   );
 
+  const families = FAMILIES.flatMap((family) => {
+    const head = options.find((option) => option.id === family.headId) ?? null;
+    const children = options.filter((option) => option.parent === family.headId);
+
+    return head === null || children.length === 0
+      ? []
+      : [
+          {
+            id: family.id,
+            title: family.title,
+            head,
+            // De mayor a menor porcentaje de consecución: el más avanzado, a la
+            // izquierda, y el conseguido (100 %) el primero.
+            children: orderByObjectiveProgress(children),
+          },
+        ];
+  });
+
+  // Las cuentas de cabecera son del catálogo entero: los carruseles también son
+  // objetivos. Las secciones que vienen debajo muestran solo los individuales.
+  const achieved = options.filter((option) => option.achieved);
   const earnedPoints = achieved.reduce((total, option) => total + option.points, 0);
   const contendingPoints = contending.reduce(
     (total, option) => total + option.points,
@@ -205,32 +228,46 @@ export function ParticipantObjectivesView({
         title="Al alcance"
         note={
           contending.length === 1
-            ? "1 objetivo en el que ya tienes puesto"
-            : `${contending.length} objetivos en los que ya tienes puesto`
+            ? "1 objetivo en el que ya cuentas"
+            : `${contending.length} objetivos en los que ya cuentas`
         }
         pointsLabel="en juego"
         items={contending}
         groupLabels={groupLabels}
+        mapPool={mapPool}
         emptyMessage="Ahora mismo no apareces en la clasificación de ningún objetivo. En cuanto cierres una partida que cuente para uno, saldrá aquí tu puesto."
-        minimumsByObjective={minimumsByObjective}
         onOpen={setActive}
         highlight
-      />
+      >
+        {families.map((family) => (
+          <FamilyCarouselSection
+            key={family.id}
+            id={family.id}
+            title={family.title}
+            headLabel={family.head.label}
+            items={family.children}
+            groupLabels={groupLabels}
+            mapPool={mapPool}
+            onOpen={setActive}
+          />
+        ))}
+      </ObjectiveSection>
 
       <ObjectiveSection
         id="en-posesion"
         title="En posesión"
         note={
-          achieved.length === 1
+          achievedIndividual.length === 1
             ? "1 objetivo en tu haber"
-            : `${achieved.length} objetivos en tu haber`
+            : `${achievedIndividual.length} objetivos en tu haber`
         }
         pointsLabel="en tu haber"
-        items={achieved}
+        items={achievedIndividual}
         groupLabels={groupLabels}
+        mapPool={mapPool}
         emptyMessage="Todavía no has ganado ningún objetivo especial. Los tienes listados abajo, con lo que pide cada uno."
-        minimumsByObjective={minimumsByObjective}
         onOpen={setActive}
+        compact
       />
 
       <ObjectiveSection
@@ -238,14 +275,14 @@ export function ParticipantObjectivesView({
         title="Sin disputar todavía"
         note={
           waiting.length === 1
-            ? "1 objetivo que aún no cuenta contigo"
-            : `${waiting.length} objetivos que aún no cuentan contigo`
+            ? "1 objetivo en el que aún no has empezado tu participación"
+            : `${waiting.length} objetivos en los que aún no has empezado tu participación`
         }
         pointsLabel="en juego"
         items={waiting}
         groupLabels={groupLabels}
+        mapPool={mapPool}
         emptyMessage="Estás en la carrera de todos los objetivos."
-        minimumsByObjective={minimumsByObjective}
         onOpen={setActive}
         compact
       />
@@ -261,8 +298,6 @@ export function ParticipantObjectivesView({
         <ObjectiveRankingDialog
           key={active.id}
           option={active}
-          minimums={minimums}
-          masterizarTodosId={masterizarTodosId}
           highlightProfileId={player.profileId}
           onClose={() => setActive(null)}
         />
@@ -273,8 +308,13 @@ export function ParticipantObjectivesView({
 
 /**
  * Entradilla narrativa de la cabecera: qué objetivo es hoy el más cercano y
- * cuánto separa del primer puesto. Sin ninguno al alcance, explica por qué y
- * cuándo aparecerá, que es lo que debe hacer un vacío.
+ * cuánto le falta. Sin ninguno al alcance, explica por qué y cuándo aparecerá,
+ * que es lo que debe hacer un vacío.
+ *
+ * La frase se adapta al tipo del objetivo más cercano: un logro se cuenta por lo
+ * que le falta para el umbral; una competición, por el puesto y la distancia al
+ * liderato. El orden de "Al alcance" mezcla los dos tipos, así que la entradilla
+ * no puede dar por hecho que el primero sea una carrera.
  */
 function BestBetNote({
   bestBet,
@@ -289,6 +329,20 @@ function BestBetNote({
         Todavía no apareces en la clasificación de ningún objetivo. En cuanto
         juegues una partida clasificatoria que cuente para alguno, aquí verás tu
         puesto y lo que te falta para el primero.
+      </>
+    );
+  }
+
+  if (bestBet.kind === "achievement") {
+    return (
+      <>
+        Tu objetivo más cercano es{" "}
+        <strong className="font-medium text-foreground">{bestBet.label}</strong>: te
+        falta{" "}
+        <strong className="font-medium text-foreground">
+          {remainingText(bestBet) ?? "—"}
+        </strong>{" "}
+        para conseguirlo.
       </>
     );
   }
@@ -322,11 +376,12 @@ function ObjectiveSection({
   pointsLabel,
   items,
   groupLabels,
+  mapPool,
   emptyMessage,
-  minimumsByObjective,
   onOpen,
   highlight = false,
   compact = false,
+  children,
 }: {
   id: string;
   title: string;
@@ -334,11 +389,13 @@ function ObjectiveSection({
   pointsLabel: string;
   items: ParticipantObjective[];
   groupLabels: Record<ObjectiveGroup, string>;
+  mapPool: readonly string[];
   emptyMessage: string;
-  minimumsByObjective: Record<string, ObjectiveMinimumView | null>;
   onOpen: (objective: ParticipantObjective) => void;
   highlight?: boolean;
   compact?: boolean;
+  /** Bloques que van dentro de la sección, tras sus tarjetas (los carruseles). */
+  children?: ReactNode;
 }) {
   const points = items.reduce((total, option) => total + option.points, 0);
   const totals = `${objectiveCount(items.length)} · ${points} puntos ${pointsLabel}`;
@@ -364,9 +421,11 @@ function ObjectiveSection({
       )}
 
       {items.length === 0 ? (
-        <p className="mt-3 rounded-lg border border-dashed border-line bg-surface/40 px-5 py-6 text-sm text-muted">
-          {emptyMessage}
-        </p>
+        children === undefined ? (
+          <p className="mt-3 rounded-lg border border-dashed border-line bg-surface/40 px-5 py-6 text-sm text-muted">
+            {emptyMessage}
+          </p>
+        ) : null
       ) : compact ? (
         <ul className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((objective) => (
@@ -380,19 +439,86 @@ function ObjectiveSection({
           ))}
         </ul>
       ) : (
-        <ul className="mt-3 grid gap-3 lg:grid-cols-2">
+        <ul className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
           {items.map((objective) => (
-            <ObjectiveRow
-              key={objective.id}
-              objective={objective}
-              groupLabels={groupLabels}
-              minimumsByObjective={minimumsByObjective}
-              onOpen={onOpen}
-            />
+            <li key={objective.id}>
+              <ObjectiveCard
+                objective={objective}
+                groupLabels={groupLabels}
+                mapPool={mapPool}
+                onOpen={onOpen}
+              />
+            </li>
           ))}
         </ul>
       )}
+
+      {children === undefined ? null : (
+        <div className="mt-8 flex flex-col gap-8">{children}</div>
+      )}
     </section>
+  );
+}
+
+/**
+ * Carrusel de una familia de civilización en la ficha del participante.
+ *
+ * Monta el mismo riel que `/objetivos` (`ObjectiveFamilyRail`) con las tarjetas
+ * de avance del jugador en vez de las globales, y añade el titular con el
+ * recuento de lo conseguido. Vive **dentro de "Al alcance"**, justo después de
+ * sus tarjetas individuales: son objetivos cuyo avance se sigue igual. Las
+ * tarjetas llegan ya ordenadas de mayor a menor porcentaje de consecución. La
+ * cabeza de la familia no se repite aquí: vive en las secciones individuales.
+ */
+function FamilyCarouselSection({
+  id,
+  title,
+  headLabel,
+  items,
+  groupLabels,
+  mapPool,
+  onOpen,
+}: {
+  id: string;
+  title: string;
+  headLabel: string;
+  items: ParticipantObjective[];
+  groupLabels: Record<ObjectiveGroup, string>;
+  mapPool: readonly string[];
+  onOpen: (objective: ParticipantObjective) => void;
+}) {
+  const achieved = items.filter((objective) => objective.achieved).length;
+
+  return (
+    <div id={id} className="scroll-mt-24">
+      <div className="flex flex-col gap-1 border-b border-line pb-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+          <h3 className="font-display text-base font-semibold text-foreground">{title}</h3>
+          <p className="text-xs tabular-nums text-muted">
+            {subobjectiveCount(items.length)} · {achievedCount(achieved)}
+          </p>
+        </div>
+        <p className="mt-0.5 text-xs text-muted">
+          Objetivos por civilización; completarlos todos suma el extra de {headLabel}.
+        </p>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-4">
+        <ObjectiveFamilyRail
+          items={items}
+          itemClassName="w-[18rem] shrink-0 snap-start sm:w-[20rem]"
+          renderCard={(objective) => (
+            <ObjectiveCard
+              objective={objective}
+              groupLabels={groupLabels}
+              mapPool={mapPool}
+              onOpen={onOpen}
+              dense
+            />
+          )}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -402,83 +528,136 @@ function ObjectiveSection({
  * en sus tres datos; y al final, en tono apagado, lo accesorio (la regla) y la
  * puerta a la clasificación. El pie va anclado abajo (`mt-auto`) para que las
  * tarjetas de una misma fila lo alineen aunque su texto no ocupe lo mismo.
+ *
+ * La misma tarjeta sirve en la rejilla de las secciones y en el riel de un
+ * carrusel de familia. En el riel va `dense`: el ancho es fijo y más estrecho,
+ * así que se aprieta el relleno y se recorta la regla a dos líneas para que no
+ * desborde. La rejilla interior de tres datos se sostiene con `break-words` en
+ * los valores: palabras largas como "civilizaciones" parten antes que salirse.
+ *
+ * El cromo lo pinta `BorderGlow` (halo dorado) y la tarjeta entera es un botón
+ * invisible que abre su clasificación, igual que en `/objetivos`: mismo hover,
+ * mismo cursor de clic y mismo destino.
  */
-function ObjectiveRow({
+function ObjectiveCard({
   objective,
   groupLabels,
-  minimumsByObjective,
+  mapPool,
   onOpen,
+  dense = false,
 }: {
   objective: ParticipantObjective;
   groupLabels: Record<ObjectiveGroup, string>;
-  minimumsByObjective: Record<string, ObjectiveMinimumView | null>;
+  mapPool: readonly string[];
   onOpen: (objective: ParticipantObjective) => void;
+  dense?: boolean;
 }) {
   const distance = formatDistance(objective);
-  const minimum = minimumsByObjective[objective.id] ?? null;
-  const current = (minimum?.unit ?? "partidas") === "partidas" ? objective.matches : objective.value;
 
   return (
-    <li
-      className={`flex flex-col rounded-lg border bg-surface p-5 ${
-        objective.achieved ? "border-accent/35" : "border-line"
-      }`}
-    >
-      <div className="flex items-start gap-4">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
-          <ObjectiveIcon option={objective} className="size-6 shrink-0" />
-        </span>
+    <BorderGlow className="h-full">
+      <div className={`flex h-full flex-col ${dense ? "p-4" : "p-5"}`}>
+        <div className="flex items-start gap-3">
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
+            <ObjectiveIcon option={objective} className="size-6 shrink-0" />
+          </span>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 className="min-w-0 font-display text-base font-semibold leading-snug text-foreground">
-              {objective.label}
-            </h3>
-            {objective.detail !== null ? (
-              <span className="text-xs text-muted">({objective.detail.label})</span>
-            ) : null}
-            {objective.achieved ? (
-              <AchievedBadge />
-            ) : (
-              <PositionBadge position={objective.position} />
-            )}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <h3 className="min-w-0 font-display text-base font-semibold leading-snug text-foreground">
+                {objective.label}
+              </h3>
+              {objective.detail !== null ? (
+                <span className="text-xs text-muted">({objective.detail.label})</span>
+              ) : null}
+              {objective.achieved ? (
+                <AchievedBadge />
+              ) : objective.kind === "competition" ? (
+                <PositionBadge position={objective.position} />
+              ) : null}
+            </div>
+            <p className="mt-0.5 text-xs text-muted">{groupLabels[objective.group]}</p>
           </div>
-          <p className="mt-0.5 text-xs text-muted">{groupLabels[objective.group]}</p>
+
+          <PointsPlate points={objective.points} achieved={objective.achieved} />
         </div>
 
-        <PointsPlate points={objective.points} achieved={objective.achieved} />
-      </div>
+        <dl className="mt-4 grid grid-cols-3 gap-x-3 gap-y-2">
+          <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
+          {objective.kind === "achievement" ? (
+            <>
+              <Fact label="Estado" value={objective.achieved ? "Conseguido" : "En camino"} />
+              <Fact label="Te falta" value={remainingText(objective) ?? "—"} />
+            </>
+          ) : (
+            <>
+              <Fact
+                label="Posición"
+                value={objective.achieved ? "Poseído" : positionText(objective)}
+              />
+              <Fact label="Al primero" value={distance ?? "—"} />
+            </>
+          )}
+        </dl>
 
-      <dl className="mt-4 grid grid-cols-3 gap-x-4 gap-y-2">
-        <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
-        <Fact
-          label="Posición"
-          value={objective.achieved ? "Poseído" : positionText(objective)}
-        />
-        <Fact label="Al primero" value={distance ?? "—"} />
-      </dl>
+        <AchievementProgress objective={objective} />
 
-      <MinimumProgress current={current} minimum={minimum} />
-
-      <p className="mt-3 text-xs leading-relaxed text-muted">
-        {objective.description}
-      </p>
-
-      <div className="mt-auto flex justify-end border-t border-line pt-3">
-        <button
-          type="button"
-          onClick={() => onOpen(objective)}
-          aria-label={`Ver la clasificación de ${objective.label}`}
-          className="-mb-1 rounded-sm pb-1 text-xs font-medium text-accent underline-offset-4 transition-colors hover:underline"
+        <p
+          className={`mt-3 text-xs leading-relaxed text-muted ${
+            dense ? "line-clamp-2" : ""
+          }`}
         >
-          Ver clasificación
-        </button>
+          {objective.description}
+        </p>
+
+        {objective.metric === "mapas" && mapPool.length > 0 ? (
+          <MapPool maps={mapPool} />
+        ) : null}
+
+        <div className="mt-auto flex items-end justify-end border-t border-line pt-3">
+          {/* El clic lo recoge el botón invisible que cubre la tarjeta; el pie
+              solo anuncia la acción, como en `/objetivos`. */}
+          <span className="pointer-events-none inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent">
+            Ver clasificación
+            <Chevron />
+          </span>
+        </div>
       </div>
-    </li>
+
+      <button
+        type="button"
+        onClick={() => onOpen(objective)}
+        aria-label={`Ver la clasificación de ${objective.label}`}
+        className="absolute inset-0 z-10 rounded-lg"
+      />
+    </BorderGlow>
   );
 }
 
-/** Ficha compacta de un objetivo, para el índice de los que aún no se disputan. */
+/** Flecha del pie de la tarjeta. */
+function Chevron() {
+  return (
+    <svg
+      viewBox="0 0 12 12"
+      aria-hidden="true"
+      className="size-3 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4.5 2.5 8 6l-3.5 3.5" />
+    </svg>
+  );
+}
+
+/**
+ * Ficha compacta de un objetivo: el índice de los que aún no se disputan y el de
+ * los ya conseguidos. Los conseguidos se distinguen por el tinte, el subtítulo
+ * ("Conseguido", en lugar del grupo) y el check; así "En posesión" conserva la
+ * lectura de botín aunque comparta el tratamiento compacto.
+ */
 function ObjectiveChip({
   objective,
   groupLabels,
@@ -488,27 +667,46 @@ function ObjectiveChip({
   groupLabels: Record<ObjectiveGroup, string>;
   onOpen: (objective: ParticipantObjective) => void;
 }) {
+  const achieved = objective.achieved;
+
   return (
     <button
       type="button"
       onClick={() => onOpen(objective)}
-      aria-label={`Ver la clasificación de ${objective.label}`}
-      className="group flex w-full items-center gap-3 rounded-md border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-line-strong hover:bg-surface-raised"
+      aria-label={`Ver la clasificación de ${objective.label}${
+        achieved ? " (conseguido)" : ""
+      }`}
+      className={`group flex w-full items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${
+        achieved
+          ? "border-accent/35 bg-surface hover:bg-accent/5"
+          : "border-transparent bg-surface hover:bg-surface-raised"
+      }`}
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
+      <span
+        className={`flex size-8 shrink-0 items-center justify-center rounded-md border ${
+          achieved
+            ? "border-accent/40 bg-accent/5"
+            : "border-line bg-surface-raised"
+        }`}
+      >
         <ObjectiveIcon option={objective} className="size-4 shrink-0" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm text-foreground transition-colors group-hover:text-accent">
           {objective.label}
         </span>
-        <span className="block truncate text-xs text-muted">
-          {groupLabels[objective.group]}
+        <span
+          className={`block truncate text-xs ${achieved ? "text-accent" : "text-muted"}`}
+        >
+          {achieved ? "Conseguido" : groupLabels[objective.group]}
         </span>
       </span>
-      <span className="shrink-0 font-display text-sm font-semibold tabular-nums text-muted">
-        {objective.points}
-        <span className="sr-only"> puntos</span>
+      <span className="flex shrink-0 items-center gap-1.5">
+        {achieved ? <CheckIcon className="size-3.5 shrink-0 text-accent" /> : null}
+        <span className="font-display text-sm font-semibold tabular-nums text-muted">
+          {objective.points}
+          <span className="sr-only"> puntos</span>
+        </span>
       </span>
     </button>
   );
@@ -569,7 +767,7 @@ function Fact({
     <div className="min-w-0">
       <dt className="text-xs text-muted">{label}</dt>
       <dd
-        className={`mt-0.5 text-sm text-foreground tabular-nums ${
+        className={`mt-0.5 break-words text-sm text-foreground tabular-nums ${
           strong ? "font-semibold" : "font-medium"
         }`}
       >
@@ -641,38 +839,23 @@ function PositionBadge({ position }: { position: number | null }) {
 }
 
 /**
- * Avance hacia el mínimo del objetivo, cuando lo hay y aún no se cumple. La
- * barra solo refuerza el texto, que ya dice cuánto falta; por eso es decorativa.
+ * Barra de avance de un logro: cuánto lleva de su umbral. La barra solo refuerza
+ * el dato, que ya va en "Tu avance"; por eso es decorativa.
  */
-function MinimumProgress({
-  current,
-  minimum,
-}: {
-  current: number;
-  minimum: ObjectiveMinimumView | null;
-}) {
-  if (minimum === null) {
+function AchievementProgress({ objective }: { objective: ParticipantObjective }) {
+  if (objective.target === null || objective.achieved) {
     return null;
   }
 
-  if (current >= minimum.value) {
-    return null;
-  }
-
-  const missing = minimum.value - current;
-  const percent =
-    minimum.value > 0
-      ? Math.min(100, Math.round((current / minimum.value) * 100))
-      : 0;
+  const { value } = objective;
+  const { value: target } = objective.target;
+  const percent = target > 0 ? Math.min(100, Math.round((value / target) * 100)) : 0;
 
   return (
     <div className="mt-3">
       <p className="text-xs text-muted">
-        Te {missing === 1 ? "falta" : "faltan"}{" "}
-        <span className="font-medium text-foreground">
-          {countUnits(missing, minimum.unit)}
-        </span>{" "}
-        para el mínimo de <span className="tabular-nums">{minimum.value}</span>
+        Llevas <span className="font-medium text-foreground tabular-nums">{value}</span> de{" "}
+        <span className="tabular-nums">{target}</span>.
       </p>
       <div
         aria-hidden="true"
@@ -734,23 +917,38 @@ function objectiveCount(count: number): string {
   return count === 1 ? "1 objetivo" : `${count} objetivos`;
 }
 
-/** "4 partidas" / "1 victoria", en la unidad del mínimo. */
-function countUnits(count: number, unit: "partidas" | "victorias"): string {
-  if (unit === "victorias") {
-    return count === 1 ? "1 victoria" : `${count} victorias`;
-  }
+/** "3 subobjetivos" / "1 subobjetivo". */
+function subobjectiveCount(count: number): string {
+  return count === 1 ? "1 subobjetivo" : `${count} subobjetivos`;
+}
 
-  return count === 1 ? "1 partida" : `${count} partidas`;
+/** "3 conseguidos" / "1 conseguido". */
+function achievedCount(count: number): string {
+  return count === 1 ? "1 conseguido" : `${count} conseguidos`;
+}
+
+/**
+ * Orden de "Al alcance": de más a menos cerca de cobrar el objetivo.
+ *
+ * La cercanía la mide `objectiveCloseness` (fracción común a logros y
+ * competiciones); el empate se rompe por la distancia al líder y, si todavía
+ * empatan, por el nombre, para que el orden no dependa del azar del ranking.
+ */
+function compareCloseness(a: ParticipantObjective, b: ParticipantObjective): number {
+  return (
+    objectiveCloseness(b) - objectiveCloseness(a) ||
+    (a.distance ?? Number.POSITIVE_INFINITY) -
+      (b.distance ?? Number.POSITIVE_INFINITY) ||
+    a.label.localeCompare(b.label, "es")
+  );
 }
 
 /**
  * Valor actual del jugador en la métrica del objetivo, en la unidad que se lee
- * de un vistazo. Es el mismo criterio de `formatValue` (tarjetas de
- * `/objetivos`): en `winrate` se pinta el récord con su porcentaje, porque el
- * valor son victorias de `matches` partidas.
+ * de un vistazo.
  */
 function formatMetricValue(objective: ParticipantObjective): string {
-  const { value, matches } = objective;
+  const { value } = objective;
 
   switch (objective.metric) {
     case "partidas":
@@ -759,28 +957,18 @@ function formatMetricValue(objective: ParticipantObjective): string {
       return value === 1 ? "1 victoria seguida" : `${value} victorias seguidas`;
     case "victorias":
       return value === 1 ? "1 victoria" : `${value} victorias`;
-    case "winrate": {
-      if (matches <= 0) {
-        return "Sin partidas";
-      }
-
-      const losses = matches - value;
-      const percentage = Math.round((value / matches) * 100);
-
-      // Espacio duro antes del «%»: en español no se separa de su cifra.
-      return `${value}-${losses} (${percentage}\u00A0%)`;
-    }
+    case "dias":
+      return value === 1 ? "1 día" : `${value} días`;
+    case "civilizaciones":
+      return `${value}/${objective.target?.value ?? "?"} civilizaciones`;
+    case "mapas":
+      return `${value}/${objective.target?.value ?? "?"} mapas`;
   }
 }
 
 /**
- * Distancia al líder, ya formateada según la métrica.
- *
- * En `partidas`, `victorias` y `racha` la distancia son unidades enteras que
- * faltan. En `winrate` es una fracción de `[0, 1]`, así que se traduce a puntos
- * porcentuales; un valor por debajo del medio punto se muestra como "<1 pp" en
- * vez de redondear a un falso "0 pp". Un `null` (sin puesto o ya primero) no se
- * pinta.
+ * Distancia al líder, ya formateada según la métrica. Un `null` (sin puesto o ya
+ * primero) no se pinta.
  */
 function formatDistance(objective: ParticipantObjective): string | null {
   const { distance, metric } = objective;
@@ -796,16 +984,41 @@ function formatDistance(objective: ParticipantObjective): string | null {
       return distance === 1 ? "1 victoria" : `${distance} victorias`;
     case "racha":
       return distance === 1 ? "1 victoria seguida" : `${distance} victorias seguidas`;
-    case "winrate": {
-      const points = distance * 100;
-      const rounded = Math.round(points);
+    case "dias":
+      return distance === 1 ? "1 día" : `${distance} días`;
+    case "civilizaciones":
+      return `${distance} civilizaciones`;
+    case "mapas":
+      return `${distance} mapas`;
+  }
+}
 
-      if (rounded === 0 && points > 0) {
-        return "<1 pp";
-      }
+/**
+ * Cuánto le falta a un logro para su umbral, en la unidad de su métrica. `null`
+ * en las competiciones, que no tienen umbral.
+ */
+function remainingText(objective: ParticipantObjective): string | null {
+  const { target } = objective;
 
-      return `${rounded} pp`;
-    }
+  if (target === null) {
+    return null;
+  }
+
+  const remaining = Math.max(0, target.value - objective.value);
+
+  switch (objective.metric) {
+    case "partidas":
+      return remaining === 1 ? "1 partida" : `${remaining} partidas`;
+    case "victorias":
+      return remaining === 1 ? "1 victoria" : `${remaining} victorias`;
+    case "racha":
+      return remaining === 1 ? "1 victoria seguida" : `${remaining} victorias seguidas`;
+    case "dias":
+      return remaining === 1 ? "1 día" : `${remaining} días`;
+    case "civilizaciones":
+      return `${remaining} civilizaciones`;
+    case "mapas":
+      return `${remaining} mapas`;
   }
 }
 

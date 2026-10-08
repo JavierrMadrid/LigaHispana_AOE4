@@ -152,40 +152,35 @@ export default async function ScoringPage() {
             <SectionHeading title="Objetivos especiales" />
             <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
-                Además de las victorias, el torneo reparte{" "}
-                <strong className="font-semibold text-foreground">
-                  2420 puntos extra entre 38 objetivos
-                </strong>
-                .
+                Además de las victorias, el torneo reparte puntos extra entre{" "}
+                <strong className="font-semibold text-foreground">82 objetivos</strong>.
               </p>
               <p>
-                Cada objetivo lo gana{" "}
-                <strong className="font-semibold text-foreground">
-                  una sola persona
-                </strong>
-                , la que va primera: no hay puntos repartidos ni puestos
-                parciales.
+                Hay dos formas de cobrarlos: las{" "}
+                <strong className="font-semibold text-foreground">competiciones</strong> las gana
+                una sola persona, la que va primera; los{" "}
+                <strong className="font-semibold text-foreground">logros</strong> los cobra todo el
+                que cumple la condición, y pueden ser varios.
               </p>
               <p>
                 Se calculan sobre las mismas partidas clasificatorias, así que
                 también respetan la fecha de inscripción.
               </p>
               <p>
-                Algunos exigen un mínimo: 10 partidas clasificatorias para los
-                objetivos de ratio y de racha, y 10 victorias con una civilización
-                para las carreras de civilización.
+                Cada logro tiene su umbral fijo: 3 victorias o partidas con una
+                civilización, 3 partidas cortas o largas, una racha de 5 victorias,
+                etc.
               </p>
               <p>
-                La mayoría se resuelve en cada recálculo, así que el poseedor
-                puede cambiar de una jornada a otra. Las carreras de civilización
-                se cierran en cuanto alguien las completa y no se reabren.
+                Todos se resuelven en cada recálculo, así que quién los cobra puede
+                cambiar de una jornada a otra.
               </p>
               <p>
                 <Link
                   href="/objetivos"
                   className="text-accent underline underline-offset-4 hover:text-accent-strong"
                 >
-                  Ver los 38 objetivos y quién los posee
+                  Ver los 82 objetivos y quién los cobra
                 </Link>
               </p>
             </div>

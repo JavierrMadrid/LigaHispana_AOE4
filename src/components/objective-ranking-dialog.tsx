@@ -2,10 +2,10 @@
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import type { ObjectiveContender, ObjectiveOption, ObjectiveView } from "@/lib/public";
+import type { ObjectiveContender, ObjectiveOption } from "@/lib/public";
+import { contenderValue } from "@/lib/objective-format";
 import {
   ContenderName,
-  contenderValue,
   emptyMessage,
   ineligibleTag,
 } from "@/components/objective-card";
@@ -17,8 +17,6 @@ const PAGE_SIZE = 10;
 
 type ObjectiveRankingDialogProps = {
   option: ObjectiveOption;
-  minimums: ObjectiveView["minimums"];
-  masterizarTodosId: string;
   /**
    * Participante a resaltar en la lista, para las vistas que abren el diálogo
    * desde la ficha de un jugador concreto. Sin él (`null`/`undefined`), el
@@ -42,8 +40,6 @@ type ObjectiveRankingDialogProps = {
  */
 export function ObjectiveRankingDialog({
   option,
-  minimums,
-  masterizarTodosId,
   highlightProfileId = null,
   onClose,
 }: ObjectiveRankingDialogProps) {
@@ -160,11 +156,7 @@ export function ObjectiveRankingDialog({
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-            <HolderSummary
-              option={option}
-              minimums={minimums}
-              masterizarTodosId={masterizarTodosId}
-            />
+            <HolderSummary option={option} />
             <PrizePlate points={option.points} />
           </div>
         </header>
@@ -191,7 +183,6 @@ export function ObjectiveRankingDialog({
                   option={option}
                   contender={contender}
                   rank={start + index + 1}
-                  masterizarTodosId={masterizarTodosId}
                   highlightProfileId={highlightProfileId}
                 />
               ))}
@@ -223,23 +214,31 @@ export function ObjectiveRankingDialog({
   return createPortal(dialog, document.body);
 }
 
-/** El poseedor actual en grande, o el motivo por el que el objetivo está libre. */
-function HolderSummary({
-  option,
-  minimums,
-  masterizarTodosId,
-}: {
-  option: ObjectiveOption;
-  minimums: ObjectiveView["minimums"];
-  masterizarTodosId: string;
-}) {
+/** El poseedor actual en grande, el recuento de un logro, o por qué está libre. */
+function HolderSummary({ option }: { option: ObjectiveOption }) {
+  if (option.kind === "achievement") {
+    return (
+      <div className="flex items-center gap-3 rounded-md border border-accent/25 bg-accent/5 p-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-foreground">
+            {option.beneficiaries.length === 1
+              ? "1 jugador lo ha conseguido"
+              : `${option.beneficiaries.length} jugadores lo han conseguido`}
+          </p>
+          <p className="mt-0.5 text-xs leading-relaxed text-muted">{option.description}</p>
+        </div>
+        <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
+          Logro
+        </span>
+      </div>
+    );
+  }
+
   if (option.holder === null) {
     return (
       <div className="rounded-md border border-dashed border-line bg-surface-raised/40 p-3">
         <p className="text-sm font-medium text-foreground/90">Sin poseedor todavía</p>
-        <p className="mt-1 text-xs leading-relaxed text-muted">
-          {emptyMessage(option, minimums, masterizarTodosId)}
-        </p>
+        <p className="mt-1 text-xs leading-relaxed text-muted">{emptyMessage(option)}</p>
       </div>
     );
   }
@@ -253,7 +252,7 @@ function HolderSummary({
           className="truncate text-sm font-medium text-foreground"
         />
         <p className="mt-0.5 text-xs tabular-nums text-accent">
-          {contenderValue(option, option.holder, masterizarTodosId)}
+          {contenderValue(option, option.holder)}
         </p>
       </div>
       <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
@@ -268,23 +267,23 @@ function RankingRow({
   option,
   contender,
   rank,
-  masterizarTodosId,
   highlightProfileId,
 }: {
   option: ObjectiveOption;
   contender: ObjectiveContender;
   rank: number;
-  masterizarTodosId: string;
   highlightProfileId: number | null;
 }) {
-  const isHolder = contender.profileId === option.holder?.profileId;
-  // Sin participante que resaltar (el caso de `/objetivos`) manda el poseedor;
-  // con él, el resaltado se muda a su fila y el poseedor deja de marcarse solo
-  // por fondo. La etiqueta "Poseedor" no depende de esto.
+  // En una competición el distintivo es del poseedor; en un logro, de quien ya lo
+  // ha completado (`eligible`).
+  const achieved =
+    option.kind === "achievement"
+      ? contender.eligible
+      : contender.profileId === option.holder?.profileId;
+  // Sin participante que resaltar (el caso de `/objetivos`) manda el cobrador;
+  // con él, el resaltado se muda a su fila. La etiqueta no depende de esto.
   const highlighted =
-    highlightProfileId === null
-      ? isHolder
-      : contender.profileId === highlightProfileId;
+    highlightProfileId === null ? achieved : contender.profileId === highlightProfileId;
 
   return (
     <li className={`flex items-center gap-3 px-4 py-3 sm:px-6 ${highlighted ? "bg-accent/5" : ""}`}>
@@ -295,19 +294,19 @@ function RankingRow({
         {highlighted ? (
           <span className="sr-only">(jugador de esta ficha)</span>
         ) : null}
-        {isHolder || contender.eligible ? null : (
+        {!achieved && option.kind === "competition" ? (
           <span className="mt-0.5 block text-xs text-muted">{ineligibleTag(option)}</span>
-        )}
+        ) : null}
       </span>
 
-      {isHolder ? (
+      {achieved ? (
         <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
-          Poseedor
+          {option.kind === "achievement" ? "Conseguido" : "Poseedor"}
         </span>
       ) : null}
 
       <span className="shrink-0 text-sm tabular-nums text-foreground/90">
-        {contenderValue(option, contender, masterizarTodosId)}
+        {contenderValue(option, contender)}
       </span>
     </li>
   );

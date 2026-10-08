@@ -63,14 +63,13 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
 
 ```json
 {
-  "version": 2,
-  "label": "10 puntos por victoria clasificatoria más 38 objetivos especiales; solo el primero los cobra",
+  "version": 3,
+  "label": "10 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
   "modes": ["rm_solo", "rm_team"],
   "window": { "from": "2026-09-15T00:00:00.000Z", "to": "2026-10-15T00:00:00.000Z" },
   "pointsPerWin": 10,
-  "minimums": { "winrate": 10, "streak": 10, "masterizar": 10 },
   "countRandomizedCivs": false,
-  "objectives": { "loco-por-ganar": 70, "masterizar-japanese": 70, "masterizarlos-a-todos": 100 }
+  "objectives": { "loco-por-ganar": 50, "bienhadado": 200, "rey-1v1": 180 }
 }
 ```
 
@@ -89,13 +88,13 @@ aplican.
 
 ```json
 {
-  "ruleSetVersion": 2,
-  "rule": "10 puntos por victoria clasificatoria más 38 objetivos especiales; solo el primero los cobra",
+  "ruleSetVersion": 3,
+  "rule": "10 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
     "rm_team": { "wins": 1, "points": 10, "matches": 2 }
   },
-  "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1"] }
+  "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1", "lider-french"] }
 }
 ```
 

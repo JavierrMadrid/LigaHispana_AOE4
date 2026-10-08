@@ -1,0 +1,153 @@
+/*
+ * BorderGlow: borde con malla de degradado que sigue al cursor y se enciende
+ * cerca del filo. Es el componente de React Bits adaptado a los tokens del
+ * sitio: el brillo es el oro de la casa (`--accent`/`--accent-strong`) y no los
+ * colores morado, rosa y azul por defecto, y no lleva la pila de sombras del
+ * original, que la cara pública no usa.
+ *
+ * El halo se sale de la tarjeta (`--glow-padding`); quien lo coloque debe dejar
+ * ver el desborde. El carril de objetivos le da al `<ul>` un margen negativo y
+ * un relleno igual al halo para que quepa dentro de su área de scroll y no se
+ * recorte.
+ */
+
+.border-glow-card {
+  --edge-proximity: 0;
+  --cursor-angle: 45deg;
+  --edge-sensitivity: 30;
+  --color-sensitivity: calc(var(--edge-sensitivity) + 20);
+  --border-radius: 8px;
+  --glow-padding: 12px;
+  --cone-spread: 25;
+
+  position: relative;
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: var(--border-radius);
+  background: var(--card-bg, var(--surface));
+  isolation: isolate;
+  overflow: visible;
+  transform: translate3d(0, 0, 0.01px);
+}
+
+/*
+ * Capas del halo: borde de malla (::before), relleno de malla (::after) y halo
+ * exterior (.edge-light). Todas se encienden con el puntero; no hay realce
+ * permanente.
+ */
+.border-glow-card::before,
+.border-glow-card::after,
+.border-glow-card > .edge-light {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  transition: opacity 0.25s ease-out;
+}
+
+.border-glow-card:not(:hover):not(.sweep-active)::before,
+.border-glow-card:not(:hover):not(.sweep-active)::after,
+.border-glow-card:not(:hover):not(.sweep-active) > .edge-light {
+  opacity: 0;
+  transition: opacity 0.75s ease-in-out;
+}
+
+/* Borde de malla degradada, recortado al cono que mira al cursor. */
+.border-glow-card::before {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--card-bg, var(--surface)) 0 100%) padding-box,
+    linear-gradient(rgb(255 255 255 / 0%) 0% 100%) border-box,
+    var(--gradient-one) border-box,
+    var(--gradient-two) border-box,
+    var(--gradient-three) border-box,
+    var(--gradient-four) border-box,
+    var(--gradient-five) border-box,
+    var(--gradient-six) border-box,
+    var(--gradient-seven) border-box,
+    var(--gradient-base) border-box;
+  opacity: calc((var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+  mask-image: conic-gradient(
+    from var(--cursor-angle) at center,
+    black calc(var(--cone-spread) * 1%),
+    transparent calc((var(--cone-spread) + 15) * 1%),
+    transparent calc((100 - var(--cone-spread) - 15) * 1%),
+    black calc((100 - var(--cone-spread)) * 1%)
+  );
+}
+
+/* Relleno de malla cerca del filo, sutil. */
+.border-glow-card::after {
+  border: 1px solid transparent;
+  background:
+    var(--gradient-one) padding-box,
+    var(--gradient-two) padding-box,
+    var(--gradient-three) padding-box,
+    var(--gradient-four) padding-box,
+    var(--gradient-five) padding-box,
+    var(--gradient-six) padding-box,
+    var(--gradient-seven) padding-box,
+    var(--gradient-base) padding-box;
+  mask-image: conic-gradient(
+    from var(--cursor-angle) at center,
+    transparent 5%,
+    black 15%,
+    black 85%,
+    transparent 95%
+  );
+  mix-blend-mode: soft-light;
+  opacity: calc(var(--fill-opacity, 0.4) * (var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+}
+
+/* Halo exterior que sigue al cursor. */
+.border-glow-card > .edge-light {
+  inset: calc(var(--glow-padding) * -1);
+  z-index: 1;
+  pointer-events: none;
+  mix-blend-mode: plus-lighter;
+  mask-image: conic-gradient(
+    from var(--cursor-angle) at center,
+    black 2.5%,
+    transparent 10%,
+    transparent 90%,
+    black 97.5%
+  );
+  opacity: calc((var(--edge-proximity) - var(--edge-sensitivity)) / (100 - var(--edge-sensitivity)));
+}
+
+.border-glow-card > .edge-light::before {
+  content: "";
+  position: absolute;
+  inset: var(--glow-padding);
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px var(--glow-color),
+    inset 0 0 3px 0 var(--glow-color-50),
+    inset 0 0 6px 0 var(--glow-color-40),
+    inset 0 0 15px 0 var(--glow-color-30),
+    inset 0 0 25px 2px var(--glow-color-20),
+    inset 0 0 50px 2px var(--glow-color-10),
+    0 0 3px 0 var(--glow-color-50),
+    0 0 6px 0 var(--glow-color-40),
+    0 0 15px 0 var(--glow-color-30),
+    0 0 25px 2px var(--glow-color-20),
+    0 0 50px 2px var(--glow-color-10);
+}
+
+.border-glow-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .border-glow-card::before,
+  .border-glow-card::after,
+  .border-glow-card > .edge-light {
+    transition: none;
+  }
+}

@@ -5,10 +5,8 @@ import { EmptyState } from "@/components/empty-state";
 import { PageHead } from "@/components/page-head";
 import { ParticipantObjectivesView } from "@/components/participant-objectives";
 import {
-  MASTERIZAR_TODOS_ID,
   OBJECTIVE_GROUP_LABELS,
   getParticipantObjectives,
-  objectiveMinimum,
 } from "@/lib/public";
 
 const GENERIC_METADATA: Metadata = {
@@ -121,16 +119,6 @@ export default async function ParticipantObjectivesPage({
   const data = read.data;
 
   return (
-    <ParticipantObjectivesView
-      data={data}
-      groupLabels={OBJECTIVE_GROUP_LABELS}
-      minimumsByObjective={Object.fromEntries(
-        data.options.map((option) => [
-          option.id,
-          objectiveMinimum(option, data.minimums),
-        ]),
-      )}
-      masterizarTodosId={MASTERIZAR_TODOS_ID}
-    />
+    <ParticipantObjectivesView data={data} groupLabels={OBJECTIVE_GROUP_LABELS} />
   );
 }

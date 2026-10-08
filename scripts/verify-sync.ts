@@ -8,7 +8,7 @@ import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame, readOwnCivRandomized, r
 import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/parse";
 import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 
-import { CIVILIZATIONS, isKnownCivilization } from "@/lib/civs";
+import { CIVILIZATIONS } from "@/lib/civs";
 import { unwrapRead } from "@/lib/db-errors";
 import { describeMode, describeTeamSize, teamSizesFromRawJson } from "@/lib/format";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
@@ -61,7 +61,7 @@ const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
  * `OBJECTIVE_COUNT` para que el número no pueda cambiar en los dos sitios a la vez
  * sin que se note.
  */
-const EXPECTED_OBJECTIVE_COUNT = 38;
+const EXPECTED_OBJECTIVE_COUNT = 82;
 /**
  * Tercer jugador, solo para la ventana: sus partidas se colocan justo en los bordes
  * de `[from, to)` y son las que deciden qué cuenta.
@@ -556,6 +556,7 @@ async function checkNormalization(): Promise<void> {
       historyError: null,
       discordError: null,
       streamsError: null,
+      mapPoolError: null,
       failures: [],
     };
 
@@ -660,6 +661,7 @@ async function checkNormalization(): Promise<void> {
       historyError: null,
       discordError: null,
       streamsError: null,
+      mapPoolError: null,
       failures: [],
       lastSuccessAt: finishedAt,
     });
@@ -1016,13 +1018,15 @@ async function checkObjectiveCatalogue(): Promise<void> {
   console.log("Catálogo de objetivos");
 
   const {
-    MASTERIZAR_TODOS_ID,
+    JUGON_ID,
     OBJECTIVE_COUNT,
     OBJECTIVE_DEFINITIONS,
     OBJECTIVE_GROUP_LABELS,
     OBJECTIVE_POINTS,
+    POLIFACETICO_ID,
     computeObjectives,
   } = await import("@/lib/objectives");
+  const { DEFAULT_MAP_POOL } = await import("@/lib/map-pool");
 
   await check(`el catálogo tiene los ${EXPECTED_OBJECTIVE_COUNT} objetivos de docs/OBJETIVOS.md`, () => {
     assert.equal(OBJECTIVE_COUNT, EXPECTED_OBJECTIVE_COUNT);
@@ -1034,28 +1038,23 @@ async function checkObjectiveCatalogue(): Promise<void> {
     );
     assert.deepEqual(
       [...new Set(OBJECTIVE_DEFINITIONS.map((definition) => definition.group))],
-      ["actividad", "racha", "division", "formato", "civilizacion"],
+      ["actividad", "racha", "hazanas", "formato", "civilizacion"],
       "los grupos salen en el orden documentado, sin intercalarse",
     );
   });
 
-  await check("cada objetivo trae rótulo y descripción de la regla", () => {
+  await check("cada objetivo trae rótulo, descripción, tipo y grupo con rótulo", () => {
     for (const definition of OBJECTIVE_DEFINITIONS) {
       assert.ok(definition.label.trim().length > 0, `${definition.id}: falta el rótulo`);
       assert.ok(
         definition.description.trim().length > 0,
         `${definition.id}: falta la descripción de la regla`,
       );
+      assert.ok(definition.points > 0, `${definition.id}: los puntos por defecto son positivos`);
       assert.ok(
-        definition.description.length <= 90,
-        `${definition.id}: la descripción es una frase, no un párrafo`,
+        definition.kind === "competition" || definition.kind === "achievement",
+        `${definition.id}: el tipo no es válido`,
       );
-      assert.equal(
-        definition.description.endsWith("."),
-        true,
-        `${definition.id}: la descripción es una frase completa`,
-      );
-      assert.ok(definition.points > 0, `${definition.id}: los puntos por defecto son un entero`);
       assert.equal(
         definition.group in OBJECTIVE_GROUP_LABELS,
         true,
@@ -1064,50 +1063,47 @@ async function checkObjectiveCatalogue(): Promise<void> {
     }
   });
 
-  await check("ninguna descripción escribe un número del ruleset", () => {
-    // El único número configurable que aparece en una regla es el mínimo
-    // (`minimums.masterizar`), y por eso las descripciones no lo escriben: si lo
-    // hicieran, dejarían de ser ciertas el día que se cambiara en `Setting`.
-    // Los dígitos de "1v1" o de un nombre de civ no son números de configuración.
-    for (const definition of OBJECTIVE_DEFINITIONS) {
-      for (const minimum of Object.values(DEFAULT_RULESET.minimums)) {
-        assert.equal(
-          new RegExp(`\\b${minimum}\\b`).test(definition.description),
-          false,
-          `${definition.id}: la descripción escribe el mínimo ${minimum}, que es configurable`,
-        );
-      }
-    }
-  });
+  await check("las familias de civilización: cabeza, hijos y umbral", () => {
+    const polifacetico = OBJECTIVE_DEFINITIONS.find(
+      (definition) => definition.id === POLIFACETICO_ID,
+    );
+    const jugon = OBJECTIVE_DEFINITIONS.find((definition) => definition.id === JUGON_ID);
 
-  await check("masterizarlos-a-todos: carrera al final del grupo de civilizaciones", () => {
-    const ultimo = OBJECTIVE_DEFINITIONS.at(-1);
-    const masterizarlos = OBJECTIVE_DEFINITIONS.find(
-      (definition) => definition.id === MASTERIZAR_TODOS_ID,
+    assert.ok(polifacetico !== undefined, "existe la cabeza polifacetico");
+    assert.ok(jugon !== undefined, "existe la cabeza jugon");
+    assert.equal(polifacetico.kind, "achievement");
+    assert.equal(jugon.kind, "achievement");
+    assert.equal(polifacetico.parent, null);
+    assert.equal(jugon.parent, null);
+
+    const lideres = OBJECTIVE_DEFINITIONS.filter(
+      (definition) => definition.parent === POLIFACETICO_ID,
+    );
+    const acolitos = OBJECTIVE_DEFINITIONS.filter(
+      (definition) => definition.parent === JUGON_ID,
     );
 
-    assert.ok(masterizarlos !== undefined, "el objetivo existe en el catálogo");
-    assert.equal(ultimo?.id, MASTERIZAR_TODOS_ID, "se presenta al final del grupo");
-    assert.equal(masterizarlos.group, "civilizacion");
-    assert.equal(masterizarlos.label, "Masterízalos a todos", "el rótulo es copy del cliente");
+    assert.equal(lideres.length, CIVILIZATIONS.length, "un lider-* por civilización");
+    assert.equal(acolitos.length, CIVILIZATIONS.length, "un acolito-* por civilización");
     assert.equal(
-      masterizarlos.description,
-      "El primero en ganar una partida con cada civilización.",
+      lideres.every((definition) => definition.kind === "achievement"),
+      true,
     );
-    assert.equal(masterizarlos.metric, "victorias", "ordena por civilizaciones de forma entera");
+    assert.equal(
+      acolitos.every((definition) => definition.kind === "achievement"),
+      true,
+    );
+
+    const indexOf = (id: string): number =>
+      OBJECTIVE_DEFINITIONS.findIndex((definition) => definition.id === id);
+
     assert.ok(
-      masterizarlos.points > Math.max(...CIVILIZATIONS.map(() => 70)),
-      "los 100 puntos superan a los 70 de un masterizar-*",
+      indexOf(POLIFACETICO_ID) < indexOf(lideres[0].id),
+      "la cabeza se presenta antes que sus hijos",
     );
-    assert.equal(
-      DEFAULT_RULESET.objectives[MASTERIZAR_TODOS_ID],
-      masterizarlos.points,
-      "los puntos por defecto están en el ruleset",
-    );
-    assert.equal(
-      MASTERIZAR_TODOS_ID.startsWith("masterizar-"),
-      false,
-      "el id no empieza por `masterizar-`, que es el prefijo de las civilizaciones",
+    assert.ok(
+      indexOf(JUGON_ID) < indexOf(acolitos[0].id),
+      "la cabeza se presenta antes que sus hijos",
     );
   });
 
@@ -1129,35 +1125,42 @@ async function checkObjectiveCatalogue(): Promise<void> {
     }
   });
 
-  await check("los puntos en juego son los de la tabla de `docs/OBJETIVOS.md`", () => {
+  await check("los puntos del catálogo por grupo son los de `docs/OBJETIVOS.md`", () => {
+    // Son los puntos que reparte **una** copia de cada objetivo. En los logros el
+    // reparto se multiplica por el número de beneficiarios, así que la suma no es
+    // un tope del torneo, solo la tabla del catálogo.
     const porGrupo = new Map<string, number>();
 
     for (const definition of OBJECTIVE_DEFINITIONS) {
       porGrupo.set(definition.group, (porGrupo.get(definition.group) ?? 0) + definition.points);
     }
 
-    assert.equal(porGrupo.get("actividad"), 130, "Actividad");
-    assert.equal(porGrupo.get("racha"), 110, "Racha");
-    assert.equal(porGrupo.get("division"), 290, "Divisiones");
-    assert.equal(porGrupo.get("formato"), 180, "Formatos");
-    assert.equal(porGrupo.get("civilizacion"), 1710, "Civilizaciones");
-    assert.equal(
-      [...porGrupo.values()].reduce((suma, puntos) => suma + puntos, 0),
-      2420,
-      "el total en juego",
-    );
+    assert.equal(porGrupo.get("actividad"), 64, "Actividad");
+    assert.equal(porGrupo.get("racha"), 232, "Racha");
+    assert.equal(porGrupo.get("hazanas"), 129, "Hazañas");
+    assert.equal(porGrupo.get("formato"), 720, "Formatos");
+    assert.equal(porGrupo.get("civilizacion"), 1601, "Civilizaciones");
   });
 
-  await check("sin partidas no hay poseedores, y el ranking sale vacío", () => {
-    const { options, pointsByPlayer, holders } = computeObjectives([], DEFAULT_RULESET);
+  await check("sin partidas no hay cobradores, y el ranking sale vacío", () => {
+    const { options, pointsByPlayer, holders } = computeObjectives(
+      [],
+      DEFAULT_RULESET,
+      DEFAULT_MAP_POOL,
+    );
 
     assert.equal(options.length, OBJECTIVE_COUNT, "los objetivos existen aunque no haya datos");
-    assert.equal(holders, 0, "nadie posee nada sin partidas");
-    assert.equal(pointsByPlayer.size, 0, "y nadie cobra");
+    assert.equal(holders, 0, "nadie cobra nada sin partidas");
+    assert.equal(pointsByPlayer.size, 0, "y nadie suma puntos");
     assert.equal(
-      options.every((option) => option.holder === null && option.ranking.length === 0),
+      options.every(
+        (option) =>
+          option.holder === null &&
+          option.ranking.length === 0 &&
+          option.beneficiaries.length === 0,
+      ),
       true,
-      "cada objetivo sale sin poseedor y con el ranking vacío, no relleno con ceros",
+      "cada objetivo sale sin cobrador y con el ranking vacío, no relleno con ceros",
     );
   });
 }
@@ -2127,9 +2130,12 @@ async function runDatabaseChecks(): Promise<void> {
     });
 
     await check("los objetivos se publican con el contrato previsto", async () => {
-      const { MASTERIZAR_TODOS_ID, OBJECTIVE_COUNT, OBJECTIVE_GROUP_LABELS } = await import(
-        "@/lib/objectives"
-      );
+      const {
+        JUGON_ID,
+        OBJECTIVE_COUNT,
+        OBJECTIVE_GROUP_LABELS,
+        POLIFACETICO_ID,
+      } = await import("@/lib/objectives");
 
       const view = unwrapRead(await getObjectives(), "verify:objetivos/contrato");
 
@@ -2145,10 +2151,10 @@ async function runDatabaseChecks(): Promise<void> {
         DEFAULT_RULESET.pointsPerWin,
         "los puntos por victoria salen del ruleset activo",
       );
-      assert.deepEqual(
-        view.minimums,
-        DEFAULT_RULESET.minimums,
-        "los mínimos salen del ruleset activo",
+      assert.equal(
+        Array.isArray(view.mapPool) && view.mapPool.length > 0,
+        true,
+        "la vista publica el pool de mapas activo",
       );
       assert.equal(
         view.options.length,
@@ -2159,13 +2165,13 @@ async function runDatabaseChecks(): Promise<void> {
       const groups = view.options.map((option) => option.group);
       assert.deepEqual(
         [...new Set(groups)],
-        ["actividad", "racha", "division", "formato", "civilizacion"],
+        ["actividad", "racha", "hazanas", "formato", "civilizacion"],
         "los grupos salen en el orden documentado, sin intercalarse",
       );
       assert.deepEqual(
         view.options.slice(0, 4).map((option) => option.id),
-        ["loco-por-ganar", "otp", "golpe-de-suerte", "prohibido-perder"],
-        "otp va con Actividad y prohibido-perder con Racha, en ese orden",
+        ["loco-por-ganar", "imparable", "bienhadado", "imbatible"],
+        "Actividad y Racha salen en el orden documentado",
       );
       assert.equal(
         groups.every((group) => group in OBJECTIVE_GROUP_LABELS),
@@ -2173,117 +2179,31 @@ async function runDatabaseChecks(): Promise<void> {
         "todo grupo tiene rótulo",
       );
 
-      // Copy exacto del cliente y métricas de Actividad y Racha.
+      // Las familias de civilización: cabeza, hijos y sus etiquetas.
       const porId = new Map(view.options.map((option) => [option.id, option]));
+      const polifacetico = porId.get(POLIFACETICO_ID);
+      const jugon = porId.get(JUGON_ID);
 
+      assert.ok(polifacetico !== undefined, "polifacetico existe");
+      assert.ok(jugon !== undefined, "jugon existe");
+      assert.equal(polifacetico.kind, "achievement");
+      assert.equal(jugon.kind, "achievement");
+      assert.equal(polifacetico.parent, null);
       assert.equal(
-        porId.get("golpe-de-suerte")?.label,
-        "¿Golpe de suerte?",
-        "el rótulo de `golpe-de-suerte` es copy del cliente",
+        view.options.filter((option) => option.parent === POLIFACETICO_ID).length,
+        CIVILIZATIONS.length,
+        "los lider-* apuntan a polifacetico",
       );
       assert.equal(
-        porId.get("sensei-oro")?.label,
-        "El Sensei de Oro",
-        "los rótulos de `sensei-*` son copy del cliente",
+        view.options.filter((option) => option.parent === JUGON_ID).length,
+        CIVILIZATIONS.length,
+        "los acolito-* apuntan a jugon",
       );
+      assert.equal(porId.get("masterizando-japanese")?.kind, "competition");
       assert.equal(
-        porId.get("otp")?.group,
-        "actividad",
-        "otp se agrupa en Actividad (sin grupo Dominio)",
-      );
-      assert.equal(
-        porId.get("prohibido-perder")?.group,
-        "racha",
-        "prohibido-perder se agrupa en Racha (sin grupo Dominio)",
-      );
-      assert.equal(
-        porId.get("otp")?.metric,
-        "victorias",
-        "otp lo decide el máximo de victorias con una misma civ, sin umbral",
-      );
-      assert.equal(
-        porId.get("prohibido-perder")?.metric,
-        "winrate",
-        "prohibido-perder sigue decidiéndose por ratio",
-      );
-
-      // `masterizarlos-a-todos`: el objetivo que abarca las 23 civilizaciones,
-      // al final del grupo y con la etiqueta fijada por el cliente.
-      const todos = porId.get(MASTERIZAR_TODOS_ID);
-
-      assert.ok(todos !== undefined, "masterizarlos-a-todos existe");
-      assert.equal(
-        view.options.at(-1)?.id,
-        MASTERIZAR_TODOS_ID,
-        "masterizarlos-a-todos se presenta al final del grupo de civilizaciones",
-      );
-      assert.equal(
-        todos.group,
-        "civilizacion",
-        "masterizarlos-a-todos va en el grupo Civilizaciones",
-      );
-      assert.equal(
-        todos.label,
-        "Masterízalos a todos",
-        "el rótulo de `masterizarlos-a-todos` es copy del cliente",
-      );
-      assert.equal(
-        todos.points,
-        DEFAULT_RULESET.objectives[MASTERIZAR_TODOS_ID],
-        "los 100 de masterizarlos-a-todos salen del ruleset, como los demás",
-      );
-      assert.equal(
-        porId.get("masterizar-japanese")?.points,
-        DEFAULT_RULESET.objectives["masterizar-japanese"],
-        "y un masterizar-* sigue valiendo lo que diga el ruleset",
-      );
-      // Nadie que no haya ganado con todas las civs puede tenerlo, así que en
-      // la prueba (que no llega a las 23) el objetivo tiene que salir vacío.
-      assert.equal(
-        todos.holder,
-        null,
-        "sin las 23 civilizaciones dominadas el objetivo no tiene poseedor",
-      );
-      for (const contender of todos.ranking) {
-        assert.ok(
-          contender.value <= CIVILIZATIONS.length,
-          `masterizarlos-a-todos: ${contender.value} civilizaciones no puede pasar de ${CIVILIZATIONS.length}`,
-        );
-        assert.equal(
-          contender.eligible,
-          contender.value === CIVILIZATIONS.length,
-          "masterizarlos-a-todos: solo es elegible quien las tiene todas",
-        );
-        assert.ok(
-          contender.matches >= contender.value,
-          "masterizarlos-a-todos: cada civ dominada necesita al menos una partida",
-        );
-      }
-
-      // El detalle de `otp`: la civilización del jugador, en el catálogo.
-      const otp = porId.get("otp");
-
-      assert.ok(otp !== undefined, "otp existe");
-
-      for (const contender of otp.ranking) {
-        assert.ok(contender.detail, `otp: ${contender.name} lleva su civ en detail`);
-        assert.equal(
-          isKnownCivilization(contender.detail.id),
-          true,
-          `otp: ${contender.detail.id} es una civ del catálogo`,
-        );
-        assert.ok(
-          contender.detail.label.length > 0,
-          `otp: la civ ${contender.detail.id} tiene nombre en español`,
-        );
-      }
-
-      assert.equal(
-        view.options
-          .filter((option) => option.id !== "otp")
-          .every((option) => option.ranking.every((contender) => contender.detail == null)),
+        porId.get("lider-japanese")?.label.includes("Japoneses"),
         true,
-        "solo otp rellena detail",
+        "el rótulo de un lider-* nombra la civilización",
       );
 
       const holders = new Set<string>();
@@ -2298,18 +2218,6 @@ async function runDatabaseChecks(): Promise<void> {
           option.description.trim().length > 0,
           `${option.id}: la descripción de la regla no está vacía`,
         );
-        // Sin mínimos dentro: el único configurable es `minimums.masterizar`
-        // (y los de ratio y racha), y si uno estuviera escrito en la
-        // descripción dejaría de ser cierto el día que se cambiara en
-        // `Setting`. Los dígitos de "1v1" o de una civ no cuentan: no son
-        // números de configuración.
-        for (const minimum of Object.values(view.minimums)) {
-          assert.equal(
-            new RegExp(`\\b${minimum}\\b`).test(option.description),
-            false,
-            `${option.id}: la descripción no escribe el mínimo ${minimum}, que es configurable`,
-          );
-        }
         assert.equal(
           new Set(option.ranking.map((contender) => contender.profileId)).size,
           option.ranking.length,
@@ -2321,7 +2229,7 @@ async function runDatabaseChecks(): Promise<void> {
           assert.equal(
             typeof contender.eligible,
             "boolean",
-            `${option.id}: eligible marca si cumple el mínimo`,
+            `${option.id}: eligible es un booleano`,
           );
           assert.equal(
             contender.profileUrl,
@@ -2330,17 +2238,58 @@ async function runDatabaseChecks(): Promise<void> {
           );
         }
 
-        if (option.holder !== null) {
-          holders.add(option.id);
-          assert.equal(option.holder.eligible, true, `${option.id}: el poseedor cumple el mínimo`);
-          // El ranking va entero, así que el poseedor tiene que salir en él con
-          // la posición que le da su métrica: no se extrae ni se pone el primero.
-          assert.ok(
-            option.ranking.some(
-              (contender) => contender.profileId === option.holder?.profileId,
-            ),
-            `${option.id}: el poseedor aparece en el ranking, marcado por holder`,
+        if (option.kind === "competition") {
+          assert.equal(option.target, null, `${option.id}: una competición no tiene umbral`);
+          assert.equal(
+            option.beneficiaries.length,
+            0,
+            `${option.id}: una competición no reparte entre varios`,
           );
+
+          if (option.holder !== null) {
+            holders.add(option.id);
+            assert.equal(
+              option.holder.eligible,
+              true,
+              `${option.id}: el poseedor cumple la condición`,
+            );
+            assert.ok(
+              option.ranking.some(
+                (contender) => contender.profileId === option.holder?.profileId,
+              ),
+              `${option.id}: el poseedor aparece en el ranking, marcado por holder`,
+            );
+          }
+        } else {
+          assert.equal(option.holder, null, `${option.id}: un logro no tiene poseedor único`);
+          assert.ok(option.target !== null, `${option.id}: un logro tiene umbral`);
+          assert.equal(
+            new Set(option.beneficiaries.map((beneficiary) => beneficiary.profileId)).size,
+            option.beneficiaries.length,
+            `${option.id}: los beneficiarios no se repiten`,
+          );
+
+          if (option.beneficiaries.length > 0) {
+            holders.add(option.id);
+          }
+
+          for (const beneficiary of option.beneficiaries) {
+            assert.ok(
+              beneficiary.points > 0,
+              `${option.id}: un beneficiario cobra puntos positivos`,
+            );
+            assert.ok(
+              beneficiary.points <= option.points,
+              `${option.id}: nadie cobra por encima de los puntos del objetivo`,
+            );
+            assert.ok(
+              option.ranking.some(
+                (contender) =>
+                  contender.profileId === beneficiary.profileId && contender.eligible,
+              ),
+              `${option.id}: todo beneficiario aparece en el ranking como cumplido`,
+            );
+          }
         }
       }
 
@@ -3689,7 +3638,7 @@ async function checkHistoryOrder(): Promise<void> {
 
   const objetivos = [
     filaHistorial({ id: "o1", fecha: H3, objetivo: "loco-por-ganar" }),
-    filaHistorial({ id: "o2", fecha: H2, objetivo: "otp" }),
+    filaHistorial({ id: "o2", fecha: H2, objetivo: "lider-french" }),
   ];
 
   const todas = [...partidas, ...objetivos];

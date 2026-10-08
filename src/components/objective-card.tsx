@@ -1,45 +1,47 @@
-import { CIVILIZATION_IDS } from "@/lib/civs";
-import type {
-  ObjectiveContender,
-  ObjectiveMetric,
-  ObjectiveOption,
-  ObjectiveView,
-} from "@/lib/public";
+import type { ReactNode } from "react";
+import type { ObjectiveContender, ObjectiveOption } from "@/lib/public";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
+import { formatMapPool } from "@/lib/objective-format";
 
 /**
  * Tarjeta de un objetivo especial.
  *
  * Se lee como un cartel del premio: arriba el emblema, el nombre y la regla en
- * una frase, con los puntos en juego en una placa a la derecha; debajo, quién
- * lo posee (o por qué está vacante). El top de contendientes ya no vive aquí:
- * la lista entera se enseña en el diálogo de `ObjectiveRankingDialog`, así que
- * la tarjeta se escanea de un vistazo. El pie es la puerta a esa clasificación.
+ * una frase, con los puntos en juego en una placa a la derecha; debajo, el
+ * estado (poseedor único en una competición, cuántos lo han conseguido en un
+ * logro) y la puerta a la clasificación. La lista entera de participantes no
+ * vive aquí: se enseña en la ventana que abre la tarjeta (`ObjectiveDialogCard`).
+ *
+ * Es presentacional: quien la coloca decide el alto —y el `BorderGlow` que le
+ * pinta el cromo— y le pone encima el botón que abre la clasificación.
  */
-type ObjectiveCardProps = {
+
+/** Id estable de `por-tierra-y-agua`, que lista el pool de mapas. */
+export const POR_TIERRA_ID = "por-tierra-y-agua";
+
+type ObjectiveSummaryProps = {
   option: ObjectiveOption;
-  /** Abre la clasificación completa del objetivo. */
-  onOpen: () => void;
+  /** Pool de mapas activo, solo para explicar `por-tierra-y-agua`. */
+  mapPool?: readonly string[];
+  /** Texto de la acción que abre la clasificación ("Ver clasificación", "Ver completados"). */
+  actionLabel?: string;
+  /**
+   * Aclaración de cómo puntúa el conjunto, cuando la tarjeta es la cabeza de una
+   * familia (ver `ObjectiveFamilySection`). Sin ella, la tarjeta solo lleva lo
+   * del objetivo.
+   */
+  note?: ReactNode;
 };
 
-export function ObjectiveCard({
+export function ObjectiveSummary({
   option,
-  onOpen,
-}: ObjectiveCardProps) {
-  const held = option.holder !== null;
-
+  mapPool = [],
+  actionLabel = "Ver clasificación",
+  note,
+}: ObjectiveSummaryProps) {
   return (
-    // `min-w-0`: como ítem de la rejilla, el ancho mínimo por defecto es
-    // `auto`, o sea su min-content, y ese lo fija el pie (poseedor + botón
-    // "Ver clasificación"). Con nombres largos la tarjeta mide más que la
-    // columna y desborda la página en móvil estrecho; con `min-w-0` el pie
-    // cede y su nombre se recorta donde ya lo hace.
-    <article
-      className={`flex h-full min-w-0 flex-col rounded-lg border bg-surface p-5 ${
-        held ? "border-accent/35" : "border-line"
-      }`}
-    >
+    <div className="flex h-full flex-col p-5">
       <div className="flex items-center gap-4">
         <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
           <ObjectiveIcon option={option} className="size-6 shrink-0" />
@@ -50,50 +52,79 @@ export function ObjectiveCard({
         <PrizePlate points={option.points} />
       </div>
 
-      <p className="mt-3 pb-6 text-sm leading-relaxed text-muted">{option.description}</p>
+      <p className="mt-3 text-sm leading-relaxed text-muted">{option.description}</p>
 
-      {/*
-        Pie en una sola línea bajo un filete fino: a la izquierda el poseedor
-        (rótulo pequeño y debajo el nombre), a la derecha el enlace a la
-        clasificación. El valor de la métrica y el motivo de vacante viven en
-        el diálogo, no aquí.
-      */}
+      {note !== undefined ? (
+        <p className="mt-3 text-xs leading-relaxed text-muted">{note}</p>
+      ) : null}
+
+      {option.metric === "mapas" && mapPool.length > 0 ? <MapPool maps={mapPool} /> : null}
+
       <div className="mt-auto flex items-end justify-between gap-4 border-t border-line pt-4">
-        <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted">Poseedor</p>
-          {option.holder === null ? (
-            <p className="mt-1 truncate text-sm text-muted">Sin poseedor todavía</p>
-          ) : (
-            <div className="mt-1 flex items-center gap-2">
-              <PlayerAvatar
-                name={option.holder.name}
-                avatarUrl={option.holder.avatarUrl}
-                className="size-6 shrink-0 text-xs"
-              />
-              <ContenderName
-                contender={option.holder}
-                className="truncate text-sm font-medium text-foreground"
-              />
-            </div>
-          )}
-        </div>
-        {/* El relleno vertical amplía el área de pulsación hasta los 44 px del
-            mínimo táctil sin engordar el texto: los márgenes negativos lo
-            compensan para que la fila del pie no crezca. */}
-        <button
-          type="button"
-          onClick={onOpen}
-          className="-my-3 shrink-0 py-3 text-sm font-medium text-accent underline-offset-4 transition-colors hover:underline focus-visible:underline"
-        >
-          Ver clasificación
-        </button>
+        <ObjectiveStatus option={option} />
+        {/* El icono y el texto acompañan al botón invisible que cubre la tarjeta
+            (ver `ObjectiveDialogCard`); el `pointer-events-none` deja que el clic
+            lo recoja ese botón. */}
+        <span className="pointer-events-none inline-flex shrink-0 items-center gap-1 text-sm font-medium text-accent">
+          {actionLabel}
+          <Chevron />
+        </span>
       </div>
-    </article>
+    </div>
+  );
+}
+
+/** El estado del objetivo: quién lo posee, o cuánta gente lo ha conseguido. */
+function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted">
+        {option.kind === "achievement" ? "Lo han conseguido" : "Poseedor"}
+      </p>
+      {option.kind === "achievement" ? (
+        <p className="mt-1 truncate text-sm text-foreground">
+          {option.beneficiaries.length === 0
+            ? "Todavía nadie"
+            : option.beneficiaries.length === 1
+              ? "1 jugador"
+              : `${option.beneficiaries.length} jugadores`}
+        </p>
+      ) : option.holder === null ? (
+        <p className="mt-1 truncate text-sm text-muted">Sin poseedor todavía</p>
+      ) : (
+        <div className="mt-1 flex items-center gap-2">
+          <PlayerAvatar
+            name={option.holder.name}
+            avatarUrl={option.holder.avatarUrl}
+            className="size-6 shrink-0 text-xs"
+          />
+          {/* Sin enlace a propósito: la tarjeta cerrada entera es un botón que
+              abre la clasificación, y un enlace por debajo quedaría tapado. El
+              perfil se alcanza desde la lista que aparece al voltear. */}
+          <span className="truncate text-sm font-medium text-foreground">
+            {option.holder.name}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Los mapas del pool activo, en el objetivo que exige jugar en cada uno. */
+export function MapPool({ maps }: { maps: readonly string[] }) {
+  return (
+    <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-muted">
+      <span className="font-medium text-foreground/90">
+        {maps.length === 1 ? "1 mapa" : `${maps.length} mapas`}
+      </span>
+      {" · "}
+      {formatMapPool(maps)}
+    </p>
   );
 }
 
 /** La placa del premio: los puntos que reparte el objetivo, a la derecha. */
-function PrizePlate({ points }: { points: number }) {
+export function PrizePlate({ points }: { points: number }) {
   return (
     <span className="shrink-0 rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-right">
       <span className="block font-display text-xl font-semibold leading-none tabular-nums text-accent">
@@ -135,90 +166,42 @@ export function ContenderName({
   );
 }
 
-/**
- * Valor de la métrica de un contendiente, en la unidad que se lee de un vistazo.
- *
- * En `masterizarlos-a-todos` el valor no son victorias sino **civilizaciones
- * dominadas** del catálogo, así que se ramifica por id y no por métrica: añadir
- * un miembro a `ObjectiveMetric` rompería el `switch` exhaustivo de
- * `formatValue`.
- */
-export function contenderValue(
-  option: ObjectiveOption,
-  contender: ObjectiveContender,
-  masterizarTodosId: string,
-): string {
-  if (option.id === masterizarTodosId) {
-    return `${contender.value}/${CIVILIZATION_IDS.length} civilizaciones`;
-  }
-
-  return formatValue(option.metric, contender);
-}
-
-/**
- * Valor de la métrica del objetivo, en la unidad que se lee de un vistazo.
- * En `winrate` el valor son victorias de `matches` partidas, así que se pinta
- * el récord completo con su porcentaje.
- */
-export function formatValue(metric: ObjectiveMetric, contender: ObjectiveContender): string {
-  const { value, matches } = contender;
-
-  switch (metric) {
-    case "partidas":
-      return value === 1 ? "1 partida" : `${value} partidas`;
-    case "racha":
-      return value === 1 ? "1 victoria seguida" : `${value} victorias seguidas`;
-    case "victorias":
-      return value === 1 ? "1 victoria" : `${value} victorias`;
-    case "winrate": {
-      if (matches <= 0) {
-        return "-";
-      }
-
-      const losses = matches - value;
-      const percentage = Math.round((value / matches) * 100);
-
-      // Espacio duro antes del signo: en español el «%» no se separa de su cifra.
-      return `${value}-${losses} (${percentage}\u00A0%)`;
-    }
-  }
-}
-
-/** Por qué el objetivo está vacante, con el matiz de cada familia. */
-export function emptyMessage(
-  option: ObjectiveOption,
-  minimums: ObjectiveView["minimums"],
-  masterizarTodosId: string,
-): string {
-  if (option.id === masterizarTodosId) {
-    return "Carrera abierta: nadie ha ganado todavía con las 23 civilizaciones.";
-  }
-
-  if (option.group === "civilizacion") {
-    return `Carrera abierta: nadie ha llegado a ${minimums.masterizar} victorias con esta civilización todavía.`;
-  }
-
-  if (option.metric === "winrate" || option.metric === "racha") {
-    const minimo = option.metric === "winrate" ? minimums.winrate : minimums.streak;
-
-    return option.ranking.length === 0
-      ? "Sin candidatos todavía: nadie ha jugado una partida clasificatoria."
-      : `Nadie cumple el mínimo de ${minimo} partidas clasificatorias.`;
+/** Por qué el objetivo todavía no lo cobra nadie, con el matiz de cada familia. */
+export function emptyMessage(option: ObjectiveOption): string {
+  if (option.kind === "achievement") {
+    return "Todavía nadie ha completado este logro.";
   }
 
   switch (option.group) {
-    case "division":
-      return "Nadie de esta división ha ganado una partida todavía.";
+    case "civilizacion":
+      return "Nadie ha ganado todavía con una civilización fija.";
     case "formato":
       return "Nadie ha ganado todavía en este formato.";
+    case "racha":
+      return "Nadie ha encadenado todavía una victoria clasificatoria.";
     default:
-      return option.metric === "victorias"
-        ? "Nadie ha ganado todavía con una civilización fija."
-        : "Todavía no hay partidas clasificatorias jugadas.";
+      return "Todavía no hay partidas clasificatorias jugadas.";
   }
 }
 
-/** Por qué un aspirante no puede cobrar todavía el objetivo. */
+/** Por qué un aspirante no cobra todavía el objetivo. */
 export function ineligibleTag(option: ObjectiveOption): string {
-  return option.group === "civilizacion" ? "en camino" : "no llega al mínimo";
+  return option.kind === "achievement" ? "en camino" : "no disputa";
+}
+
+function Chevron() {
+  return (
+    <svg
+      viewBox="0 0 12 12"
+      aria-hidden="true"
+      className="size-3 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4.5 2.5 8 6l-3.5 3.5" />
+    </svg>
+  );
 }
