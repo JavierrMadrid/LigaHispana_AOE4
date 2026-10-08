@@ -8,7 +8,7 @@ import type {
   StandingObjective,
   StandingRow,
 } from "@/lib/public";
-import { countryFlagSvgUrl } from "@/lib/flag";
+import { countryFlagSvgUrl, countryFlagUrl } from "@/lib/flag";
 import { ChannelLinks } from "@/components/channel-links";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
@@ -919,20 +919,13 @@ function StandingsCard({
   onToggleObjectives: (profileId: number) => void;
 }) {
   const objectivesPanelId = `objetivos-movil-${row.profileId}`;
-  // La bandera es la marca de país de la tarjeta. Se estira a todo el ancho en
-  // vez de quedarse en el borde derecho: en una tarjeta estrecha una franja
-  // lateral solo cubriría media fila. Sin país resoluble no se pinta.
-  const flagSvg = countryFlagSvgUrl(row.country);
+  // La bandera de la tarjeta es un icono junto a la identidad, no un fondo a
+  // toda la fila: en una tarjeta estrecha el fondo ensuciaba la lectura. Sin
+  // país resoluble no se pinta.
+  const flagUrl = countryFlagUrl(row.country);
 
   return (
     <li className="relative overflow-hidden rounded-lg border border-line bg-surface p-3 transition-colors">
-      {flagSvg !== null ? (
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-0 opacity-40"
-          style={flagStyle(flagSvg)}
-        />
-      ) : null}
       <div className="relative z-10 flex items-start gap-3">
         <RankBadge rank={row.rank} />
         {/* El avatar responde a "quién es"; el podio lo marca la medalla del
@@ -947,6 +940,18 @@ function StandingsCard({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <PlayerName row={row} />
+            {flagUrl !== null ? (
+              // eslint-disable-next-line @next/next/no-img-element -- las banderas vienen de flagcdn.com; next/image exigiría declarar el host remoto.
+              <img
+                src={flagUrl}
+                alt=""
+                loading="lazy"
+                className="h-4 w-6 shrink-0 rounded-sm object-cover ring-1 ring-line"
+              />
+            ) : null}
+            {row.country !== null ? (
+              <span className="sr-only">País: {row.country}</span>
+            ) : null}
             <PlayerChips
               row={row}
               objectivesExpanded={objectivesExpanded}
@@ -959,9 +964,6 @@ function StandingsCard({
         </div>
 
         <div className="shrink-0 text-right">
-          {row.country !== null ? (
-            <span className="sr-only">País: {row.country}</span>
-          ) : null}
           <span className="block font-semibold tabular-nums text-foreground">
             {row.points}
           </span>
