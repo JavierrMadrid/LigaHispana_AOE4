@@ -137,19 +137,33 @@ export function ParticipantObjectivesView({
     <div className="flex flex-col gap-8">
       <PageHead title={`Objetivos de ${player.name}`} />
 
-      <nav
-        aria-label="Vuelta"
-        className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm"
-      >
-        <Link href="/" className="text-muted transition-colors hover:text-accent">
-          Clasificación general
-        </Link>
-        <Link
-          href="/objetivos"
-          className="text-muted transition-colors hover:text-accent"
-        >
-          Todos los objetivos
-        </Link>
+      <nav aria-label="Migas de pan" className="min-w-0 text-sm">
+        <ol className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <li className="flex min-w-0 items-center gap-x-2">
+            <Link href="/" className="text-muted transition-colors hover:text-accent">
+              Clasificación
+            </Link>
+            <span aria-hidden="true" className="text-muted/50">
+              /
+            </span>
+          </li>
+          <li className="flex min-w-0 items-center gap-x-2">
+            <Link
+              href="/objetivos"
+              className="text-muted transition-colors hover:text-accent"
+            >
+              Objetivos
+            </Link>
+            <span aria-hidden="true" className="text-muted/50">
+              /
+            </span>
+          </li>
+          <li className="min-w-0">
+            <span aria-current="page" title={player.name} className="block truncate">
+              {player.name}
+            </span>
+          </li>
+        </ol>
       </nav>
 
       {/*

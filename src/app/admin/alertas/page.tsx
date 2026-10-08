@@ -157,7 +157,7 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
             />
           ) : (
             <>
-              <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
+              <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
                 <table className="w-full text-left text-sm">
                   <caption className="sr-only">
                     Alertas de comportamiento: fecha, jugador, regla, sujeto de la alerta
@@ -201,7 +201,10 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
                       />
                       {/* El detalle es la frase del motor y el distintivo de tipo no es
                           una columna: no se ordenan. */}
-                      <th scope="col" className="px-4 py-3 font-medium">
+                      <th
+                        scope="col"
+                        className="bg-surface px-4 py-3 font-medium lg:sticky lg:top-0 lg:z-10"
+                      >
                         Detalle
                       </th>
                       <SortableHeaderLink

@@ -59,7 +59,7 @@ export function LiveMatchesFilters({
           type="button"
           aria-pressed={division === null}
           onClick={() => onDivisionChange(null)}
-          className={`h-10 rounded-md px-3 text-xs font-semibold transition-colors ${
+          className={`h-10 rounded-md px-3 text-xs font-semibold active:translate-y-px transition-colors ${
             division === null
               ? "bg-accent text-accent-ink"
               : "bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
@@ -79,7 +79,7 @@ export function LiveMatchesFilters({
               aria-label={`Filtrar por división ${item.label}`}
               title={item.label}
               onClick={() => onDivisionChange(active ? null : item.id)}
-              className={`flex size-10 items-center justify-center rounded-md border transition-colors ${
+              className={`flex size-10 items-center justify-center rounded-md border active:translate-y-px transition-colors ${
                 active
                   ? item.activeClass
                   : "border-transparent bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
@@ -108,7 +108,7 @@ function FilterPill({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`inline-flex h-10 items-center rounded-full border px-3.5 text-xs font-semibold transition-colors ${
+      className={`inline-flex h-10 items-center rounded-full border px-3.5 text-xs font-semibold active:translate-y-px transition-colors ${
         active
           ? "border-accent bg-accent text-accent-ink"
           : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"

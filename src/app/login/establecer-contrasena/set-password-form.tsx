@@ -56,7 +56,9 @@ export function SetPasswordForm() {
         </label>
 
         {state.error ? (
-          <p className="text-sm text-red-400">{state.error}</p>
+          <p role="alert" className="text-sm text-danger">
+            {state.error}
+          </p>
         ) : null}
 
         <button

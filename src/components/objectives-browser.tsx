@@ -148,7 +148,7 @@ export function ObjectivesBrowser({
           <button
             type="button"
             onClick={() => setGroup(null)}
-            className="mt-5 inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong"
+            className="mt-5 inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong active:translate-y-px"
           >
             Ver todos los objetivos
           </button>
@@ -223,7 +223,7 @@ function FilterPill({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-xs font-semibold transition-colors ${
+      className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-xs font-semibold active:translate-y-px transition-colors ${
         active
           ? "border-accent bg-accent text-accent-ink"
           : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"

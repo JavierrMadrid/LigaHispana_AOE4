@@ -55,6 +55,37 @@ export default async function ScoringPage() {
         .
       </p>
 
+      {/* Banda de resumen: las tres cifras que resumen el sistema antes del texto
+          normativo. Es el mismo cromo que la banda del torneo de la portada
+          (`thread-top`, `rounded-lg`, `border-line`, `bg-surface`). Solo las
+          victorias van en el oro del acento; el cero y el recuento de objetivos
+          se quedan en el texto. En móvil se apila. */}
+      <section
+        aria-label="Resumen de la puntuación"
+        className="thread-top relative overflow-hidden rounded-lg border border-line bg-surface px-5 py-4"
+      >
+        <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-3">
+          <div className="flex items-baseline gap-2">
+            <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
+              2
+            </dd>
+            <dt className="text-sm text-muted">puntos por victoria</dt>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <dd className="font-display text-2xl font-semibold tabular-nums text-muted">
+              0
+            </dd>
+            <dt className="text-sm text-muted">por derrota</dt>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <dd className="font-display text-2xl font-semibold tabular-nums text-foreground">
+              82
+            </dd>
+            <dt className="text-sm text-muted">objetivos especiales</dt>
+          </div>
+        </dl>
+      </section>
+
       <MobileSectionIndex
         sections={SECTIONS}
         ariaLabel="Secciones de la puntuación"
