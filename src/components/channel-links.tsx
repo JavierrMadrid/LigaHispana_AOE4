@@ -72,7 +72,7 @@ function ChannelLink({
         value.isLive ? ", en directo ahora mismo" : ""
       } (se abre en una pestaña nueva)`}
       title={`${meta.label}: ${value.channel}`}
-      className={`-m-1 inline-flex shrink-0 items-center justify-center p-1 transition-colors ${
+      className={`-m-1.5 inline-flex shrink-0 items-center justify-center p-1.5 transition-colors ${
         value.isLive ? meta.live : "text-muted/70 hover:text-muted"
       }`}
     >

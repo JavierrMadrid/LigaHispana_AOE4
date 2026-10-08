@@ -1,5 +1,5 @@
 /**
- * Banderas de país: del rótulo canónico que guarda el torneo a un fichero de
+ * Banderas de país: del rótulo canónico que guarda el torneo al fichero de
  * bandera servido por `flagcdn.com`.
  *
  * ## Por qué un diccionario aquí y no un código ISO en la base de datos
@@ -31,13 +31,13 @@
  *
  * `paises.txt` (raíz del repositorio) es la fuente de verdad de la lista admitida
  * y se publica con `npm run countries:seed`. Cuando se añada un país allí, hay que
- * añadirlo **también aquí** con su ISO-2. Si no, `Player.country` guardará un
- * rótulo que esta tabla no conoce y la fila se pintará sin bandera, en silencio,
- * que es justo el fallo que hay que evitar. No hay comprobación automática porque
- * este módulo no puede leer ni la lista sembrada —vive en la base de datos— ni
- * `DEFAULT_COUNTRIES` —que es `server-only`—; lo que sí existe es
- * `npm run verify:sync`, que vigila que `paises.txt` y `DEFAULT_COUNTRIES` no
- * divergan.
+ * añadirlo **también aquí** con su ISO-2. Si no,
+ * `Player.country` guardará un rótulo que estas tablas no conocen y la fila se
+ * pintará sin bandera, en silencio, que es justo el fallo que hay que
+ * evitar. No hay comprobación automática porque este módulo no puede leer ni la
+ * lista sembrada —vive en la base de datos— ni `DEFAULT_COUNTRIES` —que es
+ * `server-only`—; lo que sí existe es `npm run verify:sync`, que vigila que
+ * `paises.txt` y `DEFAULT_COUNTRIES` no divergan.
  */
 const ISO_BY_COUNTRY: Readonly<Record<string, string>> = {
   Colombia: "co",
@@ -92,3 +92,28 @@ export function countryFlagUrl(country: string | null): string | null {
 
   return `https://flagcdn.com/w40/${iso}.png`;
 }
+
+/**
+ * URL de la bandera en SVG (escala sin pixelarse), o `null` igual que
+ * `countryFlagUrl`.
+ *
+ * El SVG es para fondos decorativos de la clasificación, donde la bandera se pinta
+ * como imagen de fondo y el PNG de `w40` se vería borroso al escalarlo.
+ * El fichero vectorial se sirve a cualquier escala sin perder nitidez. La política
+ * de `null` es la misma que la de `countryFlagUrl`: sin país resoluble no se pinta
+ * nada, ni un fondo roto ni una bandera inventada.
+ */
+export function countryFlagSvgUrl(country: string | null): string | null {
+  if (country === null) {
+    return null;
+  }
+
+  const iso: string | undefined = ISO_BY_COUNTRY[country];
+
+  if (iso === undefined) {
+    return null;
+  }
+
+  return `https://flagcdn.com/${iso}.svg`;
+}
+

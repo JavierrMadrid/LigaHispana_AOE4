@@ -2,7 +2,7 @@
 description: Diseño y UX (interfaces, componentes, Tailwind, copy). Úsalo para crear o modificar cualquier UI, página, componente o estilo visual del frontend.
 mode: subagent
 model: opencode-go/deepseek-v4.1-flash
-variant: low
+variant: high
 temperature: 0.3
 permission:
   edit: allow

@@ -8,8 +8,8 @@ import type {
   StandingObjective,
   StandingRow,
 } from "@/lib/public";
+import { countryFlagSvgUrl } from "@/lib/flag";
 import { ChannelLinks } from "@/components/channel-links";
-import { CountryFlag } from "@/components/country-flag";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
 import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
@@ -39,6 +39,19 @@ const RANK_CLASS: Record<number, string> = {
   1: "font-display text-base text-accent",
   2: "font-display text-base text-podium-silver",
   3: "font-display text-base text-podium-bronze",
+};
+
+/**
+ * Tinte plano de podio para las tres primeras plazas, del mismo metal que
+ * `RANK_CLASS` y a poca opacidad para que el texto gris de las celdas se lea con
+ * holgura. El plata es un tono claro que, a esta opacidad, aclararía la fila y
+ * bajaría el contraste; por eso se oscurece mezclándolo con el fondo antes de
+ * darle alpha. `color-mix` mantiene el color atado a los tokens del sistema.
+ */
+const RANK_TINT: Record<number, string> = {
+  1: "color-mix(in oklab, var(--accent) 14%, transparent)",
+  2: "color-mix(in oklab, color-mix(in oklab, var(--podium-silver) 40%, var(--background)) 30%, transparent)",
+  3: "color-mix(in oklab, var(--podium-bronze) 13%, transparent)",
 };
 
 /**
@@ -335,7 +348,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
           <button
             type="button"
             onClick={clearFilters}
-            className="mt-5 inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong"
+            className="mt-5 inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong active:translate-y-px"
           >
             Quitar filtros
           </button>
@@ -699,6 +712,16 @@ function StandingsRow({
 }) {
   const league = rankLevelToLeague(row.rankLevel);
   const objectivesPanelId = `objetivos-${row.profileId}`;
+  // La bandera es la marca de país de la primera celda; sin país resoluble no se
+  // pinta. El tinte de podio, cuando toca, empieza justo después: la bandera
+  // ocupa la primera celda entera, así que el tinte va en las celdas de datos.
+  const flagSvg = countryFlagSvgUrl(row.country);
+  // Capa plana y translúcida sobre el `bg-surface` de la celda: va como
+  // `backgroundImage` para no anular el `group-hover:bg-surface-raised`, que es
+  // un `background-color`. Al ser plana, celdas contiguas quedan continuas.
+  const tint = RANK_TINT[row.rank];
+  const tintStyle =
+    tint === undefined ? undefined : { backgroundImage: `linear-gradient(${tint}, ${tint})` };
 
   return (
     <tbody className="group">
@@ -706,23 +729,35 @@ function StandingsRow({
         <td
           className={`${CELL} ${
             objectivesExpanded ? "rounded-tl-lg" : "rounded-l-lg"
-          } text-center font-semibold tabular-nums ${
+          } relative overflow-hidden text-center font-semibold tabular-nums ${
             RANK_CLASS[row.rank] ?? "text-muted"
           }`}
         >
-          {row.rank}
+          {flagSvg !== null ? (
+            <span
+              aria-hidden="true"
+              className={`pointer-events-none absolute inset-y-0 left-0 z-10 w-full bg-cover bg-center opacity-40 ${
+                objectivesExpanded ? "rounded-tl-lg" : "rounded-l-lg"
+              }`}
+              style={{ backgroundImage: `url(${flagSvg})` }}
+            />
+          ) : null}
+          <span className="relative z-10">{row.rank}</span>
+          {row.country !== null ? (
+            <span className="sr-only">País: {row.country}</span>
+          ) : null}
         </td>
 
-        <td className={CELL}>
+        <td className={CELL} style={tintStyle}>
           <div className="flex items-center gap-3">
-            {/* Bandera y avatar forman una unidad: van juntos, con menos aire
-                entre ellos que el resto de la fila, porque los dos responden a
-                "quién es". Sin país, `CountryFlag` no pinta nada y el avatar
-                vuelve a quedarse solo, sin hueco de más. */}
-            <span className="flex shrink-0 items-center gap-2">
-              <CountryFlag country={row.country} />
-              <PlayerAvatar name={row.name} avatarUrl={row.avatarUrl} className="size-9 text-xs" />
-            </span>
+            {/* El avatar responde a "quién es" y va solo: la bandera es ahora la
+                marca de país de la primera celda, con el puesto. */}
+            <PlayerAvatar
+              name={row.name}
+              avatarUrl={row.avatarUrl}
+              className="size-9 text-xs"
+              shape="circle"
+            />
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <PlayerName row={row} />
               <PlayerChips
@@ -735,11 +770,11 @@ function StandingsRow({
           </div>
         </td>
 
-        <td className={`${CELL} text-center`}>
+        <td className={`${CELL} text-center`} style={tintStyle}>
           <span className="tabular-nums text-muted">{row.wins + row.losses}</span>
         </td>
 
-        <td className={`${CELL} text-center`}>
+        <td className={`${CELL} text-center`} style={tintStyle}>
           {/* Total dominante con su desglose debajo: las tres cifras se leen
               sin hover, y el total conserva el peso del dato principal. La
               leyenda del desglose vive en la cabecera de la columna. */}
@@ -759,7 +794,7 @@ function StandingsRow({
           </div>
         </td>
 
-        <td className={`${CELL} text-center`}>
+        <td className={`${CELL} text-center`} style={tintStyle}>
           <span className="inline-flex items-center justify-center gap-1.5 tabular-nums text-foreground">
             {row.elo === null ? <span className="text-muted">-</span> : row.elo}
             {league !== null ? (
@@ -774,22 +809,32 @@ function StandingsRow({
           </span>
         </td>
 
-        <td className={`${CELL} whitespace-nowrap text-center tabular-nums`}>
-          <span className="text-win">{row.wins}</span>
-          <span className="text-muted"> - </span>
-          <span className="text-loss">{row.losses}</span>
+        <td
+          className={`${CELL} whitespace-nowrap text-center tabular-nums`}
+          style={tintStyle}
+        >
+          <span>
+            <span className="text-win">{row.wins}</span>
+            <span className="text-muted"> - </span>
+            <span className="text-loss">{row.losses}</span>
+          </span>
         </td>
 
-        <td className={`${CELL} text-center tabular-nums`}>
-          <StreakValue streak={row.streak} />
+        <td className={`${CELL} text-center tabular-nums`} style={tintStyle}>
+          <span>
+            <StreakValue streak={row.streak} />
+          </span>
         </td>
 
         <td
           className={`${CELL} ${
             objectivesExpanded ? "rounded-tr-lg" : "rounded-r-lg"
           } text-center`}
+          style={tintStyle}
         >
-          <ObjectivesLink profileId={row.profileId} name={row.name} />
+          <span className="inline-flex">
+            <ObjectivesLink profileId={row.profileId} name={row.name} />
+          </span>
         </td>
       </tr>
 
@@ -835,22 +880,42 @@ function StandingsCard({
   onToggleObjectives: (profileId: number) => void;
 }) {
   const objectivesPanelId = `objetivos-movil-${row.profileId}`;
+  // La bandera es la marca de país del borde izquierdo de la tarjeta. El tinte de
+  // podio, cuando toca, empieza justo después de ella, que ocupa `w-16`.
+  const flagSvg = countryFlagSvgUrl(row.country);
+  const tint = RANK_TINT[row.rank];
 
   return (
     <li
-      className={`rounded-lg border bg-surface p-3 transition-colors ${
+      className={`relative overflow-hidden rounded-lg border bg-surface p-3 transition-colors ${
         row.rank === 1 ? "border-accent/40" : "border-line"
       }`}
     >
-      <div className="flex items-start gap-3">
+      {tint !== undefined ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-16 right-0"
+          style={{ backgroundColor: tint }}
+        />
+      ) : null}
+      {flagSvg !== null ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-0 z-10 w-16 bg-cover bg-center opacity-40"
+          style={{ backgroundImage: `url(${flagSvg})` }}
+        />
+      ) : null}
+      <div className="relative z-10 flex items-start gap-3">
         <RankBadge rank={row.rank} />
-        {/* En móvil la bandera repite la posición de la tabla: entre el puesto y
-            el avatar. El bloque va `shrink-0` para que sea la identidad, y no la
-            bandera, quien ceda el ancho que sobra. */}
-        <span className="flex shrink-0 items-center gap-2">
-          <CountryFlag country={row.country} />
-          <PlayerAvatar name={row.name} avatarUrl={row.avatarUrl} className="size-9 text-xs" />
-        </span>
+        {row.country !== null ? <span className="sr-only">País: {row.country}</span> : null}
+        {/* El avatar responde a "quién es" y va solo: la bandera es ahora la
+            marca de país del borde izquierdo de la tarjeta. */}
+        <PlayerAvatar
+          name={row.name}
+          avatarUrl={row.avatarUrl}
+          className="size-9 text-xs"
+          shape="circle"
+        />
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -883,7 +948,7 @@ function StandingsCard({
       </div>
 
       {objectivesExpanded ? (
-        <div id={objectivesPanelId} className="mt-3 border-t border-line pt-3">
+        <div id={objectivesPanelId} className="relative z-10 mt-3 border-t border-line pt-3">
           <ObjectivesDetail objectives={row.objectives} />
         </div>
       ) : null}
@@ -1277,32 +1342,16 @@ function RankBadge({ rank }: { rank: number }) {
 }
 
 /**
- * Escala de color de la racha. Los umbrales salen del signo y la magnitud, en
- * un solo sitio para que el corte y el estilo no se dispersen: -6 o menos rojo,
- * de -5 a -1 naranja, de 0 a 4 verde amarillento y de 5 en adelante verde. El
- * signo `+` y la cifra ya dicen el dato; el color es solo refuerzo.
+ * Color de la racha en dos tonos: negativa o positiva. El signo `+` y la cifra
+ * ya dicen el dato; el color es solo refuerzo.
  */
 const STREAK_CLASS = {
-  slump: "text-streak-slump",
-  dip: "text-streak-dip",
-  rise: "text-streak-rise",
-  surge: "text-streak-surge",
+  down: "text-streak-down",
+  up: "text-streak-up",
 } as const;
 
 function streakTone(streak: number): string {
-  if (streak <= -6) {
-    return STREAK_CLASS.slump;
-  }
-
-  if (streak < 0) {
-    return STREAK_CLASS.dip;
-  }
-
-  if (streak < 5) {
-    return STREAK_CLASS.rise;
-  }
-
-  return STREAK_CLASS.surge;
+  return streak < 0 ? STREAK_CLASS.down : STREAK_CLASS.up;
 }
 
 function StreakValue({ streak }: { streak: number | null }) {

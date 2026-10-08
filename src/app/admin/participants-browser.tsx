@@ -357,7 +357,7 @@ export function ParticipantsBrowser({
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
+            <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
               <table className="w-full text-left text-sm">
                 <caption className="sr-only">
                   Jugadores del torneo: nombre, perfil de AoE4World, canales de directo,
@@ -385,13 +385,19 @@ export function ParticipantsBrowser({
                       className="hidden px-4 py-3 font-medium lg:table-cell"
                     />
                     {/* Los canales son enlaces: no se ordenan, no hay un criterio único. */}
-                    <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
+                    <th
+                      scope="col"
+                      className="hidden bg-surface px-4 py-3 font-medium lg:sticky lg:top-0 lg:z-10 lg:table-cell"
+                    >
                       Canales
                     </th>
                     {/* El Discord es de solo lectura y no se ordena: no hay un criterio
                         de orden que signifique algo para quien administra. La columna
                         muestra el @usuario y su estado de pertenencia al servidor. */}
-                    <th scope="col" className="hidden px-4 py-3 font-medium lg:table-cell">
+                    <th
+                      scope="col"
+                      className="hidden bg-surface px-4 py-3 font-medium lg:sticky lg:top-0 lg:z-10 lg:table-cell"
+                    >
                       Discord
                     </th>
                     <SortableHeaderButton
@@ -424,7 +430,10 @@ export function ParticipantsBrowser({
                       align="right"
                       className="hidden px-4 py-3 font-medium lg:table-cell"
                     />
-                    <th scope="col" className="px-4 py-3 text-right font-medium">
+                    <th
+                      scope="col"
+                      className="bg-surface px-4 py-3 text-right font-medium lg:sticky lg:top-0 lg:z-10"
+                    >
                       Acciones
                     </th>
                   </tr>
