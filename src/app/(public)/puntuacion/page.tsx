@@ -115,12 +115,12 @@ export default async function ScoringPage() {
                   aria-hidden="true"
                   className="font-display font-semibold tabular-nums text-accent"
                 >
-                  10
+                  2
                 </span>
                 <span>
                   Cada victoria en una partida clasificatoria vale{" "}
                   <strong className="font-semibold text-foreground">
-                    10 puntos
+                    2 puntos
                   </strong>
                   .
                 </span>

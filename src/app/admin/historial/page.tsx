@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   title: { absolute: "Historial de partidas · Admin" },
 };
 
-/** `1 punto` / `10 puntos`: el plural importa en un registro que se lee. */
+/** `1 punto` / `2 puntos`: el plural importa en un registro que se lee. */
 function puntos(count: number): string {
   return count === 1 ? "1 punto" : `${count} puntos`;
 }

@@ -20,7 +20,7 @@ Definen la competición. No se pueden incumplir.
 | Se compite en la **ladder *ranked***: 1v1 y ranked por equipos. El *quick match*, las partidas personalizadas y el resto de modos no cuentan. | — |
 | Solo puntúa la partida **resuelta**: una en curso no cuenta. | — |
 | Solo cuentan las partidas **dentro de las fechas del torneo** y **posteriores a la inscripción** del jugador. | — |
-| Los puntos son **10 por victoria** clasificatoria más los **82 objetivos** ([puntuación](./PUNTUACION.md), [objetivos](./OBJETIVOS.md)). | — |
+| Los puntos son **2 por victoria** clasificatoria más los **82 objetivos** ([puntuación](./PUNTUACION.md), [objetivos](./OBJETIVOS.md)). | — |
 
 ### De participación
 

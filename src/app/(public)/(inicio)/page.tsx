@@ -11,7 +11,7 @@ import { getLiveMatches, getStandings, getTournamentWindow } from "@/lib/public"
 export const metadata: Metadata = {
   title: "Clasificación general",
   description:
-    "Posiciones de la Liga Hispana de Age of Empires IV ordenadas por puntos: 10 por cada victoria clasificatoria más los puntos de los objetivos especiales.",
+    "Posiciones de la Liga Hispana de Age of Empires IV ordenadas por puntos: 2 por cada victoria clasificatoria más los puntos de los objetivos especiales.",
 };
 
 // La clasificación se lee de la base de datos en cada petición. Sin esto la

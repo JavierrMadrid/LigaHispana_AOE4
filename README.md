@@ -52,7 +52,7 @@ partidas y alertas, y gestionar el torneo.
 
 - **Individual, en la ladder *ranked*** del juego: 1v1 y ranked por equipos. El resto de modos no
   puntúa.
-- **10 puntos por victoria**, más **82 objetivos** que reparten puntos extra: **competiciones** (los
+- **2 puntos por victoria**, más **82 objetivos** que reparten puntos extra: **competiciones** (los
   cobra quien va primero) y **logros** (los cobra quien cumple la condición).
 - **Ventana de fechas**: solo cuentan las partidas jugadas dentro del periodo del torneo.
 - **Transparencia**: la organización vigila comportamientos que podrían inflar la clasificación

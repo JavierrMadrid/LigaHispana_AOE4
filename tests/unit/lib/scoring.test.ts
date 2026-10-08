@@ -58,7 +58,7 @@ describe("reglas v3 (constantes del motor)", () => {
   });
 
   it("los valores por defecto son los acordados", () => {
-    expect(DEFAULT_RULESET.pointsPerWin).toBe(10);
+    expect(DEFAULT_RULESET.pointsPerWin).toBe(2);
     // Por defecto la civ aleatoria no cuenta: no dice nada de la civilización de
     // nadie, así que no puede contar para los objetivos de civilización.
     expect(DEFAULT_RULESET.countRandomizedCivs).toBe(false);
