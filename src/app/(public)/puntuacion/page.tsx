@@ -55,16 +55,20 @@ export default async function ScoringPage() {
         .
       </p>
 
-      {/* Banda de resumen: las tres cifras que resumen el sistema antes del texto
+      {/* Banda de resumen: las cifras que resumen el sistema antes del texto
           normativo. Es el mismo cromo que la banda del torneo de la portada
-          (`thread-top`, `rounded-lg`, `border-line`, `bg-surface`). Solo las
-          victorias van en el oro del acento; el cero y el recuento de objetivos
-          se quedan en el texto. En móvil se apila. */}
+          (`thread-top`, `rounded-lg`, `border-line`, `bg-surface`) y se ciñe a
+          la medida de lectura con el mismo `max-w-[68ch] text-[15px]` que los
+          párrafos, para que su borde derecho case con el del texto. Los tres
+          datos van en una sola línea, anclados a los bordes de la banda
+          (`justify-between`); si el ancho no da, envuelven a la línea siguiente.
+          Solo las victorias van en el oro del acento; el cero y las cifras de
+          objetivos se quedan en el texto. */}
       <section
         aria-label="Resumen de la puntuación"
-        className="thread-top relative overflow-hidden rounded-lg border border-line bg-surface px-5 py-4"
+        className="thread-top relative max-w-[68ch] overflow-hidden rounded-lg border border-line bg-surface px-5 py-4 text-[15px]"
       >
-        <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-3">
+        <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3">
           <div className="flex items-baseline gap-2">
             <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
               2
@@ -81,7 +85,9 @@ export default async function ScoringPage() {
             <dd className="font-display text-2xl font-semibold tabular-nums text-foreground">
               82
             </dd>
-            <dt className="text-sm text-muted">objetivos especiales</dt>
+            <dt className="text-sm text-muted">
+              objetivos que reparten 4.679 puntos en total
+            </dt>
           </div>
         </dl>
       </section>
@@ -163,15 +169,63 @@ export default async function ScoringPage() {
               Una partida puntúa si cumple todo esto:
             </p>
             <ul className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
-              <li>
-                Es de la ladder <em>ranked</em>: 1vs1 o por equipos. Quick match y
-                personalizadas no cuentan.
+              <li className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className="font-display font-semibold text-accent"
+                >
+                  -
+                </span>
+                <span>
+                  Es de la ladder <em>ranked</em>: 1vs1 o por equipos. Quick
+                  match y personalizadas no cuentan.
+                </span>
               </li>
-              <li>Está terminada, con resultado.</li>
-              <li>Se jugó dentro de las fechas del torneo.</li>
-              <li>Es posterior a la inscripción del jugador.</li>
-              <li>No está revertida por la organización.</li>
-              <li>El jugador está aprobado.</li>
+              <li className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className="font-display font-semibold text-accent"
+                >
+                  -
+                </span>
+                <span>Está terminada, con resultado.</span>
+              </li>
+              <li className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className="font-display font-semibold text-accent"
+                >
+                  -
+                </span>
+                <span>Se jugó dentro de las fechas del torneo.</span>
+              </li>
+              <li className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className="font-display font-semibold text-accent"
+                >
+                  -
+                </span>
+                <span>Es posterior a la inscripción del jugador.</span>
+              </li>
+              <li className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className="font-display font-semibold text-accent"
+                >
+                  -
+                </span>
+                <span>No está revertida por la organización.</span>
+              </li>
+              <li className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className="font-display font-semibold text-accent"
+                >
+                  -
+                </span>
+                <span>El jugador está aprobado.</span>
+              </li>
             </ul>
 
             <div className="mt-6">

@@ -97,3 +97,50 @@ export function ObjectiveFamilySection({
     </section>
   );
 }
+
+type ObjectiveMasterizandoSectionProps = {
+  /** Las competiciones `masterizando-<civ>`, una por civilización, en orden. */
+  subobjectives: ObjectiveOption[];
+  standings: ObjectiveStandingPlayer[] | null;
+};
+
+/**
+ * Las competiciones `Masterizando <civ>` de `/objetivos`.
+ *
+ * No son una familia —no tienen cabeza que las agrupe—, pero se leen como tal:
+ * el mismo riel (`ObjectiveFamilyRail`) con su filtro de banderas, sus flechas y
+ * el salto por civilización, bajo un titular propio, para no amontonarlas en la
+ * rejilla de objetivos sueltos. La tarjeta abre la clasificación de esa
+ * civilización, igual que las de las familias.
+ */
+export function ObjectiveMasterizandoSection({
+  subobjectives,
+  standings,
+}: ObjectiveMasterizandoSectionProps) {
+  return (
+    <section className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1 border-b border-line pb-2">
+        <h3 className="font-display text-base font-semibold text-foreground">
+          Masterizando
+        </h3>
+        <p className="mt-0.5 text-xs text-muted">
+          Una competición por civilización: la cobra quien más victorias suma con
+          ella.
+        </p>
+      </div>
+
+      <ObjectiveFamilyRail
+        items={subobjectives}
+        itemsLabel="competiciones"
+        flagsLabel="Civilizaciones con competición"
+        renderCard={(child) => (
+          <ObjectiveDialogCard
+            option={child}
+            standings={standings}
+            actionLabel="Ver clasificación"
+          />
+        )}
+      />
+    </section>
+  );
+}

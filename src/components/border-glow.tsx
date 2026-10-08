@@ -8,10 +8,11 @@ import "./border-glow.css";
  * React Bits, adaptado).
  *
  * Se usa como cromo de las tarjetas de objetivo: pone el borde, el fondo y el
- * radio, y dibuja el halo al pasar el ratón. El brillo sale de `--accent` y
- * `--accent-strong`, así que es el oro de la casa en vez de la paleta morada
- * del original. No lleva la pila de sombras del componente original: la cara
- * pública del sitio no usa sombras.
+ * radio, dibuja el halo al pasar el ratón y deja una estela dorada que sigue al
+ * cursor por el interior. El brillo sale de `--accent` y `--accent-strong`, así
+ * que es el oro de la casa en vez de la paleta morada del original. No lleva la
+ * pila de sombras del componente original: la cara pública del sitio no usa
+ * sombras.
  */
 
 type BorderGlowProps = {
@@ -28,6 +29,7 @@ type BorderGlowProps = {
   glowIntensity?: number;
   edgeSensitivity?: number;
   coneSpread?: number;
+  /** Intensidad máxima de la estela dorada interior (0–1). */
   fillOpacity?: number;
   animated?: boolean;
 };
@@ -91,10 +93,10 @@ export function BorderGlow({
   backgroundColor = "var(--surface)",
   borderRadius = 8,
   glowRadius = 12,
-  glowIntensity = 1,
+  glowIntensity = 0.75,
   edgeSensitivity = 30,
   coneSpread = 25,
-  fillOpacity = 0.4,
+  fillOpacity = 0.28,
   animated = false,
 }: BorderGlowProps) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -124,6 +126,10 @@ export function BorderGlow({
 
     card.style.setProperty("--edge-proximity", (edge * 100).toFixed(3));
     card.style.setProperty("--cursor-angle", `${degrees.toFixed(3)}deg`);
+    // Posición del puntero dentro de la tarjeta, en píxeles: la estela interior
+    // (`::after`) centra ahí el degradado radial que sigue al cursor.
+    card.style.setProperty("--cursor-x", `${x.toFixed(1)}px`);
+    card.style.setProperty("--cursor-y", `${y.toFixed(1)}px`);
   }, []);
 
   // Barrido de entrada opcional; solo corre si el llamante lo pide.

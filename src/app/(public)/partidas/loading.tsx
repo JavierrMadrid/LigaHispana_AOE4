@@ -3,7 +3,7 @@
  *
  * La página es `force-dynamic` y relee la base en cada petición, así que entre la
  * navegación y los datos hay un hueco. Se reserva la forma de la rejilla real
- * —tarjetas con la banda del mapa a 16/7 y los dos bandos— con las mismas cajas
+ * —tarjetas con la banda del mapa a 4/3 y los dos bandos— con las mismas cajas
  * de `surface`/`line`, para que no salte el diseño al llegar las partidas.
  */
 export default function Loading() {
@@ -25,16 +25,16 @@ export default function Loading() {
 
       <ul
         aria-hidden="true"
-        className="grid items-start gap-4 lg:grid-cols-2"
+        className="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
       >
         {[0, 1, 2, 3].map((card) => (
           <li
             key={card}
             className="overflow-hidden rounded-lg border border-line bg-surface"
           >
-            <div className="aspect-[16/7] w-full bg-surface-raised" />
+            <div className="aspect-[4/3] w-full bg-surface-raised" />
 
-            <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-4">
+            <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-3">
               <div className="flex flex-1 flex-col gap-2">
                 <span className="h-4 w-3/4 rounded bg-surface-raised" />
                 <span className="h-4 w-1/2 rounded bg-surface-raised" />

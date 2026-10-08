@@ -76,6 +76,10 @@ secciones (es un objetivo que se consigue) y sus hijos van en un carrusel por fa
 alcance"** y tras sus tarjetas individuales, con el avance del jugador y las tarjetas ordenadas de
 mayor a menor porcentaje de consecución.
 
+Los 23 `masterizando-<civ>` no forman familia —no tienen cabeza que los agrupe—, pero en `/objetivos`
+se leen igual: bajo el titular «Masterizando», un riel con el mismo filtro de banderas y la misma
+navegación, con cada tarjeta abriendo la clasificación de esa civilización.
+
 ## Pool de mapas
 
 `por-tierra-y-agua` usa los mapas de `Setting["scoring.mapPool"]`: una lista de nombres **exactamente**
@@ -108,5 +112,7 @@ logro (que no decide puntos: todos los que cumplen cobran):
 
 A diferencia del catálogo anterior, el total en juego **no es un número cerrado**: un logro lo cobra
 cada participante que lo cumple, así que su reparto se multiplica por el número de beneficiarios.
-`imparable` reparte puntos variables por jugador. Los puntos por objetivo, uno a uno, están en las
-tablas de arriba y en `OBJECTIVE_POINTS`.
+`imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo
+contado una vez, `imparable` a su tope de 14— es **4.679 puntos**: es la cifra que resume la banda de
+`/puntuacion`. Los puntos por objetivo, uno a uno, están en las tablas de arriba y en
+`OBJECTIVE_POINTS`.

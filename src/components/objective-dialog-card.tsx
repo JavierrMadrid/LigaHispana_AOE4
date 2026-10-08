@@ -3,9 +3,10 @@
 import { useState, type ReactNode } from "react";
 import type { ObjectiveOption } from "@/lib/public";
 import { BorderGlow } from "@/components/border-glow";
-import { Modal } from "@/components/modal";
+import { ObjectiveFlipDialog } from "@/components/objective-flip-dialog";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { ObjectiveSummary, PrizePlate } from "@/components/objective-card";
+import { ObjectiveFeatureSummary } from "@/components/objective-feature-summary";
 import {
   ObjectiveStandings,
   type ObjectiveStandingPlayer,
@@ -19,7 +20,12 @@ type ObjectiveDialogCardProps = {
   mapPool?: readonly string[];
   /** Texto de la acción ("Ver clasificación" / "Ver completados"). */
   actionLabel?: string;
-  /** Alto de la tarjeta cerrada, en clases de Tailwind. */
+  /**
+   * Alto de la tarjeta cerrada, en clases de Tailwind. Por defecto ocupa el alto
+   * de su fila (`h-full`): en la rejilla, la fila la fija la tarjeta más alta y
+   * las demás se estiran a su altura; en el riel, la fija la más alta del carril.
+   * Así no queda hueco muerto bajo el pie de las tarjetas cortas.
+   */
   heightClass?: string;
   /** Participante a resaltar al abrir la clasificación (ficha de jugador). */
   highlightProfileId?: number | null;
@@ -28,22 +34,21 @@ type ObjectiveDialogCardProps = {
 };
 
 /**
- * Tarjeta de objetivo que abre su clasificación a tamaño ventana.
+ * Tarjeta de objetivo que abre su clasificación en una tarjeta volteable.
  *
- * Cerrada es un resumen del objetivo; al pulsarla se abre el `Modal` nativo —que
- * ya resuelve foco, `Esc` y bloqueo del scroll— con la clasificación y el avance
- * de cada participante. No hay giro 3D: la ventana aparece con una entrada
- * discreta (la misma del diálogo de clasificación del sitio), que basta para
- * leerla como una capa nueva sin simular el volteo de una tarjeta. La tarjeta
- * cerrada es un botón invisible que cubre el resumen: así se puede pulsar en
- * cualquier punto y el orden de tabulación tiene un único destino.
+ * Cerrada es un resumen del objetivo; al pulsarla se abre la ventana con la
+ * clasificación —la cara posterior, igual que la ventana anterior— y un giro
+ * (clic, teclado o arrastre) descubre el resumen front. El `Modal` de dentro
+ * sigue resolviendo foco, `Esc`, clic en el fondo y bloqueo del scroll. La
+ * tarjeta cerrada es un botón invisible que cubre el resumen: así se puede pulsar
+ * en cualquier punto y el orden de tabulación tiene un único destino.
  */
 export function ObjectiveDialogCard({
   option,
   standings,
   mapPool = [],
   actionLabel = "Ver clasificación",
-  heightClass = "h-72",
+  heightClass = "h-full",
   highlightProfileId = null,
   note,
 }: ObjectiveDialogCardProps) {
@@ -69,36 +74,48 @@ export function ObjectiveDialogCard({
       </BorderGlow>
 
       {open ? (
-        <Modal
-          open
+        <ObjectiveFlipDialog
           onClose={() => setOpen(false)}
           ariaLabel={`Clasificación de ${option.label}`}
+          cardLabel={option.label}
           closeLabel="Cerrar la clasificación"
-          className="m-auto h-[100dvh] max-h-[100dvh] w-full max-w-none overflow-hidden border-0 bg-transparent p-0 sm:h-[85vh] sm:max-h-[44rem] sm:max-w-4xl"
-        >
-          <div className="animate-dialog-in flex h-full flex-col rounded-lg border border-line bg-surface motion-reduce:animate-none">
-            <header className="flex items-start gap-4 border-b border-line p-4 pr-14 sm:p-6 sm:pr-16">
-              <span className="flex size-12 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
-                <ObjectiveIcon option={option} className="size-7 shrink-0" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <h2 className="font-display text-lg font-semibold leading-snug text-foreground sm:text-xl">
-                  {option.label}
-                </h2>
-                <p className="mt-1 text-sm leading-relaxed text-muted">{option.description}</p>
-              </div>
-              <PrizePlate points={option.points} />
-            </header>
-
-            <div className="flex-1 overflow-y-auto">
-              <ObjectiveStandings
+          front={
+            // El componente reserva arriba el aire del botón de cerrar del
+            // `Modal`, que flota sobre la esquina superior derecha de la tarjeta.
+            <div className="h-full overflow-y-auto">
+              <ObjectiveFeatureSummary
                 option={option}
-                players={standings}
-                highlightProfileId={highlightProfileId}
+                mapPool={mapPool}
+                actionLabel={actionLabel}
+                note={note}
               />
             </div>
-          </div>
-        </Modal>
+          }
+          back={
+            <div className="flex h-full flex-col">
+              <header className="flex items-start gap-4 border-b border-line p-6 pt-14 sm:p-8 sm:pt-16">
+                <span className="flex size-12 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
+                  <ObjectiveIcon option={option} className="size-7 shrink-0" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="font-display text-lg font-semibold leading-snug text-foreground sm:text-xl">
+                    {option.label}
+                  </h2>
+                  <p className="mt-1 text-sm leading-relaxed text-muted">{option.description}</p>
+                </div>
+                <PrizePlate points={option.points} />
+              </header>
+
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <ObjectiveStandings
+                  option={option}
+                  players={standings}
+                  highlightProfileId={highlightProfileId}
+                />
+              </div>
+            </div>
+          }
+        />
       ) : null}
     </>
   );

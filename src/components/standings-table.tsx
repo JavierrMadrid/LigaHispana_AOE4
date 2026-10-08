@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import type {
   DivisionId,
@@ -34,25 +34,58 @@ const CELL = "bg-surface px-3 py-2.5 transition-colors group-hover:bg-surface-ra
 /** La fila desplegable de objetivos ocupa el ancho de toda la tabla. */
 const OBJECTIVE_COLUMNS = 8;
 
-/** Podio: el oro de la casa para el 1.º, plata y bronce para el 2.º y el 3.º. */
-const RANK_CLASS: Record<number, string> = {
-  1: "font-display text-base text-accent",
-  2: "font-display text-base text-podium-silver",
-  3: "font-display text-base text-podium-bronze",
+/**
+ * Medalla de podio: oro, plata y bronce por tokens. Es la única marca de las tres
+ * primeras plazas y va donde iría el número: en la celda «Puesto» de la tabla y
+ * en el distintivo de puesto de la tarjeta. El oro es `--accent`, el mismo token
+ * que globals.css reserva a la medalla de la primera plaza.
+ */
+const MEDAL_CLASS: Record<number, string> = {
+  1: "text-accent",
+  2: "text-podium-silver",
+  3: "text-podium-bronze",
 };
 
+/** ¿La plaza es de podio (oro, plata o bronce)? */
+function isPodium(rank: number): boolean {
+  return MEDAL_CLASS[rank] !== undefined;
+}
+
 /**
- * Tinte plano de podio para las tres primeras plazas, del mismo metal que
- * `RANK_CLASS` y a poca opacidad para que el texto gris de las celdas se lea con
- * holgura. El plata es un tono claro que, a esta opacidad, aclararía la fila y
- * bajaría el contraste; por eso se oscurece mezclándolo con el fondo antes de
- * darle alpha. `color-mix` mantiene el color atado a los tokens del sistema.
+ * Estilo de la bandera: solo la imagen de fondo, limpia y sin fundido, para que
+ * el borde derecho quede nítido. Se estira al alto de la fila en vez de usar
+ * `cover` para que su escala vertical sea la misma que la del tinte y el empalme
+ * no muestre un escalón. El fondo va en un `span` y no en la celda para no anular
+ * el `group-hover:bg-surface-raised`, que es un `background-color`.
  */
-const RANK_TINT: Record<number, string> = {
-  1: "color-mix(in oklab, var(--accent) 14%, transparent)",
-  2: "color-mix(in oklab, color-mix(in oklab, var(--podium-silver) 40%, var(--background)) 30%, transparent)",
-  3: "color-mix(in oklab, var(--podium-bronze) 13%, transparent)",
-};
+function flagStyle(svg: string): CSSProperties {
+  return {
+    backgroundImage: `url(${svg})`,
+    backgroundSize: "100% 100%",
+  };
+}
+
+/**
+ * Tinte que prolonga la bandera hacia la izquierda con sus propios colores: la
+ * misma imagen, estirada para que solo asome su franja izquierda y volteada, de
+ * modo que el borde que toca la bandera muestra justo su columna izquierda y el
+ * empalme no se ve. La máscara lo funde a transparente al final del tinte: se
+ * define opaca a la izquierda y transparente a la derecha porque el `scaleX(-1)`
+ * la invierte al pintar.
+ */
+function flagTintStyle(svg: string): CSSProperties {
+  const mask = "linear-gradient(to right, black, transparent)";
+
+  return {
+    backgroundImage: `url(${svg})`,
+    backgroundSize: "2000% 100%",
+    backgroundPosition: "left center",
+    backgroundRepeat: "no-repeat",
+    transform: "scaleX(-1)",
+    maskImage: mask,
+    WebkitMaskImage: mask,
+  };
+}
 
 /**
  * Rótulos de grupo de los objetivos para la fila desplegable.
@@ -712,16 +745,9 @@ function StandingsRow({
 }) {
   const league = rankLevelToLeague(row.rankLevel);
   const objectivesPanelId = `objetivos-${row.profileId}`;
-  // La bandera es la marca de país de la primera celda; sin país resoluble no se
-  // pinta. El tinte de podio, cuando toca, empieza justo después: la bandera
-  // ocupa la primera celda entera, así que el tinte va en las celdas de datos.
+  // La bandera es la marca de país del borde derecho de la fila; sin país
+  // resoluble no se pinta.
   const flagSvg = countryFlagSvgUrl(row.country);
-  // Capa plana y translúcida sobre el `bg-surface` de la celda: va como
-  // `backgroundImage` para no anular el `group-hover:bg-surface-raised`, que es
-  // un `background-color`. Al ser plana, celdas contiguas quedan continuas.
-  const tint = RANK_TINT[row.rank];
-  const tintStyle =
-    tint === undefined ? undefined : { backgroundImage: `linear-gradient(${tint}, ${tint})` };
 
   return (
     <tbody className="group">
@@ -729,29 +755,24 @@ function StandingsRow({
         <td
           className={`${CELL} ${
             objectivesExpanded ? "rounded-tl-lg" : "rounded-l-lg"
-          } relative overflow-hidden text-center font-semibold tabular-nums ${
-            RANK_CLASS[row.rank] ?? "text-muted"
-          }`}
+          } text-center font-semibold tabular-nums text-muted`}
         >
-          {flagSvg !== null ? (
-            <span
-              aria-hidden="true"
-              className={`pointer-events-none absolute inset-y-0 left-0 z-10 w-full bg-cover bg-center opacity-40 ${
-                objectivesExpanded ? "rounded-tl-lg" : "rounded-l-lg"
-              }`}
-              style={{ backgroundImage: `url(${flagSvg})` }}
-            />
-          ) : null}
-          <span className="relative z-10">{row.rank}</span>
-          {row.country !== null ? (
-            <span className="sr-only">País: {row.country}</span>
-          ) : null}
+          {isPodium(row.rank) ? (
+            <>
+              <span className="sr-only">Puesto {row.rank}</span>
+              <span className="inline-flex items-center justify-center">
+                <MedalIcon rank={row.rank} className="size-6" />
+              </span>
+            </>
+          ) : (
+            row.rank
+          )}
         </td>
 
-        <td className={CELL} style={tintStyle}>
-          <div className="flex items-center gap-3">
-            {/* El avatar responde a "quién es" y va solo: la bandera es ahora la
-                marca de país de la primera celda, con el puesto. */}
+        <td className={CELL}>
+          <div className="relative z-[1] flex items-center gap-3">
+            {/* El avatar responde a "quién es"; el podio lo marca la medalla de la
+                columna de puesto. */}
             <PlayerAvatar
               name={row.name}
               avatarUrl={row.avatarUrl}
@@ -770,20 +791,18 @@ function StandingsRow({
           </div>
         </td>
 
-        <td className={`${CELL} text-center`} style={tintStyle}>
-          <span className="tabular-nums text-muted">{row.wins + row.losses}</span>
+        <td className={`${CELL} text-center`}>
+          <span className="relative z-[1] tabular-nums text-muted">
+            {row.wins + row.losses}
+          </span>
         </td>
 
-        <td className={`${CELL} text-center`} style={tintStyle}>
+        <td className={`${CELL} text-center`}>
           {/* Total dominante con su desglose debajo: las tres cifras se leen
               sin hover, y el total conserva el peso del dato principal. La
               leyenda del desglose vive en la cabecera de la columna. */}
-          <div className="flex flex-col items-center gap-0.5">
-            <span
-              className={`font-semibold tabular-nums ${
-                row.rank === 1 ? "text-accent" : "text-foreground"
-              }`}
-            >
+          <div className="relative z-[1] flex flex-col items-center gap-0.5">
+            <span className="font-semibold tabular-nums text-foreground">
               {row.points}
             </span>
             <span className="whitespace-nowrap text-xs leading-none tabular-nums text-muted">
@@ -794,8 +813,8 @@ function StandingsRow({
           </div>
         </td>
 
-        <td className={`${CELL} text-center`} style={tintStyle}>
-          <span className="inline-flex items-center justify-center gap-1.5 tabular-nums text-foreground">
+        <td className={`${CELL} text-center`}>
+          <span className="relative z-[1] inline-flex items-center justify-center gap-1.5 tabular-nums text-foreground">
             {row.elo === null ? <span className="text-muted">-</span> : row.elo}
             {league !== null ? (
               <span
@@ -811,28 +830,48 @@ function StandingsRow({
 
         <td
           className={`${CELL} whitespace-nowrap text-center tabular-nums`}
-          style={tintStyle}
         >
-          <span>
+          <span className="relative z-[1]">
             <span className="text-win">{row.wins}</span>
             <span className="text-muted"> - </span>
             <span className="text-loss">{row.losses}</span>
           </span>
         </td>
 
-        <td className={`${CELL} text-center tabular-nums`} style={tintStyle}>
-          <span>
+        <td className={`${CELL} text-center tabular-nums`}>
+          <span className="relative z-[1]">
             <StreakValue streak={row.streak} />
           </span>
         </td>
 
         <td
-          className={`${CELL} ${
+          className={`${CELL} relative ${
             objectivesExpanded ? "rounded-tr-lg" : "rounded-r-lg"
           } text-center`}
-          style={tintStyle}
         >
-          <span className="inline-flex">
+          {flagSvg !== null ? (
+            <>
+              {/* El tinte desborda la celda hacia la izquierda para prolongar los
+                  colores de la bandera; los textos de las celdas que cruza van un
+                  nivel por encima para quedar legibles sobre él. */}
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 right-full z-0 w-[36rem] opacity-25"
+                style={flagTintStyle(flagSvg)}
+              />
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-0 z-0 opacity-25 ${
+                  objectivesExpanded ? "rounded-tr-lg" : "rounded-r-lg"
+                }`}
+                style={flagStyle(flagSvg)}
+              />
+            </>
+          ) : null}
+          {row.country !== null ? (
+            <span className="sr-only">País: {row.country}</span>
+          ) : null}
+          <span className="relative z-10 inline-flex">
             <ObjectivesLink profileId={row.profileId} name={row.name} />
           </span>
         </td>
@@ -880,36 +919,30 @@ function StandingsCard({
   onToggleObjectives: (profileId: number) => void;
 }) {
   const objectivesPanelId = `objetivos-movil-${row.profileId}`;
-  // La bandera es la marca de país del borde izquierdo de la tarjeta. El tinte de
-  // podio, cuando toca, empieza justo después de ella, que ocupa `w-16`.
+  // La bandera es la marca de país del borde derecho de la tarjeta; sin país
+  // resoluble no se pinta.
   const flagSvg = countryFlagSvgUrl(row.country);
-  const tint = RANK_TINT[row.rank];
 
   return (
-    <li
-      className={`relative overflow-hidden rounded-lg border bg-surface p-3 transition-colors ${
-        row.rank === 1 ? "border-accent/40" : "border-line"
-      }`}
-    >
-      {tint !== undefined ? (
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 left-16 right-0"
-          style={{ backgroundColor: tint }}
-        />
-      ) : null}
+    <li className="relative overflow-hidden rounded-lg border border-line bg-surface p-3 transition-colors">
       {flagSvg !== null ? (
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 left-0 z-10 w-16 bg-cover bg-center opacity-40"
-          style={{ backgroundImage: `url(${flagSvg})` }}
-        />
+        <>
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-28 z-0 w-20 opacity-25"
+            style={flagTintStyle(flagSvg)}
+          />
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 z-0 w-28 opacity-25"
+            style={flagStyle(flagSvg)}
+          />
+        </>
       ) : null}
       <div className="relative z-10 flex items-start gap-3">
         <RankBadge rank={row.rank} />
-        {row.country !== null ? <span className="sr-only">País: {row.country}</span> : null}
-        {/* El avatar responde a "quién es" y va solo: la bandera es ahora la
-            marca de país del borde izquierdo de la tarjeta. */}
+        {/* El avatar responde a "quién es"; el podio lo marca la medalla del
+            distintivo de puesto. */}
         <PlayerAvatar
           name={row.name}
           avatarUrl={row.avatarUrl}
@@ -932,11 +965,10 @@ function StandingsCard({
         </div>
 
         <div className="shrink-0 text-right">
-          <span
-            className={`block font-semibold tabular-nums ${
-              row.rank === 1 ? "text-accent" : "text-foreground"
-            }`}
-          >
+          {row.country !== null ? (
+            <span className="sr-only">País: {row.country}</span>
+          ) : null}
+          <span className="block font-semibold tabular-nums text-foreground">
             {row.points}
           </span>
           {/* En la tabla de escritorio el desglose se explica con el subtítulo de
@@ -1168,6 +1200,44 @@ function TargetIcon({ className }: { className?: string }) {
 }
 
 /**
+ * Medalla del podio. Ocupa el puesto de las tres primeras plazas —la celda de la
+ * tabla y el distintivo de la tarjeta— y el mismo glifo vale para el oro, la
+ * plata y el bronce: el metal lo pone `MEDAL_CLASS`, así que la forma es una y el
+ * color la distingue. Es decorativa —el puesto va en un `sr-only` al lado—, por
+ * eso no lleva texto alternativo. Vive aquí y no en un fichero propio porque solo
+ * la usa la clasificación, igual que `TargetIcon` o `Chevron`; los iconos que
+ * comparten varias páginas sí tienen su módulo.
+ */
+function MedalIcon({ rank, className }: { rank: number; className?: string }) {
+  const color = MEDAL_CLASS[rank];
+
+  if (color === undefined) {
+    return null;
+  }
+
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={`${className ?? ""} shrink-0 ${color}`}
+    >
+      <path d="M8.5 2.5 12 9l3.5-6.5" />
+      <circle cx="12" cy="14.5" r="5.5" />
+      <path
+        d="M12 11.3 12.8 13.4 15 13.5 13.3 14.9 13.9 17.1 12 15.9 10.1 17.1 10.7 14.9 9 13.5 11.2 13.4Z"
+        fill="currentColor"
+        stroke="none"
+      />
+    </svg>
+  );
+}
+
+/**
  * Control del desplegable de objetivos: un botón de texto, en el mismo registro
  * discreto que los controles en texto de la tabla ("Quitar filtros"), con un
  * chevron que señala el estado. Se pinta el texto y el icono dentro del mismo
@@ -1322,19 +1392,21 @@ function PlayerName({ row }: { row: StandingRow }) {
 }
 
 /**
- * Puesto del jugador como distintivo de la tarjeta de móvil. Usa los mismos
- * colores de podio que la columna de la tabla, para que el primero siga leyéndose
- * en oro sin depender de la posición de una columna.
+ * Puesto del jugador como distintivo de la tarjeta de móvil. Neutro para todas
+ * las plazas salvo el podio, donde el número deja su sitio a la medalla de oro,
+ * plata o bronce; la caja y su tamaño se mantienen para que la columna no se
+ * descoloque entre filas. El puesto sigue anunciándose en texto para lectores de
+ * pantalla, porque la medalla es decorativa.
  */
 function RankBadge({ rank }: { rank: number }) {
   return (
-    <span
-      className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised tabular-nums ${
-        RANK_CLASS[rank] ?? "text-sm font-semibold text-muted"
-      }`}
-    >
-      <span className="sr-only">Puesto </span>
-      {rank}
+    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised text-sm font-semibold tabular-nums text-muted">
+      <span className="sr-only">Puesto {rank}</span>
+      {isPodium(rank) ? (
+        <MedalIcon rank={rank} className="size-5" />
+      ) : (
+        <span aria-hidden="true">{rank}</span>
+      )}
     </span>
   );
 }

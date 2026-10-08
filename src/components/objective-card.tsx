@@ -41,8 +41,8 @@ export function ObjectiveSummary({
   note,
 }: ObjectiveSummaryProps) {
   return (
-    <div className="flex h-full flex-col p-5">
-      <div className="flex items-center gap-4">
+    <div className="flex h-full flex-col p-4">
+      <div className="flex items-center gap-3">
         <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
           <ObjectiveIcon option={option} className="size-6 shrink-0" />
         </span>
@@ -52,15 +52,15 @@ export function ObjectiveSummary({
         <PrizePlate points={option.points} />
       </div>
 
-      <p className="mt-3 text-sm leading-relaxed text-muted">{option.description}</p>
+      <p className="mt-2 text-sm leading-relaxed text-muted">{option.description}</p>
 
       {note !== undefined ? (
-        <p className="mt-3 text-xs leading-relaxed text-muted">{note}</p>
+        <p className="mt-2 text-xs leading-relaxed text-muted">{note}</p>
       ) : null}
 
       {option.metric === "mapas" && mapPool.length > 0 ? <MapPool maps={mapPool} /> : null}
 
-      <div className="mt-auto flex items-end justify-between gap-4 border-t border-line pt-4">
+      <div className="mt-auto flex items-end justify-between gap-4 border-t border-line pt-3">
         <ObjectiveStatus option={option} />
         {/* El icono y el texto acompañan al botón invisible que cubre la tarjeta
             (ver `ObjectiveDialogCard`); el `pointer-events-none` deja que el clic
@@ -75,7 +75,7 @@ export function ObjectiveSummary({
 }
 
 /** El estado del objetivo: quién lo posee, o cuánta gente lo ha conseguido. */
-function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
+export function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
   return (
     <div className="min-w-0">
       <p className="text-xs font-medium uppercase tracking-wide text-muted">
@@ -113,7 +113,7 @@ function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
 /** Los mapas del pool activo, en el objetivo que exige jugar en cada uno. */
 export function MapPool({ maps }: { maps: readonly string[] }) {
   return (
-    <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-muted">
+    <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted">
       <span className="font-medium text-foreground/90">
         {maps.length === 1 ? "1 mapa" : `${maps.length} mapas`}
       </span>
