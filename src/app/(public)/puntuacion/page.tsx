@@ -67,7 +67,7 @@ export default async function ScoringPage() {
         <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-3">
           <div className="flex items-baseline gap-2">
             <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
-              10
+              2
             </dd>
             <dt className="text-sm text-muted">puntos por victoria</dt>
           </div>
