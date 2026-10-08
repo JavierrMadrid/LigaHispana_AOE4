@@ -139,7 +139,7 @@ function DiscordOAuthNotice({ notice }: { notice: DiscordNotice }) {
       role={isError ? "alert" : "status"}
       className={`rounded-md border px-4 py-3 text-sm leading-relaxed ${
         isError
-          ? "border-red-500/40 bg-red-500/5 text-red-300"
+          ? "border-danger/40 bg-danger/5 text-danger-soft"
           : "border-line bg-surface text-muted"
       }`}
     >
