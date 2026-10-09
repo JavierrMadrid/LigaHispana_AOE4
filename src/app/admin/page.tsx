@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { approvePlayer, rejectPlayer } from "@/app/admin/actions";
+import { DonationsForm } from "@/app/admin/donations-form";
 import { ParticipantsBrowser } from "@/app/admin/participants-browser";
 import { PlayerForm } from "@/app/admin/player-form";
 import { RegistrationSwitch } from "@/app/admin/registration-switch";
@@ -10,8 +11,9 @@ import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
+import { DEFAULT_MATCHERINO_DONATIONS } from "@/lib/donations";
 import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
-import { readRegistrationOpen } from "@/lib/settings";
+import { readMatcherinoDonations, readRegistrationOpen } from "@/lib/settings";
 
 export const metadata: Metadata = {
   title: { absolute: "Participantes · Admin" },
@@ -48,9 +50,14 @@ export default async function AdminPage() {
   // ambas al guardar —el país en el alta y el plazo en el alta y en el envío
   // público—, así que una lectura degradada aquí no abre nada por accidente. Van
   // en paralelo porque son independientes.
-  const [countries, registrationOpen] = await Promise.all([
+  //
+  // La campaña de donaciones sigue el mismo criterio: si no se puede leer, se
+  // muestra apagada y sin URL. No puede publicarse un banner roto por accidente
+  // —activar exige una dirección—, así que degradar aquí es seguro.
+  const [countries, registrationOpen, donations] = await Promise.all([
     readCountries().catch(() => [...DEFAULT_COUNTRIES]),
     readRegistrationOpen().catch(() => DEFAULT_REGISTRATION_OPEN),
+    readMatcherinoDonations().catch(() => DEFAULT_MATCHERINO_DONATIONS),
   ]);
 
   // `syncHealth` es un `PublicRead`: `status` distingue "no se ha podido leer" de
@@ -227,6 +234,18 @@ export default async function AdminPage() {
         </p>
         <div className="mt-4">
           <RegistrationSwitch open={registrationOpen} />
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-lg font-medium">Donaciones</h2>
+        <p className="mt-1 max-w-[70ch] text-sm text-muted">
+          El banner de donaciones de la web pública. Mientras esté publicado y tenga la
+          dirección de la campaña de Matcherino, aparece en lo alto de todas las páginas
+          del sitio.
+        </p>
+        <div className="mt-4">
+          <DonationsForm donations={donations} />
         </div>
       </section>
 

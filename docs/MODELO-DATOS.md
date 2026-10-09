@@ -239,6 +239,7 @@ Claves vivas en producción, con quién las escribe:
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |
 | `registration.countries` | Países que admite el formulario. | `npm run countries:seed` |
 | `registration.open` | Si la inscripción está abierta. | Panel de admin |
+| `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel de admin |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube ya resuelto. | Worker |
 | `aoe4world.sync.player.<profileId>` | Cursor de sincronización por jugador. | Worker |

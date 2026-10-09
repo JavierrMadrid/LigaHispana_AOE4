@@ -1,17 +1,25 @@
 import Image from "next/image";
 import Link from "next/link";
 import { AdminAccess } from "@/components/admin-access";
+import { DonationBanner } from "@/components/donation-banner";
 import { ParticipateCta } from "@/components/participate-cta";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav, SiteTabBar } from "@/components/site-nav";
+import { getMatcherinoDonations } from "@/lib/public";
 
-export default function PublicLayout({
+export default async function PublicLayout({
   children,
   modal,
 }: {
   children: React.ReactNode;
   modal: React.ReactNode;
 }) {
+  // Lectura ligera de `Setting`, envuelta en `cache()` por si otra pieza de la
+  // misma petición la necesita. Con la base caída llega `"degraded"`: el banner no
+  // se pinta, porque un aviso de base caída en todas las páginas públicas sería
+  // ruido y "no hay campaña publicada" deja la misma página.
+  const donationsRead = await getMatcherinoDonations();
+
   return (
     // El relleno inferior deja libre la franja que ocupa `SiteTabBar` en móvil:
     // la barra es fija y, sin él, taparía el último tramo del pie. Desde `sm` la
@@ -23,6 +31,16 @@ export default function PublicLayout({
       >
         Saltar al contenido
       </a>
+
+      {/* El banner va antes de la cabecera y **fuera de su `sticky`**, en el flujo
+          normal: así la cabecera (`sticky top-0 z-20`) se pega al borde superior al
+          desplazar y el banner, que ya ha subido, no queda debajo ni la tapa. Debajo
+          de la cabecera se leería a medias durante el desplazamiento. Solo se pinta
+          cuando la lectura fue `"ok"`; el propio componente devuelve `null` si la
+          campaña está apagada. */}
+      {donationsRead.status === "ok" ? (
+        <DonationBanner donations={donationsRead.data} />
+      ) : null}
 
       <header className="thread-bottom relative sticky top-0 z-20 border-b border-line bg-background/95 backdrop-blur">
         {/* La cabecera es más ancha que `main` (`max-w-[80rem]`) a propósito: así el

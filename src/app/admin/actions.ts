@@ -14,6 +14,7 @@ import { requireAdmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { logDatabaseFailure, uniqueViolationOn } from "@/lib/db-errors";
+import { parseMatcherinoDonations } from "@/lib/donations";
 import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
 import {
   isLegacyYoutubeUrl,
@@ -29,7 +30,7 @@ import {
 import { countsAsRanked } from "@/lib/ranked-match";
 import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
-import { readRegistrationOpen, writeRegistrationOpen } from "@/lib/settings";
+import { readRegistrationOpen, writeMatcherinoDonations, writeRegistrationOpen } from "@/lib/settings";
 
 /**
  * Server Actions del panel de administración.
@@ -1193,6 +1194,101 @@ export async function setRegistrationOpen(formData: FormData): Promise<void> {
   // público donde se nota.
   revalidatePath("/admin");
   revalidatePath("/participar");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Banner de donaciones                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * La dirección no vale.
+ *
+ * La decidimos aquí y no en el parser para poder decírselo a quien la escribió: el
+ * parser (`parseMatcherinoDonations()`) descarta en silencio lo que no es `http` o
+ * `https` porque su trabajo es leer lo guardado, pero un formulario que se queda
+ * sin guardar sin explicar por qué es peor que uno que pide corregirlo.
+ */
+const DONATIONS_INVALID_URL_ERROR =
+  "La dirección de la campaña tiene que empezar por http:// o https://. Cópiala tal cual desde Matcherino.";
+
+/** Un banner activo sin dirección no lleva a ningún sitio: mejor no publicarlo. */
+const DONATIONS_ENABLED_WITHOUT_URL_ERROR =
+  "Para activar el banner hay que indicar la dirección de la campaña de Matcherino.";
+
+/**
+ * Activa o desactiva el banner de donaciones y guarda la URL de la campaña.
+ *
+ * Escribe `Setting["donations.matcherino"]`, que es lo que lee el layout público
+ * para pintar el banner. Va **detrás de `requireAdmin()`**, como todas las de este
+ * archivo: es un cambio de cara al público y no se puede dejar al criterio de quien
+ * llame a la acción directamente.
+ *
+ * ## Un solo formulario, una foto completa
+ *
+ * La acción escribe activación y URL **juntas**, como `updatePlayer()` reescribe sus
+ * siete campos: el formulario del panel es una foto de la campaña y siempre manda
+ * los dos campos. Un `enabled` ausente cuenta como apagado —el estado seguro, igual
+ * que en `setRegistrationOpen()`—, así que una casilla sin marcar (que el navegador
+ * no envía) desactiva el banner en lugar de dejarlo en un estado ambiguo.
+ *
+ * ## Por qué devuelve estado y no es `void` como `setRegistrationOpen()`
+ *
+ * Porque aquí hay un campo de texto libre que se puede escribir mal. Un `void` sin
+ * estado no tendría dónde decir "esa dirección no vale" y el formulario se cerraría
+ * como si hubiera guardado, cuando lo que pasó es que no. Se devuelve
+ * `AdminActionResult` para que el panel pueda enseñar el motivo; el `try` cubre
+ * **solo** la escritura, como manda el patrón de este archivo.
+ *
+ * ## Qué revalida
+ *
+ * `/admin`, donde está el formulario, y el layout de `(public)`, que es quien pinta
+ * el banner: apagarlo o cambiarle la URL tiene que verse en la siguiente visita sin
+ * desplegar. Las páginas públicas son `force-dynamic` y releen igualmente, pero
+ * revalidar el layout es lo que invalida lo que envuelve.
+ */
+export async function setMatcherinoDonations(
+  _prevState: AdminActionResult,
+  formData: FormData,
+): Promise<AdminActionResult> {
+  await requireAdmin();
+
+  const urlRaw = readField(formData, "url");
+  const enabled = readField(formData, "enabled") === "true";
+
+  // El parser es la única definición de qué es una campaña válida: valida la URL y,
+  // además, la deja apagada si no hay dirección. Se le pasa lo que se ha escrito y
+  // se comparan los dos casos por separado para poder decir qué hay que corregir.
+  const donations = parseMatcherinoDonations({ enabled, url: urlRaw });
+
+  if (urlRaw !== "" && donations.url === "") {
+    return { status: "error", message: DONATIONS_INVALID_URL_ERROR };
+  }
+
+  // `enabled` es el valor crudo, no el ya normalizado: si se pidió activar y no hay
+  // dirección, el parser ya la apagó y hay que explicar que falta lo uno o lo otro.
+  if (enabled && donations.url === "") {
+    return { status: "error", message: DONATIONS_ENABLED_WITHOUT_URL_ERROR };
+  }
+
+  try {
+    await writeMatcherinoDonations(donations);
+  } catch (error) {
+    logDatabaseFailure("admin/setMatcherinoDonations", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/(public)", "layout");
+
+  return {
+    status: "success",
+    message: donations.enabled
+      ? "Banner de donaciones activado."
+      : donations.url === ""
+        ? "Banner de donaciones desactivado."
+        : "Banner de donaciones desactivado. La dirección queda guardada por si la vuelves a activar.",
+  };
 }
 
 /* -------------------------------------------------------------------------- */
