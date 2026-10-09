@@ -54,7 +54,7 @@ export default async function AdminLayout({
           </div>
         </div>
 
-        {/* Las cuatro pestañas van en su propia fila: con los nombres completos no
+        {/* Las cinco pestañas van en su propia fila: con los nombres completos no
             caben junto a la marca y el cierre de sesión. En móvil se desplazan en
             horizontal en lugar de partirse. */}
         <div className="mx-auto w-full max-w-5xl px-4">

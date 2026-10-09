@@ -1190,8 +1190,10 @@ export async function setRegistrationOpen(formData: FormData): Promise<void> {
     return;
   }
 
-  // Las dos caras del interruptor: el panel donde se cambia y el formulario
-  // público donde se nota.
+  // El valor del interruptor se lee en tres sitios: la Configuración donde se
+  // cambia, el alta de `/admin`, que se deshabilita con el plazo cerrado, y el
+  // formulario público.
+  revalidatePath("/admin/configuracion");
   revalidatePath("/admin");
   revalidatePath("/participar");
 }
@@ -1241,10 +1243,10 @@ const DONATIONS_ENABLED_WITHOUT_URL_ERROR =
  *
  * ## Qué revalida
  *
- * `/admin`, donde está el formulario, y el layout de `(public)`, que es quien pinta
- * el banner: apagarlo o cambiarle la URL tiene que verse en la siguiente visita sin
- * desplegar. Las páginas públicas son `force-dynamic` y releen igualmente, pero
- * revalidar el layout es lo que invalida lo que envuelve.
+ * `/admin/configuracion`, donde está el formulario, y el layout de `(public)`, que es
+ * quien pinta el banner: apagarlo o cambiarle la URL tiene que verse en la siguiente
+ * visita sin desplegar. Las páginas públicas son `force-dynamic` y releen igualmente,
+ * pero revalidar el layout es lo que invalida lo que envuelve.
  */
 export async function setMatcherinoDonations(
   _prevState: AdminActionResult,
@@ -1278,7 +1280,7 @@ export async function setMatcherinoDonations(
     return { status: "error", message: SAVE_FAILED_MESSAGE };
   }
 
-  revalidatePath("/admin");
+  revalidatePath("/admin/configuracion");
   revalidatePath("/(public)", "layout");
 
   return {
