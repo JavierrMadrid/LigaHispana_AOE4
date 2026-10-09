@@ -108,9 +108,10 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
               </Rule>
 
               <Rule index={5} title="Equipos en una división muy distinta" mode="Solo equipos">
-                Se compara el elo del jugador en esa partida de equipo con la media del
-                juego, las dos de la misma ladder. Si distan {thresholds.lowDivisionSteps}{" "}
-                escalones de división o más, por encima o por debajo, se avisa.
+                Se compara el rating del jugador en esa partida de equipo con el rating
+                medio de la partida, los dos de la misma ladder. Si distan{" "}
+                {thresholds.lowDivisionSteps} escalones de división o más, por encima o
+                por debajo, se avisa.
               </Rule>
             </ol>
 
@@ -120,8 +121,9 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
               cierre con el conteo que tenga. Las de total se crean al alcanzar el
               umbral. Solo cuentan las partidas clasificatorias resueltas y no
               revertidas, y las partidas que no puntúan no rompen las rachas. Cada
-              umbral avisa una sola vez. La regla 5 necesita el elo del jugador en esa
-              partida de equipo y la media del juego: sin ellos no se puede evaluar.
+              umbral avisa una sola vez. La regla 5 necesita el rating del jugador en esa
+              partida de equipo y el rating medio de la partida: sin ellos no se puede
+              evaluar.
             </p>
 
             <div className="mt-6 border-t border-line pt-5">

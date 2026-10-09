@@ -2,7 +2,7 @@ import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, AlertKind, AlertRule, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
-import { ALERT_RULE_LABELS, readAlertsRuleset, type AlertsThresholds } from "@/lib/alerts";
+import { ALERT_RULE_LABELS, anchorInstant, readAlertsRuleset, type AlertsThresholds } from "@/lib/alerts";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { describeTeamSize, formatRelativeTime, teamSizesFromRawJson } from "@/lib/format";
@@ -1589,12 +1589,16 @@ export async function getAdminActions(
  * llama la regla: el informe descargable y el panel leerían la misma alerta con dos
  * nombres distintos en cuanto uno de los dos se tocara.
  *
- * ## Lo que no viaja
+ * ## La partida que ancla la alerta
  *
- * Ni `threshold` ni `anchorGameId` ni `details`: esta fila es para leer de un vistazo, y
- * lo que hay detrás está en el informe descargable y en `Alert`. El `summary` sí viaja
- * entero, redactado por el motor al escribir la fila, y se pinta tal cual —montar la
- * frase en el componente daría dos textos para el mismo hallazgo—.
+ * De `Alert.details` —un `Json`— se publican solo dos cosas, y validadas: la partida
+ * ancla (`anchorGameId`, que también es columna propia) y su instante
+ * (`anchorStartedAt`), este último leído con `anchorInstant()`, el mismo validador
+ * que usa el informe descargable. El resto de `details` no viaja: su forma cambia con
+ * cada regla y esta fila es para leer de un vistazo; lo que hay detrás está en el
+ * informe y en `Alert`. El `summary` sí viaja entero, redactado por el motor al
+ * escribir la fila, y se pinta tal cual —montar la frase en el componente daría dos
+ * textos para el mismo hallazgo—.
  */
 export type AdminAlertRow = {
   /** `Alert.id`. */
@@ -1623,6 +1627,15 @@ export type AdminAlertRow = {
   count: number;
   /** La frase en español, tal cual se pinta. La redacta `alertSummary()`. */
   summary: string;
+  /** `Alert.anchorGameId`: la partida que ancla la alerta, o `null`. */
+  anchorGameId: string | null;
+  /**
+   * `Match.startedAt` de la partida ancla, leído y validado de
+   * `Alert.details.anchorStartedAt` con `anchorInstant()`. `null` si la alerta no
+   * tiene ancla o si el `details` no lo trae legible (una fila de otra versión del
+   * código).
+   */
+  anchorStartedAt: Date | null;
 };
 
 /**
@@ -1630,6 +1643,9 @@ export type AdminAlertRow = {
  *
  * El nombre del jugador no está en la alerta (a propósito: un nombre guardado se
  * quedaría congelado el día que alguien se renombre), así que sale del `join`.
+ *
+ * `anchorGameId` es una columna y `details` es el `Json` del motor: se lee entero para
+ * sacar de él, y validado con `anchorInstant()`, el instante de la partida ancla.
  */
 const ALERT_SELECT = {
   id: true,
@@ -1640,6 +1656,8 @@ const ALERT_SELECT = {
   subjectProfileId: true,
   count: true,
   summary: true,
+  anchorGameId: true,
+  details: true,
   player: { select: { name: true, profileId: true } },
 } satisfies Prisma.AlertSelect;
 
@@ -1821,6 +1839,8 @@ export async function getAdminAlerts(
           subjectProfileId: row.subjectProfileId,
           count: row.count,
           summary: row.summary,
+          anchorGameId: row.anchorGameId,
+          anchorStartedAt: anchorInstant(row.details),
         })),
       };
     }, page, pageSize, sort);

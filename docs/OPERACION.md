@@ -307,10 +307,11 @@ npm run alerts:cutoffs -- --show
 - **Cortes de división (R5)**: se cachean en `Setting["alerts.divisionCutoffs"]` y se derivan a mano
   con `alerts:cutoffs` (~150 peticiones) porque la API ignora `rating_min`/`rank_level`. Solo se derivan
   los de `rm_team` (la única familia que R5 consulta; el `rm_solo` que se derivaba antes ya no lo lee
-  nadie y se poda al reescribir la caché). R5 compara el elo del jugador en la partida de equipo con la
-  media del juego, las dos traducidas a subdivisión con los cortes de la familia de la partida
-  (`Match.mode`, `rm_team`), y avisa si distan 3 escalones o más en cualquiera de los dos sentidos. Sin
-  cortes, R5 se omite con un aviso y las otras diez reglas siguen.
+  nadie y se poda al reescribir la caché). R5 compara el rating del jugador en la partida de equipo con
+  la media de **rating** de esa partida (`average_rating`), las dos traducidas a subdivisión con los cortes
+  de la familia de la partida (`Match.mode`, `rm_team`), y avisa si distan 3 escalones o más en cualquiera
+  de los dos sentidos. El `mmr` del payload es otra escala y no se usa. Sin cortes, R5 se omite con un
+  aviso y las otras diez reglas siguen.
 - Un fallo del motor **no** mueve `lastSuccessAt`.
 
 ## Directos (YouTube y Kick)

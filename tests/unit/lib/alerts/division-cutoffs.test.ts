@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  lowestRatingInSubdivision,
+  majoritySubdivisionIndex,
   pruneCutoffsTable,
   readCutoffsTable,
   subdivisionForRating,
@@ -113,8 +115,8 @@ describe("readCutoffsTable — lo que se guarda se vuelve a leer igual", () => {
   });
 
   it("las ladders se guardan por separado, con su propia escala", () => {
-    // `average_mmr` es elo de equipos: las dos ladders no comparten cortes y
-    // confundirlas daría escalones que no existen.
+    // El rating de cada familia se traduce con sus cortes: las dos ladders no
+    // comparten escala y confundirlas daría escalones que no existen.
     const leidos = desdeJson(guardado(tabla(RM_SOLO, RM_TEAM)));
 
     expect(leidos?.["rm_solo"]?.cutoffs[0]?.minRating).toBe(5000);
@@ -173,7 +175,7 @@ describe("readCutoffsTable — una fila mala tumba su ladder y solo la suya", ()
   });
 
   it("un corte con el rating o el `rank_level` ilegible también invalida la ladder", () => {
-    // `minRating` decide en qué bloque cae un `average_mmr`, así que un string, un
+    // `minRating` decide en qué bloque cae un `average_rating`, así que un string, un
     // `NaN` o un corte que no es un objeto hacen la ladder tan inservible como una
     // subdivisión inventada.
     const malos: unknown[] = [
@@ -309,5 +311,76 @@ describe("subdivisionForRating", () => {
         1000,
       ),
     ).toBeNull();
+  });
+});
+
+describe("majoritySubdivisionIndex — la subdivisión de una página es la mayoritaria", () => {
+  const fila = (rankLevel: string | null) => ({ rankLevel, rating: 1000 });
+  const indice = (rankLevel: string) => (SUBDIVISION_RANK_LEVELS as readonly string[]).indexOf(rankLevel);
+
+  it("devuelve la subdivisión que más aparece, no la primera fila", () => {
+    // La ladder trae etiquetas incoherentes por Glicko: la fila suelta que va
+    // primero no puede decidir el bloque de la página.
+    expect(
+      majoritySubdivisionIndex([fila("gold_3"), fila("gold_2"), fila("gold_2"), fila("gold_2")]),
+    ).toBe(indice("gold_2"));
+  });
+
+  it("ignora las filas sin subdivisión reconocible", () => {
+    expect(majoritySubdivisionIndex([fila(null), fila(""), fila("plata_1"), fila("gold_1")])).toBe(
+      indice("gold_1"),
+    );
+  });
+
+  it("un empate se resuelve hacia la subdivisión más fuerte, para que sea determinista", () => {
+    expect(
+      majoritySubdivisionIndex([fila("gold_1"), fila("gold_2"), fila("gold_1"), fila("gold_2")]),
+    ).toBe(indice("gold_2"));
+    expect(
+      majoritySubdivisionIndex([fila("gold_2"), fila("gold_1"), fila("gold_2"), fila("gold_1")]),
+    ).toBe(indice("gold_2"));
+  });
+
+  it("sin ninguna fila reconocible no hay mayoría", () => {
+    expect(majoritySubdivisionIndex([])).toBeNull();
+    expect(majoritySubdivisionIndex([fila(null), fila("plata_1")])).toBeNull();
+  });
+});
+
+describe("lowestRatingInSubdivision — el corte se lee al final del bloque", () => {
+  const fila = (rankLevel: string | null, rating: number | null): { rankLevel: string | null; rating: number | null } => ({
+    rankLevel,
+    rating,
+  });
+  const gold3 = SUBDIVISION_RANK_LEVELS.indexOf("gold_3");
+
+  it("se queda con el rating más bajo de la subdivisión, ignorando las demás de la página", () => {
+    // En una página de frontera conviven dos bloques: el mínimo de la página es de
+    // la subdivisión siguiente y no puede ser el corte de `target`.
+    const rows = [fila("gold_3", 978), fila("gold_3", 940), fila("gold_2", 899), fila("gold_2", 850)];
+
+    expect(lowestRatingInSubdivision(rows, gold3)).toBe(940);
+  });
+
+  it("reproduce el desvío del arreglo: leer el inicio del bloque da el máximo, no el mínimo", () => {
+    // La búsqueda devolvía la **primera** página del bloque (mínimo 978) en vez de la
+    // última (mínimo 900), y el corte salía ~80 puntos alto con las etiquetas
+    // corridas un escalón. El corte correcto es el de la última página.
+    const primeraPagina = [fila("gold_3", 999), fila("gold_3", 978)];
+    const ultimaPagina = [fila("gold_3", 926), fila("gold_3", 900)];
+
+    expect(lowestRatingInSubdivision(primeraPagina, gold3)).toBe(978);
+    expect(lowestRatingInSubdivision([...ultimaPagina, ...primeraPagina], gold3)).toBe(900);
+  });
+
+  it("ignora las filas sin `rating` o con `rank_level` desconocido", () => {
+    const rows = [fila("gold_3", null), fila("plata_1", 100), fila("gold_3", 910)];
+
+    expect(lowestRatingInSubdivision(rows, gold3)).toBe(910);
+  });
+
+  it("sin filas de la subdivisión devuelve `null`", () => {
+    expect(lowestRatingInSubdivision([fila("gold_2", 800)], gold3)).toBeNull();
+    expect(lowestRatingInSubdivision([], gold3)).toBeNull();
   });
 });

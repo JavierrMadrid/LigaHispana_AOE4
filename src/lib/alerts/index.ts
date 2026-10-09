@@ -28,7 +28,7 @@ export {
   type EvaluateAlertsResult,
 } from "./evaluate";
 
-export { buildAlertsReport, type AlertsReport } from "./report";
+export { buildAlertsReport, anchorInstant, type AlertsReport } from "./report";
 
 export {
   mergeAlertsRuleset,

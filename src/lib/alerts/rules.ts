@@ -328,11 +328,14 @@ export type AlertAnchorDetail = {
    * negativo si está por encima; el aviso sale con el valor absoluto.
    */
   steps?: number;
-  /** Media de elo de la partida de equipo (R5). */
-  averageMmr?: number;
-  /** Elo del jugador en esa partida de equipo (R5). */
+  /**
+   * Media de **rating** de la partida de equipo (R5). Es la escala de la ladder,
+   * la misma que `selfRating`; **no** es el `mmr` de la partida.
+   */
+  averageRating?: number;
+  /** Rating del jugador en esa partida de equipo (R5). */
   selfRating?: number;
-  /** Subdivisión a la que corresponde la media de la partida, ya resuelta (R5). */
+  /** Subdivisión a la que corresponde la media de rating de la partida, ya resuelta (R5). */
   gameSubdivision?: string;
   /** Subdivisión del jugador en esa partida de equipo, ya resuelta (R5). */
   playerSubdivision?: string;

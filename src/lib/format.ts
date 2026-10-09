@@ -130,6 +130,19 @@ export function aoe4WorldProfileUrl(profileId: number): string {
 }
 
 /**
+ * Enlace a una partida concreta en AoE4World.
+ *
+ * El patrón vive aquí, junto al del perfil, por el mismo motivo: la UI pasa el
+ * `profileId` del jugador y el `gameId` de la partida y no monta la URL. El `gameId`
+ * entra como `string` porque el que guarda la fila de `Alert` es un `string` (los ids
+ * de AoE4World son largos y no se operan), y no se normaliza en ningún lado: un enlace
+ * roto se detecta abriéndolo, no parseándolo.
+ */
+export function aoe4WorldGameUrl(profileId: number, gameId: string): string {
+  return `https://aoe4world.com/players/${profileId}/games/${gameId}`;
+}
+
+/**
  * Enlaces a los canales de directo, para que la interfaz no monte ninguna URL.
  *
 * Los tres tienen la misma firma y el mismo criterio por una razón concreta: quien

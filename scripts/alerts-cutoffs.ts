@@ -14,11 +14,12 @@ import { createAoe4WorldClient } from "@/lib/aoe4world/client";
  * ## Por qué es un script y no parte del sincronizador
  *
  * R5 compara **dos ratings de una misma partida de equipos** (el del jugador en
- * esa partida y la media del juego), y para eso hace falta saber, en la familia
- * **de esa partida** (`rm_team`), a partir de qué rating empieza cada subdivisión.
- * La API no lo publica: `rating_min`, `rating_max` y `rank_level` los ignora en
- * silencio, así que hay que recorrer la ladder con `?page=N` y quedarse con el
- * rating más bajo de cada bloque.
+ * esa partida y la media de rating de la partida, `average_rating`), y para eso
+ * hace falta saber, en la familia **de esa partida** (`rm_team`), a partir de qué
+ * rating empieza cada subdivisión. La API no lo publica: `rating_min`,
+ * `rating_max` y `rank_level` los ignora en silencio, así que hay que recorrer la
+ * ladder con `?page=N` y quedarse con el rating más bajo de cada bloque (el final
+ * del bloque, no su principio; ver `derive-cutoffs.ts`).
  *
  * Con búsqueda binaria son del orden de 130 llamadas por familia, y el
  * sincronizador corre cada 5 minutos: 288 × 130 peticiones al día por una tabla

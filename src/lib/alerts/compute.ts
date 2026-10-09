@@ -64,7 +64,8 @@ import {
  * Un `rawJson` ilegible no lanza: esa partida no aporta flags, y se cuenta en
  * `unreadableMatches`. Es la dirección segura, porque una regla que no puede
  * evaluarse no puede acusar a nadie. R5 se omite (sin aviso) en las partidas en
- * las que falte el rating del jugador o la media del juego, y las partidas cuya
+ * las que falte el rating del jugador o la media de rating de la partida, y las
+ * partidas cuya
  * familia de ladder no tiene cortes cacheados se saltan sin más.
  */
 
@@ -169,8 +170,12 @@ type TeamView = {
   self: Aoe4WorldGamePlayer | null;
   /** Los que estaban en su mismo equipo, él excluido. */
   teammates: Aoe4WorldGamePlayer[];
-  /** Media de elo de la partida, tal y como la publica el payload. */
-  averageMmr: number | null;
+  /**
+   * Media de **rating** de la partida (`average_rating`), tal y como la publica
+   * el payload. Es la escala de la ladder, la misma que el `rating` del jugador;
+   * la media de `mmr` es otra y no se usa.
+   */
+  averageRating: number | null;
 };
 
 /**
@@ -202,7 +207,7 @@ function readTeamView(rawJson: unknown, profileId: number): TeamView | null {
     return {
       self: team[index] ?? null,
       teammates: team.filter((_, position) => position !== index),
-      averageMmr: game.averageMmr,
+      averageRating: game.averageRating,
     };
   }
 
@@ -533,11 +538,28 @@ function teammateEloGapFlags(context: RuleContext): FlagRow {
  * partida) distan `lowDivisionSteps` escalones o más, en cualquiera de los dos
  * sentidos.
  *
- * La referencia es el **elo del jugador en esa partida de equipo**, no su
- * división 1v1: las dos magnitudes son elo de la misma familia de ladder, así que
- * se traducen con los **mismos** cortes y la comparación de escalones es
- * homogénea. Antes se comparaba la media del juego (elo de equipos) con el
- * `rank_level` de `rm_solo`, y eso mezclaba dos ladders.
+ * ## Las dos magnitudes son de la misma escala: **rating**, no `mmr`
+ *
+ * El lado del jugador es `team.self.rating` y el de la partida es
+ * `average_rating`, la media de **rating** de la partida. Los cortes de división
+ * se derivan del campo `rating` de la ladder (`derive-cutoffs.ts`) y el
+ * `rank_level` que publica la API sale de ese mismo rating, así que
+ * rating ↔ rating es la única comparación que se traduce bien con los mismos
+ * cortes.
+ *
+ * **No se usa `average_mmr`**. El `mmr` es la escala interna del MMR de la
+ * partida (~1200 en adelante) y el `rating` la de la ladder (~700-900 en la zona
+ * baja): son dos escalas distintas y traducir el `mmr` con los cortes de rating
+ * sitúa la media de `mmr` uno o más escalones por encima de donde está de
+ * verdad. Ese desajuste produjo alertas falsas: una partida de media de rating
+ * 851 jugada por un jugador de 727 (dos escalones, por debajo del umbral) salía
+ * como si la partida estuviera muy por encima de él al compararla con su
+ * `average_mmr` de 1254.
+ *
+ * La referencia es el **rating del jugador en esa misma partida de equipo**, no
+ * su división 1v1: las dos magnitudes son rating de la misma familia de ladder,
+ * así que se traducen con los **mismos** cortes y la comparación de escalones es
+ * homogénea.
  */
 function lowDivisionFlags(context: RuleContext): FlagRow {
   const { matches, player, cutoffs, thresholds } = context;
@@ -556,11 +578,11 @@ function lowDivisionFlags(context: RuleContext): FlagRow {
     }
 
     const propia = team.self?.rating ?? null;
-    const media = team.averageMmr;
+    const media = team.averageRating;
 
-    // Sin el rating del jugador o sin la media de la partida no hay contra qué
-    // comparar, y la partida se omite sin avisar: es un hueco de datos, no un
-    // comportamiento.
+    // Sin el rating del jugador o sin la media de rating de la partida no hay
+    // contra qué comparar, y la partida se omite sin avisar: es un hueco de
+    // datos, no un comportamiento.
     if (propia === null || media === null) {
       continue;
     }
@@ -597,7 +619,7 @@ function lowDivisionFlags(context: RuleContext): FlagRow {
     row.ladders[index] = match.mode;
     row.details[index] = {
       steps,
-      averageMmr: media,
+      averageRating: media,
       selfRating: propia,
       gameSubdivision: subdivisionPartida.rankLevel,
       playerSubdivision: subdivisionPropia.rankLevel,
