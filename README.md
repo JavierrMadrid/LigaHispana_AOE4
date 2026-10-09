@@ -45,8 +45,11 @@ mismo y quién está en directo.
 | **Reglas** (`/reglas`) | Las normas del torneo: formato, participación, normas de obligado cumplimiento y organización. |
 | **Participar** (`/participar`) | La inscripción pública al torneo. |
 
+Además, cuando la organización tiene publicada una campaña, todas las páginas públicas muestran arriba
+un **banner de donaciones** con el enlace a Matcherino.
+
 La organización tiene además un **panel de administración** para aprobar participantes, revisar
-partidas y alertas, y gestionar el torneo.
+partidas y alertas, gestionar el torneo y publicar la campaña de donaciones.
 
 ## Cómo se compite
 

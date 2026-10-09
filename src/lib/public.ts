@@ -7,6 +7,7 @@ import { parseGamePlayer } from "@/lib/aoe4world/parse";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
+import { type MatcherinoDonations } from "@/lib/donations";
 import { aoe4WorldProfileUrl, describeMode, describeTeamSize } from "@/lib/format";
 import { isRecord } from "@/lib/json";
 import {
@@ -24,7 +25,7 @@ import {
   type ObjectiveTarget,
 } from "@/lib/objectives";
 import { rankedModesWhere } from "@/lib/ranked-match";
-import { readMapPool } from "@/lib/settings";
+import { readMapPool, readMatcherinoDonations } from "@/lib/settings";
 import {
   RULESET_VERSION,
   readRuleset,
@@ -58,6 +59,7 @@ export {
 } from "@/lib/objectives";
 export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
+export type { MatcherinoDonations } from "@/lib/donations";
 
 /**
  * El resultado de una lectura de las pantallas públicas: o los datos, o la
@@ -72,7 +74,7 @@ export type { PublicRead };
  * Capa de lectura de las páginas públicas.
  *
  * Es la **única** puerta de entrada a la base de datos para el frontend: la UI no
- * importa `db` directamente, solo estas funciones (las cinco de abajo más los
+ * importa `db` directamente, solo estas funciones (las seis de abajo más los
  * tipos que se reexportan). Cada una devuelve
  * exactamente los campos que necesita su pantalla, ya convertidos al tipo público,
  * para que ni la interfaz ni el cliente del navegador tengan que conocer la forma
@@ -1161,3 +1163,24 @@ export async function getTournamentWindow(): Promise<PublicRead<TournamentWindow
     return { ...ruleset.window };
   });
 }
+
+/**
+ * La campaña de donaciones activa, para el banner del layout público.
+ *
+ * Es una lectura ligera de `Setting["donations.matcherino"]`, como
+ * `getTournamentWindow()`: no arrastra el cálculo de nada. El banner solo se pinta
+ * cuando `status` es `"ok"` y `data.enabled` es `true`; con la base caída llega
+ * `{ status: "degraded", data: null }` y el banner simplemente no se pinta, que es
+ * la misma cara que "no hay campaña publicada". `data.url` viene ya validada (solo
+ * `http`/`https`), así que se puede poner en un `href` sin comprobarla otra vez.
+ *
+ * Va envuelta en `cache()` de React: la lee el layout de `(public)`, que envuelve
+ * todas las páginas públicas, y así una misma petición no repite la consulta si
+ * algún día la necesitaran también la página y su cabecera. El memo es por
+ * petición, no entre peticiones, así que la lectura sigue siendo fresca.
+ */
+export const getMatcherinoDonations = cache(
+  async (): Promise<PublicRead<MatcherinoDonations>> => {
+    return readFromDatabase("public/getMatcherinoDonations", () => readMatcherinoDonations());
+  },
+);

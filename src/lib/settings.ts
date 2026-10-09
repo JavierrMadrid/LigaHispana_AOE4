@@ -10,6 +10,11 @@ import {
   parseMapPoolSync,
   type MapPoolSyncState,
 } from "@/lib/map-pool";
+import {
+  MATCHERINO_DONATIONS_KEY,
+  parseMatcherinoDonations,
+  type MatcherinoDonations,
+} from "@/lib/donations";
 import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration-open";
 
 /**
@@ -30,6 +35,10 @@ import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration
  *
  * Clave que introduce el cierre manual de inscripciones:
  * - `registration.open`: booleano; si falta o no es legible, el plazo está cerrado.
+ *
+ * Clave que introduce el banner de donaciones:
+ * - `donations.matcherino`: campaña de Matcherino (si está activa y su URL); apagada
+ *   y sin URL si falta o no es legible.
  *
  * Clave que introduce el catálogo de objetivos nuevo:
  * - `scoring.mapPool`: lista de mapas del objetivo `por-tierra-y-agua`.
@@ -554,5 +563,40 @@ export async function writeRegistrationOpen(open: boolean): Promise<void> {
     where: { key: REGISTRATION_OPEN_KEY },
     create: { key: REGISTRATION_OPEN_KEY, value: open },
     update: { value: open },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Campaña de donaciones                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * La campaña de donaciones publicada, o la de por defecto si no hay nada legible.
+ *
+ * Aplica el parser puro de `src/lib/donations.ts`, que cae al valor por defecto
+ * (apagada, sin URL) cuando la clave no existe o su valor no tiene la forma
+ * esperada. Un **fallo de la base sí se propaga**, como en `readRegistrationOpen()`:
+ * "no hay campaña publicada" tiene su valor por defecto y "no se ha podido leer" no,
+ * y quien pinta el banner tiene que poder distinguir la segunda.
+ */
+export async function readMatcherinoDonations(): Promise<MatcherinoDonations> {
+  const setting = await db.setting.findUnique({ where: { key: MATCHERINO_DONATIONS_KEY } });
+
+  return parseMatcherinoDonations(setting?.value);
+}
+
+/**
+ * Publica la campaña de donaciones. La usa el formulario de `/admin`.
+ *
+ * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
+ * `Setting.updatedAt`, que es justo el rastro que deja el cambio. Se escribe el
+ * objeto entero (activación y URL juntos) porque el formulario del panel es una
+ * foto completa de la campaña, igual que la edición de un jugador.
+ */
+export async function writeMatcherinoDonations(value: MatcherinoDonations): Promise<void> {
+  await db.setting.upsert({
+    where: { key: MATCHERINO_DONATIONS_KEY },
+    create: { key: MATCHERINO_DONATIONS_KEY, value },
+    update: { value },
   });
 }
