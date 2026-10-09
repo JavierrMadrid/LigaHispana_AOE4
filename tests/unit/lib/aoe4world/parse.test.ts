@@ -168,6 +168,16 @@ describe("parseGame", () => {
     expect(parseGame({ ...MINIMO, duration: null })?.durationSeconds).toBeNull();
   });
 
+  it("lee la media de rating de la partida (`average_rating`), que es la que compara R5", () => {
+    expect(parseGame({ ...MINIMO, average_rating: 1_610 })?.averageRating).toBe(1_610);
+    expect(parseGame({ ...MINIMO, average_rating: "1610" })?.averageRating).toBe(1_610);
+    // Sin el campo o con algo ilegible queda `null`, que es un hueco de datos y no
+    // un cero: R5 omite la partida en vez de contar un escalón inventado.
+    expect(parseGame({ ...MINIMO, average_rating: null })?.averageRating).toBeNull();
+    expect(parseGame({ ...MINIMO, average_rating: "alto" })?.averageRating).toBeNull();
+    expect(parseGame(MINIMO)?.averageRating).toBeNull();
+  });
+
   it("acepta la fecha legible `2022/04/19` que manda la API", () => {
     // `Date.parse` la interpreta como medianoche **local**, que es lo que significa
     // una fecha sin hora; no se le pone zona porque la API no la manda.

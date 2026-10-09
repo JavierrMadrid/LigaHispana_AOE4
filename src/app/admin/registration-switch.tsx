@@ -22,8 +22,9 @@ import { setRegistrationOpen } from "./actions";
  *
  * Es un componente de servidor: el `<form>` apunta a la Server Action y el
  * estado pendiente lo aporta `PendingButton` (`useFormStatus`), sin necesidad de
- * un componente de cliente propio. Tras escribir, la acción revalida `/admin` y
- * `/participar`, así que el estado que se lee aquí se refresca solo.
+ * un componente de cliente propio. Tras escribir, la acción revalida
+ * `/admin/configuracion`, `/admin` y `/participar`, así que el estado que se lee
+ * aquí se refresca solo.
  */
 export function RegistrationSwitch({ open }: { open: boolean }) {
   return (

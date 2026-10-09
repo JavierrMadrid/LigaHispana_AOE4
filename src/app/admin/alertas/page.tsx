@@ -11,7 +11,7 @@ import {
 } from "@/lib/admin";
 import { ALERT_KIND_LABELS, ALERT_RULE_LABELS, DEFAULT_ALERTS_RULESET } from "@/lib/alerts";
 import { requireAdmin } from "@/lib/auth";
-import { aoe4WorldProfileUrl, formatAbsoluteTime } from "@/lib/format";
+import { aoe4WorldGameUrl, aoe4WorldProfileUrl, formatAbsoluteTime } from "@/lib/format";
 import { AlertFilters } from "./alert-filters";
 import { AlertRulesDialog } from "./alert-rules-dialog";
 import { Pagination } from "../pagination";
@@ -39,10 +39,17 @@ function single(value: string | string[] | undefined): string | undefined {
  * La tabla tiene los mismos filtros que el historial —jugador, rango de fechas— más los
  * dos propios de las alertas: **regla** (las diez del enum) y **tipo** (las cuatro clases
  * de hallazgo). Todos viven en la URL, junto con el orden por columna
- * (`fecha`, `jugador`, `regla`, `sujeto`, `conteo`). No hay filtro por sujeto, detalle ni
- * conteo: el sujeto es un rival que puede no estar en la liga (no hay lista de la que
- * elegir), el detalle es una frase del motor y el conteo se escanea con la vista. Detalle
- * y distintivo de tipo tampoco son columnas ordenables, por el mismo motivo.
+ * (`fecha`, `jugador`, `regla`, `sujeto`, `conteo`). No hay filtro por sujeto, partida,
+ * detalle ni conteo: el sujeto es un rival que puede no estar en la liga (no hay lista de
+ * la que elegir), la partida es un identificador externo que se abre, no se ordena, el
+ * detalle es una frase del motor y el conteo se escanea con la vista. Detalle, partida y
+ * distintivo de tipo tampoco son columnas ordenables, por el mismo motivo.
+ *
+ * La columna **Partida** identifica la partida que ancla cada alerta —la que rompió la
+ * racha o donde se cruzó el umbral—, con su fecha y su id enlazado a AoE4World. Las
+ * reglas de estado (historial no público, ladder que no llega, Discord) no tienen ancla,
+ * y ahí se lee "—", igual que en Sujeto. En pantalla pequeña la partida se pliega bajo el
+ * detalle junto al jugador, la regla y el sujeto.
  *
  * El estado del sincronizador **no** está aquí: es salud del sistema y no una anomalía
  * de un jugador, y vive en `getSyncHealth()` y en el aviso de `/admin` (ver
@@ -161,9 +168,10 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
                 <table className="w-full text-left text-sm">
                   <caption className="sr-only">
                     Alertas de comportamiento: fecha, jugador, regla, sujeto de la alerta
-                    (rival o compañero), detalle del hallazgo y número de partidas. Por
-                    debajo de la pantalla grande la fecha, el jugador, la regla y el sujeto
-                    se leen bajo el detalle.
+                    (rival o compañero), partida que la ancla con su fecha e id, detalle
+                    del hallazgo y número de partidas. Por debajo de la pantalla grande la
+                    fecha, el jugador, la regla, el sujeto y la partida se leen bajo el
+                    detalle.
                   </caption>
                   <thead className="bg-surface text-muted">
                     <tr>
@@ -199,6 +207,14 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
                         query={query}
                         className="hidden px-4 py-3 font-medium lg:table-cell"
                       />
+                      {/* La partida ancla no es un criterio de orden: se identifica para
+                          abrirla, así que va como columna de lectura, no de orden. */}
+                      <th
+                        scope="col"
+                        className="hidden px-4 py-3 font-medium lg:table-cell"
+                      >
+                        Partida
+                      </th>
                       {/* El detalle es la frase del motor y el distintivo de tipo no es
                           una columna: no se ordenan. */}
                       <th
@@ -250,14 +266,20 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
  *
  * El `summary` lo redactó el motor al escribir la fila (`alertSummary()`) y se pinta
  * **tal cual**: montarlo en el componente daría dos frases para el mismo hallazgo. Las
- * columnas de jugador, regla y sujeto existen para poder recorrer la lista en diagonal
- * (quién, de qué regla, contra quién) sin leer el detalle entero; en pantalla pequeña se
- * pliegan bajo el detalle, que es el patrón de las demás tablas del panel.
+ * columnas de jugador, regla, sujeto y partida existen para poder recorrer la lista en
+ * diagonal (quién, de qué regla, contra quién, en qué partida) sin leer el detalle
+ * entero; en pantalla pequeña se pliegan bajo el detalle, que es el patrón de las demás
+ * tablas del panel.
  *
  * El sujeto es un `profileId` de AoE4World y puede no estar en la liga, así que el nombre
  * guardado en la fila es la única vía para nombrarlo; si falta, se enlaza el perfil por
  * su id. La cuenta la pinta el motor en el `summary`, pero viaja también como columna
  * numérica para poder escanear magnitudes de un vistazo.
+ *
+ * La **partida** que ancla la alerta sale con su fecha y su id, y el id enlaza a la
+ * partida en AoE4World para poder abrirla. El ancla puede faltar (reglas de estado), y
+ * entonces se lee "—"; la fecha y el id viajan por separado porque una fila vieja puede
+ * tener uno sin el otro, y cada uno se pinta si está.
  */
 function AlertRow({ alert }: { alert: AdminAlertRow }) {
   const playerUrl = aoe4WorldProfileUrl(alert.playerProfileId);
@@ -266,6 +288,10 @@ function AlertRow({ alert }: { alert: AdminAlertRow }) {
   const subjectText =
     alert.subjectName ??
     (alert.subjectProfileId === null ? null : `Perfil ${alert.subjectProfileId}`);
+  const gameUrl =
+    alert.anchorGameId === null
+      ? null
+      : aoe4WorldGameUrl(alert.playerProfileId, alert.anchorGameId);
 
   return (
     <tr>
@@ -310,6 +336,33 @@ function AlertRow({ alert }: { alert: AdminAlertRow }) {
         )}
       </td>
 
+      <td className="hidden whitespace-nowrap px-4 py-3 align-top lg:table-cell">
+        {alert.anchorStartedAt === null && alert.anchorGameId === null ? (
+          <span className="text-muted">—</span>
+        ) : (
+          <>
+            {alert.anchorStartedAt !== null ? (
+              <time
+                dateTime={alert.anchorStartedAt.toISOString()}
+                className="block text-xs text-muted tabular-nums"
+              >
+                {formatAbsoluteTime(alert.anchorStartedAt)}
+              </time>
+            ) : null}
+            {gameUrl === null ? null : (
+              <a
+                href={gameUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block max-w-[10rem] truncate text-foreground underline-offset-4 transition-colors hover:text-accent hover:underline"
+              >
+                {alert.anchorGameId}
+              </a>
+            )}
+          </>
+        )}
+      </td>
+
       <td className="px-4 py-3 align-top">
         {/* La fecha es una columna secundaria: por debajo de `md` se lee aquí. */}
         <div className="mb-1 text-xs text-muted md:hidden">
@@ -321,8 +374,8 @@ function AlertRow({ alert }: { alert: AdminAlertRow }) {
           </time>
         </div>
 
-        {/* Jugador, regla y sujeto se pliegan aquí por debajo de `lg`, en la misma
-            fila informativa que las columnas de escritorio. */}
+        {/* Jugador, regla, sujeto y partida se pliegan aquí por debajo de `lg`, en la
+            misma fila informativa que las columnas de escritorio. */}
         <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted lg:hidden">
           <a
             href={playerUrl}
@@ -338,6 +391,31 @@ function AlertRow({ alert }: { alert: AdminAlertRow }) {
             <>
               <span aria-hidden="true">·</span>
               <span>{subjectText}</span>
+            </>
+          ) : null}
+          {alert.anchorStartedAt !== null || gameUrl !== null ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="inline-flex flex-wrap items-center gap-x-1">
+                {alert.anchorStartedAt !== null ? (
+                  <time
+                    dateTime={alert.anchorStartedAt.toISOString()}
+                    className="tabular-nums"
+                  >
+                    {formatAbsoluteTime(alert.anchorStartedAt)}
+                  </time>
+                ) : null}
+                {gameUrl === null ? null : (
+                  <a
+                    href={gameUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-foreground underline-offset-4 transition-colors hover:text-accent hover:underline"
+                  >
+                    {alert.anchorGameId}
+                  </a>
+                )}
+              </span>
             </>
           ) : null}
         </div>

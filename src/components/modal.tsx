@@ -45,6 +45,11 @@ type ModalProps = {
  *   lateral.
  * - **Clic en el fondo** cierra, salvo que el gesto haya empezado dentro de la
  *   tarjeta (arrastrar para seleccionar texto no debe cerrar el diálogo).
+ * - **La alineación no se hereda de donde se monta.** El `<dialog>` sigue en el DOM
+ *   dentro del elemento que lo abre —la capa superior solo cambia dónde se pinta—,
+ *   y la columna de acciones de las tablas del panel va con `text-right`: sin el
+ *   `text-left` de la clase base, los campos de un diálogo abierto desde ahí salen
+ *   alineados a la derecha.
  *
  * El `cancel` se escucha con un listener nativo y no como evento de React
  * porque se dispara desde el navegador; leer el estado por cierre dejaría
@@ -175,7 +180,7 @@ export function Modal({
       tabIndex={-1}
       onMouseDown={handleMouseDown}
       onClick={handleClick}
-      className={`backdrop:bg-background/85 backdrop:animate-overlay-in ${className ?? ""}`}
+      className={`text-left backdrop:bg-background/85 backdrop:animate-overlay-in ${className ?? ""}`}
     >
       {closeLabel !== undefined ? (
         <button

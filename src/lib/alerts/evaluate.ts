@@ -38,8 +38,8 @@ import {
  *
  * **No sale a la red.** Todo sale de `Match` y de su `rawJson`, con la única
  * excepción de los cortes de división, que no se derivan aquí sino que se leen de
- * `Setting` (ver `derive-cutoffs.ts`): derivarlos son del orden de 130 llamadas a
- * la ladder por ladder, y esto corre cada 5 minutos. Sin cortes, R5 se omite con
+ * `Setting` (ver `derive-cutoffs.ts`): derivarlos son del orden de 130 llamadas
+ * por familia de ladder, y esto corre cada 5 minutos. Sin cortes, R5 se omite con
  * un aviso y las otras siete reglas siguen funcionando.
  */
 
@@ -108,7 +108,6 @@ type MatchRow = {
   playerId: string;
   gameId: string;
   mode: string | null;
-  leaderboard: string;
   opponentProfileId: number | null;
   opponentName: string | null;
   startedAt: Date;
@@ -154,7 +153,7 @@ async function evaluatePlayers(
     // `registeredAt` viene aquí y no en la consulta de partidas porque el corte de
     // inscripción no se puede escribir en un `where` de Prisma que abarca a todos los
     // jugadores (ver `ranked-match.ts`): se aplica por jugador, en memoria.
-    select: { id: true, profileId: true, name: true, rankLevel: true, registeredAt: true },
+    select: { id: true, profileId: true, name: true, registeredAt: true },
     orderBy: { profileId: "asc" },
   });
 
@@ -184,7 +183,6 @@ async function evaluatePlayers(
       playerId: true,
       gameId: true,
       mode: true,
-      leaderboard: true,
       opponentProfileId: true,
       opponentName: true,
       startedAt: true,
@@ -214,7 +212,6 @@ async function evaluatePlayers(
     const match: AlertMatch = {
       gameId: row.gameId,
       mode: row.mode,
-      leaderboard: row.leaderboard,
       opponentProfileId: row.opponentProfileId,
       opponentName: row.opponentName,
       startedAt: row.startedAt,
@@ -236,7 +233,6 @@ async function evaluatePlayers(
       id: row.id,
       profileId: row.profileId,
       name: row.name,
-      rankLevel: row.rankLevel,
     };
 
     const evaluation = computePlayerAlerts({

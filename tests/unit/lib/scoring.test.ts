@@ -7,6 +7,7 @@ import {
   RULESET_VERSION,
   RULE_LABEL,
   SCORING_RULESET_KEY,
+  compareStandings,
   countsAsRanked,
   mergeRuleset,
   type ScoringWindow,
@@ -308,6 +309,50 @@ describe("mergeRuleset: no toca el documento por defecto", () => {
     };
 
     expect(mergeRuleset(guardado).ruleset).toEqual(mergeRuleset(guardado).ruleset);
+  });
+});
+
+describe("desempate de la clasificación", () => {
+  const fila = (profileId: number, total: number, wins: number, matches: number) => ({
+    profileId,
+    total,
+    wins,
+    matches,
+  });
+
+  it("ordena por total y luego por victorias", () => {
+    const filas = [fila(3, 10, 2, 8), fila(1, 20, 1, 9), fila(2, 10, 5, 9)];
+
+    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2, 3]);
+  });
+
+  it("a igual total y victorias gana el mejor porcentaje de victorias", () => {
+    // 3/4 (0.75) va delante de 3/5 (0.60), con las mismas victorias y el mismo total.
+    const filas = [fila(2, 10, 3, 5), fila(1, 10, 3, 4)];
+
+    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2]);
+  });
+
+  it("el winrate va antes que `profileId`: gana el mejor ratio aunque tenga id mayor", () => {
+    const filas = [fila(1, 10, 3, 5), fila(9, 10, 3, 4)];
+
+    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([9, 1]);
+  });
+
+  it("mismo total, victorias y partidas: el winrate no decide y cierra `profileId`", () => {
+    // Con los mismos números el producto cruzado da 0 y el orden lo fija
+    // `profileId`, que es único.
+    const filas = [fila(2, 10, 3, 5), fila(1, 10, 3, 5)];
+
+    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2]);
+  });
+
+  it("con `matches` 0 el winrate no rompe nada y decide `profileId`", () => {
+    // Una fila publicada siempre tiene partidas, pero el comparador se defiende
+    // del 0 en vez de producir `NaN` (que ordenaría de forma no determinista).
+    const filas = [fila(5, 0, 0, 0), fila(2, 0, 0, 0)];
+
+    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([2, 5]);
   });
 });
 

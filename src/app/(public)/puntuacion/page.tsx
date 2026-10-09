@@ -275,8 +275,9 @@ export default async function ScoringPage() {
             <SectionHeading title="Desempates" />
             <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
               Si dos jugadores empatan a puntos, va delante quien tenga más
-              victorias. Si el empate continúa, el orden lo fija la web de forma
-              estable.
+              victorias. Si el empate continúa, decide el porcentaje de victorias
+              (victorias entre partidas jugadas) y, si aún persiste, el orden lo fija
+              la web de forma estable.
             </p>
           </section>
         </div>

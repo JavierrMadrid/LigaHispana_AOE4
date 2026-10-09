@@ -73,11 +73,11 @@ export function divisionFromRankLevel(rankLevel: string | null): DivisionId | nu
  * está en ningún otro sitio del proyecto: `DIVISIONS` solo sabe los seis
  * prefijos. Derivar el orden de una lista de prefijos sería inventar el dato.
  *
- * Comparar Escalones entre ladders es legítimo porque las subdivisiones son
- * globales: el motor de alertas compara el `rank_level` 1v1 de un jugador con
- * el que corresponde a la media de elo de una partida de equipos, y lo único
- * que cambia entre ladders es **dónde cae el corte de rating** de cada
- * subdivisión, que es lo que guarda `Setting["alerts.divisionCutoffs"]`.
+ * Comparar escalones es legítimo porque las subdivisiones son **globales**: el
+ * motor de alertas traduce el rating del jugador y la media de la partida a la
+ * misma escala de 18 subdivisiones, y lo único que cambia entre ladders es
+ * **dónde cae el corte de rating** de cada subdivisión, que es lo que guarda
+ * `Setting["alerts.divisionCutoffs"]`.
  */
 export const SUBDIVISION_RANK_LEVELS = [
   "conqueror_3",

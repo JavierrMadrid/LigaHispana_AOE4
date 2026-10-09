@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aoe4WorldGameUrl,
   aoe4WorldProfileUrl,
   countdownParts,
   describeMode,
@@ -58,6 +59,12 @@ describe("formatRelativeTime", () => {
 describe("los enlaces", () => {
   it("el perfil de AoE4World se compone con el `profileId`", () => {
     expect(aoe4WorldProfileUrl(1234)).toBe("https://aoe4world.com/players/1234");
+  });
+
+  it("la partida de AoE4World cuelga del perfil y lleva el `gameId`", () => {
+    expect(aoe4WorldGameUrl(1234, "161283541")).toBe(
+      "https://aoe4world.com/players/1234/games/161283541",
+    );
   });
 
   it("cada plataforma pone la arroba donde le toca, y no donde no", () => {

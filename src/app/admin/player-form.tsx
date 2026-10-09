@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import { CONTACT_EMAIL_MAX_LENGTH, DISCORD_USERNAME_FIELD_MAX_LENGTH } from "@/lib/player-input";
 import { createPlayer, type PlayerFormState } from "./actions";
 
@@ -39,8 +40,14 @@ export function PlayerForm({
     <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
       {disabled ? (
         <p className="mb-4 rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm leading-relaxed text-muted">
-          El alta está bloqueada porque las inscripciones están cerradas. Ábrelas en el
-          control de arriba para poder añadir jugadores.
+          El alta está bloqueada porque las inscripciones están cerradas.{" "}
+          <Link
+            href="/admin/configuracion"
+            className="text-accent underline underline-offset-4 hover:text-accent-strong"
+          >
+            Ábrelas en Configuración
+          </Link>{" "}
+          para poder añadir jugadores.
         </p>
       ) : null}
 

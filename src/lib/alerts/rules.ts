@@ -122,7 +122,7 @@ export const ALERT_RULE_LABELS = {
   REPEATED_TEAMMATE_STREAK: "Compañero repetido, en rachas",
   REPEATED_TEAMMATE_TOTAL: "Compañero repetido, en total",
   TEAMMATE_ELO_GAP: "Brecha de elo con un compañero",
-  LOW_DIVISION_TEAM_GAME: "Equipo por debajo de la división",
+  LOW_DIVISION_TEAM_GAME: "Equipo en una división muy distinta",
   HISTORY_NOT_PUBLIC: "Historial de partidas no público",
   MISSING_LADDER_MATCHES: "Partidas de ladder que no nos llegan",
   DISCORD_NOT_IN_GUILD: "Discord sin estar en el servidor",
@@ -160,7 +160,7 @@ export type AlertsThresholds = {
   repeatedTeammateTotal: number;
   /** R4: diferencia de elo con un compañero, en valor absoluto, para avisar. */
   teammateEloGap: number;
-  /** R5: escalones de subdivisión por debajo de la división del jugador. */
+  /** R5: diferencia de escalones (en valor absoluto) entre la división del jugador y la de la partida de equipo. */
   lowDivisionSteps: number;
 };
 
@@ -322,13 +322,22 @@ export type AlertAnchorDetail = {
   durationSeconds?: number;
   /** Mayor brecha de elo con un compañero en esa partida (R4). */
   eloGap?: number;
-  /** Escalones de subdivisión por debajo de la división del jugador (R5). */
+  /**
+   * Diferencia de escalones entre la subdivisión de la partida y la del jugador
+   * en esa misma partida de equipo (R5). Positivo si la partida está por debajo,
+   * negativo si está por encima; el aviso sale con el valor absoluto.
+   */
   steps?: number;
-  /** Media de elo de la partida (R5). */
-  averageMmr?: number;
-  /** Subdivisión a la que corresponde esa media, ya resuelta. */
+  /**
+   * Media de **rating** de la partida de equipo (R5). Es la escala de la ladder,
+   * la misma que `selfRating`; **no** es el `mmr` de la partida.
+   */
+  averageRating?: number;
+  /** Rating del jugador en esa partida de equipo (R5). */
+  selfRating?: number;
+  /** Subdivisión a la que corresponde la media de rating de la partida, ya resuelta (R5). */
   gameSubdivision?: string;
-  /** Subdivisión 1v1 del jugador en el momento de la evaluación (R5). */
+  /** Subdivisión del jugador en esa partida de equipo, ya resuelta (R5). */
   playerSubdivision?: string;
 
   /* Reglas de estado: la evidencia con la que se comprobó. */
@@ -400,7 +409,7 @@ export type AlertTriggerInput = {
   threshold: number;
   anchorGameId: string | null;
   anchorStartedAt: Date | null;
-  /** Ladder de la partida, que es la de la que salen los cortes de R5. */
+  /** Familia de ladder de la partida (`Match.mode`), de la que salen los cortes de R5. */
   anchorLadder?: string | null;
   /**
    * Ventana del torneo, **solo para las reglas que miran partidas**.
@@ -542,9 +551,16 @@ export function alertSummary(input: AlertTriggerInput): string {
     case "LOW_DIVISION_TEAM_GAME": {
       const steps = input.detail?.steps;
 
-      return steps === undefined
-        ? `${partidas(input.count)} de equipos muy por debajo de su división${cierre}`
-        : `${partidas(input.count)} de equipos ${conY(steps)} por debajo de su división${cierre}`;
+      if (steps === undefined) {
+        return `${partidas(input.count)} de equipos en una división muy distinta a la suya${cierre}`;
+      }
+
+      // `steps` positivo es que la partida está por debajo del jugador y negativo
+      // que está por encima; la frase conserva ese sentido, que es lo que el
+      // número quiere decir.
+      const sentido = steps < 0 ? "por encima" : "por debajo";
+
+      return `${partidas(input.count)} de equipos ${conY(Math.abs(steps))} ${sentido} de su división${cierre}`;
     }
     // Las dos de estado van al final y sin `cierre`: no son un tramo que se cierre,
     // son algo que se ha comprobado. Las frases dicen **qué se ha comprobado**, nunca

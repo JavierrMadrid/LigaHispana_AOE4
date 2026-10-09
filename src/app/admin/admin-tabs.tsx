@@ -15,10 +15,11 @@ const TABS: readonly AdminTab[] = [
   { href: "/admin/historial", label: "Historial de partidas" },
   { href: "/admin/alertas", label: "Alertas" },
   { href: "/admin/acciones", label: "Historial de acciones" },
+  { href: "/admin/configuracion", label: "Configuración" },
 ];
 
 /**
- * Navegación de las cuatro pestañas del panel.
+ * Navegación de las cinco pestañas del panel.
  *
  * Es cliente porque leer la ruta activa necesita `usePathname`; el resto del
  * layout sigue en servidor. `/admin` es una pestaña más (Participantes), así que

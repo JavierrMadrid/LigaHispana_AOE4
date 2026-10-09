@@ -235,7 +235,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
-| `alerts.divisionCutoffs` | Cortes rating → subdivisión que necesita la regla R5. | `npm run alerts:cutoffs` |
+| `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder que necesita la regla R5 (hoy solo `rm_team`). | `npm run alerts:cutoffs` |
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |
 | `registration.countries` | Países que admite el formulario. | `npm run countries:seed` |
 | `registration.open` | Si la inscripción está abierta. | Panel de admin |
