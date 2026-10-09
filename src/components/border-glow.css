@@ -31,9 +31,9 @@
 }
 
 /*
- * Capas del halo: borde de malla (::before), relleno de malla (::after) y halo
- * exterior (.edge-light). Todas se encienden con el puntero; no hay realce
- * permanente.
+ * Capas del halo: borde de malla (::before) y halo exterior (.edge-light), más
+ * la estela dorada interior (::after). Todas se encienden con el puntero; no hay
+ * realce permanente.
  */
 .border-glow-card::before,
 .border-glow-card::after,
@@ -77,27 +77,24 @@
   );
 }
 
-/* Relleno de malla cerca del filo, sutil. */
+/*
+ * Estela dorada que sigue al cursor por el interior de la tarjeta. Sustituye al
+ * relleno de malla por proximidad al filo: el borde (::before) y el halo
+ * exterior (.edge-light) se mantienen, pero lo de dentro ahora es un resplandor
+ * cálido centrado en el puntero. Va por encima del fondo de la tarjeta y por
+ * debajo del contenido (`.border-glow-inner` está a z-index 1). `screen` funde
+ * el oro sobre `--surface` sin lavar el texto; la opacidad de la capa la fija
+ * `--fill-opacity` para que siga siendo un solo mando.
+ */
 .border-glow-card::after {
-  border: 1px solid transparent;
-  background:
-    var(--gradient-one) padding-box,
-    var(--gradient-two) padding-box,
-    var(--gradient-three) padding-box,
-    var(--gradient-four) padding-box,
-    var(--gradient-five) padding-box,
-    var(--gradient-six) padding-box,
-    var(--gradient-seven) padding-box,
-    var(--gradient-base) padding-box;
-  mask-image: conic-gradient(
-    from var(--cursor-angle) at center,
-    transparent 5%,
-    black 15%,
-    black 85%,
-    transparent 95%
+  background: radial-gradient(
+    circle 10rem at var(--cursor-x, 50%) var(--cursor-y, 50%),
+    color-mix(in srgb, var(--accent-strong) 42%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 34%,
+    transparent 72%
   );
-  mix-blend-mode: soft-light;
-  opacity: calc(var(--fill-opacity, 0.4) * (var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+  mix-blend-mode: screen;
+  opacity: var(--fill-opacity, 0.28);
 }
 
 /* Halo exterior que sigue al cursor. */
@@ -142,6 +139,13 @@
   flex-direction: column;
   height: 100%;
   overflow: visible;
+  /*
+   * El ítem del grid arranca con `min-width: auto`, así que su min-content (un
+   * nombre de poseedor largo, sin poder partir) ensancharía la pista por encima
+   * del ancho de la tarjeta y el contenido desbordaría aunque el nombre lleve
+   * `truncate`. Con `min-width: 0` el ítem puede encogerse y el recorte funciona.
+   */
+  min-width: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

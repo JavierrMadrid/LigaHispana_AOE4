@@ -3,7 +3,11 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { ObjectiveGroup, ObjectiveOption } from "@/lib/public";
 import { ObjectiveDialogCard } from "@/components/objective-dialog-card";
-import { ObjectiveFamilySection } from "@/components/objective-family-section";
+import {
+  ObjectiveFamilySection,
+  ObjectiveMasterizandoSection,
+} from "@/components/objective-family-section";
+import { isMasterizandoId } from "@/components/objective-family-rail";
 import type { ObjectiveStandingPlayer } from "@/components/objective-standings";
 
 type ObjectivesBrowserProps = {
@@ -21,6 +25,8 @@ type GroupSection = {
   label: string;
   /** Objetivos sin familia: tarjetas individuales. */
   standalone: ObjectiveOption[];
+  /** Competiciones `masterizando-<civ>`: no son familia, pero van en riel. */
+  masterizando: ObjectiveOption[];
   /** Familias: cabeza + subobjetivos, en tarjeta agrupada. */
   families: { head: ObjectiveOption; children: ObjectiveOption[] }[];
   totals: { count: number; points: number; holders: number };
@@ -31,10 +37,12 @@ type GroupSection = {
  *
  * El servidor entrega los objetivos ya resueltos y aquí se agrupan por tipo y se
  * separan las familias (un logro cabeza con sus subobjetivos por civilización) de
- * los objetivos sueltos. Los sueltos son tarjetas que abren su clasificación a
- * tamaño ventana; una familia se lee como un bloque: la cabeza arriba, el filtro
- * de banderas y un riel con una tarjeta por civilización. La clasificación no se
- * pinta en la rejilla: se enseña al abrir cada tarjeta.
+ * los objetivos sueltos. Además de las familias, las competiciones
+ * `masterizando-<civ>` —que no tienen cabeza— se leen en su propio riel bajo el
+ * titular `Masterizando`, no en la rejilla. Los sueltos son tarjetas que abren su
+ * clasificación en una tarjeta volteable; una familia se lee como un bloque: la
+ * cabeza arriba, el filtro de banderas y un riel con una tarjeta por civilización.
+ * La clasificación no se pinta en la rejilla: se enseña al abrir cada tarjeta.
  */
 export function ObjectivesBrowser({
   options,
@@ -73,6 +81,7 @@ export function ObjectivesBrowser({
         .map((item) => {
           const groupOptions = options.filter((option) => option.group === item);
           const standalone: ObjectiveOption[] = [];
+          const masterizando: ObjectiveOption[] = [];
           const families: { head: ObjectiveOption; children: ObjectiveOption[] }[] = [];
 
           for (const option of groupOptions) {
@@ -85,7 +94,11 @@ export function ObjectivesBrowser({
             }
 
             if (option.parent === null) {
-              standalone.push(option);
+              if (isMasterizandoId(option.id)) {
+                masterizando.push(option);
+              } else {
+                standalone.push(option);
+              }
             }
           }
 
@@ -93,6 +106,7 @@ export function ObjectivesBrowser({
             id: item,
             label: groupLabels[item],
             standalone,
+            masterizando,
             families,
             totals: {
               count: groupOptions.length,
@@ -169,6 +183,13 @@ export function ObjectivesBrowser({
               </h2>
 
               <div className="mt-5 flex flex-col gap-10">
+                {section.masterizando.length > 0 ? (
+                  <ObjectiveMasterizandoSection
+                    subobjectives={section.masterizando}
+                    standings={standings}
+                  />
+                ) : null}
+
                 {section.families.map((family) => (
                   <ObjectiveFamilySection
                     key={family.head.id}
@@ -180,24 +201,15 @@ export function ObjectivesBrowser({
                 ))}
 
                 {section.standalone.length > 0 ? (
-                  <div className="flex flex-col gap-4">
-                    {section.families.length > 0 ? (
-                      <h3 className="text-sm font-semibold text-muted">
-                        {section.id === "civilizacion"
-                          ? "Competiciones por civilización"
-                          : "Otros objetivos"}
-                      </h3>
-                    ) : null}
-                    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                      {section.standalone.map((option) => (
-                        <ObjectiveDialogCard
-                          key={option.id}
-                          option={option}
-                          standings={standings}
-                          mapPool={mapPool}
-                        />
-                      ))}
-                    </div>
+                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                    {section.standalone.map((option) => (
+                      <ObjectiveDialogCard
+                        key={option.id}
+                        option={option}
+                        standings={standings}
+                        mapPool={mapPool}
+                      />
+                    ))}
                   </div>
                 ) : null}
               </div>

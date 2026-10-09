@@ -25,7 +25,7 @@ export default function Loading() {
 
       <ul
         aria-hidden="true"
-        className="grid items-start gap-4 lg:grid-cols-2"
+        className="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
       >
         {[0, 1, 2, 3].map((card) => (
           <li
@@ -34,7 +34,7 @@ export default function Loading() {
           >
             <div className="aspect-[16/7] w-full bg-surface-raised" />
 
-            <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-4">
+            <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-3">
               <div className="flex flex-1 flex-col gap-2">
                 <span className="h-4 w-3/4 rounded bg-surface-raised" />
                 <span className="h-4 w-1/2 rounded bg-surface-raised" />

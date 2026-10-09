@@ -9,13 +9,27 @@ import {
 } from "react";
 import { CivilizationIcon } from "@/components/civilization-icon";
 
+/**
+ * Prefijo de las competiciones `masterizando-<civ>`.
+ *
+ * No forman familia —el catálogo los lista uno a uno, sin cabeza que los
+ * agrupe—, pero comparten el sufijo de civilización con los `lider-`/`acolito-`,
+ * así que el riel los reconoce igual y les monta su filtro de banderas.
+ */
+const MASTERIZANDO_PREFIX = "masterizando-";
+
 /** Prefijos de id que llevan la civilización pegada (`lider-japanese` → `japanese`). */
-const FAMILY_CIV_PREFIXES = ["lider-", "acolito-"] as const;
+const FAMILY_CIV_PREFIXES = ["lider-", "acolito-", MASTERIZANDO_PREFIX] as const;
 
 /** Separación entre tarjetas (`gap-4`), para avanzar una tarjeta por pulsación. */
 const SCROLL_STEP_GAP = 16;
 
-/** La civilización de un id de subobjetivo, o `null` si no es de familia. */
+/** `true` si el id es una competición `masterizando-<civ>`. */
+export function isMasterizandoId(id: string): boolean {
+  return id.startsWith(MASTERIZANDO_PREFIX);
+}
+
+/** La civilización de un id de subobjetivo, o `null` si no la lleva pegada. */
 export function familyCivId(id: string): string | null {
   for (const prefix of FAMILY_CIV_PREFIXES) {
     if (id.startsWith(prefix)) {
@@ -33,16 +47,24 @@ type ObjectiveFamilyRailProps<T extends { id: string; label: string }> = {
   renderCard: (item: T) => ReactNode;
   /** Rótulo del filtro de banderas. */
   filterLabel?: string;
+  /**
+   * Cómo se llama lo que va en el riel ("subobjetivos" en las familias, que es
+   * el caso por defecto; "competiciones" en `Masterizando`), para el recuento.
+   */
+  itemsLabel?: string;
+  /** A quién agrupa el filtro de banderas, para el `aria-label` del grupo. */
+  flagsLabel?: string;
   /** Clases del `<li>` de cada tarjeta (ancho y anclaje de scroll). */
   itemClassName?: string;
 };
 
 /**
- * El riel horizontal de una familia de objetivos: el filtro de banderas arriba
- * y una tarjeta por subobjetivo debajo.
+ * El riel horizontal de un conjunto de objetivos por civilización: el filtro de
+ * banderas arriba y una tarjeta por objetivo debajo.
  *
- * Es la pieza que comparten `/objetivos` (`ObjectiveFamilySection`) y la ficha de
- * un participante, que pintan tarjetas distintas sobre el mismo riel. El filtro
+ * Es la pieza que comparten `/objetivos` (las familias y el bloque `Masterizando`),
+ * la ficha de un participante y el carrusel de cada familia, que pintan tarjetas
+ * distintas sobre el mismo riel. El filtro
  * no filtra: **salta** a la tarjeta de esa civilización dentro del riel
  * (`scrollIntoView`), que es lo que se pidió para no perder de vista el conjunto.
  * El riel se recorre con la rueda o el gesto táctil nativos, con el teclado —cada
@@ -53,13 +75,23 @@ type ObjectiveFamilyRailProps<T extends { id: string; label: string }> = {
  *
  * El `<ul>` lleva margen negativo y relleno iguales para que el halo de
  * `BorderGlow` que se sale de las tarjetas no se recorte dentro del área de
- * scroll.
+ * scroll. Como el riel usa `snap-mandatory` con `snap-start`, el relleno
+ * desplazaría la primera tarjeta al borde del área de scroll (el navegador ancla
+ * al borde de la caja, no al contenido); el `scroll-padding` insetado el mismo
+ * valor vuelve a alinear la tarjeta con el contenido de la sección, en reposo y
+ * al saltar a una civilización.
  */
 export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
   items,
   renderCard,
   filterLabel = "Salta a una civilización",
-  itemClassName = "w-[17rem] shrink-0 snap-start sm:w-[18rem]",
+  itemsLabel = "subobjetivos",
+  flagsLabel = "Civilizaciones de la familia",
+  // 19rem en móvil: el ancho que necesita la tarjeta más larga (`Masterizando
+  // <civ>`, con su etiqueta y su pie de poseedor) para que el contenido no
+  // desborde el borde de la tarjeta; desde `sm`, 20rem, el mismo que ya usa la
+  // ficha de participante.
+  itemClassName = "w-[19rem] shrink-0 snap-start sm:w-[20rem]",
 }: ObjectiveFamilyRailProps<T>) {
   const [activeCiv, setActiveCiv] = useState<string | null>(null);
   const [atStart, setAtStart] = useState(true);
@@ -77,6 +109,42 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
     }
   }
 
+  /**
+   * Marca la civilización de la tarjeta anclada a la izquierda —la que queda en
+   * `snap-start`—. Se recalcula en cada `scroll` y al acomodar el riel, para que
+   * las flechas y el desplazamiento muevan también la bandera activa. El punto
+   * de anclaje lleva el `scroll-padding` del riel, que inseta el snapport igual
+   * que el relleno del halo.
+   */
+  const syncActiveCiv = useCallback(() => {
+    const rail = railRef.current;
+
+    if (rail === null) {
+      return;
+    }
+
+    const scrollPadding = parseFloat(getComputedStyle(rail).scrollPaddingLeft) || 0;
+    const anchor = rail.getBoundingClientRect().left + scrollPadding;
+    let nearest: HTMLLIElement | null = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    for (const card of rail.querySelectorAll<HTMLLIElement>("li")) {
+      const distance = Math.abs(card.getBoundingClientRect().left - anchor);
+
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = card;
+      }
+    }
+
+    const civ = nearest?.dataset.civ;
+
+    // Las tarjetas sin civilización no pisan la selección anterior.
+    if (civ !== undefined) {
+      setActiveCiv((current) => (civ === current ? current : civ));
+    }
+  }, []);
+
   const updateScrollState = useCallback(() => {
     const rail = railRef.current;
 
@@ -86,7 +154,8 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
 
     setAtStart(rail.scrollLeft <= 1);
     setAtEnd(rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 1);
-  }, []);
+    syncActiveCiv();
+  }, [syncActiveCiv]);
 
   useEffect(() => {
     const rail = railRef.current;
@@ -141,7 +210,7 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
           <p className="text-xs font-semibold text-muted">{filterLabel}</p>
           <div className="flex items-center gap-3">
             <p className="text-xs tabular-nums text-muted">
-              {items.length} subobjetivos
+              {items.length} {itemsLabel}
             </p>
             <div className="flex items-center gap-1">
               <RailArrow
@@ -160,7 +229,7 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
 
         <ul
           role="group"
-          aria-label="Civilizaciones de la familia"
+          aria-label={flagsLabel}
           className="flex flex-wrap items-center gap-2"
         >
           {[...childrenByCiv.entries()].map(([civ, item]) => (
@@ -183,10 +252,13 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
         </ul>
       </div>
 
+      {/* El `scroll-px-3` iguala el `p-3`: sin él, el `snap-start` ancla la
+          primera tarjeta al borde del área de scroll (12px fuera del contenido);
+          con él, la ancla al contenido, que es donde encaja con la sección. */}
       <ul
         ref={railRef}
         onScroll={updateScrollState}
-        className="-m-3 flex snap-x snap-mandatory gap-4 overflow-x-auto p-3"
+        className="-m-3 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-3 p-3"
       >
         {items.map((item) => {
           const civ = familyCivId(item.id);
@@ -194,6 +266,7 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
           return (
             <li
               key={item.id}
+              data-civ={civ ?? undefined}
               ref={(element) => {
                 if (civ !== null) {
                   cardRefs.current[civ] = element;
@@ -222,8 +295,8 @@ function RailArrow({
 }) {
   const label =
     direction === "prev"
-      ? "Ver los subobjetivos anteriores"
-      : "Ver los subobjetivos siguientes";
+      ? "Ver la tarjeta anterior"
+      : "Ver la tarjeta siguiente";
 
   return (
     <button

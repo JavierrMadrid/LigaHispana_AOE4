@@ -54,7 +54,7 @@ export function ObjectiveStandings({
 }) {
   if (players === null) {
     return (
-      <p className="px-4 py-8 text-center text-sm text-muted sm:px-6">
+      <p className="px-6 py-8 text-center text-sm text-muted sm:px-8">
         No se ha podido cargar la clasificación. Vuelve a intentarlo en unos minutos.
       </p>
     );
@@ -65,19 +65,19 @@ export function ObjectiveStandings({
 
   return (
     <>
-      <div className="flex items-baseline justify-between gap-3 px-4 py-3 sm:px-6">
+      <div className="flex items-baseline justify-between gap-3 px-6 py-3 sm:px-8">
         <h3 className="font-display text-base font-semibold text-foreground">Clasificación</h3>
         <span className="text-xs tabular-nums text-muted">
           {players.length === 1 ? "1 participante" : `${players.length} participantes`}
         </span>
       </div>
 
-      <p className="border-t border-line px-4 py-2.5 text-xs text-muted sm:px-6">
+      <p className="border-t border-line px-6 py-2.5 text-xs text-muted sm:px-8">
         {completionSummary(option, players.length)}
       </p>
 
       {players.length === 0 ? (
-        <p className="border-t border-line px-4 py-8 text-center text-sm text-muted sm:px-6">
+        <p className="border-t border-line px-6 py-8 text-center text-sm text-muted sm:px-8">
           Todavía no hay participantes en la clasificación.
         </p>
       ) : (
@@ -118,21 +118,24 @@ function StandingRow({
 }) {
   return (
     <li
-      className={`flex items-center gap-3 px-4 py-3 sm:px-6 ${highlight ? "bg-accent/5" : ""}`}
+      className={`flex items-center gap-3 px-6 py-3 sm:px-8 ${highlight ? "bg-accent/5" : ""}`}
     >
       <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">
         {position === null ? null : position}
       </span>
       <PlayerAvatar name={player.name} avatarUrl={player.avatarUrl} className="size-8 text-xs" />
-      <a
-        href={player.profileUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="min-w-0 flex-1 truncate text-sm text-foreground/90 underline-offset-4 transition-colors hover:text-accent hover:underline"
-      >
-        {player.name}
-        <span className="sr-only"> en AoE4World (se abre en una pestaña nueva)</span>
-      </a>
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground/90">
+        {/* Solo el nombre es enlace: el hueco de la columna no debe navegar. */}
+        <a
+          href={player.profileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline-offset-4 transition-colors hover:text-accent hover:underline"
+        >
+          {player.name}
+          <span className="sr-only"> en AoE4World (se abre en una pestaña nueva)</span>
+        </a>
+      </span>
 
       {achieved ? (
         <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">

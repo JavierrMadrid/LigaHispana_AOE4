@@ -48,7 +48,7 @@ export function LiveMatchCard({ match }: { match: LiveMatch }) {
             src={image}
             alt=""
             fill
-            sizes="(min-width: 1024px) 34rem, 100vw"
+            sizes="(min-width: 1280px) 19rem, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
             className="object-cover"
           />
         ) : (
@@ -97,7 +97,7 @@ export function LiveMatchCard({ match }: { match: LiveMatch }) {
 
       <div className="p-4">
         {teams.length === 2 ? (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch sm:gap-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch sm:gap-3">
             <TeamBlock participants={teams[0]} label="Equipo 1" />
             <Versus />
             <TeamBlock participants={teams[1]} label="Equipo 2" alignRight />
@@ -151,7 +151,7 @@ function Versus() {
   return (
     <div
       aria-hidden="true"
-      className="flex items-center gap-3 sm:w-10 sm:flex-col sm:gap-2"
+      className="flex items-center gap-3 sm:w-8 sm:flex-col sm:gap-2"
     >
       <span className="h-px flex-1 bg-line sm:h-auto sm:w-px sm:flex-1" />
       <span className="text-xs font-semibold uppercase tracking-[0.18em] text-muted/80">
@@ -174,10 +174,10 @@ function ParticipantRow({
   const label = unknown ? "Jugador sin identificar" : name;
 
   return (
-    <li className={`flex min-w-0 items-center gap-2.5${alignRight ? " justify-end" : ""}`}>
+    <li className={`flex min-w-0 items-center gap-2.5 sm:gap-2${alignRight ? " justify-end" : ""}`}>
       <CivilizationIcon
         civ={participant.civ}
-        className="size-6 shrink-0"
+        className="size-6 shrink-0 sm:size-5"
         label={participant.civ === null ? undefined : civilizationName(participant.civ)}
       />
 
@@ -187,7 +187,7 @@ function ParticipantRow({
           target="_blank"
           rel="noopener noreferrer"
           title={label}
-          className="min-w-0 truncate font-semibold text-foreground underline-offset-4 transition-colors hover:text-accent hover:underline"
+          className="min-w-0 truncate text-sm font-semibold text-foreground underline-offset-4 transition-colors hover:text-accent hover:underline sm:text-xs"
         >
           {label}
           <span className="sr-only">
@@ -197,7 +197,7 @@ function ParticipantRow({
       ) : (
         <span
           title={label}
-          className={`min-w-0 truncate ${
+          className={`min-w-0 truncate text-sm sm:text-xs ${
             participant.isLeaguePlayer
               ? "font-semibold text-foreground"
               : unknown
@@ -229,7 +229,7 @@ function DivisionBadge({ division }: { division: DivisionId }) {
       style={{ color: divisionColor(division) }}
       className="inline-flex shrink-0 items-center"
     >
-      <LeagueIcon rank={leagueFilterRank(division)} className="h-5 w-3.5" />
+      <LeagueIcon rank={leagueFilterRank(division)} className="h-5 w-3.5 sm:h-4 sm:w-3" />
       <span className="sr-only">{label}, jugador de la liga</span>
     </span>
   );

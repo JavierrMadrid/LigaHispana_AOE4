@@ -183,7 +183,7 @@ export function Modal({
           onClick={onClose}
           disabled={closeDisabled}
           aria-label={closeLabel}
-          className="absolute right-2.5 top-2.5 inline-flex size-9 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          className="absolute right-2.5 top-2.5 z-10 inline-flex size-9 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
         >
           <CloseIcon />
         </button>

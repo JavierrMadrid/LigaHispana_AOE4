@@ -15,6 +15,7 @@ import {
   rankLevelToLeague,
 } from "@/components/league-icon";
 import { MapPool } from "@/components/objective-card";
+import { ObjectiveFeatureFrame } from "@/components/objective-feature-summary";
 import { ObjectiveFamilyRail } from "@/components/objective-family-rail";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
@@ -65,8 +66,9 @@ const SECTION_INDEX_LABEL = "Secciones de los objetivos del participante";
  * individuales, porque su avance se sigue igual que el de ellas. Las tarjetas de
  * cada carrusel van de mayor a menor porcentaje de consecución. La cabeza de cada
  * familia (`polifacetico`, `jugon`) sí es un objetivo individual y sigue en su
- * sección. La clasificación completa de un objetivo se abre en el mismo diálogo
- * que usa `/objetivos`, reutilizando `ObjectiveRankingDialog`.
+ * sección. La clasificación completa de un objetivo se abre en la misma ventana
+ * volteable que usa `/objetivos` (`ObjectiveRankingDialog`): al pulsar se ve la
+ * clasificación y el giro descubre el resumen del avance del jugador.
  */
 export function ParticipantObjectivesView({
   data,
@@ -314,6 +316,16 @@ export function ParticipantObjectivesView({
           option={active}
           highlightProfileId={player.profileId}
           onClose={() => setActive(null)}
+          front={
+            // El componente reserva arriba el aire del botón de cerrar del `Modal`.
+            <div className="h-full overflow-y-auto">
+              <ParticipantObjectiveFeatureSummary
+                objective={active}
+                groupLabels={groupLabels}
+                mapPool={mapPool}
+              />
+            </div>
+          }
         />
       )}
     </div>
@@ -537,21 +549,180 @@ function FamilyCarouselSection({
 }
 
 /**
- * Una tarjeta de objetivo. La jerarquía la fija el orden: arriba la identidad
- * (emblema, nombre y puntos); debajo, como protagonista, el avance del jugador
- * en sus tres datos; y al final, en tono apagado, lo accesorio (la regla) y la
- * puerta a la clasificación. El pie va anclado abajo (`mt-auto`) para que las
- * tarjetas de una misma fila lo alineen aunque su texto no ocupe lo mismo.
- *
- * La misma tarjeta sirve en la rejilla de las secciones y en el riel de un
- * carrusel de familia. En el riel va `dense`: el ancho es fijo y más estrecho,
- * así que se aprieta el relleno y se recorta la regla a dos líneas para que no
- * desborde. La rejilla interior de tres datos se sostiene con `break-words` en
- * los valores: palabras largas como "civilizaciones" parten antes que salirse.
- *
- * El cromo lo pinta `BorderGlow` (halo dorado) y la tarjeta entera es un botón
- * invisible que abre su clasificación, igual que en `/objetivos`: mismo hover,
- * mismo cursor de clic y mismo destino.
+ * El resumen del avance del jugador en un objetivo: emblema, nombre, puntos,
+ * los tres datos de su progreso y la regla. Es la cara frontal de la ventana
+ * volteable y el contenido de la tarjeta pequeña; el cromo (`BorderGlow`) y el
+ * botón que abre la clasificación los pone `ObjectiveCard`.
+ */
+export function ParticipantObjectiveSummary({
+  objective,
+  groupLabels,
+  mapPool,
+  dense = false,
+}: {
+  objective: ParticipantObjective;
+  groupLabels: Record<ObjectiveGroup, string>;
+  mapPool: readonly string[];
+  dense?: boolean;
+}) {
+  const distance = formatDistance(objective);
+
+  return (
+    <div className={`flex h-full flex-col ${dense ? "p-3" : "p-4"}`}>
+      <div className="flex items-start gap-3">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
+          <ObjectiveIcon option={objective} className="size-6 shrink-0" />
+        </span>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <h3 className="min-w-0 font-display text-base font-semibold leading-snug text-foreground">
+              {objective.label}
+            </h3>
+            {objective.detail !== null ? (
+              <span className="text-xs text-muted">({objective.detail.label})</span>
+            ) : null}
+            {objective.achieved ? (
+              <AchievedBadge />
+            ) : objective.kind === "competition" ? (
+              <PositionBadge position={objective.position} />
+            ) : null}
+          </div>
+          <p className="mt-0.5 text-xs text-muted">{groupLabels[objective.group]}</p>
+        </div>
+
+        <PointsPlate points={objective.points} achieved={objective.achieved} />
+      </div>
+
+      <dl className="mt-3 grid grid-cols-3 gap-x-3 gap-y-2">
+        <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
+        {objective.kind === "achievement" ? (
+          <>
+            <Fact label="Estado" value={objective.achieved ? "Conseguido" : "En camino"} />
+            <Fact label="Te falta" value={remainingText(objective) ?? "—"} />
+          </>
+        ) : (
+          <>
+            <Fact
+              label="Posición"
+              value={objective.achieved ? "Poseído" : positionText(objective)}
+            />
+            <Fact label="Al primero" value={distance ?? "—"} />
+          </>
+        )}
+      </dl>
+
+      <AchievementProgress objective={objective} />
+
+      <p
+        className={`mt-2 text-xs leading-relaxed text-muted ${
+          dense ? "line-clamp-2" : ""
+        }`}
+      >
+        {objective.description}
+      </p>
+
+      {objective.metric === "mapas" && mapPool.length > 0 ? (
+        <MapPool maps={mapPool} />
+      ) : null}
+
+      <div className="mt-auto flex items-end justify-end border-t border-line pt-3">
+        {/* El clic lo recoge el botón invisible que cubre la tarjeta; el pie
+            solo anuncia la acción, como en `/objetivos`. */}
+        <span className="pointer-events-none inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent">
+          Ver clasificación
+          <Chevron />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * La cara frontal del objetivo en la ficha de un participante: la misma
+ * información que su tarjeta pequeña (emblema, nombre, grupo y detalle, puntos,
+ * los tres datos del avance y la regla). Monta el mismo armazón que `/objetivos`
+ * —título centrado con filete, emblema en grande y descripción debajo— y lleva a
+ * la ranura inferior izquierda el avance del jugador, con los puntos en línea a la
+ * derecha sobre el filete y la puerta a la clasificación debajo, que abre el
+ * `FlipCard`.
+ */
+export function ParticipantObjectiveFeatureSummary({
+  objective,
+  groupLabels,
+  mapPool,
+}: {
+  objective: ParticipantObjective;
+  groupLabels: Record<ObjectiveGroup, string>;
+  mapPool: readonly string[];
+}) {
+  const distance = formatDistance(objective);
+  // En la tarjeta grande, la barra del logro ya resume "X de Y": repetir "Tu
+  // avance" justo encima es redundante. Solo se conserva cuando la barra no se
+  // pinta —logro sin umbral o ya conseguido—, para no perder la cifra.
+  const showProgressBar =
+    objective.kind === "achievement" && objective.target !== null && !objective.achieved;
+
+  return (
+    <ObjectiveFeatureFrame
+      target={objective}
+      title={objective.label}
+      subtitle={
+        objective.detail === null
+          ? groupLabels[objective.group]
+          : `${groupLabels[objective.group]} · ${objective.detail.label}`
+      }
+      badges={
+        objective.achieved ? (
+          <AchievedBadge />
+        ) : objective.kind === "competition" ? (
+          <PositionBadge position={objective.position} />
+        ) : null
+      }
+      points={objective.points}
+      pointsTone={objective.achieved ? "accent" : "neutral"}
+      description={objective.description}
+      detail={
+        objective.metric === "mapas" && mapPool.length > 0 ? (
+          <MapPool maps={mapPool} />
+        ) : undefined
+      }
+      progress={
+        <div className="flex flex-col gap-4">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+            {showProgressBar ? null : (
+              <div className="col-span-2">
+                <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
+              </div>
+            )}
+            {objective.kind === "achievement" ? (
+              <>
+                <Fact label="Estado" value={objective.achieved ? "Conseguido" : "En camino"} />
+                <Fact label="Te falta" value={remainingText(objective) ?? "—"} />
+              </>
+            ) : (
+              <>
+                <Fact
+                  label="Posición"
+                  value={objective.achieved ? "Poseído" : positionText(objective)}
+                />
+                <Fact label="Al primero" value={distance ?? "—"} />
+              </>
+            )}
+          </dl>
+
+          <AchievementProgress objective={objective} />
+        </div>
+      }
+      actionLabel="Ver clasificación"
+    />
+  );
+}
+
+/**
+ * Una tarjeta de objetivo. El cromo lo pinta `BorderGlow` (halo dorado y estela
+ * interior) y la tarjeta entera es un botón invisible que abre su clasificación,
+ * igual que en `/objetivos`: mismo hover, mismo cursor de clic y mismo destino.
  */
 function ObjectiveCard({
   objective,
@@ -566,77 +737,14 @@ function ObjectiveCard({
   onOpen: (objective: ParticipantObjective) => void;
   dense?: boolean;
 }) {
-  const distance = formatDistance(objective);
-
   return (
     <BorderGlow className="h-full">
-      <div className={`flex h-full flex-col ${dense ? "p-4" : "p-5"}`}>
-        <div className="flex items-start gap-3">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
-            <ObjectiveIcon option={objective} className="size-6 shrink-0" />
-          </span>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <h3 className="min-w-0 font-display text-base font-semibold leading-snug text-foreground">
-                {objective.label}
-              </h3>
-              {objective.detail !== null ? (
-                <span className="text-xs text-muted">({objective.detail.label})</span>
-              ) : null}
-              {objective.achieved ? (
-                <AchievedBadge />
-              ) : objective.kind === "competition" ? (
-                <PositionBadge position={objective.position} />
-              ) : null}
-            </div>
-            <p className="mt-0.5 text-xs text-muted">{groupLabels[objective.group]}</p>
-          </div>
-
-          <PointsPlate points={objective.points} achieved={objective.achieved} />
-        </div>
-
-        <dl className="mt-4 grid grid-cols-3 gap-x-3 gap-y-2">
-          <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
-          {objective.kind === "achievement" ? (
-            <>
-              <Fact label="Estado" value={objective.achieved ? "Conseguido" : "En camino"} />
-              <Fact label="Te falta" value={remainingText(objective) ?? "—"} />
-            </>
-          ) : (
-            <>
-              <Fact
-                label="Posición"
-                value={objective.achieved ? "Poseído" : positionText(objective)}
-              />
-              <Fact label="Al primero" value={distance ?? "—"} />
-            </>
-          )}
-        </dl>
-
-        <AchievementProgress objective={objective} />
-
-        <p
-          className={`mt-3 text-xs leading-relaxed text-muted ${
-            dense ? "line-clamp-2" : ""
-          }`}
-        >
-          {objective.description}
-        </p>
-
-        {objective.metric === "mapas" && mapPool.length > 0 ? (
-          <MapPool maps={mapPool} />
-        ) : null}
-
-        <div className="mt-auto flex items-end justify-end border-t border-line pt-3">
-          {/* El clic lo recoge el botón invisible que cubre la tarjeta; el pie
-              solo anuncia la acción, como en `/objetivos`. */}
-          <span className="pointer-events-none inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent">
-            Ver clasificación
-            <Chevron />
-          </span>
-        </div>
-      </div>
+      <ParticipantObjectiveSummary
+        objective={objective}
+        groupLabels={groupLabels}
+        mapPool={mapPool}
+        dense={dense}
+      />
 
       <button
         type="button"
