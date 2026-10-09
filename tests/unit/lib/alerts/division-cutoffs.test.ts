@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  pruneCutoffsTable,
   readCutoffsTable,
   subdivisionForRating,
   type LadderCutoffs,
@@ -60,6 +61,37 @@ function guardado(ladders: LadderCutoffsTable): StoredDivisionCutoffs {
 
 const RM_TEAM = cortes("rm_team");
 const RM_SOLO = cortes("rm_solo", 5000);
+
+describe("pruneCutoffsTable — la caché solo guarda lo que se deriva", () => {
+  it("deja solo las familias indicadas y descarta el resto", () => {
+    // El `rm_solo` que se derivaba antes ya no lo lee nadie: al reescribir la
+    // caché con solo `rm_team` no debe sobrevivir.
+    const podada = pruneCutoffsTable(tabla(RM_SOLO, RM_TEAM), ["rm_team"]);
+
+    expect(Object.keys(podada)).toEqual(["rm_team"]);
+    expect(podada["rm_team"]).toEqual(RM_TEAM);
+  });
+
+  it("conserva las indicadas que existían y no inventa las que no", () => {
+    const podada = pruneCutoffsTable(tabla(RM_TEAM), ["rm_team", "rm_solo"]);
+
+    expect(Object.keys(podada)).toEqual(["rm_team"]);
+  });
+
+  it("una tabla vacía o una lista vacía dan tabla vacía", () => {
+    expect(pruneCutoffsTable({}, ["rm_team"])).toEqual({});
+    expect(pruneCutoffsTable(tabla(RM_TEAM), [])).toEqual({});
+  });
+
+  it("no muta la tabla original", () => {
+    const original = tabla(RM_SOLO, RM_TEAM);
+    const copia = structuredClone(original);
+
+    pruneCutoffsTable(original, ["rm_team"]);
+
+    expect(original).toEqual(copia);
+  });
+});
 
 describe("readCutoffsTable — lo que se guarda se vuelve a leer igual", () => {
   it("la tabla entera sobrevive al viaje por JSON, campo a campo", () => {

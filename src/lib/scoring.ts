@@ -43,9 +43,9 @@ import { readMapPool, writeScoringLastRun } from "@/lib/settings";
  *   se publiquen reglas nuevas se recalcula al lado de las anteriores.
  * - Los puntos por partida se materializan en `Match.points`, así que se pueden
  *   auditar sin volver a agregarlos.
- * - El desempate es `total desc, wins desc, profileId asc`, que termina en un
- *   valor único (`profileId` es único), de modo que el puesto es un entero
- *   denso y estable.
+ * - El desempate es `total desc, wins desc, winrate desc, profileId asc`, que
+ *   termina en un valor único (`profileId` es único), de modo que el puesto es un
+ *   entero denso y estable.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -471,6 +471,31 @@ type AggregatedMatchRow = {
 const SCORING_LOCK_NAME = "ligahispana.recomputeScores";
 
 /**
+ * Orden de la clasificación. Función pura y exportada para poder comprobarla sin
+ * base de datos.
+ *
+ * `total` y `wins` descendentes; entre dos filas con el mismo total y las mismas
+ * victorias decide el **porcentaje de victorias**, y cierra `profileId`
+ * ascendente, que es único. El winrate se compara con **producto cruzado**
+ * (`b.wins * a.matches` frente a `a.wins * b.matches`) y no con `wins / matches`:
+ * la división en coma flotante puede ordenar mal por el redondeo binario, y aquí
+ * el orden tiene que ser exacto. Con `matches` 0 (que no se da en una fila
+ * publicada, pero por si acaso) el producto es 0 y el desempate cae a
+ * `profileId`.
+ */
+export function compareStandings(
+  a: { total: number; wins: number; matches: number; profileId: number },
+  b: { total: number; wins: number; matches: number; profileId: number },
+): number {
+  return (
+    b.total - a.total ||
+    b.wins - a.wins ||
+    b.wins * a.matches - a.wins * b.matches ||
+    a.profileId - b.profileId
+  );
+}
+
+/**
  * Reescribe los puntos por partida y la clasificación completa.
  *
  * Es idempotente: se puede ejecutar tantas veces como haga falta y el resultado
@@ -647,9 +672,10 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
 
       const profileIdByPlayer = new Map(players.map((player) => [player.id, player.profileId]));
 
-      // Desempate provisional. `profileId` es único, así que el orden es total y
-      // el puesto un entero denso: no hay empates que repartir. Una fila sin
-      // `profileId` no se publica en lugar de publicarse con un desempate falso.
+      // Desempate: total, victorias, winrate y `profileId`. Este último es único,
+      // así que el orden es total y el puesto un entero denso: no hay empates que
+      // repartir. Una fila sin `profileId` no se publica en lugar de publicarse
+      // con un desempate falso.
       const ranked = [...totals.entries()]
         .flatMap(([playerId, aggregate]) => {
           const profileId = profileIdByPlayer.get(playerId);
@@ -668,7 +694,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
                 },
               ];
         })
-        .sort((a, b) => b.total - a.total || b.wins - a.wins || a.profileId - b.profileId)
+        .sort(compareStandings)
         .map((row, index) => ({ ...row, rank: index + 1 }));
 
       const previousCount = await tx.playerScore.count({

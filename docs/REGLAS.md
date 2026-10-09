@@ -47,7 +47,7 @@ organización; las demás las comprueba la organización.
 | **Historial público**: mantener el historial de partidas de la cuenta en público. | Alerta de historial no público |
 | **Jugar hasta el final**: no abandonar ni perder a propósito para manipular el elo. | Alerta de partidas cortas |
 | **Sin rivales repetidos**: no repetir rival en 1v1 para acumular victorias. | Alerta de rival repetido |
-| **Equipos equilibrados**: no jugar por equipos con compañeros de elo muy superior a la propia, ni por debajo de la propia división. | Alertas de brecha de elo y de equipo bajo la división |
+| **Equipos equilibrados**: no jugar por equipos con compañeros de elo muy superior a la propia, ni en una división muy distinta de la propia (por encima o por debajo). | Alertas de brecha de elo y de equipo en otra división |
 | **Partidas verificables**: las partidas de ladder deben llegarnos y poder verificarse. | Alerta de partidas de ladder que no llegan |
 
 **Manipular el elo está prohibido.** Las derrotas no restan, así que dejarse perder o abandonar para

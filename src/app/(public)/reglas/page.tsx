@@ -171,7 +171,8 @@ export default function RulesPage() {
                   Equipos equilibrados.
                 </strong>{" "}
                 En partidas por equipos no se puede jugar con compañeros de elo
-                muy superior al de uno mismo, ni por debajo de la propia división.
+                muy superior al de uno mismo, ni en una división muy distinta de la
+                propia (por encima o por debajo).
               </li>
             </ol>
 

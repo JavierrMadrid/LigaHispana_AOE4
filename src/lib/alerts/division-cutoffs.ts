@@ -8,25 +8,30 @@ import { isRecord } from "@/lib/json";
  *
  * ## Qué son y por qué hacen falta
  *
- * R5 compara la **media de elo de una partida de equipos** con la división 1v1
- * del jugador, y las dos cosas están en unidades distintas: la división del
- * jugador es un `rank_level` (`gold_3`) y la media de la partida es un número
- * (`average_mmr`). Para pasar de una a otra hace falta saber, para una ladder
- * concreta, **a partir de qué rating empieza cada subdivisión**.
+ * R5 compara **dos ratings de la misma partida de equipos** —el del jugador en
+ * esa partida y la media del juego— y necesita saber a qué subdivisión
+ * corresponde cada uno para contar los escalones que los separan. El rating es
+ * un número y la subdivisión un `rank_level` (`gold_3`), así que hace falta
+ * saber, para una ladder concreta, **a partir de qué rating empieza cada
+ * subdivisión**.
  *
  * La API no lo publica: `rating_min`, `rating_max` y `rank_level` se ignoran en
  * silencio en `/leaderboards/:ladder` y siempre devuelven la página 1. La única
  * forma de averiguarlo es recorrer la ladder (ver `derive-cutoffs.ts`) y quedarse
  * con el rating más bajo de cada bloque, que es justo lo que se guarda aquí.
  *
- * ## Por qué hay cortes **por ladder**
+ * ## Por qué hay cortes **por familia de ladder**
  *
- * `average_mmr` es elo de equipos, así que los cortes que sirven son los de la
- * ladder de la partida (`Match.leaderboard`), no los de `rm_solo`. Comprobado
+ * Las dos magnitudes que compara R5 son elo de la **familia** de la partida
+ * (`Match.mode`: para equipos, `rm_team`), así que los cortes que sirven son los
+ * de esa familia, no los de `rm_solo`. Se busca por la familia resuelta y no por
+ * el literal `Match.leaderboard` porque un ranked por equipos puede publicarse
+ * como `rm_2v2`, `rm_3v3` o `rm_4v4`, y entonces el literal no coincidiría con la
+ * clave cacheada. Comprobado
  * contra la API real en septiembre de 2026: un jugador con 252 de rating en la
  * ladder `rm_team` aparece con 337 de `mmr` en su partida de equipos, o sea que
  * las dos escalas son la misma, y `rank_level` sale del rating con umbrales
- * globales. Aun así se derivan y se cachean por ladder, porque es lo que hace
+ * globales. Aun así se derivan y se cachean por familia, porque es lo que hace
  * que el dato sea **correcto por construcción** y no por una suposición sobre
  * los umbrales de AoE4World.
  */
@@ -40,7 +45,7 @@ export type LadderCutoff = {
 };
 
 export type LadderCutoffs = {
-  /** Ladder de la que salen los cortes (`rm_solo`, `rm_team`). */
+  /** Familia de ladder de la que salen los cortes (`rm_team`). */
   ladder: string;
   /** Instante de la derivación, ISO-8601. */
   derivedAt: string;
@@ -59,7 +64,7 @@ export type LadderCutoffs = {
   requests: number;
 };
 
-/** Los cortes de todas las ladders derivadas, indexados por nombre de ladder. */
+/** Los cortes de todas las familias de ladder derivadas, indexados por nombre de familia. */
 export type LadderCutoffsTable = Record<string, LadderCutoffs>;
 
 /** Forma guardada en `Setting["alerts.divisionCutoffs"]`. */
@@ -116,6 +121,31 @@ export function subdivisionForRating(
   return ultimo === undefined || indiceUltimo === null
     ? null
     : { index: indiceUltimo, rankLevel: ultimo.rankLevel };
+}
+
+/**
+ * Deja en la tabla **solo** las familias de ladder indicadas.
+ *
+ * La caché es un retrato de lo que el motor puede leer, no un histórico: cuando
+ * una familia deja de derivarse —el `rm_solo`, que R5 ya no consulta— su entrada
+ * queda obsoleta y no tiene por qué sobrevivir a la siguiente reescritura de
+ * `Setting["alerts.divisionCutoffs"]`. Es pura para poder comprobar la poda sin
+ * red ni base de datos.
+ */
+export function pruneCutoffsTable(
+  table: LadderCutoffsTable,
+  ladders: readonly string[],
+): LadderCutoffsTable {
+  const keep = new Set(ladders);
+  const pruned: LadderCutoffsTable = {};
+
+  for (const [ladder, cutoffs] of Object.entries(table)) {
+    if (keep.has(ladder)) {
+      pruned[ladder] = cutoffs;
+    }
+  }
+
+  return pruned;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -53,8 +53,10 @@ entrar. `registeredAt` es la fecha del envío del alta (no la de la aprobación)
 
 ## Desempates de la clasificación
 
-Total descendente, luego victorias descendentes, luego `profileId` ascendente. Como `profileId` es
-único, el orden es total y el puesto un entero denso. (El desempate **dentro de un objetivo** es otro:
+Total descendente, luego victorias descendentes, luego **porcentaje de victorias** (victorias entre
+partidas jugadas) descendente, y por último `profileId` ascendente. El winrate se compara con producto
+cruzado, sin coma flotante, para que el orden sea exacto. Como `profileId` es único, el orden es total y
+el puesto un entero denso. (El desempate **dentro de un objetivo** es otro:
 ver [`OBJETIVOS.md`](./OBJETIVOS.md).)
 
 ## El ruleset

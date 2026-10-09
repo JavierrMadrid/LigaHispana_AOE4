@@ -4,7 +4,12 @@ import { LADDER_MAX_PAGE_SIZE, type Aoe4WorldClient } from "@/lib/aoe4world/clie
 import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 import type { Aoe4WorldLadderPage } from "@/lib/aoe4world/types";
 import { SUBDIVISION_RANK_LEVELS, subdivisionIndex } from "@/lib/divisions";
-import type { LadderCutoff, LadderCutoffs, LadderCutoffsTable } from "./division-cutoffs";
+import {
+  pruneCutoffsTable,
+  type LadderCutoff,
+  type LadderCutoffs,
+  type LadderCutoffsTable,
+} from "./division-cutoffs";
 import { readDivisionCutoffs, writeDivisionCutoffs } from "./settings";
 
 /**
@@ -42,7 +47,7 @@ import { readDivisionCutoffs, writeDivisionCutoffs } from "./settings";
  *
  * ## El precio
  *
- * Una derivación por ladder son del orden de 120 a 150 llamadas, con la
+ * Una derivación por familia son del orden de 120 a 150 llamadas, con la
  * separación mínima entre peticiones que impone `http.ts`. Es un trabajo de una
  * sola vez, cacheado en `Setting["alerts.divisionCutoffs"]` y refrescable a mano
  * con `npm run alerts:cutoffs`: el motor **no** lo deriva nunca, porque el
@@ -401,19 +406,20 @@ export async function deriveLadderCutoffs(options: DeriveCutoffsOptions): Promis
 }
 
 /**
- * Deriva (o refresca) los cortes de una o varias ladders y los deja cacheados en
- * `Setting["alerts.divisionCutoffs"]`.
+ * Deriva (o refresca) los cortes de una o varias familias de ladder y los deja
+ * cacheados en `Setting["alerts.divisionCutoffs"]`.
  *
- * Se **acumula**: las ladders que no se piden en esta llamada conservan sus
- * cortes. Refrescar `rm_team` no puede borrar los de `rm_solo`, y quien se
- * equivoca de eso se queda sin R5 en los partidos de su propio grupo.
+ * La caché se reescribe como un **retrato** de esta llamada: se parte de lo que
+ * había, se poda a las familias que se van a derivar y se refrescan esas. Así,
+ * una entrada de una familia que ya no se deriva —el `rm_solo` que R5 consultaba
+ * antes— no sobrevive a la reescritura, en vez de quedarse inerte para siempre.
  */
 export async function refreshDivisionCutoffs(
   ladders: string[],
   options: { client: Aoe4WorldClient; signal?: AbortSignal; onProgress?: (message: string) => void },
 ): Promise<LadderCutoffsTable> {
   const existing = (await readDivisionCutoffs()) ?? {};
-  const table: LadderCutoffsTable = { ...existing };
+  const table = pruneCutoffsTable(existing, ladders);
 
   for (const ladder of ladders) {
     table[ladder] = await deriveLadderCutoffs({

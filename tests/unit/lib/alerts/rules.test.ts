@@ -124,15 +124,19 @@ describe("alertSummary", () => {
     );
   });
 
-  it("R5 concuerda el número de escalones y trae la media cuando la hay", () => {
+  it("R5 concuerda el número de escalones y conserva el sentido", () => {
     expect(
       alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: 1 } })),
     ).toContain("1 escalón");
     expect(
       alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: 3 } })),
     ).toContain("3 escalones");
+    // `steps` negativo es que la partida está por encima del jugador.
+    expect(
+      alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: -3 } })),
+    ).toContain("por encima");
     expect(alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME" }))).toContain(
-      "muy por debajo de su división",
+      "en una división muy distinta",
     );
   });
 

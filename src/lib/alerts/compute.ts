@@ -2,7 +2,6 @@ import { subdivisionForRating } from "@/lib/alerts/division-cutoffs";
 import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { parseGame } from "@/lib/aoe4world/parse";
 import type { Aoe4WorldGamePlayer } from "@/lib/aoe4world/types";
-import { subdivisionIndex } from "@/lib/divisions";
 import type { ScoringWindow } from "@/lib/ranked-match";
 import {
   buildTriggeredAlert,
@@ -47,7 +46,7 @@ import {
  * | R2 `REPEATED_OPPONENT_*` | solo `rm_solo` | la partida tiene rival con `opponentProfileId` | 3 con el mismo rival | cada 10 con el mismo rival |
  * | R3 `REPEATED_TEAMMATE_*` | solo `rm_team` | el mismo compañero está en mi equipo | 3 con ese compañero | 7 con ese compañero, una vez |
  * | R4 `TEAMMATE_ELO_GAP` | solo `rm_team` | algún compañero está a `teammateEloGap` de elo o más | 1 | — |
- * | R5 `LOW_DIVISION_TEAM_GAME` | solo `rm_team` | la media de elo de la partida cae `lowDivisionSteps` escalones o más por debajo de mi división | 1 | — |
+ * | R5 `LOW_DIVISION_TEAM_GAME` | solo `rm_team` | la división de la partida difiere `lowDivisionSteps` escalones o más (en cualquiera de los dos sentidos) de la del jugador en esa misma partida | 1 | — |
  *
  * R2 y R3 llevan **sujeto** (el rival, el compañero), así que sus rachas y sus
  * acumulados son *por sujeto*: tres partidas seguidas contra el mismo rival, no
@@ -64,9 +63,9 @@ import {
  *
  * Un `rawJson` ilegible no lanza: esa partida no aporta flags, y se cuenta en
  * `unreadableMatches`. Es la dirección segura, porque una regla que no puede
- * evaluarse no puede acusar a nadie. R5 se omite (con aviso) si el jugador no
- * tiene `rankLevel` 1v1, y las partidas cuya ladder no tiene cortes cacheados se
- * saltan sin más.
+ * evaluarse no puede acusar a nadie. R5 se omite (sin aviso) en las partidas en
+ * las que falte el rating del jugador o la media del juego, y las partidas cuya
+ * familia de ladder no tiene cortes cacheados se saltan sin más.
  */
 
 /** Lo mínimo que hace falta de un jugador. */
@@ -74,8 +73,6 @@ export type AlertPlayer = {
   id: string;
   profileId: number;
   name: string;
-  /** `rank_level` de la ladder `rm_solo`; es el que usa R5 como referencia. */
-  rankLevel: string | null;
 };
 
 /**
@@ -89,8 +86,6 @@ export type AlertPlayer = {
 export type AlertMatch = {
   gameId: string;
   mode: string | null;
-  /** Ladder literal de la API (`rm_solo`, `rm_team`): de aquí salen los cortes de R5. */
-  leaderboard: string;
   opponentProfileId: number | null;
   opponentName: string | null;
   startedAt: Date;
@@ -117,7 +112,7 @@ export type ComputeAlertsInput = {
    * filtrado con ellos, y por eso no se duplican en el ruleset de alertas.
    */
   scoring: { modes: string[]; window: ScoringWindow };
-  /** Cortes rating → subdivisión por ladder, o `null` si no hay ninguno cacheados. */
+  /** Cortes rating → subdivisión por familia de ladder, o `null` si no hay ninguno cacheados. */
   cutoffs: LadderCutoffsTable | null;
   now: Date;
 };
@@ -174,6 +169,8 @@ type TeamView = {
   self: Aoe4WorldGamePlayer | null;
   /** Los que estaban en su mismo equipo, él excluido. */
   teammates: Aoe4WorldGamePlayer[];
+  /** Media de elo de la partida, tal y como la publica el payload. */
+  averageMmr: number | null;
 };
 
 /**
@@ -205,6 +202,7 @@ function readTeamView(rawJson: unknown, profileId: number): TeamView | null {
     return {
       self: team[index] ?? null,
       teammates: team.filter((_, position) => position !== index),
+      averageMmr: game.averageMmr,
     };
   }
 
@@ -237,7 +235,7 @@ type FlagRow = {
   subjects: AlertSubject[][];
   /** Dato a destacar de la partida, para `details`. */
   details: (AlertAnchorDetail | undefined)[];
-  /** Ladder de la partida, para las reglas que la necesitan (R5). */
+  /** Familia de ladder de la partida (`Match.mode`), para las reglas que la necesitan (R5). */
   ladders: (string | undefined)[];
 };
 
@@ -389,8 +387,6 @@ type RuleContext = {
   matches: AlertMatch[];
   thresholds: AlertsRuleset["thresholds"];
   cutoffs: LadderCutoffsTable | null;
-  /** Escalones de R5 del jugador, o `null` si no se puede evaluar. */
-  playerSubdivision: number | null;
   unreadable: number;
 };
 
@@ -532,55 +528,79 @@ function teammateEloGapFlags(context: RuleContext): FlagRow {
   return row;
 }
 
-/** R5: de equipo, la media de elo cae `lowDivisionSteps` escalones o más por debajo. */
+/**
+ * R5: de equipo, la división de la partida y la del jugador (en esa misma
+ * partida) distan `lowDivisionSteps` escalones o más, en cualquiera de los dos
+ * sentidos.
+ *
+ * La referencia es el **elo del jugador en esa partida de equipo**, no su
+ * división 1v1: las dos magnitudes son elo de la misma familia de ladder, así que
+ * se traducen con los **mismos** cortes y la comparación de escalones es
+ * homogénea. Antes se comparaba la media del juego (elo de equipos) con el
+ * `rank_level` de `rm_solo`, y eso mezclaba dos ladders.
+ */
 function lowDivisionFlags(context: RuleContext): FlagRow {
-  const { matches, player, cutoffs, playerSubdivision, thresholds } = context;
+  const { matches, player, cutoffs, thresholds } = context;
   const row = emptyRow("LOW_DIVISION_TEAM_GAME", matches.length);
 
   for (const [index, match] of matches.entries()) {
-    if (match.mode !== TEAM_MODE || playerSubdivision === null || cutoffs === null) {
+    if (match.mode !== TEAM_MODE || cutoffs === null) {
       continue;
     }
 
-    const game = parseGame(match.rawJson);
+    const team = readTeamView(match.rawJson, player.profileId);
 
-    if (game === null) {
+    if (team === null) {
       context.unreadable += 1;
       continue;
     }
 
-    const media = game.averageMmr;
-    // Los cortes son los de la ladder **de la partida**, no los de `rm_solo`: la
-    // media de elo del payload es elo de equipos, y compararla con los cortes de
-    // otra ladder daría escalones que no existen.
-    const ladder = cutoffs[match.leaderboard];
-    const subdivision =
-      media === null || ladder === undefined ? null : subdivisionForRating(ladder, media);
+    const propia = team.self?.rating ?? null;
+    const media = team.averageMmr;
 
-    // Sin media legible o sin cortes para esa ladder se omite la partida sin
-    // avisar: es un hueco de datos, no un comportamiento.
-    if (subdivision === null) {
+    // Sin el rating del jugador o sin la media de la partida no hay contra qué
+    // comparar, y la partida se omite sin avisar: es un hueco de datos, no un
+    // comportamiento.
+    if (propia === null || media === null) {
+      continue;
+    }
+
+    // Los cortes se buscan por la **familia** resuelta (`match.mode`, que aquí ya
+    // es `rm_team`), no por el literal `match.leaderboard`: un ranked por equipos
+    // puede venir con `leaderboard: "rm_2v2"`/`"rm_3v3"`/`"rm_4v4"` y los cortes
+    // se guardan por familia, así que indexar por el literal se saltaría la
+    // partida aunque sus cortes estén cacheados.
+    const ladder = cutoffs[match.mode];
+
+    if (ladder === undefined) {
+      continue;
+    }
+
+    const subdivisionPropia = subdivisionForRating(ladder, propia);
+    const subdivisionPartida = subdivisionForRating(ladder, media);
+
+    if (subdivisionPropia === null || subdivisionPartida === null) {
       continue;
     }
 
     // `steps` va de la subdivisión del jugador a la de la partida, y el índice
-    // **crece al bajar**: el escalón 0 es `conqueror_3`. Así que "la partida está
-    // tres escalones por debajo" es `indicePartida - playerSubdivision >= 3`, que
-    // es exactamente lo que se comprobó con el cliente: desde `gold_3` tres
-    // escalones abajo es `silver_3`, y desde `gold_1` es `silver_1`.
-    const steps = subdivision.index - playerSubdivision;
+    // **crece al bajar**: el escalón 0 es `conqueror_3`. Positivo es que la
+    // partida está por debajo, negativo que está por encima; el flag sale con el
+    // valor absoluto, porque la regla vigila las dos direcciones.
+    const steps = subdivisionPartida.index - subdivisionPropia.index;
 
-    if (steps < thresholds.lowDivisionSteps) {
+    if (Math.abs(steps) < thresholds.lowDivisionSteps) {
       continue;
     }
 
     row.subjects[index] = [SELF_SUBJECT];
-    row.ladders[index] = match.leaderboard;
+    row.ladders[index] = match.mode;
     row.details[index] = {
       steps,
-      ...(media === null ? {} : { averageMmr: media }),
-      gameSubdivision: subdivision.rankLevel,
-      ...(player.rankLevel === null ? {} : { playerSubdivision: player.rankLevel }),
+      averageMmr: media,
+      selfRating: propia,
+      gameSubdivision: subdivisionPartida.rankLevel,
+      playerSubdivision: subdivisionPropia.rankLevel,
     };
   }
 
@@ -652,14 +672,12 @@ export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEval
   const { player, matches, ruleset, scoring, cutoffs, now } = input;
   const to = scoring.window.to;
   const tournamentEnded = to !== null && now.getTime() >= Date.parse(to);
-  const playerSubdivision = subdivisionIndex(player.rankLevel);
 
   const context: RuleContext = {
     player,
     matches,
     thresholds: ruleset.thresholds,
     cutoffs,
-    playerSubdivision,
     unreadable: 0,
   };
 
@@ -750,12 +768,6 @@ export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEval
   if (context.unreadable > 0) {
     warnings.push(
       `${context.unreadable} clasificatorias con rawJson ilegible no aportan flags a las reglas de equipo`,
-    );
-  }
-
-  if (playerSubdivision === null) {
-    warnings.push(
-      "R5 omitida: el jugador no tiene rankLevel 1v1 con el que comparar la división de la partida",
     );
   }
 

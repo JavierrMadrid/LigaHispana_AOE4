@@ -279,8 +279,8 @@ from "Player" where discordUsername is not null group by 1 having count(*) > 1;
 ## Alertas de comportamiento
 
 El motor vigila **11 reglas** sobre las clasificatorias: **8 de patrón** (partidas cortas, rival o
-compañero repetido, brecha de elo con un compañero y equipo por debajo de la división) y **3 de
-estado** (historial no público, partidas de ladder que no llegan, y Discord fuera del servidor).
+compañero repetido, brecha de elo con un compañero y equipo en una división muy distinta de la suya) y
+**3 de estado** (historial no público, partidas de ladder que no llegan, y Discord fuera del servidor).
 
 ```bash
 npm test                       # el motor, con secuencias sintéticas y SIN base de datos
@@ -295,8 +295,9 @@ npm run alerts:cutoffs -- --show
   `rules.test.ts` (umbrales, frases y claves de dedupe) y `division-cutoffs.test.ts`.
 - **Umbrales** en `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo):
   partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10, compañero repetido 7, brecha de elo
-  500 y 3 escalones de división. `window` y `modes` **no** se duplican: se leen del ruleset de
-  puntuación, con el mismo `rankedMatchWhere()` y el corte de inscripción.
+  500 y 3 escalones de diferencia entre la división del jugador y la de la partida (en cualquiera de los
+  dos sentidos). `window` y `modes` **no** se duplican: se leen del ruleset de puntuación, con el mismo
+  `rankedMatchWhere()` y el corte de inscripción.
 - **Cuándo se evalúa**: en `syncApprovedPlayers()`, después de `recomputeScores()`, **solo los
   jugadores tocados**; y también al revertir o restaurar una partida, al cerrar el torneo
   (`Setting["alerts.tournamentClose"]` lo marca) y a mano.
@@ -304,8 +305,12 @@ npm run alerts:cutoffs -- --show
   alertas disparadas y rachas abiertas, y llama a `evaluateAlerts({ full: true })` antes.
 - **Idempotente**: `createMany({ skipDuplicates: true })` sobre `dedupeKey`; repetirlo no crea nada.
 - **Cortes de división (R5)**: se cachean en `Setting["alerts.divisionCutoffs"]` y se derivan a mano
-  con `alerts:cutoffs` (~150 peticiones por ladder) porque la API ignora `rating_min`/`rank_level`. Sin
-  ellos, R5 se omite con un aviso y las otras diez reglas siguen.
+  con `alerts:cutoffs` (~150 peticiones) porque la API ignora `rating_min`/`rank_level`. Solo se derivan
+  los de `rm_team` (la única familia que R5 consulta; el `rm_solo` que se derivaba antes ya no lo lee
+  nadie y se poda al reescribir la caché). R5 compara el elo del jugador en la partida de equipo con la
+  media del juego, las dos traducidas a subdivisión con los cortes de la familia de la partida
+  (`Match.mode`, `rm_team`), y avisa si distan 3 escalones o más en cualquiera de los dos sentidos. Sin
+  cortes, R5 se omite con un aviso y las otras diez reglas siguen.
 - Un fallo del motor **no** mueve `lastSuccessAt`.
 
 ## Directos (YouTube y Kick)

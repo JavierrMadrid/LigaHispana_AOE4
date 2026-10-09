@@ -38,7 +38,6 @@ const JUGADOR = {
   id: "jugador-alertas",
   profileId: PERFIL_JUGADOR,
   name: "Jugador Alertas",
-  rankLevel: "gold_3",
 };
 
 /**
@@ -127,7 +126,6 @@ function secuencia() {
       const partida: AlertMatch = {
         gameId: String(800_000 + indice()),
         mode: "rm_solo",
-        leaderboard: "rm_solo",
         opponentProfileId: rival,
         opponentName: nombre,
         startedAt: startedAt(),
@@ -149,13 +147,11 @@ function secuencia() {
       selfRating?: number | null;
       teammates: Array<[number | null, string, number | null]>;
       averageMmr?: number | null;
-      leaderboard?: string;
     }): AlertMatch {
       const ratingPropio = options.selfRating === undefined ? 1500 : options.selfRating;
       const partida: AlertMatch = {
         gameId: String(800_000 + indice()),
         mode: "rm_team",
-        leaderboard: options.leaderboard ?? "rm_team",
         opponentProfileId: RIVAL_2,
         opponentName: "Rival Externo",
         startedAt: startedAt(),
@@ -213,12 +209,11 @@ function secuencia() {
 function evaluar(options: {
   matches: AlertMatch[];
   cutoffs?: LadderCutoffsTable | null;
-  rankLevel?: string | null;
   now?: Date;
   window?: ScoringWindow;
 }) {
   return computePlayerAlerts({
-    player: { ...JUGADOR, rankLevel: options.rankLevel === undefined ? JUGADOR.rankLevel : options.rankLevel },
+    player: JUGADOR,
     matches: options.matches,
     ruleset: DEFAULT_ALERTS_RULESET,
     scoring: { modes: ["rm_solo", "rm_team"], window: options.window ?? VENTANA },
@@ -495,31 +490,44 @@ describe("R4 — brecha de elo con un compañero", () => {
   });
 });
 
-describe("R5 — equipo por debajo de la división", () => {
-  it("tres escalones avisan y dos no", () => {
-    // El índice **crece al bajar**, así que "tres escalones por debajo" es
-    // `indicePartida - indiceJugador >= 3`: desde `gold_3` (1900) la partida cae a
-    // `silver_3` (1800), que son tres, mientras que a `gold_1` (1900) son dos.
+describe("R5 — equipo en una división muy distinta", () => {
+  it("tres escalones avisan y dos no, comparando el elo del jugador con la media del juego", () => {
+    // El índice **crece al bajar**, así que el flag sale con
+    // `abs(indicePartida - indiceJugador) >= 3`: un jugador `gold_3` (2100) en una
+    // partida de media `silver_3` (1800) son tres, mientras que con `gold_1`
+    // (1900) son dos.
     const tres = secuencia();
-    tres.equipo({ averageMmr: 1800, teammates: [[COMPAÑERO, "Compañero", 1500]] });
+    tres.equipo({ selfRating: 2100, averageMmr: 1800, teammates: [[COMPAÑERO, "Compañero", 1500]] });
     tres.cierre();
 
     const dos = secuencia();
-    dos.equipo({ averageMmr: 1900, teammates: [[COMPAÑERO, "Compañero", 1500]] });
+    dos.equipo({ selfRating: 2100, averageMmr: 1900, teammates: [[COMPAÑERO, "Compañero", 1500]] });
     dos.cierre();
 
     expect(de(evaluar({ matches: tres.partidas() }), "LOW_DIVISION_TEAM_GAME")).toHaveLength(1);
     expect(de(evaluar({ matches: dos.partidas() }), "LOW_DIVISION_TEAM_GAME")).toHaveLength(0);
   });
 
+  it("avisa en las dos direcciones: una partida muy por encima también cuenta", () => {
+    const s = secuencia();
+    s.equipo({ selfRating: 1500, averageMmr: 2100, teammates: [[COMPAÑERO, "Compañero", 1500]] });
+    s.cierre();
+
+    const alerta = de(evaluar({ matches: s.partidas() }), "LOW_DIVISION_TEAM_GAME")[0];
+
+    expect(alerta?.details.steps).toBe(-6);
+    expect(alerta?.summary).toContain("por encima");
+  });
+
   it("el detalle lleva los dos lados de la cuenta", () => {
     const s = secuencia();
-    s.equipo({ averageMmr: 1500, teammates: [[COMPAÑERO, "Compañero", 1500]] });
+    s.equipo({ selfRating: 2100, averageMmr: 1500, teammates: [[COMPAÑERO, "Compañero", 1500]] });
     s.cierre();
 
     const alerta = de(evaluar({ matches: s.partidas() }), "LOW_DIVISION_TEAM_GAME")[0];
 
     expect(alerta?.details).toMatchObject({
+      selfRating: 2100,
       averageMmr: 1500,
       gameSubdivision: "bronze_3",
       playerSubdivision: "gold_3",
@@ -527,11 +535,14 @@ describe("R5 — equipo por debajo de la división", () => {
     expect(alerta?.details.steps).toBe(6);
   });
 
-  it("usa los cortes de la ladder de la partida, no los de `rm_solo`", () => {
-    // `average_mmr` es elo de equipos: compararlo con los cortes de otra ladder
-    // daría escalones que no existen.
+  it("busca los cortes por la familia (`rm_team`), no por el literal de la partida", () => {
+    // Las dos magnitudes que se comparan son elo de la familia de equipos:
+    // traducirlas con los cortes de otra daría escalones que no existen. La
+    // búsqueda va por `match.mode`, así que unos cortes solo de `rm_solo` no
+    // sirven para una partida de equipo aunque su `leaderboard` literal fuera
+    // `rm_2v2` (que es justo el caso que la familia resuelve).
     const s = secuencia();
-    s.equipo({ averageMmr: 1500, teammates: [[COMPAÑERO, "Compañero", 1500]] });
+    s.equipo({ selfRating: 2100, averageMmr: 1500, teammates: [[COMPAÑERO, "Compañero", 1500]] });
     s.cierre();
 
     const soloCortes: LadderCutoffsTable = { rm_solo: ladder("rm_solo") };
@@ -542,9 +553,20 @@ describe("R5 — equipo por debajo de la división", () => {
     ).toHaveLength(0);
   });
 
-  it("una partida sin `average_mmr` se salta sin avisar: es un hueco de datos", () => {
+  it("sin la media de la partida se salta sin avisar: es un hueco de datos", () => {
     const s = secuencia();
-    s.equipo({ averageMmr: null, teammates: [[COMPAÑERO, "Compañero", 1500]] });
+    s.equipo({ selfRating: 2100, averageMmr: null, teammates: [[COMPAÑERO, "Compañero", 1500]] });
+    s.cierre();
+
+    const evaluacion = evaluar({ matches: s.partidas() });
+
+    expect(de(evaluacion, "LOW_DIVISION_TEAM_GAME")).toHaveLength(0);
+    expect(evaluacion.unreadableMatches).toBe(0);
+  });
+
+  it("sin el rating del jugador en la partida se salta sin avisar: es un hueco de datos", () => {
+    const s = secuencia();
+    s.equipo({ selfRating: null, averageMmr: 1500, teammates: [[COMPAÑERO, "Compañero", 1500]] });
     s.cierre();
 
     const evaluacion = evaluar({ matches: s.partidas() });
@@ -555,7 +577,7 @@ describe("R5 — equipo por debajo de la división", () => {
 
   it("sin cortes cacheados la regla se omite entera, con aviso de la evaluación", () => {
     const s = secuencia();
-    s.equipo({ averageMmr: 1000, teammates: [[COMPAÑERO, "Compañero", 1500]] });
+    s.equipo({ selfRating: 2100, averageMmr: 1000, teammates: [[COMPAÑERO, "Compañero", 1500]] });
     s.cierre();
 
     const evaluacion = evaluar({ matches: s.partidas(), cutoffs: null });
@@ -564,17 +586,6 @@ describe("R5 — equipo por debajo de la división", () => {
     // Lo dice aunque no haya ninguna partida de equipo: quien lee el resumen tiene
     // que saber que hay una regla sin evaluar, no deducirlo de que no salió.
     expect(evaluacion.globalWarnings.some((w) => w.includes("R5"))).toBe(true);
-  });
-
-  it("un jugador sin `rankLevel` 1v1 no se evalúa con R5, con aviso individual", () => {
-    const s = secuencia();
-    s.equipo({ averageMmr: 1000, teammates: [[COMPAÑERO, "Compañero", 1500]] });
-    s.cierre();
-
-    const evaluacion = evaluar({ matches: s.partidas(), rankLevel: null });
-
-    expect(de(evaluacion, "LOW_DIVISION_TEAM_GAME")).toHaveLength(0);
-    expect(evaluacion.warnings.some((w) => w.includes("rankLevel"))).toBe(true);
   });
 });
 
@@ -643,7 +654,6 @@ describe("lo que degrada sin romper", () => {
     const rota: AlertMatch = {
       gameId: "800-900",
       mode: "rm_team",
-      leaderboard: "rm_team",
       opponentProfileId: RIVAL,
       opponentName: "Rival",
       startedAt: new Date("2026-09-15T01:00:00.000Z"),
@@ -669,7 +679,6 @@ describe("lo que degrada sin romper", () => {
     const rota: AlertMatch = {
       gameId: "800-901",
       mode: "rm_solo",
-      leaderboard: "rm_solo",
       opponentProfileId: RIVAL,
       opponentName: "Rival",
       startedAt: new Date("2026-09-15T01:00:00.000Z"),

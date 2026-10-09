@@ -64,8 +64,8 @@ enum AdminActionType {
 ///
 /// Deliberadamente corto y **fijo en el código**: son las condiciones que el
 /// cliente hoaxó (partidas cortas, rival o compañero repetido, brecha de elo
-/// con el equipo y equipo muy por debajo de la división del jugador, más las dos
-/// de la transparencia del historial). Lo que sí
+/// con el equipo y equipo en una división muy distinta de la del jugador, más las
+/// dos de la transparencia del historial). Lo que sí
 /// es configurable son los umbrales, que viven en `Setting["alerts.ruleset"]`:
 /// añadir un comportamiento nuevo exige un cambio de esquema, y añadir un umbral
 /// no. Cuando haga falta un comportamiento nuevo, se añade el valor al enum y la
