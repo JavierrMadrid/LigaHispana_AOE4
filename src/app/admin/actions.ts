@@ -27,7 +27,7 @@ import {
   parseTwitchChannel,
   parseYoutubeChannel,
 } from "@/lib/player-input";
-import { countsAsRanked } from "@/lib/ranked-match";
+import { countsAsRanked, rankedMatchWhere } from "@/lib/ranked-match";
 import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
 import { readRegistrationOpen, writeMatcherinoDonations, writeRegistrationOpen } from "@/lib/settings";
@@ -1313,6 +1313,22 @@ export async function setMatcherinoDonations(
  * pendiente es el rastro de `scoring.lastRun`, que se rellena en la siguiente
  * pasada. Por eso el estado devuelto es de **éxito con un aviso**: el borrado sí ha
  * pasado, y callarlo sería peor que decirlo.
+ *
+ * ## Qué cuenta como "sus partidas"
+ *
+ * El número del rastro no son las filas de `Match` que caen en cascada —el jugador
+ * tiene importado su histórico entero, con modos que no puntúan y partidas anteriores
+ * a la inscripción, y ese número no significa nada para el torneo—, sino sus
+ * **partidas clasificatorias dentro de la ventana**, con la misma definición única que
+ * el motor y que la columna "Partidas" del panel: `rankedMatchWhere()` con los `modes`
+ * y la `window` del ruleset activo y el `registeredAt` del propio jugador. Es un
+ * `db.match.count()` y no el `_count` de la cascada precisamente para leer esa regla y
+ * no inventar una segunda.
+ *
+ * El estado del jugador **no** entra en la cuenta: `ranked-match.ts` dice que la
+ * definición de partida clasificatoria no incluye el estado y que lo pone quien
+ * consulta. La baja trata con un APPROVED, pero añadirlo como condición sería una
+ * sexta regla que las otras traducciones no tienen.
  */
 export async function deletePlayer(
   _prevState: AdminActionResult,
@@ -1339,19 +1355,28 @@ export async function deletePlayer(
         id: true,
         name: true,
         profileId: true,
-        _count: { select: { matches: true } },
+        registeredAt: true,
       },
     });
 
-    encontrado =
-      row === null
-        ? null
-        : {
-            id: row.id,
-            name: row.name,
-            profileId: row.profileId,
-            matchCount: row._count.matches,
-          };
+    if (row === null) {
+      encontrado = null;
+    } else {
+      const ruleset = await readRuleset();
+      const matchCount = await db.match.count({
+        where: {
+          playerId: row.id,
+          ...rankedMatchWhere(ruleset.modes, ruleset.window, row.registeredAt),
+        },
+      });
+
+      encontrado = {
+        id: row.id,
+        name: row.name,
+        profileId: row.profileId,
+        matchCount,
+      };
+    }
   } catch (error) {
     logDatabaseFailure("admin/deletePlayer", error);
 
@@ -1389,8 +1414,8 @@ export async function deletePlayer(
 
   const partidas =
     player.matchCount === 0
-      ? "No tenía partidas guardadas."
-      : `Sus ${player.matchCount} ${player.matchCount === 1 ? "partida" : "partidas"} se han borrado con ella.`;
+      ? "No tenía partidas clasificatorias."
+      : `Sus ${player.matchCount} ${player.matchCount === 1 ? "partida clasificatoria" : "partidas clasificatorias"} se han borrado con ella.`;
 
   return {
     status: "success",
