@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   title: { absolute: "Historial de partidas · Admin" },
 };
 
-/** `1 punto` / `10 puntos`: el plural importa en un registro que se lee. */
+/** `1 punto` / `2 puntos`: el plural importa en un registro que se lee. */
 function puntos(count: number): string {
   return count === 1 ? "1 punto" : `${count} puntos`;
 }
@@ -223,7 +223,7 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
               />
             ) : (
               <>
-                <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
+                <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
                   <table className="w-full text-left text-sm">
                     <caption className="sr-only">
                       Partidas clasificatorias y objetivos cumplidos: fecha, resultado o
@@ -251,10 +251,16 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                         />
                         {/* La descripción es una frase montada en la interfaz y las
                             acciones no son un dato ordenable. */}
-                        <th scope="col" className="px-4 py-3 font-medium">
+                        <th
+                          scope="col"
+                          className="bg-surface px-4 py-3 font-medium lg:sticky lg:top-0 lg:z-10"
+                        >
                           Descripción
                         </th>
-                        <th scope="col" className="px-4 py-3 text-right font-medium">
+                        <th
+                          scope="col"
+                          className="bg-surface px-4 py-3 text-right font-medium lg:sticky lg:top-0 lg:z-10"
+                        >
                           Acciones
                         </th>
                       </tr>

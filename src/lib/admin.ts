@@ -2,7 +2,7 @@ import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, AlertKind, AlertRule, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
-import { ALERT_RULE_LABELS, readAlertsRuleset, type AlertsThresholds } from "@/lib/alerts";
+import { ALERT_RULE_LABELS, anchorInstant, readAlertsRuleset, type AlertsThresholds } from "@/lib/alerts";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { describeTeamSize, formatRelativeTime, teamSizesFromRawJson } from "@/lib/format";
@@ -38,7 +38,7 @@ import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/set
  * ventana del torneo. Los umbrales se leen del ruleset efectivo y no de una constante
  * del código porque la organización puede retocarlos sin desplegar: un texto de reglas
  * escrito a mano en la interfaz acabaría mintiendo en cuanto eso pasara, que es el mismo
- * pendiente que tienen `/reglas` y `/objetivos` con los números del ruleset de puntos.
+ * pendiente que tienen `/puntuacion` y `/objetivos` con los números del ruleset de puntos.
  *
  * El **informe descargable** no vive aquí: es un fichero entero que se genera con la
  * comprobación completa del motor por delante, y eso es `src/lib/alerts/report.ts`, que
@@ -437,7 +437,7 @@ function readSort<K extends string>(
  *   y no por la información de la frase, así que el orden no significaría nada; además
  *   obligaría a traer la columna entera y ordenarla en memoria, porque el criterio no
  *   es una columna de la tabla.
- * - **Tipo de alerta** (`kind`): son tres valores, se filtran con `?tipo=` y ya se
+ * - **Tipo de alerta** (`kind`): son cuatro valores, se filtran con `?tipo=` y ya se
  *   pintan como distintivo en cada fila. Ordenarlos no respondería a nada que alguien
  *   se pregunte ("¿cuántas rachas rotas hay y cuántas acumuladas?"), y el filtro cubre
  *   la necesidad real.
@@ -615,6 +615,42 @@ export type AdminParticipant = {
   kickChannel: string | null;
   contactEmail: string | null;
   /**
+   * Identidad de Discord del participante (F12), **solo lectura**.
+   *
+   * No está en `CamposEditables` ni en `PlayerFormState`, y no es un descuido: el
+   * panel **no** añade ni edita Discord. `discordUserId` es la prueba de que una
+   * persona es quien dice ser —lo firma Discord con el paso OAuth2 de la
+   * inscripción—, y una caja de texto en la que un admin escribiera un id sería un
+   * campo de identidad que se rellena a mano, que es justo lo que el paso de OAuth
+   * existe para evitar. Quien necesite corregir algo aquí lo hace desde Discord y
+   * vuelve a hacer el paso.
+   *
+   * Llega **sin normalizar**, como los canales: `discordUsername` es el nombre de
+   * usuario en el momento del vínculo y Discord permite renombrarse, así que aquí se
+   * muestra tal cual está en la fila y no se "arregla" al leer.
+   */
+  discordUserId: string | null;
+  /** Nombre de usuario de Discord, o `null` si la fila no tiene Discord vinculado. */
+  discordUsername: string | null;
+  /**
+   * ¿Está la cuenta de Discord en el servidor del torneo? **Tres estados**, y la
+   * distinción es lo que importa:
+   *
+   * - `true`: el worker lo ha comprobado con la lista de miembros del servidor.
+   * - `false`: comprobado, y **no está**. Es el estado que genera la alerta
+   *   `DISCORD_NOT_IN_GUILD`.
+   * - `null`: sin comprobar. O no se ha comprobado nunca (el alta de admin, hasta que
+   *   el worker encuentre la cuenta por el `@usuario`), o no se ha podido comprobar
+   *   (un fallo de la API de Discord, o una lista de miembros vacía porque al bot le
+   *   falta el intent privilegiado). **Nunca** significa "no está": eso solo puede
+   *   salir de una respuesta de Discord.
+   *
+   * Llega junto a `discordUsername` porque con las dos columnas la interfaz puede
+   * distinguir "nunca comprobado" de "comprobado y no se ha podido identificar", que
+   * es la diferencia entre no tener nada y tener una avería.
+   */
+  discordInGuild: boolean | null;
+  /**
    * `Player.country`: el rótulo canónico de la lista admitida
    * (`Setting["registration.countries"]`), o `null` si el alta no lo trajo. El
    * panel no lo resuelve ni lo normaliza —lo hace `parseCountry()` al validarlo—,
@@ -639,6 +675,9 @@ const PARTICIPANT_SELECT = {
   youtubeChannel: true,
   kickChannel: true,
   contactEmail: true,
+  discordUserId: true,
+  discordUsername: true,
+  discordInGuild: true,
   country: true,
   status: true,
   avatarUrl: true,
@@ -838,7 +877,7 @@ export type AdminMatchHistoryQuery = AdminPageQuery &
  * todo resuelto, para que pintar un hito no obligue a mirar el catálogo.
  */
 export type AdminObjectiveEvent = {
-  /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`masterizar-japanese`…). */
+  /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`lider-japanese`…). */
   id: string;
   /** Rótulo público del objetivo (`ObjectiveDefinition.label`). */
   label: string;
@@ -1328,8 +1367,17 @@ export async function getAdminMatchHistory(
     // Los filtros se suman, no se eligen: `where` es una conjunción, así que jugador
     // + fechas + resultado se combinan solos. No hace falta ninguna lógica de "si hay
     // dos, el segundo gana", que es justo donde estos filtros se suelen equivocar.
+    //
+    // El `null` del `registeredAt` es deliberado y es la excepción de este módulo:
+    // el historial enseña **el recorrido entero** de cada participante dentro de la
+    // ventana del torneo, con sus 0 puntos a la vista, no solo lo que le suma. Un
+    // historial del que desaparecieran las partidas anteriores al alta dejaría al
+    // panel contradiciendo la cuenta de AoE4World, que sí las enseña. Lo que puntúa
+    // lo dicen `Match.points` y la clasificación, y el botón de revertir ya solo
+    // aparece donde hay puntos (`setMatchReverted()` vuelve a preguntar por la regla
+    // entera, corte incluido).
     const where: Prisma.MatchWhereInput = {
-      ...classificatoryWhere(ruleset.modes, ruleset.window),
+      ...classificatoryWhere(ruleset.modes, ruleset.window, null),
       ...(playerId === null ? {} : { playerId }),
       ...(hasDateBounds(rango) ? { startedAt: rango } : {}),
       ...(resultado === null ? {} : { result: resultado }),
@@ -1541,12 +1589,16 @@ export async function getAdminActions(
  * llama la regla: el informe descargable y el panel leerían la misma alerta con dos
  * nombres distintos en cuanto uno de los dos se tocara.
  *
- * ## Lo que no viaja
+ * ## La partida que ancla la alerta
  *
- * Ni `threshold` ni `anchorGameId` ni `details`: esta fila es para leer de un vistazo, y
- * lo que hay detrás está en el informe descargable y en `Alert`. El `summary` sí viaja
- * entero, redactado por el motor al escribir la fila, y se pinta tal cual —montar la
- * frase en el componente daría dos textos para el mismo hallazgo—.
+ * De `Alert.details` —un `Json`— se publican solo dos cosas, y validadas: la partida
+ * ancla (`anchorGameId`, que también es columna propia) y su instante
+ * (`anchorStartedAt`), este último leído con `anchorInstant()`, el mismo validador
+ * que usa el informe descargable. El resto de `details` no viaja: su forma cambia con
+ * cada regla y esta fila es para leer de un vistazo; lo que hay detrás está en el
+ * informe y en `Alert`. El `summary` sí viaja entero, redactado por el motor al
+ * escribir la fila, y se pinta tal cual —montar la frase en el componente daría dos
+ * textos para el mismo hallazgo—.
  */
 export type AdminAlertRow = {
   /** `Alert.id`. */
@@ -1557,7 +1609,10 @@ export type AdminAlertRow = {
   rule: AlertRule;
   /** Cómo se llama esa regla en español (`ALERT_RULE_LABELS`). */
   ruleLabel: string;
-  /** `Alert.kind`: si la racha se rompió, la cerró el torneo o se cruzó un acumulado. */
+  /**
+   * `Alert.kind`: si la racha se rompió, la cerró el torneo, se cruzó un acumulado o se
+   * comprobó un estado (las dos reglas del historial de partidas).
+   */
   kind: AlertKind;
   /** Nombre de display del jugador, del `join` con `Player` (nunca del texto de la alerta). */
   playerName: string;
@@ -1565,10 +1620,22 @@ export type AdminAlertRow = {
   /** El rival o el compañero al que se refiere, o `null` en las reglas sin sujeto. */
   subjectName: string | null;
   subjectProfileId: number | null;
-  /** Magnitud del hallazgo: partidas de la racha o del acumulado. */
+  /**
+   * Magnitud del hallazgo: partidas de la racha, del acumulado, o —en las reglas de
+   * estado— la magnitud con la que se comparó.
+   */
   count: number;
   /** La frase en español, tal cual se pinta. La redacta `alertSummary()`. */
   summary: string;
+  /** `Alert.anchorGameId`: la partida que ancla la alerta, o `null`. */
+  anchorGameId: string | null;
+  /**
+   * `Match.startedAt` de la partida ancla, leído y validado de
+   * `Alert.details.anchorStartedAt` con `anchorInstant()`. `null` si la alerta no
+   * tiene ancla o si el `details` no lo trae legible (una fila de otra versión del
+   * código).
+   */
+  anchorStartedAt: Date | null;
 };
 
 /**
@@ -1576,6 +1643,9 @@ export type AdminAlertRow = {
  *
  * El nombre del jugador no está en la alerta (a propósito: un nombre guardado se
  * quedaría congelado el día que alguien se renombre), así que sale del `join`.
+ *
+ * `anchorGameId` es una columna y `details` es el `Json` del motor: se lee entero para
+ * sacar de él, y validado con `anchorInstant()`, el instante de la partida ancla.
  */
 const ALERT_SELECT = {
   id: true,
@@ -1586,6 +1656,8 @@ const ALERT_SELECT = {
   subjectProfileId: true,
   count: true,
   summary: true,
+  anchorGameId: true,
+  details: true,
   player: { select: { name: true, profileId: true } },
 } satisfies Prisma.AlertSelect;
 
@@ -1596,8 +1668,8 @@ const ALERT_SELECT = {
  * |---|---|---|
  * | `from` / `to` | `Alert.createdAt` | fecha `YYYY-MM-DD` o instante con zona, con los mismos bordes que el historial |
  * | `playerId` | `Alert.playerId` | un `Player.id` con forma de `cuid` |
- * | `regla` | `Alert.rule` | uno de los ocho `AlertRule` |
- * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED` |
+ * | `regla` | `Alert.rule` | uno de los diez `AlertRule` |
+ * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
  *
  * Los cuatro se combinan (es una conjunción), y los tres que son una lista usan
  * **allowlist**: un valor que no está en la lista es ausencia de filtro, no "cero alertas
@@ -1767,6 +1839,8 @@ export async function getAdminAlerts(
           subjectProfileId: row.subjectProfileId,
           count: row.count,
           summary: row.summary,
+          anchorGameId: row.anchorGameId,
+          anchorStartedAt: anchorInstant(row.details),
         })),
       };
     }, page, pageSize, sort);

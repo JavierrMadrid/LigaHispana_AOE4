@@ -1,20 +1,36 @@
 import "server-only";
 
+import { cache } from "react";
 import { Prisma } from "@/generated/prisma/client";
 import { PlayerStatus } from "@/generated/prisma/enums";
 import { parseGamePlayer } from "@/lib/aoe4world/parse";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
+import { type MatcherinoDonations } from "@/lib/donations";
 import { aoe4WorldProfileUrl, describeMode, describeTeamSize } from "@/lib/format";
 import { isRecord } from "@/lib/json";
 import {
   OBJECTIVE_DEFINITIONS,
+  computeObjectives,
+  loadObjectivePlayers,
+  objectiveStanding,
+  type ObjectiveBeneficiary,
+  type ObjectiveContender,
+  type ObjectiveDetail,
   type ObjectiveGroup,
+  type ObjectiveKind,
   type ObjectiveMetric,
+  type ObjectiveOption,
+  type ObjectiveTarget,
 } from "@/lib/objectives";
 import { rankedModesWhere } from "@/lib/ranked-match";
-import { RULESET_VERSION, readRuleset, type ScoringRuleset } from "@/lib/scoring";
+import { readMapPool, readMatcherinoDonations } from "@/lib/settings";
+import {
+  RULESET_VERSION,
+  readRuleset,
+  type ScoringRuleset,
+} from "@/lib/scoring";
 import {
   normalizeKickChannel,
   normalizeTwitchChannel,
@@ -23,17 +39,27 @@ import {
 
 export { getObjectives } from "@/lib/scoring";
 export type {
+  ObjectiveBeneficiary,
   ObjectiveContender,
   ObjectiveDefinition,
   ObjectiveDetail,
   ObjectiveGroup,
+  ObjectiveKind,
   ObjectiveMetric,
   ObjectiveOption,
+  ObjectiveTarget,
   ObjectiveView,
 } from "@/lib/objectives";
-export { MASTERIZAR_TODOS_ID, OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
+export {
+  IMPARABLE_ID,
+  JUGON_ID,
+  OBJECTIVE_GROUP_LABELS,
+  POLIFACETICO_ID,
+  POR_TIERRA_ID,
+} from "@/lib/objectives";
 export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
+export type { MatcherinoDonations } from "@/lib/donations";
 
 /**
  * El resultado de una lectura de las pantallas públicas: o los datos, o la
@@ -48,7 +74,7 @@ export type { PublicRead };
  * Capa de lectura de las páginas públicas.
  *
  * Es la **única** puerta de entrada a la base de datos para el frontend: la UI no
- * importa `db` directamente, solo estas funciones (las cuatro de abajo más los
+ * importa `db` directamente, solo estas funciones (las seis de abajo más los
  * tipos que se reexportan). Cada una devuelve
  * exactamente los campos que necesita su pantalla, ya convertidos al tipo público,
  * para que ni la interfaz ni el cliente del navegador tengan que conocer la forma
@@ -116,7 +142,7 @@ export type { PublicRead };
  * se puede pintar con el mismo icono que su tarjeta en `/objetivos`.
  */
 export type StandingObjective = {
-  /** Id estable del objetivo (`loco-por-ganar`, `rey-1v1`, `masterizar-…`). */
+  /** Id estable del objetivo (`loco-por-ganar`, `rey-1v1`, `lider-…`). */
   id: string;
   label: string;
   group: ObjectiveGroup;
@@ -218,7 +244,7 @@ export type StandingRow = {
 };
 
 /**
- * Índice `id -> objetivo` de los 38 del catálogo, con los puntos del ruleset
+ * Índice `id -> objetivo` del catálogo, con los puntos del ruleset
  * activo ya aplicados.
  *
  * Se construye en cada llamada (no en el módulo) porque depende de la
@@ -441,6 +467,226 @@ async function loadStandings(): Promise<StandingRow[]> {
       objectives: earnedObjectives(row.breakdown, lookup),
     };
   });
+}
+
+/**
+ * Identidad de un participante en su ficha pública. Solo lo que el encabezado
+ * necesita para presentarlo; el `profileId` es el que ya viaja en los enlaces a
+ * AoE4World y el que identifica al jugador en la URL de la ficha.
+ */
+export type ParticipantIdentity = {
+  profileId: number;
+  /** Nombre de display, el que escribió quien se inscribió. */
+  name: string;
+  /** `Player.avatarUrl`; `null` si no hay foto y la UI dibuja un monograma. */
+  avatarUrl: string | null;
+  profileUrl: string;
+  /**
+   * División del jugador, derivada de `rankLevel`; `null` si no está
+   * clasificado. Se resuelve con `divisionFromRankLevel()`, igual que en
+   * `getStandings`, para que la cabecera pueda pintar su emblema.
+   */
+  division: DivisionId | null;
+  /**
+   * `Player.rankLevel` en crudo (`"gold_2"`), tal cual lo publica AoE4World.
+   * `null` si no está clasificado. Se publica sin traducir para que la
+   * subdivisión (el escalón dentro de la división) siga disponible.
+   */
+  rankLevel: string | null;
+};
+
+/**
+ * El avance de un participante en **un** objetivo del torneo.
+ *
+ * No es el ranking del objetivo (eso es `ObjectiveOption.ranking`) sino la
+ * proyección de ese ranking sobre un único jugador: qué valor tiene hoy, qué
+ * puesto ocupa entre los aspirantes y cuánto le falta para el primero.
+ *
+ * `value` y `matches` salen de la entrada del participante en el ranking y son
+ * `0` cuando no aparece en él: `ranking` solo lleva a quien tiene al menos una
+ * partida dentro del objetivo, así que un cero es la verdad ("no ha jugado nada
+ * que cuente para este objetivo") y no un valor inventado.
+ */
+export type ParticipantObjective = {
+  id: string;
+  group: ObjectiveGroup;
+  kind: ObjectiveKind;
+  label: string;
+  description: string;
+  metric: ObjectiveMetric;
+  /** Puntos que otorga cobrarlo, ya con los overrides del ruleset aplicados. */
+  points: number;
+  /** Cabeza de familia del objetivo (`ObjectiveOption.parent`). */
+  parent: string | null;
+  /** Valor actual en la métrica del objetivo (`0` si no disputa el objetivo). */
+  value: number;
+  /** Partidas de las que sale `value`; `0` si no disputa el objetivo. */
+  matches: number;
+  /** Detalle del objetivo; `null` si no aporta nada. */
+  detail: ObjectiveDetail | null;
+  /**
+   * Posición 1-based entre los aspirantes, o `null` si no está en el ranking
+   * del objetivo (ver `objectiveStanding`).
+   */
+  position: number | null;
+  /**
+   * Distancia al primero, en la unidad de la métrica, o `null` si no está en el
+   * ranking.
+   */
+  distance: number | null;
+  /**
+   * Ya lo cobra el participante: posee la competición, o ha completado el logro.
+   * Es el check que pinta la ficha.
+   */
+  achieved: boolean;
+  /**
+   * Poseedor actual del objetivo en una **competición**, o `null` si nadie
+   * cumple. En un logro es siempre `null` (lo cobra cualquiera que cumpla: ver
+   * `beneficiaries`).
+   */
+  holder: ObjectiveContender | null;
+  /** Quién ha completado un logro, con sus puntos; vacío en las competiciones. */
+  beneficiaries: ObjectiveBeneficiary[];
+  /** Umbral del logro, para la barra de avance; `null` en las competiciones. */
+  target: ObjectiveTarget | null;
+  /**
+   * **Todos** los contendientes del objetivo, ordenados por la cadena de
+   * desempate. Es la **misma referencia** que el `ranking` del `ObjectiveOption`
+   * del que sale, para reutilizar `ObjectiveRankingDialog` sin pedir nada aparte.
+   */
+  ranking: ObjectiveContender[];
+};
+
+/**
+ * La ficha pública de objetivos de un participante: quién es y cómo va en cada
+ * objetivo del torneo.
+ *
+ * `options` va en el orden del catálogo, el mismo que publica `/objetivos`, para
+ * que la ficha se lea en el mismo orden que la pantalla de objetivos.
+ */
+export type ParticipantObjectives = {
+  player: ParticipantIdentity;
+  /**
+   * Pool de mapas activo, copiado tal cual de `Setting` (igual que hace
+   * `loadObjectives`). La ficha lo necesita para explicar `por-tierra-y-agua` sin
+   * volver a leer la configuración.
+   */
+  mapPool: string[];
+  options: ParticipantObjective[];
+};
+
+/**
+ * Avance de **un participante** en los objetivos, para su ficha pública.
+ *
+ * Reutiliza exactamente el mismo motor que `/objetivos` (`computeObjectives`
+ * sobre `loadObjectivePlayers`) en vez de recalcular nada: el avance de un
+ * jugador tiene que salir del mismo ranking que ve el resto del sitio, o la
+ * ficha podría contradecir a la clasificación del objetivo.
+ *
+ * Devuelve `null` —dentro de `PublicRead`, así que `{ status: "ok", data: null }`—
+ * cuando no hay ningún participante **aprobado** con ese `profileId`; la página
+ * lo traduce a `notFound()`. Es a propósito que el "no existe" no se mezcle con
+ * el "no lo hemos podido leer": este último es `status: "degraded"`, que la
+ * página tiene que distinguir para no decir que un jugador no existe cuando lo
+ * que pasa es que la base no responde.
+ *
+ * Lee en cada llamada, igual que `getStandings` y `getObjectives`, así que la
+ * página que la use tiene que ser dinámica.
+ *
+ * Va envuelta en `cache()` de React: la página la llama dos veces dentro de la
+ * misma petición —una para `generateMetadata` y otra para el render— y sin esto
+ * cada llamada volvería a leer la base. La firma pública no cambia; el memo es
+ * por petición, no entre peticiones, así que la lectura sigue siendo fresca.
+ */
+export const getParticipantObjectives = cache(
+  async (profileId: number): Promise<PublicRead<ParticipantObjectives | null>> => {
+    return readFromDatabase("public/getParticipantObjectives", () =>
+      loadParticipantObjectives(profileId),
+    );
+  },
+);
+
+async function loadParticipantObjectives(
+  profileId: number,
+): Promise<ParticipantObjectives | null> {
+  // La identidad y el ruleset son independientes entre sí, así que van en
+  // paralelo; las partidas clasificatorias dependen del ruleset.
+  const [player, ruleset, mapPool] = await Promise.all([
+    db.player.findUnique({
+      where: { profileId },
+      select: { profileId: true, name: true, avatarUrl: true, status: true, rankLevel: true },
+    }),
+    readRuleset(),
+    readMapPool(),
+  ]);
+
+  // Solo los aprobados tienen ficha pública: un `PENDING` o un `REJECTED` no
+  // sale en la clasificación, así que publicar su avance sería abrir una puerta
+  // lateral a datos que el sitio no enseña en ningún otro sitio.
+  if (player === null || player.status !== PlayerStatus.APPROVED) {
+    return null;
+  }
+
+  const players = await loadObjectivePlayers(db, ruleset);
+  const { options } = computeObjectives(players, ruleset, mapPool);
+
+  return {
+    player: {
+      profileId: player.profileId,
+      name: player.name,
+      avatarUrl: player.avatarUrl,
+      profileUrl: aoe4WorldProfileUrl(player.profileId),
+      division: divisionFromRankLevel(player.rankLevel),
+      rankLevel: player.rankLevel,
+    },
+    mapPool: [...mapPool],
+    options: options.map((option) => participantObjective(option, profileId)),
+  };
+}
+
+/**
+ * Proyecta el ranking de un objetivo sobre un participante concreto.
+ *
+ * La entrada del jugador en el ranking es la fuente de `value`, `matches` y
+ * `detail` de su avance; si no está, esos tres van a cero/null y la posición y
+ * la distancia las resuelve `objectiveStanding` (que es la parte pura).
+ *
+ * `holder`, `beneficiaries` y `ranking` se copian tal cual del `ObjectiveOption`
+ * —`ranking` y `beneficiaries` por referencia, sin clonar— para que el diálogo de
+ * clasificación del objetivo se pueda reutilizar desde la ficha sin pedir los
+ * datos por otra vía.
+ */
+function participantObjective(
+  option: ObjectiveOption,
+  profileId: number,
+): ParticipantObjective {
+  const entry = option.ranking.find((contender) => contender.profileId === profileId) ?? null;
+  const { position, distance } = objectiveStanding(option.ranking, profileId);
+  const achieved =
+    option.kind === "competition"
+      ? option.holder !== null && option.holder.profileId === profileId
+      : option.beneficiaries.some((beneficiary) => beneficiary.profileId === profileId);
+
+  return {
+    id: option.id,
+    group: option.group,
+    kind: option.kind,
+    label: option.label,
+    description: option.description,
+    metric: option.metric,
+    points: option.points,
+    parent: option.parent,
+    value: entry?.value ?? 0,
+    matches: entry?.matches ?? 0,
+    detail: entry?.detail ?? null,
+    position,
+    distance,
+    achieved,
+    holder: option.holder,
+    beneficiaries: option.beneficiaries,
+    target: option.target,
+    ranking: option.ranking,
+  };
 }
 
 /**
@@ -894,3 +1140,47 @@ export async function getTwitchChannels(): Promise<TwitchChannelRow[]> {
 
   return channels;
 }
+
+/**
+ * La ventana del torneo, tal cual está configurada en el ruleset activo.
+ *
+ * Es una lectura **ligera** a propósito: `getObjectives()` también publica la
+ * ventana, pero arrastra el cálculo de todos los objetivos. Las pantallas que solo
+ * necesitan el periodo —`/puntuacion` y el contador de la portada— no tienen por
+ * qué pagar ese cálculo.
+ *
+ * `from` y `to` son instantes ISO-8601 UTC y `to` puede ser `null` (ventana
+ * abierta por la derecha). Con la base caída devuelve
+ * `{ status: "degraded", data: null }`, y quien pinte decide si enseña el periodo
+ * o se queda con el texto genérico sin fechas.
+ */
+export type TournamentWindow = { from: string; to: string | null };
+
+export async function getTournamentWindow(): Promise<PublicRead<TournamentWindow>> {
+  return readFromDatabase("public/getTournamentWindow", async () => {
+    const ruleset = await readRuleset();
+
+    return { ...ruleset.window };
+  });
+}
+
+/**
+ * La campaña de donaciones activa, para el banner del layout público.
+ *
+ * Es una lectura ligera de `Setting["donations.matcherino"]`, como
+ * `getTournamentWindow()`: no arrastra el cálculo de nada. El banner solo se pinta
+ * cuando `status` es `"ok"` y `data.enabled` es `true`; con la base caída llega
+ * `{ status: "degraded", data: null }` y el banner simplemente no se pinta, que es
+ * la misma cara que "no hay campaña publicada". `data.url` viene ya validada (solo
+ * `http`/`https`), así que se puede poner en un `href` sin comprobarla otra vez.
+ *
+ * Va envuelta en `cache()` de React: la lee el layout de `(public)`, que envuelve
+ * todas las páginas públicas, y así una misma petición no repite la consulta si
+ * algún día la necesitaran también la página y su cabecera. El memo es por
+ * petición, no entre peticiones, así que la lectura sigue siendo fresca.
+ */
+export const getMatcherinoDonations = cache(
+  async (): Promise<PublicRead<MatcherinoDonations>> => {
+    return readFromDatabase("public/getMatcherinoDonations", () => readMatcherinoDonations());
+  },
+);

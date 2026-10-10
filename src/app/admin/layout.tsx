@@ -11,6 +11,13 @@ export default async function AdminLayout({
 
   return (
     <div className="flex min-h-full flex-col">
+      <a
+        href="#contenido"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-30 focus:bg-accent focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-accent-ink"
+      >
+        Saltar al contenido
+      </a>
+
       <header className="thread-bottom relative border-b border-line bg-surface">
         <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-4 px-4 py-3">
           <Link
@@ -47,7 +54,7 @@ export default async function AdminLayout({
           </div>
         </div>
 
-        {/* Las cuatro pestañas van en su propia fila: con los nombres completos no
+        {/* Las cinco pestañas van en su propia fila: con los nombres completos no
             caben junto a la marca y el cierre de sesión. En móvil se desplazan en
             horizontal en lugar de partirse. */}
         <div className="mx-auto w-full max-w-5xl px-4">
@@ -55,8 +62,19 @@ export default async function AdminLayout({
         </div>
       </header>
 
-      {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`. */}
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-8 pb-20">{children}</main>
+      {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`.
+          El ancho es el que manda aquí y no en las tablas: el listado de
+          participantes tiene nueve columnas y con `max-w-5xl` se salía del
+          contenedor, con la última (Acciones) cortada. Un tope más alto
+          (`max-w-[100rem]`) deja que la tabla crezca con el ancho de la
+          pantalla en pantallas anchas, y en las estrechas manda igual el
+          desplazamiento horizontal del propio `<table>`. */}
+      <main
+        id="contenido"
+        className="mx-auto w-full max-w-[100rem] flex-1 px-4 pt-8 pb-20"
+      >
+        {children}
+      </main>
     </div>
   );
 }

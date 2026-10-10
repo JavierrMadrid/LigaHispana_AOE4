@@ -1,45 +1,47 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { refreshDivisionCutoffs } from "@/lib/alerts/derive-cutoffs";
 import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { createAoe4WorldClient } from "@/lib/aoe4world/client";
-import { DEFAULT_LEADERBOARD } from "@/lib/aoe4world/types";
 
 /**
  * Derivar (o refrescar) los cortes rating → subdivisión que necesita la regla R5.
  *
- *   npm run alerts:cutoffs                     # rm_solo y rm_team
- *   npm run alerts:cutoffs -- --ladder=rm_team # solo una
+ *   npm run alerts:cutoffs                     # rm_team
+ *   npm run alerts:cutoffs -- --ladder=rm_team # una familia concreta
  *   npm run alerts:cutoffs -- --show           # solo enseña lo que hay cacheado
  *
  * ## Por qué es un script y no parte del sincronizador
  *
- * R5 compara la media de elo de una partida de equipos con la división 1v1 del
- * jugador, y para eso hace falta saber, en la ladder **de esa partida**, a partir
- * de qué rating empieza cada subdivisión. La API no lo publica: `rating_min`,
+ * R5 compara **dos ratings de una misma partida de equipos** (el del jugador en
+ * esa partida y la media de rating de la partida, `average_rating`), y para eso
+ * hace falta saber, en la familia **de esa partida** (`rm_team`), a partir de qué
+ * rating empieza cada subdivisión. La API no lo publica: `rating_min`,
  * `rating_max` y `rank_level` los ignora en silencio, así que hay que recorrer la
- * ladder con `?page=N` y quedarse con el rating más bajo de cada bloque.
+ * ladder con `?page=N` y quedarse con el rating más bajo de cada bloque (el final
+ * del bloque, no su principio; ver `derive-cutoffs.ts`).
  *
- * Con búsqueda binaria son del orden de 130 llamadas por ladder, y el
+ * Con búsqueda binaria son del orden de 130 llamadas por familia, y el
  * sincronizador corre cada 5 minutos: 288 × 130 peticiones al día por una tabla
  * que solo cambia cuando cambia el reparto de la temporada. Los cortes se
  * derivan una vez, se cachean en `Setting["alerts.divisionCutoffs"]` y se
  * refrescan a mano. **El motor nunca sale a la red**: sin cortes, R5 se omite con
  * un aviso y las otras siete reglas funcionan igual.
  *
- * ## Por qué las dos ladders
+ * ## Por qué solo `rm_team`
  *
- * Hoy solo R5 los necesita, y R5 solo mira partidas de equipo, así que la que
- * hace falta es `rm_team`. Se deriva también `rm_solo` porque es la ladder de la
- * que sale `Player.rankLevel` y tener las dos hace que la caché sea completa y
- * auditable. La derivación **acumula**: pedir una no borra la otra.
+ * R5 solo mira partidas de equipo, así que la única familia que necesita cortes
+ * es `rm_team`. El `rm_solo` se derivaba antes, cuando R5 comparaba con el
+ * `rank_level` 1v1 del jugador; hoy no lo lee nadie y no se deriva. La caché se
+ * reescribe como un retrato de esta llamada, así que una entrada vieja de
+ * `rm_solo` se poda en la siguiente ejecución.
  *
  * Los cortes guardados incluyen la fecha y el número de peticiones, y son
  * visibles con `--show`, para que nadie los tome por un dato que se recalcula solo.
  */
 
-/** Ladders de las que se derivan cortes si no se dice otra cosa. */
-const DEFAULT_LADDERS = [DEFAULT_LEADERBOARD, "rm_team"];
+/** Familias de ladder de las que se derivan cortes si no se dice otra cosa. */
+const DEFAULT_LADDERS = ["rm_team"];
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : `Error desconocido: ${String(error)}`;
@@ -78,7 +80,7 @@ async function main(): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
     console.log("Uso: npm run alerts:cutoffs [-- --ladder=<nombre>] [-- --show]");
     console.log("");
-    console.log(`  --ladder=<nombre>  Ladder de la que derivar los cortes. Repetible.`);
+    console.log(`  --ladder=<nombre>  Familia de ladder de la que derivar los cortes. Repetible.`);
     console.log(`                     Por defecto: ${DEFAULT_LADDERS.join(", ")}`);
     console.log("  --show             Solo enseña los cortes cacheados y sale.");
     return;
@@ -100,7 +102,7 @@ async function main(): Promise<void> {
 
   console.log(`Derivando los cortes de: ${objetivo.join(", ")}`);
 
-  // Plazo generoso a propósito: son ~130 llamadas por ladder con la separación
+  // Plazo generoso a propósito: son ~130 llamadas por familia con la separación
   // mínima entre peticiones de `http.ts`, y un cron que se queda a medias
   // desperdicia todo el trabajo.
   const signal = AbortSignal.timeout(15 * 60_000);

@@ -1,17 +1,25 @@
 import Image from "next/image";
 import Link from "next/link";
 import { AdminAccess } from "@/components/admin-access";
+import { DonationBanner } from "@/components/donation-banner";
 import { ParticipateCta } from "@/components/participate-cta";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav, SiteTabBar } from "@/components/site-nav";
+import { getMatcherinoDonations } from "@/lib/public";
 
-export default function PublicLayout({
+export default async function PublicLayout({
   children,
   modal,
 }: {
   children: React.ReactNode;
   modal: React.ReactNode;
 }) {
+  // Lectura ligera de `Setting`, envuelta en `cache()` por si otra pieza de la
+  // misma petición la necesita. Con la base caída llega `"degraded"`: el banner no
+  // se pinta, porque un aviso de base caída en todas las páginas públicas sería
+  // ruido y "no hay campaña publicada" deja la misma página.
+  const donationsRead = await getMatcherinoDonations();
+
   return (
     // El relleno inferior deja libre la franja que ocupa `SiteTabBar` en móvil:
     // la barra es fija y, sin él, taparía el último tramo del pie. Desde `sm` la
@@ -24,18 +32,28 @@ export default function PublicLayout({
         Saltar al contenido
       </a>
 
+      {/* El banner va antes de la cabecera y **fuera de su `sticky`**, en el flujo
+          normal: así la cabecera (`sticky top-0 z-20`) se pega al borde superior al
+          desplazar y el banner, que ya ha subido, no queda debajo ni la tapa. Debajo
+          de la cabecera se leería a medias durante el desplazamiento. Solo se pinta
+          cuando la lectura fue `"ok"`; el propio componente devuelve `null` si la
+          campaña está apagada. */}
+      {donationsRead.status === "ok" ? (
+        <DonationBanner donations={donationsRead.data} />
+      ) : null}
+
       <header className="thread-bottom relative sticky top-0 z-20 border-b border-line bg-background/95 backdrop-blur">
-        {/* La cabecera es más ancha que `main` (`max-w-6xl`) a propósito: así el
+        {/* La cabecera es más ancha que `main` (`max-w-[80rem]`) a propósito: así el
             emblema y las acciones sobresalen de la columna donde empieza y acaba
             el contenido, mientras la navegación sigue centrada respecto a la página.
             La rejilla de tres columnas (`1fr auto 1fr`) es la que sostiene ese
             centrado: las dos laterales reparten el mismo ancho, así que ni el ancho
             de la marca ni el de las dos acciones de la derecha desplazan la nav.
-            Esa fila necesita el ancho completo del contenedor (1248 px), de ahí que
+            Esa fila necesita el ancho completo del contenedor (1376 px), de ahí que
             se active en `xl` y no en `lg`: por debajo, marca y acciones comparten la
             primera fila y la navegación baja a la segunda, a ancho completo, sin que
             el wordmark se recorte. En móvil (`< sm`) esa segunda fila desaparece: los
-            cuatro destinos bajan a `SiteTabBar`, la barra fija del pie, y la cabecera
+            cinco destinos bajan a `SiteTabBar`, la barra fija del pie, y la cabecera
             se queda en una sola fila compacta.
             En la celda de la derecha viven las dos acciones de la barra —la
             inscripción y el acceso de la organización—. Son cromo: cada una tiene
@@ -45,7 +63,7 @@ export default function PublicLayout({
             filete neutro (el porqué, en su componente). El contenedor las centra
             con `items-center` y las separa con el `gap-2` de entre controles; en
             `xl` la celda se estira para que el centrado sea el de la fila. */}
-        <div className="mx-auto grid w-full max-w-[78rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:gap-x-4 sm:px-6 sm:py-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-6 xl:gap-y-0">
+        <div className="mx-auto grid w-full max-w-[86rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:gap-x-4 sm:px-6 sm:py-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-6 xl:gap-y-0">
           <Link
             href="/"
             className="col-start-1 row-start-1 inline-flex min-w-0 items-center gap-2 transition-colors hover:text-accent sm:gap-3"
@@ -81,7 +99,7 @@ export default function PublicLayout({
           {/* `min-w-0`: sin él, el ancho mínimo de la lista de navegación (con
               enlaces que no se parten) empujaría la rejilla y abriría scroll de
               página en lugar de desplazarse solo la barra.
-              Por debajo de `sm` no se pinta: los cuatro destinos no caben sin
+              Por debajo de `sm` no se pinta: los cinco destinos no caben sin
               desplazamiento horizontal y ahí navega `SiteTabBar`. La fila queda
               vacía y la rejilla se cierra en una sola altura. */}
           <div className="col-span-2 row-start-2 hidden min-w-0 w-full sm:block xl:col-span-1 xl:col-start-2 xl:row-start-1 xl:w-auto">
@@ -92,7 +110,7 @@ export default function PublicLayout({
 
       <main
         id="contenido"
-        className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6 sm:py-14"
+        className="mx-auto w-full max-w-[80rem] flex-1 px-4 py-10 sm:px-6 sm:py-14"
       >
         {children}
       </main>

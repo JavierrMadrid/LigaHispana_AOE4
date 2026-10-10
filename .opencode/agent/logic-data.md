@@ -1,7 +1,8 @@
 ---
 description: Lógica, datos e integraciones (Prisma, Supabase Auth/Postgres, API de AoE4World, Server Actions, workers). Úsalo para cualquier cambio de lógica, base de datos, API o infraestructura.
 mode: subagent
-model: opencode/space-bunny-free
+model: opencode-go/deepseek-v4.1-flash
+variant: high
 temperature: 0.2
 permission:
   edit: allow
@@ -9,6 +10,7 @@ permission:
     "*": ask
     "npm run lint*": allow
     "npm run build*": allow
+    "npm test*": allow
     "npm run generate*": allow
     "npm run db:push*": allow
     "npm run studio*": allow
@@ -39,13 +41,13 @@ Reglas de selección:
 
 ## Información específica de este proyecto
 
-Lee `docs/PLAN.md` antes de empezar: contiene el estado de las fases, el modelo de datos y las decisiones de stack.
+El estado del trabajo está en las **issues del repositorio en GitHub** (`JavierrMadrid/LigaHispana_AOE4`); el modelo de datos, tabla por tabla, en `docs/MODELO-DATOS.md`. En el repositorio no hay documento de plan.
 
 - **Stack**: Next.js 16 (App Router, `src/app`) + Prisma 7 + PostgreSQL en Supabase + Supabase Auth (solo admins).
 - **Cliente Prisma**: `import { db } from "@/lib/db"`, singleton con `@prisma/adapter-pg`. Enums desde `@/generated/prisma/enums`. Alias `@/*` → `src/*`.
 - **Auth**: helpers en `src/lib/supabase/`, verificación segura en `src/lib/auth.ts` (`requireAdmin`), y `src/proxy.ts` (**Proxy**, no *middleware*). Todo usuario autenticado es admin → registros públicos de Supabase desactivados.
-- **Modelo actual**: `Player` (participante), `Match` (partida, dedup por `gameId`, con `rawJson` y `leaderboard`), `Setting` (config del torneo).
-- **Puntuación**: se suma por **cualquier partida clasificatoria**, no solo ranked 1v1. Por eso `Match` guarda `leaderboard` y `rawJson`; el motor de F3 filtrará con ellos. No las borres ni las "simplifiques".
+- **Modelo actual**: `Player`, `Match` (dedup por `(playerId, gameId)`, con `rawJson` y `leaderboard`), `PlayerScore`, `ObjectiveEvent`, `Alert`, `AdminAction`, `RateLimitCounter` y `Setting`. El detalle, tabla por tabla, en `docs/MODELO-DATOS.md`.
+- **Puntuación**: se suma por **cualquier partida clasificatoria**, no solo ranked 1v1. Por eso `Match` guarda `leaderboard` y `rawJson`; el motor de puntuación filtra con ellos. No las borres ni las "simplifiques". El filtro de qué puntúa vive en `src/lib/ranked-match.ts` y las reglas en `docs/PUNTUACION.md`.
 
 ## Reglas de Next.js 16 (esto no es el Next que conoces)
 
@@ -53,7 +55,7 @@ Lee `docs/PLAN.md` antes de empezar: contiene el estado de las fases, el modelo 
 - *Middleware* → **Proxy** (`src/proxy.ts`).
 - `cookies()`, `headers()` y `params` son **async**.
 - El Proxy solo hace comprobaciones optimistas leyendo cookies; la verificación real va en la DAL.
-- Las Server Actions son endpoints públicos: validan la entrada y comprueban permisos en el servidor, siempre. `src/app/admin/jugadores/actions.ts` es la referencia de estilo.
+- Las Server Actions son endpoints públicos: validan la entrada y comprueban permisos en el servidor, siempre. `src/app/admin/actions.ts` es la referencia de estilo.
 - Todo acceso a datos pasa por la DAL y devuelve solo los campos necesarios.
 
 ## Reglas de datos
@@ -69,8 +71,10 @@ Lee `docs/PLAN.md` antes de empezar: contiene el estado de las fases, el modelo 
 1. En vía completa, carga **solo** las skills que apliquen según la tabla del paso 0; en vía rápida, ninguna.
 2. Localiza el código afectado y **respeta sus convenciones** antes de proponer nada nuevo.
 3. Comentarios solo cuando explican un *porqué* no obvio.
-4. En vía completa, al terminar ejecuta `npm run lint` y `npm run build`, y `npm run generate` si tocaste el schema. Arréglalo si falla. En vía rápida basta con `lint`.
-5. Antes de un `db:push` con cambios destructivos (borrar o renombrar columnas), pregunta al usuario.
+4. En vía completa, al terminar ejecuta `npm run lint`, `npm run build` y `npm test`, y `npm run generate` si tocaste el schema. Arréglalo si falla. En vía rápida basta con `lint`.
+5. Si tocaste lógica de negocio, de puntuación o la frontera con la API de AoE4World, el test del módulo va en el mismo diff: los tests son **puros** (sin base de datos, sin red, sin variables de entorno) y van en el árbol espejo, en `tests/unit/lib/<modulo>.test.ts`, replicando la estructura de carpetas de `src/lib/`, para que `src/` no lleve código de prueba dentro. Sus imports no se tocan al moverlos: siguen apuntando al código con `@/…`.
+6. **Documentación**: si el cambio toca puntuación, objetivos, modelo de datos, despliegue u operativa, actualiza el documento correspondiente (`docs/PUNTUACION.md`, `docs/OBJETIVOS.md`, `docs/MODELO-DATOS.md`, `docs/DESPLIEGUE.md`, `docs/OPERACION.md`) en el mismo diff. La tabla completa está en `AGENTS.md`.
+7. Antes de un `db:push` con cambios destructivos (borrar o renombrar columnas), pregunta al usuario.
 
 ## Fuera de tu ámbito
 
@@ -79,4 +83,4 @@ Lee `docs/PLAN.md` antes de empezar: contiene el estado de las fases, el modelo 
 
 ## Informe final
 
-Di qué skills cargaste (y por qué aplican), qué cambios hiciste (archivos y, si aplica, cambios de schema), cómo verificaste que funciona y qué queda pendiente.
+Di qué skills cargaste (y por qué aplican), qué cambios hiciste (archivos y, si aplica, cambios de schema), cómo verificaste que funciona, qué documentos actualizaste y qué queda pendiente.

@@ -28,24 +28,28 @@ export {
   type EvaluateAlertsResult,
 } from "./evaluate";
 
-export { buildAlertsReport, type AlertsReport } from "./report";
+export { buildAlertsReport, anchorInstant, type AlertsReport } from "./report";
 
 export {
   mergeAlertsRuleset,
   alertDedupeKey,
   alertDetails,
   alertSummary,
+  buildTriggeredAlert,
   ALERTS_RULESET_KEY,
   ALERTS_RULESET_VERSION,
   ALERTS_RULE_LABEL,
   ALERT_KIND_LABELS,
   ALERT_RULE_LABELS,
   DEFAULT_ALERTS_RULESET,
+  SELF_SUBJECT,
+  type AlertAnchorDetail,
   type AlertKindName,
   type AlertsRuleName,
   type AlertsRuleset,
   type AlertsRulesetMergeResult,
   type AlertsThresholds,
+  type StateAlertRule,
   type StreakAlertRule,
   type TotalAlertRule,
   type TriggeredAlert,

@@ -64,12 +64,23 @@ enum AdminActionType {
 ///
 /// Deliberadamente corto y **fijo en el código**: son las condiciones que el
 /// cliente hoaxó (partidas cortas, rival o compañero repetido, brecha de elo
-/// con el equipo y equipo muy por debajo de la división del jugador). Lo que sí
+/// con el equipo y equipo en una división muy distinta de la del jugador, más las
+/// dos de la transparencia del historial). Lo que sí
 /// es configurable son los umbrales, que viven en `Setting["alerts.ruleset"]`:
 /// añadir un comportamiento nuevo exige un cambio de esquema, y añadir un umbral
 /// no. Cuando haga falta un comportamiento nuevo, se añade el valor al enum y la
 /// frase en `src/lib/alerts/rules.ts`; el `switch` de ese módulo es exhaustivo
 /// para que un valor sin frase no pueda salir a la base.
+///
+/// Los tres últimos no miran las partidas que ya tenemos, sino **el estado del
+/// jugador fuera de AoE4World**: que el toggle "Share History" esté en "Public",
+/// que la última partida que la ladder le registra nos llegue y que su cuenta de
+/// Discord esté en el servidor del torneo. Las evalúa el worker del sync
+/// (`src/lib/history-checks.ts` y `src/lib/discord/check.ts`), no
+/// `computePlayerAlerts()`, porque son datos de `Player` y de fuentes que no son
+/// `Match`. Van **al final del enum** por lo mismo que `PLAYER_EDITED`: `ALTER
+/// TYPE … ADD VALUE` solo añade al final, y el panel ordena por el enum, así que
+/// lo nuevo sale detrás de lo ya escrito.
 enum AlertRule {
   SHORT_MATCH_STREAK
   SHORT_MATCH_TOTAL
@@ -79,35 +90,55 @@ enum AlertRule {
   REPEATED_TEAMMATE_TOTAL
   TEAMMATE_ELO_GAP
   LOW_DIVISION_TEAM_GAME
+  HISTORY_NOT_PUBLIC
+  MISSING_LADDER_MATCHES
+  /// La cuenta de Discord del participante no está en el servidor del torneo, o
+  /// no se ha podido comprobar que lo esté.
+  ///
+  /// Es la tercera regla de **estado** (F12): se comprueba contra la API de
+  /// Discord con el bot, no contra `Match`. El vínculo OAuth2 de la inscripción
+  /// guarda quién es la persona (`Player.discordUserId`) y lo que después lo
+  /// comprueba el worker (`discordInGuild`). Un `null` ahí significa "sin
+  /// comprobar" y **no** dispara nada: como en `historyPublic`, un fallo no
+  /// puede afirmar lo contrario de lo que se quería comprobar.
+  DISCORD_NOT_IN_GUILD
 }
 
 /// Cuándo se ha detectado la alerta.
 ///
-/// Los tres casos no se pueden reducir a dos. Una racha normalmente se avisa
+/// Los cuatro casos no se pueden reducir a menos. Una racha normalmente se avisa
 /// **cuando se rompe** (llega una partida sin el patrón), porque es el momento en
 /// que se sabe cuánto duró; pero si el torneo se cierra con la racha todavía
 /// abierta, el patrón ya no se va a romper nunca y sin este valor esa racha no se
 /// avisaría jamás. Los acumulados no son rachas: no tienen ni principio ni fin.
+///
+/// El cuarto es otro género: `STATE_DETECTED` no marca un tramo ni un acumulado,
+/// sino **un estado que se ha comprobado** (el historial público o el cerrado, la
+/// ladder por delante de lo que nos llega). No tiene "cuándo cerrar el tramo",
+/// tiene "con qué evidencia", y por eso es el único cuyo `anchorGameId` es
+/// siempre `null`: la evidencia son las respuestas del sondeo, que van en
+/// `details`, y la corrección es que la condición deje de cumplirse.
 enum AlertKind {
   STREAK_CLOSED
   STREAK_AT_TOURNAMENT_END
   TOTAL_REACHED
+  STATE_DETECTED
 }
 
 model Player {
-  id            String       @id @default(cuid())
-  profileId     Int          @unique
+  id             String       @id @default(cuid())
+  profileId      Int          @unique
   // Nombre de **display**: lo escribe quien participa (formulario de
   // inscripción) o el admin. No lo toca el worker nunca, para que el nombre que
   // alguien eligió no dependa de que AoE4World lo cambie por su cuenta.
-  name          String
+  name           String
   // Nombre **oficial de AoE4World**, separado del de display para poder publicar
   // los dos. Lo refresca el worker con `GET /players/:profile_id`; null = aún no
   // se ha sincronizado, que es lo que hay en toda fila creada hoy.
-  aoe4WorldName String?
+  aoe4WorldName  String?
   // Canal registrado en el panel (lo escribe el admin). No es lo mismo que
   // `twitchUrl`, que es lo que AoE4World publica en el perfil del jugador.
-  twitchChannel String?
+  twitchChannel  String?
   // Canal de **YouTube** y de **Kick**, con el mismo sentido y las mismas reglas
   // que `twitchChannel`: lo escribe quien se inscribe o el admin, en minúsculas y
   // ya canónico, y **AoE4World no publica ninguno de los dos**, así que aquí no
@@ -118,14 +149,18 @@ model Player {
   // usa para componer la URL) y el de Kick es su slug, también sin arroba ni
   // https.
   youtubeChannel String?
-  kickChannel     String?
+  kickChannel    String?
   // Correo de contacto: lo **exige** el formulario público de `/participar` para
-  // que la organización pueda responder dudas. Es nullable a propósito, y no por
-  // descuido: el alta manual de admin no tiene por qué traerlo (se puede dar de
-  // alta a un jugador sin pedirle que deje un correo) y las filas que ya existían
-  // no lo tienen. El motor de puntos no lo lee nunca: es un dato de contacto, no
-  // de juego, así que no entra en la clasificación ni en ningún desglose.
-  contactEmail  String?
+  // que la organización pueda responder dudas, y el panel de administración lo
+  // pide **opcional** en el alta y en la edición (mismo criterio que `country`
+  // abajo: vacío es `null`, y un valor escrito que no es una dirección es un error
+  // en vez de un `null` en silencio).
+  //
+  // Es nullable a propósito, y no por descuido: las filas que ya existían en la
+  // base de producción no lo tienen y no se van a rellenar, y en el panel es
+  // opcional. El motor de puntos no lo lee nunca: es un dato de contacto, no de
+  // juego, así que no entra en la clasificación ni en ningún desglose.
+  contactEmail   String?
   // País del participante, guardado con el **rótulo canónico** de la lista que
   // admite el torneo (`Setting["registration.countries"]`, sembrada desde
   // `paises.txt` con `npm run countries:seed`): "República Dominicana", no "RD" ni
@@ -136,13 +171,108 @@ model Player {
   //
   // Nullable a propósito, y por el mismo motivo que `contactEmail`: el formulario
   // público de `/participar` lo **exige** (es de los datos con los que la
-  // organización organiza el torneo), pero el alta manual de admin no tiene por qué
-  // traerlo y las filas que ya estaban guardadas no lo tienen. La columna existe
+  // organización organiza el torneo), pero en el panel es opcional y las filas que ya
+  // estaban guardadas no lo tienen. La columna existe
   // para todas las filas y eso que unas no la informen es información —"no lo
   // sabemos"— y no una fila a medias. Como el correo, el motor de puntos no lo lee:
   // no entra en la clasificación ni en ningún desglose.
-  country       String?
-  status        PlayerStatus @default(PENDING)
+  country        String?
+  // Identidad de Discord del participante.
+  //
+  // Lo único de F12 que **no** se escribe a mano en ningún sitio es el
+  // `discordUserId`, que solo firma Discord. Del `@usuario` sí se ocupa la
+  // organización cuando da de alta a alguien —es un dato que le dan— y esa es la
+  // diferencia entre las dos columnas de identidad.
+  //
+  // Las escriben las dos, y solo las dos: el **vínculo OAuth2** de la inscripción
+  // pública (`src/app/api/discord/oauth/callback`) guarda `discordUserId` y
+  // `discordUsername` con lo que responde `GET /users/@me`, el **alta de admin**
+  // escribe `discordUsername` (que se lo dice la organización) y el **worker** deja
+  // `discordUserId`, `discordInGuild` y `discordCheckedAt` con lo que dice la API de
+  // Discord. El panel **no edita el `discordUserId`** y `updatePlayer` no lo toca: una
+  // cuenta de Discord es una identidad que solo Discord firma, y dejar que alguien la
+  // escriba a mano sería no comprobar nada.
+  //
+  // **Las cuatro son nullable, y por dos motivos distintos.** `discordUserId` es
+  // `null` en toda fila anterior a F12 y en todo alta de admin —que escribe el
+  // `@usuario` pero no el id, que solo Discord firma— y el worker lo rellena cuando
+  // encuentra la cuenta en el roster del servidor. `discordUsername` es `null` solo
+  // en las filas anteriores a F12. `discordInGuild` y `discordCheckedAt` son las que
+  // escribe el worker, y `discordInGuild === null` significa **"sin comprobar"**,
+  // igual que `historyPublic`: no se escribe valor cuando la comprobación falla o no
+  // se ha hecho, porque un `false` afirma "no está en el servidor" y eso solo puede
+  // salir de una respuesta de Discord.
+  //
+  // **`discordUserId` es `@unique` a propósito**: una cuenta de Discord no puede
+  // quedar vinculada a dos participantes, porque el mismo jugador podría tener dos
+  // filas en el torneo y la organización no sabría cuál es cuál al hablar con él
+  // por su servidor. Los `null` no colisionan en Postgres (como en el índice único
+  // de `Alert.dedupeKey`), así que las filas sin Discord no estorban entre sí. Y como
+  // `Player` tiene **tres** unicidades, cada `P2002` se distingue por **qué** columna
+  // lo saltó (`profileId`, `discordUserId` y `discordUsername`): son tres problemas
+  // distintos y tres mensajes distintos.
+  discordUserId    String?     @unique
+  // **Nombre de usuario global de Discord** (`pepito`), guardado en su forma
+  // canónica: **sin arroba y en minúsculas**, que es exactamente lo que devuelve
+  // `GET /users/@me` y lo que trae la lista de miembros del servidor. Es lo que se
+  // guarda; lo que **se escribe en los formularios lleva la arroba** (`@pepito`) y
+  // es obligatorio empezar por ella, porque en un servidor Discord hay muchos nombres
+  // iguales y `@usuario` solo significa una cosa.
+  //
+  // Es `@unique`, y por el mismo motivo que `discordUserId`: el `@usuario` identifica
+  // a una persona en todo Discord, así que dos participantes con el mismo nombre
+  // serían la misma cuenta escrita de dos maneras —el alta de admin escribe el
+  // `@usuario` que le dice la organización y la inscripción pública lo resuelve por
+  // OAuth—, y la organización no sabría a cuál de las dos filas hablarle. Sin la
+  // unicidad, el worker no podría ni resolver un `discordUserId` a partir del
+  // `@usuario`: dos coincidencias exactas en el roster serían indistinguibles.
+  //
+  // Los `null` no colisionan en Postgres, así que las filas anteriores a F12 (sin
+  // Discord) siguen conviviendo con las nuevas sin estorbar. Y como ahora hay tres
+  // unicidades, los tres `P2002` posibles se distinguen por **qué** columna saltó:
+  // `profileId`, `discordUserId` y esta.
+  //
+  // Es **una foto**, igual que lo era sin la unicidad: Discord deja renombrarse, así
+  // que el nombre de hoy puede no ser este, y por eso no se usa para decidir nada
+  // sobre la pertenencia al servidor. Va para que el panel reconozca a la persona de
+  // un vistazo y es lo que el worker usa para **encontrar** la cuenta en el roster.
+  //
+  // **Al aplicar el `@unique` puede saltar un `P2002`**: dos filas de antes de esta
+  // fase pueden tener el mismo nombre con discriminador (`pepito#1234` y
+  // `pepito#5678`), que al quitarlo son el mismo `@usuario`. Es el caso que hay que
+  // mirar si `db push` se queja (ver `docs/OPERACION.md`).
+  discordUsername  String?     @unique
+  // ¿Está la cuenta en el servidor del torneo? `null` = sin comprobar (ver arriba).
+  // El worker lo refresca con la caché de `DISCORD_CHECK_TTL_HOURS`.
+  discordInGuild   Boolean?
+  // Cuándo se comprobó lo anterior: es el plazo de la caché y, con
+  // `discordUserId === null`, la señal de que esa fila nunca se ha comprobado.
+  discordCheckedAt DateTime?
+  status         PlayerStatus @default(PENDING)
+
+  // Cuándo se **inscribió** la persona, no cuándo la aprobó la organización:
+  // es el instante del envío del alta (formulario público o alta de admin), y
+  // **no se toca al aprobar**. Quien se apunta a tiempo no pierde partidas porque
+  // la organización mire su solicitud más tarde.
+  //
+  // Es lo que hace que el motor no le cuente a un alta posterior el historial
+  // anterior: la ventana de puntuaciones no es solo la del torneo, sino
+  // `max(window.from, registeredAt)` para cada jugador (ver `scoringCutoff()` en
+  // `src/lib/ranked-match.ts`). Los objetivos van con el mismo corte, así que no
+  // se puede ganar un objetivo con partidas que no puntúan.
+  //
+  // **Nullable a propósito, y sin *backfill*.** La base es la de producción y no
+  // hay *staging*: `db:push` no debe tocar las filas que ya están, y `null`
+  // significa justo lo que les toca a los que ya estaban inscritos —"cuenta desde
+  // el inicio de la ventana"—, así que es el valor correcto para ellos, no una
+  // falta de información.
+  //
+  // **No reutiliza `createdAt`.** Una reinscripción de un `REJECTED` reutiliza la
+  // fila, así que `createdAt` se queda en el primer
+  // envío —que la organización ya miró y rechazó— y no dice cuándo empezó a
+  // contar la persona. Solo se escribe en el alta; el diálogo de edición del
+  // panel no lo mueve.
+  registeredAt DateTime?
 
   // Lo siguiente se rellena con `GET /leaderboards/rm_solo`, una sola vez por
   // pasada del worker (no una por jugador). Ver `src/lib/aoe4world/ladder.ts`.
@@ -150,17 +280,33 @@ model Player {
   // `rating` de la ladder. Null = el jugador no tiene partidas clasificatorias
   // en la ladder (o todavía no se ha sincronizado): sigue siendo una fila
   // válida del torneo, solo que sin elo ni división.
-  elo             Int?
+  elo              Int?
   // `rank_level` literal de AoE4World ("gold_2"), no la división resuelta: la
   // tabla puede querer pintar el tier y la división se deriva en el DAL.
-  rankLevel       String?
+  rankLevel        String?
   // Racha **firmada**: positiva = victorias seguidas, negativa = derrotas
   // seguidas, null = sin ladder. No guardarla en valor absoluto: el signo es
   // la información.
-  streak          Int?
+  streak           Int?
+  // `games_count` de la misma entrada de ladder (`GET /leaderboards/rm_solo`, el
+  // lote de hasta 50 ids por el que salen el elo y la racha): **ninguna llamada
+  // nueva**, el campo venía en el payload y hasta aquí se descartaba. `null` = el
+  // jugador no ha salido en la respuesta de la ladder, o la API no lo publica.
+  ladderGamesCount Int?
+  // `last_game_at` de esa misma entrada, y por el mismo motivo.
+  //
+  // **Va por delante de lo que vemos, y medido cuánto** (2026-10-05, sobre 136
+  // jugadores de `rm_solo`): entre 1 y 71 minutos por delante del `startedAt` de la
+  // partida más reciente que somos capaces de importar. La ladder se actualiza en
+  // tiempo real al empezar la partida y la fila se publica después, así que un
+  // `last_game_at` reciente **no** demuestra que falte ninguna partida. El margen
+  // con el que hay que comparar está en `LADDER_PUBLICATION_LAG_MINUTES`
+  // (`src/lib/history-visibility.ts`), que es donde también vive la comprobación
+  // del historial de partidas.
+  ladderLastGameAt DateTime?
   // "En directo en Twitch" leído de `twitch_is_live` del mismo endpoint que el
   // elo, así F5 no necesita la API de Helix para el indicador de la clasificación.
-  twitchIsLive    Boolean   @default(false)
+  twitchIsLive     Boolean   @default(false)
   // "En directo" en YouTube y en Kick, con el mismo significado que
   // `twitchIsLive`, pero de otra manera: **AoE4World no publica nada de esto**,
   // así que quien lo escribe es el propio worker llamando a cada plataforma
@@ -172,16 +318,42 @@ model Player {
   // Un `false` aquí significa "no se ha comprobado que esté en directo", que es lo
   // único que se puede decir sin mentir; por eso **no** se escribe cuando el
   // refresco falla, solo cuando la plataforma ha dicho que sí o que no.
-  youtubeIsLive  Boolean   @default(false)
-  kickIsLive     Boolean   @default(false)
+  youtubeIsLive    Boolean   @default(false)
+  kickIsLive       Boolean   @default(false)
   // Respaldo del canal: si el jugador no tiene `twitchChannel` registrado, la
   // tabla enlaza el que declara en AoE4World.
-  twitchUrl       String?
+  twitchUrl        String?
   // `avatars.full`; si es null la interfaz dibuja un monograma.
-  avatarUrl       String?
+  avatarUrl        String?
   // Cuándo se miró la ladder por última vez. No se toca si el jugador no
   // aparece en la respuesta, para poder distinguir "sin ladder" de "sin sync".
-  ladderUpdatedAt DateTime?
+  ladderUpdatedAt  DateTime?
+
+  // ¿Tiene el participante **abierto** el historial de partidas en el juego? En AoE4
+  // hay un toggle "Share History" (menú principal -> retrato -> Match History) y el
+  // FAQ de AoE4World dice que los *game summaries* solo existen si está en "Public":
+  // con el historial cerrado podemos dejar de verle las partidas sin que nada lo diga.
+  //
+  // La API **no expone el dato**, así que se comprueba con un `HEAD` a la ruta del
+  // sitio que sirve ese summary (`src/lib/history-visibility.ts`), que responde 200
+  // si la partida lo tiene y 404 si no. Las otras plataformas no hacen falta: el
+  // ajuste es del juego y el summary lo publica AoE4World.
+  //
+  // **Un `false` afirma "cerrado", y eso solo se puede afirmar con una respuesta.**
+  // Un timeout, un 5xx o un error de red no significa cerrado, así que no se
+  // escriben: quien no ha podido comprobarlo no toca estas columnas y reintenta más
+  // tarde. Por eso `historyPublic` es nullable y `null` significa "sin comprobar".
+  historyPublic    Boolean?
+  // Cuándo se comprobó por última vez. Da igual de qué valor: es el plazo de la
+  // caché, y el `null` de las dos columnas a la vez es lo que hace que un jugador
+  // aprobado sin verificar se compruebe en la siguiente pasada.
+  //
+  // El plazo son 12 h (`HISTORY_CHECK_TTL_HOURS`) porque el worker corre cada ~5 min:
+  // sin caché serían tres peticiones por jugador y cada cinco minutos para no
+  // aprender nada nuevo. Y no sale gratis: el sitio de AoE4World es el mismo que
+  // sirve la API, así que se le habla con el mismo `User-Agent` del cliente y con el
+  // mismo ritmo.
+  historyCheckedAt DateTime?
 
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -286,22 +458,19 @@ model PlayerScore {
 
 /// Un objetivo del torneo que alguien cumplió, con **cuándo** se cumplió.
 ///
-/// Un evento por objetivo del catálogo y como mucho 38 filas en toda la vida del
-/// torneo. Es el registro que lee el historial del panel (`/admin/historial`,
-/// `getAdminMatchHistory()`) y responde a lo que un feed de partidas no puede
-/// decir: que alguien se quedó un objetivo, y cuándo.
+/// Un evento por **objetivo y jugador**: en una competición hay uno (el
+/// poseedor), y en un logro puede haber muchos (todos los que lo completan). El
+/// historial del panel (`/admin/historial`) lo lee como un feed; no alimenta la
+/// clasificación.
 ///
-/// ## Cuándo se registra (la traducción de `docs/PUNTUACION.md` §6)
+/// ## Cuándo se registra (la traducción de `docs/OBJETIVOS.md`)
 ///
-/// - **Carreras** (grupo `civilizacion`: los 23 `masterizar-<civ>` y
-///   `masterizarlos-a-todos`): se resuelven al completarse y **no se reabren**, así
-///   que el evento se escribe en cuanto hay poseedor, con `achievedAt` = el
-///   `finishedAt` de la partida que cerró la carrera.
-/// - **Los 14 "en caliente"**: su poseedor cambia en cada recálculo, así que solo
-///   tienen sentido al final del torneo. Se registran cuando la ventana ya tiene
-///   `to` informado **y** ha pasado, con `achievedAt` = ese `window.to`. Con la
-///   ventana abierta (`to: null`) no se registra nada todavía, que es justo lo que
-///   significa "solo se añaden una vez termina el torneo".
+/// El catálogo nuevo **no tiene carreras**: competiciones y logros se resuelven en
+/// caliente y pueden cambiar en cada recálculo. Por eso todos se registran igual:
+/// solo cuando la ventana ya tiene `to` informado **y** ha pasado, con
+/// `achievedAt` = ese `window.to`. Con la ventana abierta (`to: null`) no se
+/// registra nada todavía, que es justo lo que significa "solo se añaden una vez
+/// termina el torneo".
 ///
 /// Lo escribe `reconcileObjectiveEvents()` (`src/lib/objective-events.ts`) dentro de
 /// la transacción de `recomputeScores()`, así que o hay evento o no hay nada, y los
@@ -317,15 +486,16 @@ model PlayerScore {
 /// punto o un nombre en `Setting` o en el catálogo, y el historial enseñaría unos
 /// puntos que ya no son los del torneo.
 ///
-/// ## Por qué un único evento por objetivo, y por qué se puede borrar
+/// ## Por qué un único evento por objetivo y jugador, y por qué se puede borrar
 ///
 /// La fila es un **espejo reconciliado del cómputo**, no un log *append-only* (la
 /// diferencia con `AdminAction`, que sí es un log: allí el rastro vale aunque el
 /// cambio se deshaga). La reconciliación borra lo que deja de cumplirse, porque el
-/// escenario es real: si se revierte la partida que cerró una carrera, los puntos se
-/// mueven al siguiente y un evento que nombrara al poseedor antiguo estaría
-/// mintiendo. `@@unique([objectiveId])` es lo que hace que esa reconciliación quepa
-/// en un `upsert` por id en lugar de un historial de repeticiones.
+/// escenario es real: si se revierte la partida que cerró una competición o que
+/// completó un logro, los puntos se mueven y un evento que nombrara al beneficiario
+/// antiguo estaría mintiendo. `@@unique([objectiveId, playerId])` es lo que hace que
+/// esa reconciliación quepa en un `update` por esa clave en lugar de un historial
+/// de repeticiones.
 ///
 /// ## El borrado en cascada
 ///
@@ -334,21 +504,20 @@ model PlayerScore {
 /// las FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra los
 /// hitos por jugador).
 model ObjectiveEvent {
-  /// Id estable del catálogo (`loco-por-ganar`, `masterizar-japanese`…).
+  /// Id estable del catálogo (`loco-por-ganar`, `lider-japanese`…).
   objectiveId String
-  /// Quien lo cumplió.
+  /// Quien lo cobró.
   playerId    String
   player      Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-  /// Instante de la hazaña en las carreras; el fin del torneo en los "en caliente".
+  /// Fin del torneo (la ventana ya cerrada) cuando se registra el objetivo.
   achievedAt DateTime
   /// Cuándo se escribió la fila. `achievedAt` es el dato del torneo; esto es solo
   /// el rastro de que alguien lo registró (el motor corre cada 5 minutos).
   recordedAt DateTime @default(now())
 
-  // Un evento por objetivo, y no (objetivo, jugador): el poseedor de un objetivo en
-  // caliente es el final, no una secuencia de interim.
-  @@unique([objectiveId])
+  // Un evento por objetivo y jugador: un logro tiene varios beneficiarios.
+  @@unique([objectiveId, playerId])
   // El feed del historial ordena y filtra por `achievedAt`.
   @@index([achievedAt])
   // Índice de la FK: el panel filtra los hitos por jugador y el `Cascade` al borrar
@@ -460,6 +629,15 @@ model AdminAction {
 /// `kind` entra en la clave: una racha que se rompe y una que solo la cerró el
 /// fin del torneo son alertas distintas del mismo tramo, y sin él colisionarían.
 ///
+/// **La regla de estado (`STATE_DETECTED`) es la excepción, y a propósito.** Un
+/// estado no tiene remate: o se cumple o no se cumple, y su corrección es que
+/// deje de cumplirse (el jugador abre el historial; la ladder vuelve a coincide
+/// con lo que nos llega). Si su clave llevara la partida ancla o el número
+/// medido, y estos se reevalúan **cada 5 minutos**, insertaría una fila nueva
+/// cada 12 horas para siempre. Por eso su clave es solo (regla, tipo, jugador):
+/// una alerta por jugador y por hecho, y la fila dice "esto se detectó", no
+/// "esto se detectó por nth vez".
+///
 /// `summary` está **ya redactado en español** en el momento de escribir la fila
 /// (`src/lib/alerts/rules.ts`), igual que en `AdminAction`: el informe lo pinta
 /// tal cual y no monta la frase en el cliente, donde un número o un nombre con
@@ -486,6 +664,14 @@ model Alert {
   // Magnitud del hallazgo: partidas de la racha para los avisos de racha, y
   // partidas acumuladas para los de total. En un total es siempre el múltiplo o
   // el umbral que se ha cruzado, así que `count == threshold`.
+  //
+  // Las reglas de estado (`AlertKind.STATE_DETECTED`) no cuentan nada: ahí
+  // `count` es la magnitud **con la que se comparó** y `threshold` el valor con
+  // el que se comparó, para que el informe diga por qué se avisó sin deducirlo
+  // de la regla. En `HISTORY_NOT_PUBLIC` son las partidas sondeadas sin summary
+  // y las que se exigen; en `MISSING_LADDER_MATCHES`, los minutos que la ladder
+  // va por delante y el margen de publicación. Lo demás (los `gameId` sondeados,
+  // las dos fechas comparadas) va en `details`.
   count     Int
   // Umbral que dispara el aviso, tomado del ruleset activo. Se guarda para que
   // el informe pueda decir con qué criterio se avisó aunque las reglas cambien
@@ -495,7 +681,8 @@ model Alert {
   // Partida que **rompió** la racha (la primera clasificatoria sin el patrón) o
   // cruzó el umbral; en el cierre de torneo, la última de la racha, que es la
   // única que se puede señalar porque no hay ninguna que la rompiera.
-  // `null` solo si algún día una regla dispara sin partida que señalar.
+  // `null` en las reglas de estado —no hay partida que rompa nada— y también si
+  // algún día una regla dispara sin partida que señalar.
   anchorGameId String?
 
   dedupeKey String @unique

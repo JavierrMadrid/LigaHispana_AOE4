@@ -113,7 +113,7 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
           </button>
         </div>
       ) : (
-        <ul className="grid items-start gap-4 lg:grid-cols-2">
+        <ul className="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filtered.map((match) => (
             <LiveMatchCard key={match.gameId} match={match} />
           ))}

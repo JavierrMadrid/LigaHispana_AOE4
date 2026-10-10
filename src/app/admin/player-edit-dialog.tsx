@@ -2,6 +2,7 @@
 
 import { useActionState, useId, useState } from "react";
 import { updatePlayer, type PlayerFormState } from "./actions";
+import { CONTACT_EMAIL_MAX_LENGTH, DISCORD_USERNAME_FIELD_MAX_LENGTH } from "@/lib/player-input";
 import type { AdminParticipant } from "@/lib/admin";
 import { useActionFeedback } from "@/components/action-feedback";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -9,9 +10,11 @@ import { Modal } from "@/components/modal";
 
 const initialState: PlayerFormState = { error: null, message: null };
 
-/** Los cinco campos que `updatePlayer` reescribe, ya como texto de formulario. */
+/** Los siete campos que `updatePlayer` reescribe, ya como texto de formulario. */
 type EditFields = {
   name: string;
+  contactEmail: string;
+  discordUsername: string;
   twitchChannel: string;
   youtubeChannel: string;
   kickChannel: string;
@@ -21,6 +24,12 @@ type EditFields = {
 function fieldsFrom(player: AdminParticipant): EditFields {
   return {
     name: player.name,
+    contactEmail: player.contactEmail ?? "",
+    // `discordUsername` se guarda sin arroba; el campo se pinta y se envía con ella,
+    // que es como lo escribe una persona y como lo valida el servidor. En una ficha
+    // anterior a F12 (`null`) queda solo la arroba, y hay que completarlo para
+    // guardar: la pista del campo lo dice.
+    discordUsername: `@${player.discordUsername ?? ""}`,
     twitchChannel: player.twitchChannel ?? "",
     youtubeChannel: player.youtubeChannel ?? "",
     kickChannel: player.kickChannel ?? "",
@@ -31,6 +40,8 @@ function fieldsFrom(player: AdminParticipant): EditFields {
 function fieldsDiffer(a: EditFields, b: EditFields): boolean {
   return (
     a.name !== b.name ||
+    a.contactEmail !== b.contactEmail ||
+    a.discordUsername !== b.discordUsername ||
     a.twitchChannel !== b.twitchChannel ||
     a.youtubeChannel !== b.youtubeChannel ||
     a.kickChannel !== b.kickChannel ||
@@ -42,10 +53,10 @@ function fieldsDiffer(a: EditFields, b: EditFields): boolean {
  * Botón "Editar" de la columna de acciones y su formulario.
  *
  * Escribe un formulario propio y no reutiliza `player-form.tsx`, que es el alta:
- * aunque comparten cinco campos, el alta pide además el `profileId` y el estado,
+ * aunque comparten siete campos, el alta pide además el `profileId` y el estado,
  * llama a `createPlayer` y el servidor puede tardar segundos trayendo partidas.
  * Aquí el `profileId` y el estado no se tocan (el estado tiene su propio
- * aprobar/rechazar) y lo único que se manda es una foto de los cinco campos. Se
+ * aprobar/rechazar) y lo único que se manda es una foto de los siete campos. Se
  * copia el dialecto de los campos del alta (mismas clases, mismas pistas) en vez
  * de extraer un formulario genérico: parametrizar el alta obligaría a tocar un
  * componente estable fuera de este encargo para ganar unas pocas líneas.
@@ -150,7 +161,7 @@ export function PlayerEditDialog({
       <button
         type="button"
         onClick={openDialog}
-        className="h-10 rounded-md border border-line px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+        className="h-10 whitespace-nowrap rounded-md border border-line px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
       >
         Editar
       </button>
@@ -183,6 +194,31 @@ export function PlayerEditDialog({
               maxLength={64}
               required
               autoFocus
+            />
+
+            <TextField
+              id={`${titleId}-email`}
+              name="email"
+              label="Correo de contacto (opcional)"
+              hint="Solo para avisarle si hay dudas con su inscripción."
+              placeholder="nombre@correo.com"
+              type="email"
+              autoComplete="email"
+              value={fields.contactEmail}
+              onChange={(value) => setField("contactEmail", value)}
+              maxLength={CONTACT_EMAIL_MAX_LENGTH}
+            />
+
+            <TextField
+              id={`${titleId}-discord`}
+              name="discordUsername"
+              label="Usuario de Discord"
+              hint="Se escribe con la arroba, como @pepito: es el usuario global, el que la persona usa en todo Discord, no el nombre que tenga puesto dentro del servidor. Si esta ficha todavía no lo tiene, escríbelo para poder comprobar que está en el servidor."
+              placeholder="@pepito"
+              value={fields.discordUsername}
+              onChange={(value) => setField("discordUsername", value)}
+              maxLength={DISCORD_USERNAME_FIELD_MAX_LENGTH}
+              required
             />
 
             <fieldset className="flex flex-col gap-4">
@@ -308,6 +344,10 @@ type TextFieldProps = {
   maxLength?: number;
   required?: boolean;
   autoFocus?: boolean;
+  /** Tipo del `input`; por defecto texto, como el resto de campos del panel. */
+  type?: "text" | "email";
+  /** `autoComplete` del `input`; por defecto apagado, como el resto de campos. */
+  autoComplete?: string;
 };
 
 function TextField({
@@ -321,6 +361,8 @@ function TextField({
   maxLength,
   required,
   autoFocus,
+  type = "text",
+  autoComplete = "off",
 }: TextFieldProps) {
   const hintId = hint !== undefined ? `${id}-hint` : undefined;
 
@@ -332,7 +374,7 @@ function TextField({
       <input
         id={id}
         name={name}
-        type="text"
+        type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -340,7 +382,7 @@ function TextField({
         required={required}
         data-autofocus={autoFocus ? true : undefined}
         aria-describedby={hintId}
-        autoComplete="off"
+        autoComplete={autoComplete}
         className="h-10 rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
       />
       {hint !== undefined ? (

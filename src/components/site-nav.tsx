@@ -5,16 +5,18 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 /**
- * Los cuatro destinos del sitio público, en el orden en que se leen.
+ * Los cinco destinos del sitio público, en el orden en que se leen.
  *
  * `label` es el nombre completo y `tabLabel` el que cabe en la barra inferior de
- * móvil, donde no hay sitio para "Partidas en juego". El destino es el mismo, así
- * que el `href` y el orden son la única fuente de verdad para las dos formas.
+ * móvil, donde no hay sitio para "Partidas en juego" ni para "Puntuación". El
+ * destino es el mismo, así que el `href` y el orden son la única fuente de verdad
+ * para las dos formas.
  */
 const items = [
   { href: "/", label: "Clasificación", tabLabel: "Clasificación", icon: PodiumIcon },
   { href: "/partidas", label: "Partidas en juego", tabLabel: "Partidas", icon: SwordsIcon },
   { href: "/objetivos", label: "Objetivos", tabLabel: "Objetivos", icon: TargetIcon },
+  { href: "/puntuacion", label: "Puntuación", tabLabel: "Puntos", icon: MedalIcon },
   { href: "/reglas", label: "Reglas", tabLabel: "Reglas", icon: BookIcon },
 ] as const;
 
@@ -30,10 +32,10 @@ function isActive(href: string, pathname: string): boolean {
  * barra inferior de móvil. El estado activo se marca con el `aria-current`, el
  * color de acento y un filete, aquí inferior porque la barra cuelga de arriba.
  *
- * Por debajo de `sm` esta versión no se pinta: cuatro destinos no caben a lo
- * ancho de un móvil (463 px de contenido en 370 px de pantalla), y en lugar de
- * dejar "Reglas" fuera de vista tras un desplazamiento sin señal, la navegación
- * baja a `SiteTabBar`. A partir de `sm` la fila cabe entera y no hay desplazamiento.
+ * Por debajo de `sm` esta versión no se pinta: cinco destinos no caben a lo
+ * ancho de un móvil, y en lugar de dejar "Reglas" fuera de vista tras un
+ * desplazamiento sin señal, la navegación baja a `SiteTabBar`. A partir de `sm`
+ * la fila cabe entera y no hay desplazamiento.
  */
 export function SiteNav() {
   const pathname = usePathname();
@@ -79,11 +81,14 @@ export function SiteNav() {
 /**
  * Barra de destinos para móvil, fija al pie de la ventana.
  *
- * Es la misma navegación que `SiteNav`, resuelta como pestañas: cuatro destinos
+ * Es la misma navegación que `SiteNav`, resuelta como pestañas: cinco destinos
  * en una fila, siempre a la vista y al alcance del pulgar. Existe porque en un
- * móvil los cuatro nombres no caben de una sola línea y la alternativa —una
+ * móvil los cinco nombres no caben de una sola línea y la alternativa —una
  * barra que se desplaza— esconde un destino sin avisar de que hay más. Aquí no
- * hay nada que desplazar ni que adivinar.
+ * hay nada que desplazar ni que adivinar. El relleno lateral es más estrecho que
+ * en la cabecera para que los cinco rótulos entren sin recortarse en los anchos
+ * de móvil habituales; `min-w-0` y el `truncate` de la etiqueta quedan como red
+ * de seguridad en pantallas muy justas.
  *
  * El coste de identidad es real: el sitio deja de tener toda su navegación
  * arriba. Se compensa manteniendo el dialecto de la cabecera (mismo fondo, mismo
@@ -111,7 +116,7 @@ export function SiteTabBar() {
               <Link
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex flex-col items-center gap-1 px-2 py-2 text-xs leading-none transition-colors ${
+                className={`relative flex flex-col items-center gap-1 px-1.5 py-2 text-xs leading-none transition-colors ${
                   active ? "text-accent" : "text-muted hover:text-foreground"
                 }`}
               >
@@ -138,8 +143,9 @@ export function SiteTabBar() {
  * Mismo lenguaje que los iconos de `objective-icon.tsx` (caja de 24, `currentColor`,
  * 1.5 de grosor y extremos redondeados), para que la navegación no estrene un
  * dialecto propio: el podio para la clasificación, las espadas cruzadas para las
- * partidas, la diana para los objetivos y el libro abierto para las reglas.
- * Todos son decorativos: el nombre accesible lo da la etiqueta del enlace.
+ * partidas, la diana para los objetivos, la medalla para la puntuación y el libro
+ * abierto para las reglas. Todos son decorativos: el nombre accesible lo da la
+ * etiqueta del enlace.
  */
 function Glyph({ className, children }: { className?: string; children: ReactNode }) {
   return (
@@ -191,6 +197,18 @@ function TargetIcon({ className }: { className?: string }) {
       <circle cx="12" cy="12" r="7.5" />
       <circle cx="12" cy="12" r="3.25" />
       <circle cx="12" cy="12" r="0.75" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Puntuación: la medalla que premia la victoria. */
+function MedalIcon({ className }: { className?: string }) {
+  return (
+    <Glyph className={className}>
+      <path d="M8.75 3.5 10.75 8.25" />
+      <path d="M15.25 3.5 13.25 8.25" />
+      <circle cx="12" cy="14.25" r="6.25" />
+      <path d="M12 10.9l1 2 2.2.3-1.6 1.55.4 2.2-2-1.05-2 1.05.4-2.2-1.6-1.55 2.2-.3z" />
     </Glyph>
   );
 }

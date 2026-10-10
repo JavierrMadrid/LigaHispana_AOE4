@@ -80,6 +80,89 @@ export class Aoe4WorldRateLimitError extends Aoe4WorldError {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Plazo y cancelación                                                         */
+/* -------------------------------------------------------------------------- */
+
+/** Lo que pasó al ejecutar una operación con plazo. */
+export type DeadlineOutcome<T> =
+  | { kind: "value"; value: T }
+  | {
+      /** La operación lanzó. El error va **tal cual**, sin interpretar. */
+      kind: "failed";
+      error: unknown;
+      /** `true` si el plazo propio se agotó mientras corría. */
+      timedOut: boolean;
+      /** `true` si quien llamó canceló mientras corría. */
+      cancelled: boolean;
+    };
+
+/**
+ * Ejecuta `operation` con un plazo propio y, si el llamante pasa su señal, bajo su
+ * cancelación.
+ *
+ * ## Por qué un helper y no un `AbortSignal.timeout`
+ *
+ * Porque "tardó demasiado" y "el worker canceló" son fallos distintos y este módulo
+ * los reporta distinto: el primero es reintentable (`Aoe4WorldTimeoutError`) y el
+ * segundo se propaga tal cual, sin marcarlo como avería de la API. Con
+ * `AbortSignal.timeout` no hay forma de saber cuál de los dos abortó la señal.
+ *
+ * ## Por qué envuelve toda la operación
+ *
+ * No solo el `fetch`: el plazo cubre también la **lectura del cuerpo**, que es donde
+ * una respuesta grande se queda colgada. Por eso el temporizador se limpia en el
+ * `finally` de la `operation` completa y no al terminar la respuesta.
+ *
+ * ## Por qué **no** decide, y por eso devuelve el error sin interpretar
+ *
+ * Aquí es donde el error propio de la operación y el flag de plazo vencido llegan al
+ * mismo sitio, y el orden en que se miran **no es un detalle**. Si el plazo ganara, un
+ * `404` de AoE4World —que lanza `Aoe4WorldNotFoundError` y significa "el perfil no
+ * existe"— se reintentaría como si fuera un problema de red, y el worker dejaría de
+ * tratar ese jugador como perfil inexistente.
+ *
+ * El helper es genérico y **no puede decidir**: no sabe qué errores son del dominio de
+ * quien llama. Lo que hace es devolver los tres hechos por separado —el error, si venció
+ * el plazo y si se canceló— para que sea quien llama el que aplique **su** precedencia
+ * (`error instanceof Aoe4WorldError` → plazo → cancelación → red), que es la que tenía
+ * `performRequest()` antes de que este helper existiera.
+ *
+ * Se exporta porque hay una segunda llamada a AoE4World que no es de la API: el
+ * sondeo de si un jugador tiene el historial de partidas abierto, que va al sitio
+ * con un `HEAD` (`src/lib/history-visibility.ts`). Comparte el plazo y el
+ * `User-Agent` con el cliente, y no vale la pena tener dos implementaciones de lo
+ * mismo que solo se distinguen en dónde viven.
+ */
+export async function runWithDeadline<T>(
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<DeadlineOutcome<T>> {
+  const controller = new AbortController();
+  let timedOut = false;
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abortFromCaller, { once: true });
+
+  try {
+    return { kind: "value", value: await operation(controller.signal) };
+  } catch (error) {
+    // El error se devuelve **siempre**, también cuando además venció el plazo o se
+    // canceló: son hechos que le importan a quien llama, no razones para tapar el
+    // error. Interpretarlos es cosa de quien llama (ver el docblock).
+    return { kind: "failed", error, timedOut, cancelled: signal?.aborted === true };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) {
     return Promise.resolve();
@@ -159,7 +242,8 @@ function parseRateLimitReset(value: string | null): number | null {
 /** Cuánto hay que esperar por un 429, si la API da alguna pista. */
 function readServerRequestedWait(headers: Headers): number | null {
   return (
-    parseRetryAfter(headers.get("retry-after")) ?? parseRateLimitReset(headers.get("x-ratelimit-reset"))
+    parseRetryAfter(headers.get("retry-after")) ??
+    parseRateLimitReset(headers.get("x-ratelimit-reset"))
   );
 }
 
@@ -303,29 +387,23 @@ export function createAoe4WorldHttpClient(
 
     const safeUrl = redactUrl(url);
 
-    // Timeout propio en lugar de `AbortSignal.timeout` para poder distinguir
-    // "tardó demasiado" de "el worker canceló", que son fallos distintos.
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, config.timeoutMs);
-
+    // `runWithDeadline` no sabe qué errores son de AoE4World, así que devuelve el
+    // error tal cual y los dos hechos (plazo vencido, cancelación). El orden en que se
+    // miran es de aquí, y es el que tenía antes de que existiera el helper: **el
+    // error propio gana**, porque un `404` o un `429` explícitos de la API son más
+    // precisos que "tardó demasiado" y se reintentan o no según lo que digan.
     const callerSignal = options?.signal;
-    const abortFromCaller = () => controller.abort(callerSignal?.reason);
-    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
     stats.requests += 1;
 
-    try {
+    const outcome = await runWithDeadline(config.timeoutMs, callerSignal, async (signal) => {
       const response = await fetch(url, {
         method: "GET",
         headers: {
           Accept: "application/json",
           "User-Agent": config.userAgent,
         },
-        signal: controller.signal,
+        signal,
         // El worker pregunta por partidas nuevas en cada pasada: nunca queremos
         // que el framework le sirva una respuesta cacheada de la API.
         cache: "no-store",
@@ -353,35 +431,41 @@ export function createAoe4WorldHttpClient(
 
         throw new Aoe4WorldError(
           `AoE4World respondió ${response.status} a ${safeUrl}${detail === "" ? "." : `: ${detail}`}`,
-          { status: response.status, retryable: RETRYABLE_STATUS.has(response.status), serverWaitMs },
+          {
+            status: response.status,
+            retryable: RETRYABLE_STATUS.has(response.status),
+            serverWaitMs,
+          },
         );
       }
 
       return (await response.json()) as unknown;
-    } catch (error) {
-      if (error instanceof Aoe4WorldError) {
-        throw error;
-      }
+    });
 
-      if (timedOut) {
-        throw new Aoe4WorldTimeoutError(safeUrl, config.timeoutMs);
-      }
-
-      if (callerSignal?.aborted) {
-        throw error;
-      }
-
-      // Fallo de red (DNS, TLS, conexión cortada): reintentable.
-      throw new Aoe4WorldError(
-        `Fallo de red al pedir ${safeUrl}: ${
-          error instanceof Error ? error.message : "causa desconocida"
-        }`,
-        { retryable: true },
-      );
-    } finally {
-      clearTimeout(timer);
-      callerSignal?.removeEventListener("abort", abortFromCaller);
+    if (outcome.kind === "value") {
+      return outcome.value;
     }
+
+    if (outcome.error instanceof Aoe4WorldError) {
+      throw outcome.error;
+    }
+
+    if (outcome.timedOut) {
+      throw new Aoe4WorldTimeoutError(safeUrl, config.timeoutMs);
+    }
+
+    if (outcome.cancelled) {
+      throw outcome.error;
+    }
+
+    // Lo que llega aquí no es un error de AoE4World: fallo de red (DNS, TLS,
+    // conexión cortada) o una respuesta que no se ha podido leer. Reintentable.
+    throw new Aoe4WorldError(
+      `Fallo de red al pedir ${safeUrl}: ${
+        outcome.error instanceof Error ? outcome.error.message : "causa desconocida"
+      }`,
+      { retryable: true },
+    );
   }
 
   async function fetchJson(

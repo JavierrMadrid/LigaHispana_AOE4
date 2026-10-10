@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { Client } from "pg";
 
@@ -137,7 +137,7 @@ const SCHEDULE = "*/5 * * * *";
  * Reprogramar el reloj no es crear otro job: `cron.schedule` hace *upsert* sobre
  * `jobname_username_uniq`, así que `SITE_URL=... npm run db:cron` con otra URL
  * reescribe el `ligahispana-sync` de siempre y se puede repetir sin miedo. Ver
- * `docs/OPERACION.md`, "El reloj del torneo y el cambio de dominio".
+ * `docs/OPERACION.md`, seccion "Cambio de dominio".
  */
 const DEFAULT_SITE_URL = "https://laligahispana.es";
 

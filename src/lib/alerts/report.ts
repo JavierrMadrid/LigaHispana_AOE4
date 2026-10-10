@@ -165,8 +165,12 @@ function formatInstant(value: Date | null): string {
  * `details` es un `Json` escrito por el motor, y una fila puede ser de una versión
  * anterior del código: se valida en vez de castearse. Sin instante legible la celda se
  * queda vacía.
+ *
+ * Lo comparten el informe (para la celda "Fecha de partida") y el panel
+ * (`admin.ts`, para el ancla de la alerta), para que la fila que se pinta y la que
+ * se descarga lean el JSON con el mismo criterio.
  */
-function anchorInstant(details: unknown): Date | null {
+export function anchorInstant(details: unknown): Date | null {
   if (!isRecord(details) || typeof details.anchorStartedAt !== "string") {
     return null;
   }
