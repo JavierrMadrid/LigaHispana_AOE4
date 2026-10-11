@@ -36,13 +36,15 @@ export function LoginForm() {
       </label>
 
       {state.error ? (
-        <p className="text-sm text-red-400">{state.error}</p>
+        <p role="alert" className="text-sm text-danger">
+          {state.error}
+        </p>
       ) : null}
 
       <button
         type="submit"
         disabled={pending}
-        className="h-10 rounded-md bg-accent px-4 font-medium text-accent-ink transition-colors hover:bg-accent-strong disabled:opacity-60"
+        className="h-10 rounded-md bg-accent px-4 font-medium text-accent-ink transition-colors hover:bg-accent-strong active:translate-y-px disabled:opacity-60"
       >
         {pending ? "Entrando…" : "Entrar"}
       </button>

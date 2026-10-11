@@ -221,6 +221,7 @@ export function parseGame(value: unknown): Aoe4WorldGame | null {
     ongoing: readBoolean(value.ongoing),
     justFinished: readBoolean(value.just_finished),
     averageMmr: readNumber(value.average_mmr),
+    averageRating: readNumber(value.average_rating),
     teams: parseTeams(value.teams),
     raw: asJsonValue(value),
   };

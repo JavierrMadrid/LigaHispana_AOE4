@@ -10,6 +10,13 @@
  * texto del error lo pone quien llama, que es quien sabe si el campo es
  * obligatorio u opcional y, por tanto, cómo se lee un `null`.
  *
+ * Y hay un campo con **dos formas**: lo que se guarda y lo que se escribe. El
+ * nombre de usuario de Discord se guarda **sin arroba** —que es lo que devuelve la
+ * API y lo que trae el roster del servidor— y se escribe **con ella**, porque es la
+ * única forma de dejar claro que es el nombre global. Por eso ese campo tiene dos
+ * funciones en vez de una: la que valida lo que escribe una persona y la que solo
+ * normaliza lo que ya validó Discord.
+ *
  * Este módulo **no importa nada**: vive también en el bundle del cliente
  * (`registration-form.tsx` saca de aquí `CONTACT_EMAIL_MAX_LENGTH` para el
  * `maxLength` del campo), así que nada de lo que añada puede tirar de la base de
@@ -200,12 +207,20 @@ export function parseKickChannel(value: FormDataEntryValue | null) {
 }
 
 /**
- * Correo de contacto: obligatorio en la inscripción pública y se guarda en
- * minúsculas.
+ * Correo de contacto: obligatorio en la inscripción pública, opcional en el panel
+ * de administración, y guardado en minúsculas en los tres sitios.
  *
- * Solo lo usa hoy `/participar` (el alta de admin no lo pide, y por eso la
- * columna es nullable), pero vive aquí y no en la acción por la misma razón que
- * los otros: si el patrón cambia, cambian los dos sitios a la vez.
+ * Lo usan los tres formularios —la inscripción de `/participar` y el alta y la
+ * edición de `/admin/jugadores`—, y vive aquí y no en las acciones por la misma
+ * razón que los otros parsers: si el patrón cambia, cambian los tres a la vez.
+ *
+ * **Por qué la columna sigue siendo nullable.** Ya no es porque el panel no lo
+ * pida, que ahora lo pide en el alta y en la edición: es porque las filas que ya
+ * había en la base de producción se escribieron sin él y no se van a rellenar, y
+ * porque en el panel es **opcional** igual que el país. Que en un sitio sea
+ * obligatorio y en otro opcional no afloja la validación: vacío es `null` y un
+ * valor escrito que no vale sigue siendo un error, y eso lo decide quien llama
+ * (ver el final de este texto).
  *
  * **Por qué se guarda en minúsculas.** RFC 5321 dice que la parte local distingue
  * mayúsculas, pero ningún proveedor de correo las distingue y guardarlas en dos
@@ -305,6 +320,112 @@ export function foldCountryName(value: string): string {
     .normalize("NFD")
     .replace(COMBINING_MARKS, "")
     .toLowerCase();
+}
+
+/**
+ * Nombre de usuario de Discord: `2` a `32` caracteres de `[a-z0-9._]`.
+ *
+ * Son las reglas que publica Discord para el nombre de usuario global (el nuevo,
+ * sin `#0000`), escritas sobre la forma **canónica**: en minúsculas y sin nada
+ * delante. El rango no es un capricho de este repositorio —si Discord lo cambiara,
+ * lo que habría que cambiar es este patrón— y por eso el `maxLength` del input se
+ * deriva de él y no al revés.
+ *
+ * No lleva la arroba porque lo que se guarda no la lleva: ver
+ * `canonicalDiscordUsername()`.
+ */
+const DISCORD_USERNAME = /^[a-z0-9._]{2,32}$/;
+
+/** Tope del nombre de usuario pelado, que es el que se guarda y el que se compara. */
+export const DISCORD_USERNAME_MAX_LENGTH = 32;
+
+/**
+ * Tope del campo tal y como lo escribe una persona: el nombre **más la arroba**.
+ *
+ * Se exporta aparte para el `maxLength` del input, que es lo que ve el navegador y
+ * lo que se recorta antes de enviar. Si el input se limitara a
+ * `DISCORD_USERNAME_MAX_LENGTH`, el último carácter sería la arroba y el nombre
+ * válido más largo no entraría.
+ */
+export const DISCORD_USERNAME_FIELD_MAX_LENGTH = DISCORD_USERNAME_MAX_LENGTH + 1;
+
+/**
+ * Discriminador numérico antiguo (`#1234`) y lo que venga detrás.
+ *
+ * Discord ya no lo usa: el nombre de usuario es único en todo el servicio desde
+ * 2023. Se quita **con todo lo que haya detrás** (y no solo los cuatro dígitos)
+ * porque es lo que se guarda lo que va detrás del `@usuario`, y un resto raro
+ * —`#1234 (nombre real)`— también acaba en la base si no se recorta entero.
+ */
+const LEGACY_DISCORD_SUFFIX = /#.*$/;
+
+/**
+ * Nombre de usuario de Discord en su forma canónica: **sin arroba y en minúsculas**.
+ *
+ * Es la **forma de almacenamiento** de `Player.discordUsername`, y también lo que
+ * espera el roster del servidor (los `user.username` que trae la lista de
+ * miembros), así que normalizar en un solo punto es lo que hace que la comparación
+ * del worker sea una igualdad y no una heurística.
+ *
+ * ## Por qué dos funciones y no una
+ *
+ * Esta **solo normaliza**, y no juzga si lo que hay es válido: la usan (a) lo que
+ * ya validó Discord —el `username` de `GET /users/@me` y el de cada miembro del
+ * roster— y (b) el parser de lo que escribe una persona, que además exige la
+ * arroba y el rango. Separárlo es lo que permite que el callback normalice sin
+ * inventarse una validación sobre algo que Discord ya firmada: si esta rechazara
+ * un `username` raro, el paso del OAuth fallaría por una regla de un formulario.
+ *
+ * ## Por qué el `#0000` se quita
+ *
+ * Porque es el **nombre antiguo**, el que solo era único dentro de un servidor.
+ * Quitarlo convierte `pepito#1234` en `pepito`, que es lo que ese mismo usuario
+ * escribe hoy y lo que trae el roster: sin esto, un nombre del roster nunca
+ * coincidiría con el que se guardó en el momento del vínculo, y el alta de admin
+ * (que escribe el `@usuario` a mano) tampoco podría encontrar la cuenta.
+ */
+export function canonicalDiscordUsername(value: string): string {
+  return value.trim().replace(/^@/, "").replace(LEGACY_DISCORD_SUFFIX, "").toLowerCase();
+}
+
+/**
+ * `@usuario` de Discord escrito por una persona: el nombre pelado, o `null`.
+ *
+ * ## Por qué **exige la arroba**
+ *
+ * Es lo único que hace inequívoco que se está dando el nombre de usuario **global**
+ * y no el nombre que alguien se haya puesto dentro del servidor. En un servidor
+ * Discord hay muchas cuentas que se llaman `pepito` y a las que se puede llamar de
+ * cualquier manera; el `@usuario` es lo único que es único en todo el servicio. Si
+ * se aceptara un valor sin arroba, un nombre de display acabaría guardado como si
+ * fuera una identidad, y un nombre de display no lo es. Por eso **`pepito` es un
+ * error** y `@pepito` no: el parser no perdona lo que falta porque lo que falta es
+ * justo lo que distingue el dato del que parece.
+ *
+ * ## Qué se valida
+ *
+ * El rango y los caracteres, ya sobre la forma canónica de
+ * `canonicalDiscordUsername()` (`2` a `32` de `[a-z0-9._]`, en minúsculas, sin
+ * arroba ni discriminador). Los espacios de fuera se aceptan: `" @Pepito "` es lo
+ * que se escribe con la mano. Los espacios **dentro** no, y también no un `@` o un
+ * `#` por medio, porque no son parte del nombre.
+ *
+ * Devuelve `null` sin decir por qué, como todos los parsers de este módulo: un
+ * vacío y un valor mal escrito son dos mensajes distintos y quien llama sabe si el
+ * campo es obligatorio.
+ */
+export function parseDiscordUsername(
+  value: FormDataEntryValue | null,
+): string | null {
+  const raw = String(value ?? "").trim();
+
+  if (!raw.startsWith("@")) {
+    return null;
+  }
+
+  const canonical = canonicalDiscordUsername(raw);
+
+  return DISCORD_USERNAME.test(canonical) ? canonical : null;
 }
 
 /**

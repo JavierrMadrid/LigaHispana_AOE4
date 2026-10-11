@@ -22,7 +22,7 @@ type AlertRulesDialogProps = {
  * Los números **no están escritos aquí**: llegan de los umbrales vivos
  * (`Setting["alerts.ruleset"]`, que la organización retoca sin desplegar). Un texto
  * con las cifras a mano mentiría en cuanto se cambiara un umbral, que es el mismo
- * pendiente que el proyecto ya tiene anotado para `/reglas` y `/objetivos`. El
+ * pendiente que el proyecto ya tiene anotado para `/puntuacion` y `/objetivos`. El
  * `fallback` solo afecta a la procedencia de los números: si la lectura de los
  * umbrales ha fallado, se usan los del código y la ventana lo dice.
  */
@@ -61,8 +61,8 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
               Reglas de las alertas
             </h2>
             <p className="mt-1 text-sm text-muted">
-              Qué comportamientos vigila el motor sobre las partidas clasificatorias
-              del torneo.
+              Qué vigila el motor de alertas sobre las partidas clasificatorias del
+              torneo y sobre el estado de los perfiles.
             </p>
           </header>
 
@@ -107,11 +107,11 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
                 arriba o por abajo.
               </Rule>
 
-              <Rule index={5} title="Equipos en una división muy inferior" mode="Solo equipos">
-                Se compara la media de elo de la partida con la división del jugador en
-                ranked 1v1. Si esa media está {thresholds.lowDivisionSteps} escalones de
-                división o más por debajo (por ejemplo, un jugador oro 1 en partidas de
-                media plata 1 o inferior), se avisa.
+              <Rule index={5} title="Equipos en una división muy distinta" mode="Solo equipos">
+                Se compara el rating del jugador en esa partida de equipo con el rating
+                medio de la partida, los dos de la misma ladder. Si distan{" "}
+                {thresholds.lowDivisionSteps} escalones de división o más, por encima o
+                por debajo, se avisa.
               </Rule>
             </ol>
 
@@ -121,9 +121,49 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
               cierre con el conteo que tenga. Las de total se crean al alcanzar el
               umbral. Solo cuentan las partidas clasificatorias resueltas y no
               revertidas, y las partidas que no puntúan no rompen las rachas. Cada
-              umbral avisa una sola vez. La regla 5 necesita el rango 1v1 del jugador:
-              sin él no se puede evaluar.
+              umbral avisa una sola vez. La regla 5 necesita el rating del jugador en esa
+              partida de equipo y el rating medio de la partida: sin ellos no se puede
+              evaluar.
             </p>
+
+            <div className="mt-6 border-t border-line pt-5">
+              <h3 className="text-sm font-semibold text-foreground">
+                Estado que no sale de las partidas
+              </h3>
+              <p className="mt-1 text-sm leading-relaxed text-muted">
+                Tres comprobaciones más no miran las partidas que ya tenemos, sino el
+                perfil del jugador en AoE4World y su cuenta de Discord. Avisan cuando:
+              </p>
+              <ul className="mt-3 flex flex-col gap-3 text-sm leading-relaxed text-muted">
+                <li>
+                  <strong className="font-medium text-foreground">
+                    El historial de partidas no es público.
+                  </strong>{" "}
+                  Se sondean las partidas resueltas más recientes y solo se avisa si
+                  ninguna tiene resumen, que es lo que ocurre con el historial cerrado.
+                  Un fallo de red no cuenta como cerrado: en ese caso no se escribe
+                  nada.
+                </li>
+                <li>
+                  <strong className="font-medium text-foreground">
+                    La ladder registra una partida que no nos llega.
+                  </strong>{" "}
+                  Se compara la ladder de AoE4World con nuestras partidas de 1v1 y se
+                  avisa cuando va claramente por delante de lo que tenemos.
+                </li>
+                <li>
+                  <strong className="font-medium text-foreground">
+                    La cuenta de Discord no está en el servidor del torneo.
+                  </strong>{" "}
+                  Se comprueba cada doce horas si la cuenta de Discord enlazada sigue
+                  en el servidor. Un fallo de red no cuenta como salida: en ese caso no
+                  se escribe nada.
+                </li>
+              </ul>
+              <p className="mt-3 text-sm leading-relaxed text-muted/85">
+                Estas tres son un aviso para que la organización mire, no un veredicto.
+              </p>
+            </div>
           </div>
         </div>
       </Modal>

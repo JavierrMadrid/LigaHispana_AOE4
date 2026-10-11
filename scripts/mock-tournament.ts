@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { getAoe4WorldConfig } from "@/lib/aoe4world/env";
 import {
@@ -10,7 +10,6 @@ import {
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { db } from "@/lib/db";
 import { unwrapRead } from "@/lib/db-errors";
-import { OBJECTIVE_POINTS } from "@/lib/objectives";
 import { DIVISIONS, getStandings } from "@/lib/public";
 import { DEFAULT_RULESET, RULESET_VERSION } from "@/lib/scoring";
 import { playerSyncKey } from "@/lib/settings";
@@ -46,6 +45,11 @@ process.env.AOE4WORLD_MOCK = "1";
  * aquí). Un `false` escrito por el refresco borraría el "en directo" que la
  * simulación acaba de plantar, y un `true` real exigiría llamar a YouTube desde un
  * script de desarrollo.
+ *
+ * El paso del **historial de partidas** también va apagado (`history: false`) y por
+ * el mismo motivo: su ruta no tiene fixtures, así que con el mock activo no sale a
+ * la red y no escribe nada. Apagarlo del todo solo evita el aviso; el comportamiento
+ * correcto ya está dentro del módulo.
  */
 async function ensureMockPlayers(): Promise<void> {
   for (const player of MOCK_TOURNAMENT_PLAYERS) {
@@ -192,10 +196,15 @@ async function runMockTournament(): Promise<void> {
   await ensureMockPlayers();
 
   // Solo los participantes simulados: una base con otros jugadores aprobados
-  // no se toca ni se les pide nada al mock. `streams: false` por lo que dice el
-  // docblock de `ensureMockPlayers()`: la detección de YouTube y Kick queda apagada
-  // y sus canales se quedan como los que ha plantado este script.
-  const summary = await syncApprovedPlayers({ profileIds: MOCK_PROFILE_IDS, streams: false });
+  // no se toca ni se les pide nada al mock. `streams: false` y `history: false` por
+  // lo que dice el docblock de `ensureMockPlayers()`: la detección de YouTube y Kick
+  // queda apagada y sus canales se quedan como los que ha plantado este script, y el
+  // sondeo del historial no sale a la red.
+  const summary = await syncApprovedPlayers({
+    profileIds: MOCK_PROFILE_IDS,
+    streams: false,
+    history: false,
+  });
 
   // "Partidas en directo" se cuenta por `gameId` distinto, igual que hace la
   // web: una 1v1 entre participantes genera dos filas `Match` (una por jugador)
@@ -389,18 +398,17 @@ async function runMockTournament(): Promise<void> {
 
     const objectives = breakdown?.objectives ?? { points: 0, earned: [] };
     const objectivesPoints = objectives.points ?? 0;
-    const earned = objectives.earned ?? [];
-    const sumados = earned.reduce(
-      (sum, id) => sum + (OBJECTIVE_POINTS[id] ?? -1),
-      0,
-    );
+    // No se reconstruye el reparto de objetivos desde `earned`: `imparable`
+    // reparte puntos variables (1 por día, con tope), así que el catálogo no
+    // basta para rehacer la suma. Lo que sí tiene que cuadrar es que el total sea
+    // los puntos por victoria más los de objetivos, y que los modos sumen el
+    // resto.
     const porModos = Object.values(breakdown?.byMode ?? {}).reduce(
       (sum, mode) => sum + (mode.points ?? 0),
       0,
     );
 
     return (
-      sumados !== objectivesPoints ||
       porModos !== score.total - objectivesPoints ||
       score.total !== score.wins * DEFAULT_RULESET.pointsPerWin + objectivesPoints
     );
@@ -415,7 +423,7 @@ async function runMockTournament(): Promise<void> {
   }
 
   if (scores.length === MOCK_PROFILE_IDS.length && conObjetivos.length === 0) {
-    problems.push("ningún participante suma puntos de objetivos en la v2");
+    problems.push("ningún participante suma puntos de objetivos");
   }
 
   if (standings.length > 0) {

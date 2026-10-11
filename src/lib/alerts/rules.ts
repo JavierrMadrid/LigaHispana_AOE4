@@ -4,7 +4,7 @@ import { isRecord } from "@/lib/json";
 /**
  * Umbrales y frases de las alertas de comportamiento. **Módulo puro**: no toca
  * la base de datos ni sale a la red, para que `computePlayerAlerts()` y
- * `npm run verify:alerts` se puedan comprobar con secuencias sintéticas.
+ * `rules.test.ts` (vía `npm test`) se puedan comprobar con secuencias sintéticas.
  *
  * ## Las tres piezas
  *
@@ -71,13 +71,31 @@ export type StreakAlertRule =
 
 /** Reglas que miran un acumulado sobre toda la ventana. */
 export type TotalAlertRule =
-  | "SHORT_MATCH_TOTAL"
-  | "REPEATED_OPPONENT_TOTAL"
-  | "REPEATED_TEAMMATE_TOTAL";
+  "SHORT_MATCH_TOTAL" | "REPEATED_OPPONENT_TOTAL" | "REPEATED_TEAMMATE_TOTAL";
 
-export type AlertsRuleName = StreakAlertRule | TotalAlertRule;
+/**
+ * Reglas que miran un **estado**, no una secuencia.
+ *
+ * No tienen racha ni acumulado: se comprueba una cosa (el historial de partidas del
+ * jugador, la ladder por delante de lo que nos llega, si su cuenta de Discord está en
+ * el servidor) y, mientras siga siendo cierto, el mismo hecho. Se evalúan en
+ * `src/lib/history-checks.ts` y `src/lib/discord/check.ts`, desde el worker del
+ * sincronizador, porque no leen `Match` sino columnas de `Player`, una ruta del sitio de
+ * AoE4World y la API de Discord.
+ *
+ * Su `dedupeKey` es estable por (regla, tipo, jugador) —sin partida ancla ni número—,
+ * porque si no, reevaluarlas cada 5 minutos insertaría una fila nueva cada 12 horas
+ * para siempre. Ver el docblock de `alertDedupeKey()`.
+ */
+export type StateAlertRule =
+  | "HISTORY_NOT_PUBLIC"
+  | "MISSING_LADDER_MATCHES"
+  | "DISCORD_NOT_IN_GUILD";
 
-export type AlertKindName = "STREAK_CLOSED" | "STREAK_AT_TOURNAMENT_END" | "TOTAL_REACHED";
+export type AlertsRuleName = StreakAlertRule | TotalAlertRule | StateAlertRule;
+
+export type AlertKindName =
+  "STREAK_CLOSED" | "STREAK_AT_TOURNAMENT_END" | "TOTAL_REACHED" | "STATE_DETECTED";
 
 /* -------------------------------------------------------------------------- */
 /* Las etiquetas                                                               */
@@ -104,17 +122,25 @@ export const ALERT_RULE_LABELS = {
   REPEATED_TEAMMATE_STREAK: "Compañero repetido, en rachas",
   REPEATED_TEAMMATE_TOTAL: "Compañero repetido, en total",
   TEAMMATE_ELO_GAP: "Brecha de elo con un compañero",
-  LOW_DIVISION_TEAM_GAME: "Equipo por debajo de la división",
+  LOW_DIVISION_TEAM_GAME: "Equipo en una división muy distinta",
+  HISTORY_NOT_PUBLIC: "Historial de partidas no público",
+  MISSING_LADDER_MATCHES: "Partidas de ladder que no nos llegan",
+  DISCORD_NOT_IN_GUILD: "Discord sin estar en el servidor",
 } as const satisfies Record<AlertsRuleName, string>;
 
 /**
  * Cuándo se detectó, en español, con el mismo criterio que `ALERT_RULE_LABELS`: el
  * enum describe el dato y el mapa lo traduce una sola vez.
+ *
+ * `STATE_DETECTED` es el cuarto valor y no es de la misma familia que los otros tres:
+ * no es una racha ni un acumulado, es un **estado comprobado**. Por eso se traduce
+ * como "Estado comprobado" y no como "Racha" o "Acumulado".
  */
 export const ALERT_KIND_LABELS = {
   STREAK_CLOSED: "Racha rota",
   STREAK_AT_TOURNAMENT_END: "Racha cerrada por fin de torneo",
   TOTAL_REACHED: "Acumulado alcanzado",
+  STATE_DETECTED: "Estado comprobado",
 } as const satisfies Record<AlertKindName, string>;
 
 export type AlertsThresholds = {
@@ -134,7 +160,7 @@ export type AlertsThresholds = {
   repeatedTeammateTotal: number;
   /** R4: diferencia de elo con un compañero, en valor absoluto, para avisar. */
   teammateEloGap: number;
-  /** R5: escalones de subdivisión por debajo de la división del jugador. */
+  /** R5: diferencia de escalones (en valor absoluto) entre la división del jugador y la de la partida de equipo. */
   lowDivisionSteps: number;
 };
 
@@ -274,20 +300,102 @@ export type AlertSubject = {
 /** El sujeto de las reglas que hablan del propio jugador. */
 export const SELF_SUBJECT: AlertSubject = { key: "yo", profileId: null, name: null };
 
-/** Datos de la partida que ha cerrado la racha, para `details`. */
+/**
+ * Cómo se resolvió que la cuenta de Discord de un participante no está en el
+ * servidor del torneo (`DISCORD_NOT_IN_GUILD`).
+ *
+ * Va en el `details` y **no** es un valor de `AlertRule`: los dos casos comparten
+ * regla, frase y `dedupeKey`, y separarlos en dos reglas llenaría la pestaña de
+ * Alertas de lo mismo dos veces con dos textos que hay que mantener en paralelo.
+ */
+export type DiscordNotInGuildResolvedBy = "discordUserId" | "username";
+
+/**
+ * Datos estructurados que van en `Alert.details`, por encima de los comunes.
+ *
+ * El nombre viene del uso mayoritario —lo que se sabe de la partida que ancla una
+ * racha—, pero las reglas de estado no tienen ancla y aportan aquí lo suyo: los
+ * `gameId` sondeados y las dos fechas que se compararon.
+ */
 export type AlertAnchorDetail = {
   /** Duración en segundos, si la partida la trae. */
   durationSeconds?: number;
   /** Mayor brecha de elo con un compañero en esa partida (R4). */
   eloGap?: number;
-  /** Escalones de subdivisión por debajo de la división del jugador (R5). */
+  /**
+   * Diferencia de escalones entre la subdivisión de la partida y la del jugador
+   * en esa misma partida de equipo (R5). Positivo si la partida está por debajo,
+   * negativo si está por encima; el aviso sale con el valor absoluto.
+   */
   steps?: number;
-  /** Media de elo de la partida (R5). */
-  averageMmr?: number;
-  /** Subdivisión a la que corresponde esa media, ya resuelta. */
+  /**
+   * Media de **rating** de la partida de equipo (R5). Es la escala de la ladder,
+   * la misma que `selfRating`; **no** es el `mmr` de la partida.
+   */
+  averageRating?: number;
+  /** Rating del jugador en esa partida de equipo (R5). */
+  selfRating?: number;
+  /** Subdivisión a la que corresponde la media de rating de la partida, ya resuelta (R5). */
   gameSubdivision?: string;
-  /** Subdivisión 1v1 del jugador en el momento de la evaluación (R5). */
+  /** Subdivisión del jugador en esa partida de equipo, ya resuelta (R5). */
   playerSubdivision?: string;
+
+  /* Reglas de estado: la evidencia con la que se comprobó. */
+
+  /** Partidas sondeadas que no tienen summary (`HISTORY_NOT_PUBLIC`). */
+  probedGameIds?: string[];
+  /** Partidas sondeadas en total, incluidas las que sí lo tenían. */
+  probedCount?: number;
+  /** `Player.ladderGamesCount` al comprobar (`MISSING_LADDER_MATCHES`). */
+  ladderGamesCount?: number | null;
+  /** `Player.ladderLastGameAt`, en ISO-8601 UTC. */
+  ladderLastGameAt?: string | null;
+  /** Nuestra partida `rm_solo` más reciente en la ventana, en ISO-8601 UTC. */
+  newestImportedAt?: string | null;
+  /** Minutos que la ladder va por delante de esa partida. */
+  lagMinutes?: number;
+
+  /** Evidencia de `DISCORD_NOT_IN_GUILD`, la tercera regla de estado. */
+
+  /**
+   * Cómo se resolvió que la cuenta no está en el servidor.
+   *
+   * La regla es **una sola** para los dos casos y la frase es la misma, así que la
+   * diferencia va aquí y no en un enum de regla nuevo:
+   *
+   * - `discordUserId`: la fila ya tenía la cuenta (por el vínculo OAuth2 de la
+   *   inscripción) y el roster —o la consulta por id— ha dicho que esa cuenta no está.
+   * - `username`: la fila solo tenía el `@usuario` que escribió la organización al
+   *   dar de alta, y **ese `@usuario` no aparece** en la lista de miembros (o aparece
+   *   dos veces). Aquí no se sabe de qué cuenta se trata, solo que no se la ha
+   *   encontrado.
+   *
+   * Sin esta clave las dos alertas serían indistinguibles en el informe, y quien
+   * mirase «su Discord no está en el servidor» no podría saber si es una cuenta que
+   * se ha ido del servidor o un `@usuario` que nunca se ha podido emparejar.
+   */
+  resolvedBy?: DiscordNotInGuildResolvedBy;
+  /** `Player.discordUserId` que se comprobó, o el que se resolvió con el `@usuario`. */
+  discordUserId?: string;
+  /**
+   * `Player.discordUsername` en el momento de la comprobación, que es como lo trae
+   * la fila: el nombre global **sin arroba** (`canonicalDiscordUsername()`).
+   *
+   * Va aunque haya `discordUserId`, porque es el dato que quien tiene que arreglarlo
+   * necesita para buscar a esa persona en Discord.
+   */
+  discordUsername?: string;
+  /** `Player.discordCheckedAt` en ISO-8601 UTC: el instante de la comprobación. */
+  discordCheckedAt?: string;
+  /**
+   * Estado HTTP con el que respondió Discord, si hubo respuesta.
+   *
+   * `null` cuando la comprobación salió del roster y no de una petición por cuenta:
+   * es la diferencia entre "la API dijo que no" y "no estaba en la lista que se leyó".
+   */
+  discordHttpStatus?: number | null;
+  /** Miembros que tenía el roster cuando se comprobó, si la comprobación salió de él. */
+  discordRosterMembers?: number;
 };
 
 export type AlertTriggerInput = {
@@ -301,9 +409,19 @@ export type AlertTriggerInput = {
   threshold: number;
   anchorGameId: string | null;
   anchorStartedAt: Date | null;
-  /** Ladder de la partida, que es la de la que salen los cortes de R5. */
+  /** Familia de ladder de la partida (`Match.mode`), de la que salen los cortes de R5. */
   anchorLadder?: string | null;
-  window: { from: string; to: string | null };
+  /**
+   * Ventana del torneo, **solo para las reglas que miran partidas**.
+   *
+   * Es opcional, y no por descuido: `DISCORD_NOT_IN_GUILD` se evalúa contra la API
+   * de Discord y no tiene nada que ver con fechas de partidas, así que escribir una
+   * ventana en su `details` afirmaría un alcance que no tiene —"esto se comprobó
+   * dentro del torneo"— y quien leyera el informe se llevaría una conclusión
+   * falsa. Las reglas de partidas la pasan todas, y el `details` sale igual que
+   * siempre (`alertDetails()` solo la escribe cuando viene).
+   */
+  window?: { from: string; to: string | null };
   detail?: AlertAnchorDetail;
 };
 
@@ -339,6 +457,23 @@ export type TriggeredAlert = {
  *   partida X" de "la racha de 3 partidas cerradas por la partida Y", y es lo que
  *   hace que reevaluar los mismos datos no produzca nada nuevo.
  *
+ * ## La excepción: las reglas de estado no llevan remate
+ *
+ * Un estado **no tiene remate**: no hay tramo que cerrar ni número que cruzar, y
+ * su corrección es que la condición deje de cumplirse (el jugador abre el
+ * historial, la ladder vuelve a coincidir con lo que nos llega). Por eso
+ * `STATE_DETECTED` mete `estado` en el sitio del remate y **se queda solo con
+ * (regla, tipo, jugador, sujeto)**: una alerta por jugador y por hecho.
+ *
+ * Es la decisión de la que depende que estas reglas no llenen la tabla. Las dos
+ * se reevalúan **cada 5 minutos** (la del historial con una caché de 12 h), así
+ * que una clave con la partida sondeada o con los minutos de desfase insertaría
+ * una fila nueva cada vez que cambiara el número, y en la práctica una alarma
+ * cada 12 horas para siempre por jugador. Sin `anchorGameId` ni `count` en la
+ * clave, la segunda pasada inserta 0 filas y la alerta sigue siendo la que se
+ * escribió la primera vez. `rules.test.ts` lo fija con una prueba explícita,
+ * porque es una propiedad que se rompe sin que nada falle.
+ *
  * El prefijo de versión existe para que un cambio en la forma de la clave no
  * choque con lo ya escrito: si algún día la clave cambia de ingredientes, sube
  * el prefijo y se vuelve a evaluar desde cero en lugar de saltarse filas.
@@ -351,7 +486,12 @@ export function alertDedupeKey(input: {
   anchorGameId: string | null;
   count: number;
 }): string {
-  const remate = input.kind === "TOTAL_REACHED" ? `total:${input.count}` : `partida:${input.anchorGameId ?? "-"}`;
+  const remate =
+    input.kind === "STATE_DETECTED"
+      ? "estado"
+      : input.kind === "TOTAL_REACHED"
+        ? `total:${input.count}`
+        : `partida:${input.anchorGameId ?? "-"}`;
 
   return [
     `v${ALERTS_RULESET_VERSION}`,
@@ -404,19 +544,41 @@ export function alertSummary(input: AlertTriggerInput): string {
     case "TEAMMATE_ELO_GAP": {
       const gap = input.detail?.eloGap;
 
-      return (
-        gap === undefined
-          ? `${partidas(input.count)} de equipo con un compañero muy por encima o por debajo${cierre}`
-          : `${partidas(input.count)} de equipo con un compañero a ${gap} de elo${cierre}`
-      );
+      return gap === undefined
+        ? `${partidas(input.count)} de equipo con un compañero muy por encima o por debajo${cierre}`
+        : `${partidas(input.count)} de equipo con un compañero a ${gap} de elo${cierre}`;
     }
     case "LOW_DIVISION_TEAM_GAME": {
       const steps = input.detail?.steps;
 
-      return steps === undefined
-        ? `${partidas(input.count)} de equipos muy por debajo de su división${cierre}`
-        : `${partidas(input.count)} de equipos ${conY(steps)} por debajo de su división${cierre}`;
+      if (steps === undefined) {
+        return `${partidas(input.count)} de equipos en una división muy distinta a la suya${cierre}`;
+      }
+
+      // `steps` positivo es que la partida está por debajo del jugador y negativo
+      // que está por encima; la frase conserva ese sentido, que es lo que el
+      // número quiere decir.
+      const sentido = steps < 0 ? "por encima" : "por debajo";
+
+      return `${partidas(input.count)} de equipos ${conY(Math.abs(steps))} ${sentido} de su división${cierre}`;
     }
+    // Las dos de estado van al final y sin `cierre`: no son un tramo que se cierre,
+    // son algo que se ha comprobado. Las frases dicen **qué se ha comprobado**, nunca
+    // por qué: el equipo de Alerts no sabe si el jugador cambió el ajuste, si se le
+    // olvidó, si la API dejó de publicar su historial o si el problema es nuestro, y
+    // escribir una causa sería escribirla inventada. Y no hay nada que acusar: la
+    // transparencia del torneo (poder consultar cualquier partida de un participante)
+    // se cumple abriendo el toggle, que es un ajuste del juego.
+    case "HISTORY_NOT_PUBLIC":
+      return "Su historial de partidas no es público";
+    case "MISSING_LADDER_MATCHES":
+      return "La ladder registra partidas que no nos llegan";
+    // La tercera de estado (F12). Como las otras dos, la frase dice **qué se ha
+    // comprobado** y no por qué: la cuenta puede no estar porque la persona no se ha
+    // unido, porque el bot no pudo meterla o porque la comprobación no se ha podido
+    // hacer, y el equipo de Alertas no puede distinguir eso desde aquí.
+    case "DISCORD_NOT_IN_GUILD":
+      return "Su Discord no está en el servidor del torneo";
   }
 }
 
@@ -428,6 +590,11 @@ export function alertSummary(input: AlertTriggerInput): string {
  * solo frases, y **no lleva datos que ya no sean ciertos**: el nombre del
  * sujeto va en su propia columna, y el del jugador tampoco (el panel lo saca de
  * `Player`, que es donde vive y donde puede estar actualizado).
+ *
+ * La ventana del torneo va solo si quien dispara la trae: `DISCORD_NOT_IN_GUILD`
+ * se comprueba contra la API de Discord y no tiene fechas, así que en esa fila no se
+ * escriben `windowFrom` ni `windowTo`, porque una ventana que no aplica es una
+ * afirmación que alguien acabaría creyendo.
  */
 export function alertDetails(input: AlertTriggerInput): Prisma.InputJsonObject {
   const detail = input.detail ?? {};
@@ -440,12 +607,18 @@ export function alertDetails(input: AlertTriggerInput): Prisma.InputJsonObject {
     threshold: input.threshold,
     ...(input.subject.profileId === null ? {} : { subjectProfileId: input.subject.profileId }),
     ...(input.anchorGameId === null ? {} : { anchorGameId: input.anchorGameId }),
-    ...(input.anchorStartedAt === null ? {} : { anchorStartedAt: input.anchorStartedAt.toISOString() }),
+    ...(input.anchorStartedAt === null
+      ? {}
+      : { anchorStartedAt: input.anchorStartedAt.toISOString() }),
     ...(input.anchorLadder === undefined || input.anchorLadder === null
       ? {}
       : { anchorLadder: input.anchorLadder }),
-    windowFrom: input.window.from,
-    ...(input.window.to === null ? {} : { windowTo: input.window.to }),
+    ...(input.window === undefined
+      ? {}
+      : {
+          windowFrom: input.window.from,
+          ...(input.window.to === null ? {} : { windowTo: input.window.to }),
+        }),
     ...detail,
   };
 }

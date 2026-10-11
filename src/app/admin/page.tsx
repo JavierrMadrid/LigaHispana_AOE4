@@ -9,6 +9,8 @@ import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
+import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
+import { readRegistrationOpen } from "@/lib/settings";
 
 export const metadata: Metadata = {
   title: { absolute: "Participantes · Admin" },
@@ -39,16 +41,16 @@ export default async function AdminPage() {
   const participants = participantsRead.status === "ok" ? participantsRead.data : [];
   const pending = participants.filter((player) => player.status === "PENDING");
 
-  // El país del alta se elige de la lista viva (`Setting["registration.countries"]`).
-  // Si la lectura falla, el desplegable cae a la lista por defecto y el formulario
-  // sigue siendo usable; la acción vuelve a leer la lista viva al guardar.
-  let countries: string[];
-
-  try {
-    countries = await readCountries();
-  } catch {
-    countries = [...DEFAULT_COUNTRIES];
-  }
+  // La lista de países y el estado del plazo se leen de `Setting`, y las dos
+  // lecturas degradan a su valor de respaldo en vez de tumbar el panel: la lista,
+  // a la de por defecto; el plazo, a cerrado. El servidor vuelve a comprobar
+  // ambas al guardar —el país en el alta y el plazo en el alta y en el envío
+  // público—, así que una lectura degradada aquí no abre nada por accidente. Van
+  // en paralelo porque son independientes.
+  const [countries, registrationOpen] = await Promise.all([
+    readCountries().catch(() => [...DEFAULT_COUNTRIES]),
+    readRegistrationOpen().catch(() => DEFAULT_REGISTRATION_OPEN),
+  ]);
 
   // `syncHealth` es un `PublicRead`: `status` distingue "no se ha podido leer" de
   // "leído", y `data.degraded`/`data.stale` son el estado del sincronizador. Son
@@ -66,17 +68,18 @@ export default async function AdminPage() {
     { label: "Partidas", value: totalMatches, highlight: false },
   ];
 
-  // El estado y el botón del sincronizador van en una sección propia, siempre
-  // visible, porque el botón es el "por si falla el cron" y no puede depender de
-  // que el aviso esté de mal humor. El `headline` lo redacta el servidor
-  // (`getSyncHealth()`); aquí no se reimplementa. La sección va **después** de la
-  // cola de pendientes: aprobar una solicitud es la acción del día, y el estado del
-  // sincronizador es salud del sistema, secundaria frente a ella. Los motivos de
-  // cada jugador que falló van en línea y no en un enlace, porque no hay ninguna
-  // otra pantalla que los muestre: `/admin/alertas` está reservada para anomalías
-  // de participantes y sigue sin hacerse. Sin el motivo literal de la API el aviso
-  // no serviría de nada, ya que no dice si hay que corregir un `profileId` o solo
-  // esperar a que AoE4World pare de limitar.
+  // El estado del sincronizador va en **su propia tarjeta, a la derecha del
+  // resumen y del mismo ancho** (`lg:grid-cols-2`): son dos cosas distintas —cuántos
+  // jugadores hay, y cómo va la última pasada— y el `headline` es texto que crece
+  // con la longitud del motivo, así que en una sola línea compartida empujaba al
+  // resumen. Por debajo de `lg` se apilan. El botón vive en esa tarjeta, arriba a
+  // la derecha, porque es la acción de esa sección. El `headline` lo redacta el
+  // servidor (`getSyncHealth()`); aquí no se reimplementa. Los motivos de cada
+  // jugador que falló van en línea y no en un enlace, porque no hay ninguna otra
+  // pantalla que los muestre: `/admin/alertas` está reservada para anomalías de
+  // participantes. Sin el motivo literal de la API el aviso no serviría de nada,
+  // ya que no dice si hay que corregir un `profileId` o solo esperar a que
+  // AoE4World pare de limitar.
   return (
     <div className="flex flex-col gap-8">
       <section>
@@ -87,30 +90,85 @@ export default async function AdminPage() {
         </p>
       </section>
 
-      <section
-        aria-label="Resumen del torneo"
-        className="thread-top relative overflow-hidden rounded-lg border border-line bg-surface px-5 py-4"
-      >
-        <dl className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
-          {stats.map((stat, index) => (
-            <div
-              key={stat.label}
-              className={`flex items-baseline gap-2 ${
-                index > 0 ? "sm:border-l sm:border-line sm:pl-6" : ""
-              }`}
-            >
-              <dt className="text-sm text-muted">{stat.label}</dt>
-              <dd
-                className={`text-base font-semibold tabular-nums ${
-                  stat.highlight ? "text-accent" : "text-foreground"
+      {/* Resumen y sincronización, en dos tarjetas de la mitad de ancho cada una
+          (`lg:grid-cols-2`): el resumen son cuatro cifras cortas y el estado es
+          texto largo más un botón, así que a mitades los dos tienen su sitio sin
+          que el segundo tenga que empujar al primero. Por debajo de `lg` se
+          apilan, que es lo razonable cuando no hay ancho para dos columnas.
+          El botón va en la derecha porque pertenece a lo que describe: forzar una
+          pasada es actuar sobre el estado del sincronizador, no sobre el resumen
+          de jugadores. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <section
+          aria-label="Resumen del torneo"
+          className="thread-top relative overflow-hidden rounded-lg border border-line bg-surface px-5 py-4"
+        >
+          {/* `flex h-full` y `content-center` en el `<dl>`: la rejilla estira las dos
+              tarjetas a la misma altura y el resumen solo tiene una línea de
+              cifras, así que sin esto se quedaba pegada arriba con el hueco
+              debajo, mientras la de al lado crece con el `headline` y el botón. */}
+          <dl className="flex h-full flex-wrap content-center items-baseline gap-x-6 gap-y-2">
+            {stats.map((stat, index) => (
+              <div
+                key={stat.label}
+                className={`flex items-baseline gap-2 ${
+                  index > 0 ? "sm:border-l sm:border-line sm:pl-6" : ""
                 }`}
               >
-                {stat.value.toLocaleString("es-ES")}
-              </dd>
+                <dt className="text-sm text-muted">{stat.label}</dt>
+                <dd
+                  className={`text-base font-semibold tabular-nums ${
+                    stat.highlight ? "text-accent" : "text-foreground"
+                  }`}
+                >
+                  {stat.value.toLocaleString("es-ES")}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        <section
+          aria-label="Sincronización"
+          className={`rounded-lg border bg-surface px-5 py-4 ${
+            syncAlarm ? "border-loss/40" : "border-line"
+          }`}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm text-muted">Sincronización</h2>
+              <p
+                className={`mt-1 text-sm leading-relaxed ${
+                  syncAlarm ? "text-loss" : "text-muted"
+                }`}
+              >
+                {syncState !== null
+                  ? syncState.headline
+                  : "No se ha podido leer el estado del sincronizador."}
+              </p>
             </div>
-          ))}
-        </dl>
-      </section>
+
+            {/* El botón está arriba a la derecha de su propia tarjeta y no debajo
+                del texto: es la acción de la sección y así se ve aunque el
+                `headline` ocupe tres líneas. Con ancho de sobra se queda a la
+                derecha; si no cabe, `flex-wrap` lo baja a una línea propia. */}
+            <div className="shrink-0">
+              <SyncNowButton />
+            </div>
+          </div>
+
+          {syncState?.lastRun?.failures.length ? (
+            <ul className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-xs text-muted">
+              {syncState.lastRun.failures.map((fallo) => (
+                <li key={fallo.profileId}>
+                  <span className="text-foreground">{fallo.name}</span> (
+                  {fallo.profileId}): {fallo.error}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      </div>
 
       {pendingPlayers > 0 ? (
         <section
@@ -159,40 +217,34 @@ export default async function AdminPage() {
         </section>
       ) : null}
 
-      <section
-        aria-label="Sincronización"
-        className={`rounded-lg border bg-surface px-4 py-4 ${
-          syncAlarm ? "border-loss/40" : "border-line"
-        }`}
-      >
-        <h2 className="text-lg font-medium">Sincronización</h2>
-        <p
-          className={`mt-1 max-w-[70ch] text-sm ${
-            syncAlarm ? "text-loss" : "text-muted"
-          }`}
-        >
-          {syncState !== null
-            ? syncState.headline
-            : "No se ha podido leer el estado del sincronizador. El botón sigue disponible para forzar una pasada."}
-        </p>
-        {syncState?.lastRun?.failures.length ? (
-          <ul className="mt-2 flex flex-col gap-1 text-sm text-muted">
-            {syncState.lastRun.failures.map((fallo) => (
-              <li key={fallo.profileId}>
-                <span className="text-foreground">{fallo.name}</span> ({fallo.profileId}):{" "}
-                {fallo.error}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <div className="mt-4">
-          <SyncNowButton />
-        </div>
-      </section>
-
       <section>
-        <h2 className="mb-3 text-lg font-medium">Añadir jugador</h2>
-        <PlayerForm countries={countries} />
+        <details open className="group">
+          {/* El titular es el propio `<summary>`: conserva la jerarquía de la
+              página (sigue siendo un `<h2>` dentro del resumen) y a la vez es el
+              control que pliega la sección. Sin el `<h2>` el encabezado se
+              perdería del esquema; sin el `<summary>` no habría forma de
+              plegarla. El chevron gira al abrir y respeta `motion-reduce`. */}
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-foreground transition-colors hover:text-accent [&::-webkit-details-marker]:hidden">
+            <h2 className="text-lg font-medium">Añadir jugador</h2>
+            <svg
+              viewBox="0 0 12 12"
+              aria-hidden="true"
+              className="size-3 shrink-0 text-muted transition-transform motion-reduce:transition-none group-open:rotate-180"
+            >
+              <path
+                d="M2.5 4.5 6 8l3.5-3.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </summary>
+          <div className="mt-3">
+            <PlayerForm countries={countries} disabled={!registrationOpen} />
+          </div>
+        </details>
       </section>
 
       <section>
@@ -201,7 +253,7 @@ export default async function AdminPage() {
         {participantsRead.status === "degraded" ? (
           <EmptyState
             title="No se ha podido leer la lista de jugadores"
-            body="La base de datos no ha respondido. El alta sigue disponible; vuelve a intentarlo en unos minutos para ver el listado."
+            body="La base de datos no ha respondido. Vuelve a intentarlo en unos minutos para ver el listado."
           />
         ) : (
           <ParticipantsBrowser participants={participants} countries={countries} />

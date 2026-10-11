@@ -85,7 +85,7 @@ export default async function AdminActionsPage({ searchParams }: PageProps<"/adm
         />
       ) : (
         <>
-          <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line">
+          <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
             <table className="w-full text-left text-sm">
               <caption className="sr-only">
                 Acciones de la organización: fecha, resumen de lo hecho con su tipo y

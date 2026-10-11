@@ -11,6 +11,8 @@ type ModalProps = {
   labelledBy?: string;
   /** Nombre accesible cuando el título no es un elemento con id. */
   ariaLabel?: string;
+  /** id del elemento que describe el diálogo. */
+  describedBy?: string;
   /** Si se indica, pinta un botón de cierre en la esquina con ese nombre. */
   closeLabel?: string;
   /** Clases del propio `<dialog>`: cada uso decide tamaño, cromo y radios. */
@@ -38,17 +40,25 @@ type ModalProps = {
  *   contar.
  * - **Scroll de fondo bloqueado** mientras está abierto. `showModal()` deja el
  *   resto de la página inerte, pero no impide desplazarla en todos los
- *   navegadores.
+ *   navegadores. Al bloquearlo se compensa el ancho de la barra de
+ *   desplazamiento con un `padding-right`, para que el fondo no dé un salto
+ *   lateral.
  * - **Clic en el fondo** cierra, salvo que el gesto haya empezado dentro de la
  *   tarjeta (arrastrar para seleccionar texto no debe cerrar el diálogo).
+ * - **La alineación no se hereda de donde se monta.** El `<dialog>` sigue en el DOM
+ *   dentro del elemento que lo abre —la capa superior solo cambia dónde se pinta—,
+ *   y la columna de acciones de las tablas del panel va con `text-right`: sin el
+ *   `text-left` de la clase base, los campos de un diálogo abierto desde ahí salen
+ *   alineados a la derecha.
  *
  * El `cancel` se escucha con un listener nativo y no como evento de React
  * porque se dispara desde el navegador; leer el estado por cierre dejaría
  * valores viejos, así que `onClose` y `closeDisabled` se guardan también en refs.
  *
  * Esta es la única implementación de la trampa de foco del repositorio:
- * `ConfirmDialog` la envuelve para el panel de administración y la ventana de
- * acceso la usa para el login, sin duplicar la mecánica.
+ * `ConfirmDialog` la envuelve para el panel de administración, la ventana de
+ * acceso la usa para el login y el diálogo de clasificación de objetivos la
+ * envuelve para su clasificación, sin duplicar la mecánica.
  */
 export function Modal({
   open,
@@ -56,6 +66,7 @@ export function Modal({
   closeDisabled = false,
   labelledBy,
   ariaLabel,
+  describedBy,
   closeLabel,
   className,
   children,
@@ -125,11 +136,21 @@ export function Modal({
       return;
     }
 
-    const previous = document.body.style.overflow;
+    const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
+    // Compensa el ancho de la barra de desplazamiento para que el fondo no dé
+    // un salto lateral al bloquearse el scroll.
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+
     document.body.style.overflow = "hidden";
 
+    if (scrollbar > 0) {
+      document.body.style.paddingRight = `${scrollbar}px`;
+    }
+
     return () => {
-      document.body.style.overflow = previous;
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
     };
   }, [open]);
 
@@ -152,14 +173,14 @@ export function Modal({
   return (
     <dialog
       ref={dialogRef}
-      role="dialog"
       aria-label={labelledBy === undefined ? ariaLabel : undefined}
       aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
       aria-modal="true"
       tabIndex={-1}
       onMouseDown={handleMouseDown}
       onClick={handleClick}
-      className={`backdrop:bg-black/70 ${className ?? ""}`}
+      className={`text-left backdrop:bg-background/85 backdrop:animate-overlay-in ${className ?? ""}`}
     >
       {closeLabel !== undefined ? (
         <button
@@ -167,7 +188,7 @@ export function Modal({
           onClick={onClose}
           disabled={closeDisabled}
           aria-label={closeLabel}
-          className="absolute right-2.5 top-2.5 inline-flex size-9 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          className="absolute right-2.5 top-2.5 z-10 inline-flex size-9 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
         >
           <CloseIcon />
         </button>

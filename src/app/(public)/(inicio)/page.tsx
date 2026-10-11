@@ -2,14 +2,16 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
 import { LiveDot } from "@/components/live-dot";
+import { LiveRefresh } from "@/components/live-refresh";
 import { PageHead } from "@/components/page-head";
 import { StandingsTable } from "@/components/standings-table";
-import { getLiveMatches, getStandings } from "@/lib/public";
+import { TournamentCountdown } from "@/components/tournament-countdown";
+import { getLiveMatches, getStandings, getTournamentWindow } from "@/lib/public";
 
 export const metadata: Metadata = {
   title: "Clasificación general",
   description:
-    "Posiciones de la Liga Hispana de Age of Empires IV ordenadas por puntos: 10 por cada victoria clasificatoria más los puntos de los objetivos especiales.",
+    "Posiciones de la Liga Hispana de Age of Empires IV ordenadas por puntos: 2 por cada victoria clasificatoria más los puntos de los objetivos especiales.",
 };
 
 // La clasificación se lee de la base de datos en cada petición. Sin esto la
@@ -18,7 +20,11 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function StandingsPage() {
-  const [standings, liveMatches] = await Promise.all([getStandings(), getLiveMatches()]);
+  const [standings, liveMatches, tournamentWindow] = await Promise.all([
+    getStandings(),
+    getLiveMatches(),
+    getTournamentWindow(),
+  ]);
 
   // `data` es `null` cuando la base de datos no ha podido leer. No se sustituye
   // por una lista vacía a propósito: un vacío aquí se leería como "no hay
@@ -76,12 +82,28 @@ export default async function StandingsPage() {
                   </span>{" "}
                   {rows.length === 1 ? "participante" : "participantes"}
                 </p>
-                <Link
-                  href="/reglas"
-                  className="text-accent underline-offset-4 transition-colors hover:text-accent-strong hover:underline"
-                >
-                  Cómo se puntúa
-                </Link>
+                {tournamentWindow.status === "ok" && tournamentWindow.data.to !== null ? (
+                  <>
+                    {/* Barras verticales sueltas, no bordes por campo: al envolver,
+                        un borde quedaría pegado al texto. En móvil se ocultan
+                        porque los campos se apilan. */}
+                    <span
+                      aria-hidden="true"
+                      className="hidden h-4 w-px shrink-0 bg-line sm:block"
+                    />
+                    <TournamentCountdown
+                      to={tournamentWindow.data.to}
+                      serverNow={new Date().toISOString()}
+                    />
+                  </>
+                ) : null}
+                <span
+                  aria-hidden="true"
+                  className="hidden h-4 w-px shrink-0 bg-line sm:block"
+                />
+                {/* El recuento de partidas en juego solo se refresca cada 75 s:
+                    sin la hora, el número envejecería sin que se note. */}
+                <LiveRefresh showStatus />
               </div>
             </div>
           </div>

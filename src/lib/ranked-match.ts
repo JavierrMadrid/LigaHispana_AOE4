@@ -10,37 +10,56 @@ import { isRecord } from "@/lib/json";
  * Este módulo es la **única definición** de la regla con la que el motor filtra
  * partidas, en sus tres traducciones al mundo real:
  *
- * | Forma | Dónde se usa |
- * |---|---|
- * | `countsAsRanked()` (fila a fila, en memoria) | comprobaciones y decisiones de una partida suelta |
- * | `rankedMatchWhere()` (filtro de Prisma) | el `groupBy` del agregado de `PlayerScore` |
- * | `rankedMatchSql()` (predicado SQL) | el `UPDATE` de `Match.points` y la carga de partidas de `objectives.ts` |
+ * | Forma | El corte de inscripción | Dónde se usa |
+ * |---|---|---|
+ * | `countsAsRanked()` (fila a fila, en memoria) | lo pasa quien llama | decisiones y comprobaciones de una partida suelta (`admin/actions.ts`, `verify-sync`) |
+ * | `rankedMatchWhere()` (filtro de Prisma) | lo pasa quien llama | consultas de Prisma que ya saben de qué jugador hablan; **no** vale para una que abarque a todos |
+ * | `rankedMatchSql()` (predicado SQL) | sale de la fila de `Player` de la propia consulta | consultas que abarcan a todos los jugadores: el `UPDATE` de `Match.points`, el agregado de la clasificación y la carga de `objectives.ts` |
  *
  * Las tres dicen lo mismo por una razón estructural: `scoring.ts` importa de
  * `objectives.ts`, así que la definición **no** puede vivir en ninguno de los dos
  * sin que uno tenga que importar al otro. Aquí no se importa nada del motor, y los
  * tres caminos (y `verify:sync`) consumen estas funciones.
  *
- * ## Las cuatro condiciones
+ * ## Las cinco condiciones
  *
  * 1. La familia de ladder viene en el ruleset (`rm_solo` / `rm_team` por defecto).
  * 2. La partida está **resuelta** (`result` y `finishedAt` informados): una
  *    partida en curso nunca puntúa, ni en positivo ni en negativo.
- * 3. `startedAt` cae en la **ventana** del torneo (`[from, to)`).
- * 4. La partida **no está revertida** (`Match.revertedAt IS NULL`), que es la
+ * 3. `startedAt` no es anterior al **corte** (`scoringCutoff()`), que es
+ *    `max(window.from, Player.registeredAt)`.
+ * 4. `startedAt` es anterior a `window.to`, que es **exclusivo** (esta condición
+ *    solo existe si la ventana tiene fin).
+ * 5. La partida **no está revertida** (`Match.revertedAt IS NULL`), que es la
  *    marca que pone el panel de admin para que una partida deje de puntuar.
  *
- * La **ventana de fechas** no está replicada: sus límites y su semántica (`>= from`
- * y `< to`, sobre `Match.startedAt`) salen siempre de `windowBounds()`, que es lo
- * que usan `countsWithinWindow()`, `windowWhere()` y `windowMatchSql()`. Lo único
- * que se repite es la lista de condiciones, y las tres traducciones la tienen
- * escrita en su sitio: **si alguna vez se toca una, hay que tocar las otras dos**.
+ * La **ventana de fechas** no está replicada: sus límites y su semántica salen
+ * siempre de `windowBounds()` y `scoringCutoff()`, que es lo que usan
+ * `countsWithinWindow()`, `windowWhere()` y `windowMatchSql()`. Lo único que se
+ * repite es la lista de condiciones, y las tres traducciones la tienen escrita en
+ * su sitio: **si alguna vez se toca una, hay que tocar las otras dos**.
  * `verify:sync` lo contrasta contra datos de verdad.
  *
- * La cuarta condición tiene una excepción, y es deliberada: el historial de
- * partidas del panel tiene que **enseñar** las revertidas, y para eso usa
- * `classificatoryWhere()`, que es la misma regla sin la marca. Esa es la única
- * función de este módulo que devuelve las condiciones sin `revertedAt`.
+ * ## Por qué hay dos maneras de decir el corte
+ *
+ * Porque las tres traducciones no pueden compilarlo igual. Las de SQL llevan la
+ * fila de `Player` en la propia consulta, así que lo escriben como columna
+ * (`player."registeredAt"`, con el `is null` que hace que `null` cuente desde
+ * `window.from`). Las otras dos son consultas de las que **ya se sabe de qué
+ * jugador hablan**, así que se les pasa su `registeredAt`: un `where` de Prisma
+ * compara un campo con un valor y nunca dos columnas, y una referencia a campo
+ * (`prisma.player.fields.registeredAt`) solo vale entre campos del modelo que se
+ * está consultando —probado en esta versión: *"Expected a referenced scalar field
+ * of model Match, but found a field of model Player"*. Por eso el agregado de la
+ * clasificación, que sí abarca a todos los jugadores, es SQL crudo y no un
+ * `groupBy`.
+ *
+ * La quinta condición tiene dos excepciones, y las dos son deliberadas.
+ * `classificatoryWhere()` es la misma regla **sin** la marca de revertida, porque
+ * el historial del panel tiene que enseñar las revertidas para poder deshacerlas;
+ * y el historial del panel le pasa además `registeredAt = null`, porque enseña el
+ * recorrido entero de cada participante —con sus 0 puntos a la vista— y no solo lo
+ * que le suma. Lo que puntúa lo dicen `Match.points` y la clasificación.
  *
  * Y hay un caso al revés, en `rankedModesWhere()`: una consulta que no puede
  * aplicar la regla entera porque su partida **todavía no está resuelta**
@@ -121,21 +140,61 @@ export function windowBounds(window: ScoringWindow): ScoringWindowBounds {
 }
 
 /**
- * ¿Cae esta partida en la ventana?
+ * Desde cuándo puntúan las partidas de **este** jugador: `max(window.from, registeredAt)`.
  *
- * Es la comprobación en memoria de la ventana, y la usan `countsAsRanked()` y las
- * comprobaciones de `verify:sync`. La traducción a SQL es `windowWhere()`.
+ * La ventana del torneo es global, pero el corte de cada participante no: a
+ * alguien que la organización da de alta a mitad de torneo no le cuentan las
+ * partidas que jugó antes de entrar, por muchas que trajera importadas de su
+ * histórico. `registeredAt` es el **envío** del alta y no la aprobación, así que
+ * apuntarse a tiempo no cuesta partidas aunque la organización mire la solicitud
+ * más tarde.
+ *
+ * `registeredAt === null` devuelve `window.from`, que es lo que le toca a todo el
+ * que ya estaba inscrito cuando se añadió la columna: `null` no es "no lo
+ * sabemos", es "desde el principio del torneo".
+ *
+ * Es el mismo `max` que escribe el SQL crudo (`registrationCutoffSql()`) y el
+ * que llevan a cabo las dos traducciones que reciben el `registeredAt` de su
+ * jugador. Un `window.from` ilegible sale con `NaN` en las dos: `Math.max` lo
+ * propaga y la comparación da `false`, que es la dirección segura.
+ */
+export function scoringCutoff(window: ScoringWindow, registeredAt: Date | null): Date {
+  const { from } = windowBounds(window);
+
+  return registeredAt !== null && registeredAt.getTime() > from.getTime() ? registeredAt : from;
+}
+
+/**
+ * ¿Cae esta partida en el corte y antes del final de la ventana?
+ *
+ * Es la comprobación en memoria de la ventana **con el corte del jugador**, y la
+ * usan `countsAsRanked()`, el motor de alertas y las comprobaciones de
+ * `verify:sync`. La traducción a SQL es `windowWhere()` + `windowMatchSql()`.
+ *
+ * El `registeredAt` es un parámetro **obligatorio** y no opcional a propósito: la
+ * regla ahora depende del jugador, así que quien llama tiene que saber el suyo. Un
+ * `null` por defecto haría que "se me olvidó" fuera indistinguible de "este
+ * jugador no tiene fecha de inscripción", que es justo la divergencia que este
+ * módulo existe para impedir. Quien pregunta por una partida sin jugador delante
+ * —el sondeo del historial, la regla de la ladder— pasa `null` a propósito, porque
+ * ahí lo que se pregunta es qué partidas existen y no cuáles puntúan.
  *
  * Un límite que no se puede leer (una ventana construida a mano con un texto
  * inválido) hace que la comparación sea `false`: el fallo cae hacia "no cuenta",
  * que es la dirección segura, porque repartir puntos que no tocan sería peor que
  * no repartir ninguno.
  */
-export function countsWithinWindow(startedAt: Date, window: ScoringWindow): boolean {
-  const { from, to } = windowBounds(window);
+export function countsWithinWindow(
+  startedAt: Date,
+  window: ScoringWindow,
+  registeredAt: Date | null,
+): boolean {
+  const { to } = windowBounds(window);
   const at = startedAt.getTime();
 
-  return at >= from.getTime() && (to === null || at < to.getTime());
+  return (
+    at >= scoringCutoff(window, registeredAt).getTime() && (to === null || at < to.getTime())
+  );
 }
 
 /**
@@ -251,40 +310,71 @@ export function parseWindow(value: unknown, fallback: ScoringWindow): ParsedWind
 /* -------------------------------------------------------------------------- */
 
 /**
- * El filtro de ventana como `where` de Prisma.
+ * El filtro de ventana **con el corte del jugador** como `where` de Prisma.
  *
  * `gte`/`lt` sobre `Match.startedAt` (columna `timestamp`), y con eso el índice
  * `@@index([mode, startedAt])` cubre la consulta: `mode` es igualdad y `startedAt`
  * es rango, que es el orden que aprovecha un índice en Postgres.
+ *
+ * `registeredAt` es **obligatorio** y es el de un solo jugador. Es lo único que se
+ * puede hacer aquí: el `where` de Prisma compara un campo con un valor y nunca dos
+ * columnas, y una referencia a campo solo vale entre campos del modelo que se
+ * consulta. Para una consulta que abarque a todos los jugadores está
+ * `rankedMatchSql()`, que sí lleva la fila de `Player` delante.
  */
-export function windowWhere(window: ScoringWindow): Prisma.MatchWhereInput {
-  const { from, to } = windowBounds(window);
+export function windowWhere(
+  window: ScoringWindow,
+  registeredAt: Date | null,
+): Prisma.MatchWhereInput {
+  const { to } = windowBounds(window);
+  const desde = scoringCutoff(window, registeredAt);
 
   return {
-    startedAt: to === null ? { gte: from } : { gte: from, lt: to },
+    startedAt: to === null ? { gte: desde } : { gte: desde, lt: to },
   };
 }
 
 /**
- * El mismo filtro como predicado SQL, sobre la referencia de tabla que se le pase.
+ * El mismo filtro como predicado SQL, sobre las referencias de fila que se le pasen.
  *
- * `Match.startedAt` es un `timestamp` **sin zona** que Prisma guarda en UTC, así que
- * el límite se manda como texto UTC sin zona y con el cast explícito
- * (`'2026-09-15 00:00:00.000'::timestamp`). El cast es lo que quita la zona del medio:
- * pasar un literal a `timestamptz` y de ahí a `timestamp` **sí** depende de la zona de
- * la sesión, y está medido en esta base de datos (con la sesión en `America/Bogota`,
- * `'2026-09-15T00:00:00Z'::timestamptz::timestamp` devuelve `2026-09-14 19:00`). Como
- * `timestamp` no tiene zona, castear el texto directamente no deja sitio a ninguna
- * conversión y el corte es el mismo en cualquier sesión. Es lo mismo que hace
- * `objectives.ts` con `at time zone 'UTC'`, pero al revés.
+ * `Match.startedAt` y `Player.registeredAt` son `timestamp` **sin zona** que Prisma
+ * guarda en UTC, así que el límite del torneo se manda como texto UTC sin zona y
+ * con el cast explícito (`'2026-09-15 00:00:00.000'::timestamp`). El cast es lo que
+ * quita la zona del medio: pasar un literal a `timestamptz` y de ahí a `timestamp`
+ * **sí** depende de la zona de la sesión, y está medido en esta base de datos (con
+ * la sesión en `America/Bogota`, `'2026-09-15T00:00:00Z'::timestamptz::timestamp`
+ * devuelve `2026-09-14 19:00`). Como `timestamp` no tiene zona, castear el texto
+ * directamente no deja sitio a ninguna conversión y el corte es el mismo en
+ * cualquier sesión. `registeredAt` no lleva cast por lo mismo: ya es un
+ * `timestamp` sin zona. Es lo mismo que hace `objectives.ts` con
+ * `at time zone 'UTC'`, pero al revés.
  */
-function windowMatchSql(matchTable: Prisma.Sql, window: ScoringWindow): Prisma.Sql {
+function windowMatchSql(
+  matchTable: Prisma.Sql,
+  playerTable: Prisma.Sql,
+  window: ScoringWindow,
+): Prisma.Sql {
   const { from, to } = windowBounds(window);
   const lower = Prisma.sql`${utcTimestamp(from)}::timestamp`;
+  const dentro =
+    to === null
+      ? Prisma.sql`${matchTable}."startedAt" >= ${lower}`
+      : Prisma.sql`${matchTable}."startedAt" >= ${lower} and ${matchTable}."startedAt" < ${utcTimestamp(to)}::timestamp`;
 
-  return to === null
-    ? Prisma.sql`${matchTable}."startedAt" >= ${lower}`
-    : Prisma.sql`${matchTable}."startedAt" >= ${lower} and ${matchTable}."startedAt" < ${utcTimestamp(to)}::timestamp`;
+  return Prisma.sql`${dentro} and ${registrationCutoffSql(matchTable, playerTable)}`;
+}
+
+/**
+ * El corte de inscripción en SQL: `startedAt >= registeredAt`, o nada si es `null`.
+ *
+ * Es el `max(window.from, registeredAt)` de `scoringCutoff()`, y por eso **no**
+ * usa `GREATEST`: `GREATEST` ignora los `NULL` (devuelve el mayor de los que no lo
+ * son), así que funcionaría, pero se leería como un accidente en vez de como la
+ * decisión de que `null` significa "desde el principio de la ventana". Escrito con
+ * el `is null` explícito, el `null` es lo que dice el schema.
+ */
+function registrationCutoffSql(matchTable: Prisma.Sql, playerTable: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`(${playerTable}."registeredAt" is null or ${matchTable}."startedAt" >= ${playerTable}."registeredAt")`;
 }
 
 /** Reloj de pared UTC, `YYYY-MM-DD HH:MM:SS.mmm`, tal y como lo guarda Postgres. */
@@ -293,19 +383,19 @@ function utcTimestamp(value: Date): string {
 }
 
 /**
- * Solo la primera de las cuatro condiciones: la familia de ladder del ruleset.
+ * Solo la primera de las cinco condiciones: la familia de ladder del ruleset.
  *
  * Existe para las consultas que **no pueden** usar la regla entera, y hay una
  * sola: `/partidas` lista partidas en curso, y una partida en curso nunca cumple
- * las otras tres (por definición no tiene `result` ni `finishedAt`), así que
+ * las otras (por definición no tiene `result` ni `finishedAt`), así que
  * `rankedMatchWhere()` las dejaría todas fuera — justo lo contrario de lo que
  * quiere esa pantalla. Con esto se publica lo que el torneo considera partida,
  * sin que el filtro tenga que mentir sobre su estado.
  *
  * La lista sale siempre de `ruleset.modes`, igual que en las otras tres
- * formas: nadie filtra por `RANKED_MODES` a pelo. Y no es una quinta condición,
+ * formas: nadie filtra por `RANKED_MODES` a pelo. Y no es una sexta condición,
  * de modo que no la deben usar las consultas del motor: para puntuar, la regla
- * son las cuatro.
+ * son las cinco.
  */
 export function rankedModesWhere(modes: readonly string[]): Prisma.MatchWhereInput {
   return { mode: { in: [...modes] } };
@@ -326,18 +416,23 @@ export function rankedModesWhere(modes: readonly string[]): Prisma.MatchWhereInp
  * "olvido" no puede existir, porque lo único que se puede pedir con esta función
  * es la regla sin la marca.
  *
+ * `registeredAt` va como en `rankedMatchWhere()` y con el mismo sentido: es el
+ * `registeredAt` del jugador del que trata la consulta, y el historial del panel
+ * le pasa `null` a propósito (ver el docblock de cabecera).
+ *
  * No incluye el estado del jugador: eso lo pone quien consulta, porque la carga de
  * objetivos filtra por el `join` con `Player` y el agregado por un `player.status`.
  */
 export function classificatoryWhere(
   modes: readonly string[],
   window: ScoringWindow,
+  registeredAt: Date | null,
 ): Prisma.MatchWhereInput {
   return {
     ...rankedModesWhere(modes),
     result: { not: null },
     finishedAt: { not: null },
-    ...windowWhere(window),
+    ...windowWhere(window, registeredAt),
   };
 }
 
@@ -347,13 +442,19 @@ export function classificatoryWhere(
  * Es `classificatoryWhere()` más la marca de revertida: una partida con
  * `revertedAt` informado **no** es clasificatoria para el motor, por mucho que lo
  * fuera antes de que el admin la marcara.
+ *
+ * `registeredAt` es el del **único** jugador del que trata la consulta y es
+ * obligatorio: un `where` de Prisma no compara dos columnas, así que una consulta
+ * que abarque a todos los jugadores no puede aplicar el corte aquí y tiene que
+ * usar `rankedMatchSql()`, que lleva la fila de `Player` delante.
  */
 export function rankedMatchWhere(
   modes: readonly string[],
   window: ScoringWindow,
+  registeredAt: Date | null,
 ): Prisma.MatchWhereInput {
   return {
-    ...classificatoryWhere(modes, window),
+    ...classificatoryWhere(modes, window, registeredAt),
     revertedAt: null,
   };
 }
@@ -361,22 +462,26 @@ export function rankedMatchWhere(
 /**
  * El filtro completo de partida clasificatoria, como predicado SQL.
  *
- * `matchTable` es la referencia a la fila de `Match` en la consulta, como fragmento
- * `Prisma.Sql` y no como texto: así no hay ninguna cadena que se interpole sin
- * escapar.
+ * `matchTable` y `playerTable` son las referencias de fila en la consulta, como
+ * fragmentos `Prisma.Sql` y no como texto: así no hay ninguna cadena que se
+ * interpole sin escapar. `playerTable` es **obligatoria** porque el corte de
+ * inscripción sale de la fila del jugador: quien llama tiene que haber hecho el
+ * `join` con `Player`, y como la clave foránea no admite nulos, un `join`
+ * interior no pierde ni una partida.
  *
  * Contraparte exacta de `rankedMatchWhere()` (familia del ruleset, partida resuelta,
- * dentro de la ventana y **no revertida**); si se añade una condición, tiene que ir
- * en las dos (y en `countsAsRanked()`).
+ * desde el corte del jugador, antes del final de la ventana y **no revertida**); si
+ * se añade una condición, tiene que ir en las dos (y en `countsAsRanked()`).
  */
 export function rankedMatchSql(
   matchTable: Prisma.Sql,
+  playerTable: Prisma.Sql,
   modes: readonly string[],
   window: ScoringWindow,
 ): Prisma.Sql {
   const modeList = Prisma.join(modes.map((mode) => Prisma.sql`${mode}`));
 
-  return Prisma.sql`${matchTable}."mode" in (${modeList}) and ${matchTable}."result" is not null and ${matchTable}."finishedAt" is not null and ${matchTable}."revertedAt" is null and ${windowMatchSql(matchTable, window)}`;
+  return Prisma.sql`${matchTable}."mode" in (${modeList}) and ${matchTable}."result" is not null and ${matchTable}."finishedAt" is not null and ${matchTable}."revertedAt" is null and ${windowMatchSql(matchTable, playerTable, window)}`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -386,24 +491,34 @@ export function rankedMatchSql(
 /**
  * ¿Cuenta esta partida?
  *
- * Solo si está **resuelta**, es de una familia rankeada, **empezó dentro de la
- * ventana** del torneo y **no está revertida**. Las cuatro condiciones son
- * necesarias:
+ * Solo si está **resuelta**, es de una familia rankeada, **empezó después del
+ * corte** del jugador, **terminó antes de que acabara la ventana** y **no está
+ * revertida**. Las cinco condiciones son necesarias:
  *
  * - El modo tiene que ser de una familia rankeada: una custom, un `ew_*` o un
  *   `ffa_*` sirven para practicar, no puntúan.
  * - `finishedAt === null` significa "en curso": la API todavía no ha publicado el
  *   desenlace, y una partida sin resolver nunca puntúa ni en positivo ni en
  *   negativo. `result === null` dice lo mismo por el otro lado.
- * - La ventana va sobre `startedAt` y no sobre `finishedAt` porque lo que
- *   decide es **cuándo se jugó**, no cuándo se publicó el resultado: una partida
- *   empezada el último día del torneo puede terminar después y sigue contando.
+ * - El corte va sobre `startedAt` y no sobre `finishedAt` porque lo que decide es
+ *   **cuándo se jugó**, no cuándo se publicó el resultado: una partida empezada el
+ *   último día del torneo puede terminar después y sigue contando.
  * - `revertedAt !== null` significa que el panel de admin la ha marcado: la fila
  *   sigue ahí (por eso el worker la puede reimportar y por eso se puede
  *   deshacer), pero para el torneo no cuenta ni a favor ni en contra.
  *
- * Es la traducción en memoria de `rankedMatchWhere()` / `rankedMatchSql()`; los
- * tres leen las mismas condiciones y `verify:sync` los contrasta contra la base
+ * ## Por qué `registeredAt` es un parámetro y no parte de `match`
+ *
+ * Porque es una columna de `Player`, no de `Match`: la fila de la partida no sabe
+ * cuándo se inscribió su dueño. Va **fuera** del objeto y es **obligatorio**, para
+ * que no quede una forma de llamar a la regla sin decir de qué jugador se trata: un
+ * `null` explícito ("corta en `window.from`") es una decisión, y un valor por
+ * defecto sería indistinguible de haberse olvidado. Los dos consumidores reales lo
+ * tienen a mano —`setMatchReverted()` carga `player.registeredAt` en el mismo
+ * `findUnique` que trae el nombre, y `verify-sync` lo lee del jugador de muestra—.
+ *
+ * Es la traducción en memoria de `rankedMatchWhere()` / `rankedMatchSql()`; las
+ * tres leen las mismas condiciones y `verify:sync` las contrasta contra la base
  * de datos.
  */
 export function countsAsRanked(
@@ -416,6 +531,8 @@ export function countsAsRanked(
     revertedAt: Date | null;
   },
   window: ScoringWindow,
+  /** `Player.registeredAt` del dueño de la partida, o `null` si no lo tiene. */
+  registeredAt: Date | null,
 ): boolean {
   if (
     match.finishedAt === null ||
@@ -426,5 +543,5 @@ export function countsAsRanked(
     return false;
   }
 
-  return countsWithinWindow(match.startedAt, window);
+  return countsWithinWindow(match.startedAt, window, registeredAt);
 }

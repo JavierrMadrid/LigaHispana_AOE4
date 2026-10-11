@@ -5,8 +5,8 @@ import "server-only";
  * registrarlos, y cómo decidir si una lectura **degrada** la respuesta o la
  * tumba.
  *
- * Por qué existe. Las tres páginas públicas que leen Postgres (`/`,
- * `/partidas`, `/objetivos`) son la web del torneo, y un corte puntual de la base
+ * Por qué existe. Las páginas públicas que leen Postgres (`/`, `/partidas`,
+ * `/objetivos`, `/puntuacion`) son la web del torneo, y un corte puntual de la base
  * —límite de conexiones de Supabase, un reinicio, un pico de red— no puede
  * convertirse en un 500 con una traza en el log: lo que tiene que pasar es que la
  * página siga contestando y diga que no ha podido leer. El módulo da la forma de
@@ -116,6 +116,46 @@ export function logDatabaseFailure(scope: string, error: unknown): DatabaseFailu
   console.error(`[db] ${scope}: ${failure.type}${code}: ${failure.message}`);
 
   return failure;
+}
+
+/**
+ * ¿El fallo es una violación de unicidad de **esta** columna?
+ *
+ * `Player` tiene tres columnas únicas (`profileId`, `discordUserId`,
+ * `discordUsername`) y las tres saltan con el mismo código, `P2002`. Sin
+ * distinguir **cuál** saltó, alguien con el perfil de AoE4World nuevo y el
+ * `@usuario` de otra persona recibiría "ese perfil ya está registrado", que no es
+ * cierto y no lleva a ninguna corrección.
+ *
+ * `meta.target` trae el nombre de la columna —como cadena o como lista— y **su
+ * forma depende de la versión del cliente**, así que se aceptan las dos, y además
+ * se compara sin importar si viene el nombre de la restricción de Postgres
+ * (`Player_discordUsername_key`) en vez del de la columna. Si no llega nada
+ * utilizable sale `false`, y quien llama trata el error como su caso por defecto,
+ * que es lo que hay que hacer cuando no se puede saber.
+ *
+ * Se leen `code` y `meta` **sin mirar la clase** del error a propósito: así
+ * funciona igual con el error real de Prisma y con cualquier otro que traiga la
+ * misma forma, y quien llama no necesita importar nada de Prisma para usarlo.
+ */
+export function uniqueViolationOn(error: unknown, column: string): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const { code, meta } = error as { code?: unknown; meta?: unknown };
+
+  if (code !== "P2002" || typeof meta !== "object" || meta === null) {
+    return false;
+  }
+
+  const target = (meta as { target?: unknown }).target;
+
+  if (typeof target === "string") {
+    return target === column || target.includes(column);
+  }
+
+  return Array.isArray(target) && target.some((item) => item === column);
 }
 
 /**

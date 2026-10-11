@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame, readOwnCivRandomized, r
 import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/parse";
 import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 
-import { CIVILIZATIONS, isKnownCivilization } from "@/lib/civs";
+import { CIVILIZATIONS } from "@/lib/civs";
 import { unwrapRead } from "@/lib/db-errors";
 import { describeMode, describeTeamSize, teamSizesFromRawJson } from "@/lib/format";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
@@ -57,11 +57,11 @@ const SAMPLE_RIVAL_ID = 9_000_004;
 const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
 
 /**
- * Objetivos que fija `docs/PUNTUACION.md`. Vive como constante y no como
+ * Objetivos que fija `docs/OBJETIVOS.md`. Vive como constante y no como
  * `OBJECTIVE_COUNT` para que el número no pueda cambiar en los dos sitios a la vez
  * sin que se note.
  */
-const EXPECTED_OBJECTIVE_COUNT = 38;
+const EXPECTED_OBJECTIVE_COUNT = 82;
 /**
  * Tercer jugador, solo para la ventana: sus partidas se colocan justo en los bordes
  * de `[from, to)` y son las que deciden qué cuenta.
@@ -385,30 +385,102 @@ async function checkNormalization(): Promise<void> {
       revertedAt: null,
     };
     const ventana = DEFAULT_RULESET.window;
+    // `null` es el `Player.registeredAt` de toda la fila que ya estaba inscrita, así
+    // que estas comprobaciones cubren el caso mayoritario.
+    const cuenta = (m: Parameters<typeof countsAsRanked>[0], registeredAt: Date | null = null) =>
+      countsAsRanked(m, ventana, registeredAt);
 
-    assert.equal(countsAsRanked(base, ventana), true);
+    assert.equal(cuenta(base), true);
     assert.equal(
-      countsAsRanked({ ...base, mode: "rm_team" }, ventana),
+      cuenta({ ...base, mode: "rm_team" }),
       true,
       "los equipos también son ranked",
     );
-    assert.equal(countsAsRanked({ ...base, finishedAt: null }, ventana), false, "en curso no puntúa");
-    assert.equal(countsAsRanked({ ...base, result: null }, ventana), false, "sin resultado no puntúa");
+    assert.equal(cuenta({ ...base, finishedAt: null }), false, "en curso no puntúa");
+    assert.equal(cuenta({ ...base, result: null }), false, "sin resultado no puntúa");
     assert.equal(
-      countsAsRanked({ ...base, mode: "qm_1v1" }, ventana),
+      cuenta({ ...base, mode: "qm_1v1" }),
       false,
       "una custom no es clasificatoria",
     );
-    assert.equal(countsAsRanked({ ...base, mode: null }, ventana), false, "sin ladder resuelta no puntúa");
+    assert.equal(cuenta({ ...base, mode: null }), false, "sin ladder resuelta no puntúa");
     assert.equal(
-      countsAsRanked({ ...base, mode: "rm_solo", result: "LOSS", finishedAt: NOW }, ventana),
+      cuenta({ ...base, mode: "rm_solo", result: "LOSS", finishedAt: NOW }),
       true,
       "una derrota cuenta como partida, aunque no dé puntos",
     );
     assert.equal(
-      countsAsRanked({ ...base, revertedAt: NOW }, ventana),
+      cuenta({ ...base, revertedAt: NOW }),
       false,
       "una partida revertida no cuenta, ni a favor ni en contra",
+    );
+  });
+
+  await check("el corte de inscripcion sube con `registeredAt` y no toca el `to`", () => {
+    const ventana = DEFAULT_RULESET.window;
+    const alta = new Date("2026-09-25T12:00:00.000Z");
+    const partida = (startedAt: string) => ({
+      mode: "rm_solo",
+      result: "WIN" as const,
+      startedAt: new Date(startedAt),
+      finishedAt: NOW,
+      revertedAt: null,
+    });
+
+    // Un alta posterior a la ventana no acorta nada: es el comportamiento que ya
+    // había y el que le toca a todo el que se|Apuntó antes de empezar.
+    assert.equal(
+      countsAsRanked(partida("2026-09-16T10:00:00.000Z"), ventana, new Date("2026-09-01T00:00:00Z")),
+      true,
+      "inscrito antes de la ventana: cuenta desde `window.from`",
+    );
+    assert.equal(
+      countsAsRanked(partida("2026-09-24T23:59:59.999Z"), ventana, alta),
+      false,
+      "un alta posterior no cuenta las partidas de antes de la inscripcion",
+    );
+    assert.equal(
+      countsAsRanked(partida("2026-09-25T12:00:00.000Z"), ventana, alta),
+      true,
+      "el corte es inclusivo",
+    );
+    assert.equal(
+      countsAsRanked(partida("2026-09-26T10:00:00.000Z"), ventana, alta),
+      true,
+      "despues del alta si cuenta",
+    );
+
+    // `null` y "inscrito antes de la ventana" tienen que ser indistinguibles.
+    for (const instante of [
+      "2026-09-14T23:59:59.999Z",
+      "2026-09-15T00:00:00.000Z",
+      "2026-09-25T12:00:00.000Z",
+      "2026-10-14T23:59:59.999Z",
+      "2026-10-15T00:00:00.000Z",
+    ]) {
+      assert.equal(
+        countsAsRanked(partida(instante), ventana, new Date("2026-09-01T00:00:00Z")),
+        countsAsRanked(partida(instante), ventana, null),
+        `registeredAt null debería ser lo mismo que inscritarse antes, en ${instante}`,
+      );
+    }
+
+    // El `to` exclusivo no se mueve por el corte, y el corte no destapa el resto de
+    // las condiciones.
+    assert.equal(
+      countsAsRanked(partida("2026-10-15T00:00:00.000Z"), ventana, null),
+      false,
+      "`to` sigue siendo exclusivo",
+    );
+    assert.equal(
+      countsAsRanked({ ...partida("2026-09-26T10:00:00.000Z"), revertedAt: NOW }, ventana, alta),
+      false,
+      "el corte no destapa la marca de revertida",
+    );
+    assert.equal(
+      countsAsRanked({ ...partida("2026-09-26T10:00:00.000Z"), finishedAt: null }, ventana, alta),
+      false,
+      "el corte no destapa una partida sin resolver",
     );
   });
 
@@ -416,8 +488,8 @@ async function checkNormalization(): Promise<void> {
     // Réplica de la guarda de `setMatchReverted()`. El criterio es el mismo en los
     // dos sentidos, y tiene que seguir siéndolo: invertido al restaurar, ninguna
     // partida clasificatoria se podía devolver. La guarda se pregunta siempre con
-    // `revertedAt: null`, que es lo que la deja decidir por las otras tres
-    // condiciones.
+    // `revertedAt: null`, que es lo que la deja decidir por las otras cuatro
+    // condiciones, y con el `registeredAt` del dueño, que es la quinta.
     const clasificatoria = {
       mode: "rm_team",
       result: "WIN" as const,
@@ -428,7 +500,8 @@ async function checkNormalization(): Promise<void> {
     const ventana = DEFAULT_RULESET.window;
     // El parámetro se toma del de `countsAsRanked` y no del literal de `clasificatoria`:
     // si se declarara con el tipo de este, `result: null` no entraría.
-    const cuenta = (m: Parameters<typeof countsAsRanked>[0]) => countsAsRanked(m, ventana);
+    const cuenta = (m: Parameters<typeof countsAsRanked>[0], registeredAt: Date | null = null) =>
+      countsAsRanked(m, ventana, registeredAt);
 
     assert.equal(cuenta(clasificatoria), true, "una partida clasificatoria cuenta");
     assert.equal(
@@ -442,9 +515,14 @@ async function checkNormalization(): Promise<void> {
       "sin resolver no cuenta en ningún sentido",
     );
     assert.equal(
-      countsAsRanked({ ...clasificatoria, revertedAt: NOW }, ventana),
+      countsAsRanked({ ...clasificatoria, revertedAt: NOW }, ventana, null),
       false,
       "marcada no cuenta, que es justo lo que deshace el restore",
+    );
+    assert.equal(
+      cuenta(clasificatoria, new Date("2026-10-01T00:00:00.000Z")),
+      false,
+      "anterior al alta no cuenta, así que no hay puntos que revertir ni que devolver",
     );
   });
 
@@ -475,7 +553,10 @@ async function checkNormalization(): Promise<void> {
       ladderError: null,
       scoringError: null,
       alertsError: null,
+      historyError: null,
+      discordError: null,
       streamsError: null,
+      mapPoolError: null,
       failures: [],
     };
 
@@ -538,6 +619,20 @@ async function checkNormalization(): Promise<void> {
       buena.finishedAt,
       "no comprobar los directos tampoco lo mueve",
     );
+    // Y `discordError` también, por el mismo motivo y con la misma permanence: sin
+    // `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` la pertenencia al servidor no se
+    // comprueba nunca, y eso no ha parado ni una partida.
+    assert.equal(
+      salida(
+        {
+          ...buena,
+          discordError: "sin DISCORD_BOT_TOKEN no se comprueba la pertenencia a Discord",
+        },
+        { ...buena, lastSuccessAt: buena.finishedAt },
+      ),
+      buena.finishedAt,
+      "no comprobar la pertenencia a Discord tampoco lo mueve",
+    );
   });
 
   await check("una pasada vieja se detecta como vieja y una ausente no", () => {
@@ -563,7 +658,10 @@ async function checkNormalization(): Promise<void> {
       ladderError: null,
       scoringError: null,
       alertsError: null,
+      historyError: null,
+      discordError: null,
       streamsError: null,
+      mapPoolError: null,
       failures: [],
       lastSuccessAt: finishedAt,
     });
@@ -595,24 +693,27 @@ async function checkNormalization(): Promise<void> {
       new Date(Date.parse(instante) - 1).toISOString();
 
     assert.ok(to !== null, "la ventana de pruebas tiene fin, para poder cortar los dos bordes");
+    // El `null` es el `Player.registeredAt` ausente, que es el caso de todo el que ya
+    // estaba en la base. El corte de inscripción se comprueba al final de esta misma
+    // comprobación.
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(from)), ventana),
+      countsAsRanked(resuelta(milisegundoAntes(from)), ventana, null),
       false,
       "un milisegundo antes de `from` no cuenta",
     );
-    assert.equal(countsAsRanked(resuelta(from), ventana), true, "`from` es inclusivo");
+    assert.equal(countsAsRanked(resuelta(from), ventana, null), true, "`from` es inclusivo");
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(to)), ventana),
+      countsAsRanked(resuelta(milisegundoAntes(to)), ventana, null),
       true,
       "un milisegundo antes de `to` todavía cuenta",
     );
     assert.equal(
-      countsAsRanked(resuelta(to), ventana),
+      countsAsRanked(resuelta(to), ventana, null),
       false,
       "`to` es exclusivo: una partida empezada exactamente ahí ya es de la siguiente",
     );
     assert.equal(
-      countsAsRanked(resuelta(new Date(Date.parse(to) + 1).toISOString()), ventana),
+      countsAsRanked(resuelta(new Date(Date.parse(to) + 1).toISOString()), ventana, null),
       false,
       "después de `to` no cuenta",
     );
@@ -624,7 +725,7 @@ async function checkNormalization(): Promise<void> {
       finishedAt: new Date(Date.parse("2030-01-01T00:00:00.000Z")),
     };
     assert.equal(
-      countsAsRanked(empezadaDentroTerminadaDespues, ventana),
+      countsAsRanked(empezadaDentroTerminadaDespues, ventana, null),
       true,
       "empezada dentro de la ventana cuenta aunque termine fuera",
     );
@@ -633,14 +734,33 @@ async function checkNormalization(): Promise<void> {
     // el fin del torneo más tarde sin tocar código.
     const abierta = { from, to: null };
     assert.equal(
-      countsAsRanked(resuelta("2031-06-01T12:00:00.000Z"), abierta),
+      countsAsRanked(resuelta("2031-06-01T12:00:00.000Z"), abierta, null),
       true,
       "con `to: null` no hay corte por la derecha",
     );
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(from)), abierta),
+      countsAsRanked(resuelta(milisegundoAntes(from)), abierta, null),
       false,
       "`from` sigue cortando por la izquierda con la ventana abierta",
+    );
+
+    // Y el corte de inscripción, que es el mismo `max` por jugador: con el alta a
+    // mitad de ventana, lo anterior a ella deja de contar aunque siga dentro.
+    const alta = new Date((Date.parse(from) + Date.parse(to)) / 2);
+    assert.equal(
+      countsAsRanked(resuelta(new Date(alta.getTime() - 1).toISOString()), ventana, alta),
+      false,
+      "con `registeredAt` a mitad de ventana, lo anterior al alta no cuenta",
+    );
+    assert.equal(
+      countsAsRanked(resuelta(alta.toISOString()), ventana, alta),
+      true,
+      "el corte de inscripción es inclusivo, como `from`",
+    );
+    assert.equal(
+      countsAsRanked(resuelta(to), ventana, alta),
+      false,
+      "el corte no mueve el `to` exclusivo",
     );
   });
 
@@ -898,15 +1018,17 @@ async function checkObjectiveCatalogue(): Promise<void> {
   console.log("Catálogo de objetivos");
 
   const {
-    MASTERIZAR_TODOS_ID,
+    JUGON_ID,
     OBJECTIVE_COUNT,
     OBJECTIVE_DEFINITIONS,
     OBJECTIVE_GROUP_LABELS,
     OBJECTIVE_POINTS,
+    POLIFACETICO_ID,
     computeObjectives,
   } = await import("@/lib/objectives");
+  const { DEFAULT_MAP_POOL } = await import("@/lib/map-pool");
 
-  await check(`el catálogo tiene los ${EXPECTED_OBJECTIVE_COUNT} objetivos de docs/PUNTUACION.md`, () => {
+  await check(`el catálogo tiene los ${EXPECTED_OBJECTIVE_COUNT} objetivos de docs/OBJETIVOS.md`, () => {
     assert.equal(OBJECTIVE_COUNT, EXPECTED_OBJECTIVE_COUNT);
     assert.equal(OBJECTIVE_DEFINITIONS.length, EXPECTED_OBJECTIVE_COUNT);
     assert.equal(
@@ -916,28 +1038,23 @@ async function checkObjectiveCatalogue(): Promise<void> {
     );
     assert.deepEqual(
       [...new Set(OBJECTIVE_DEFINITIONS.map((definition) => definition.group))],
-      ["actividad", "racha", "division", "formato", "civilizacion"],
+      ["actividad", "racha", "hazanas", "formato", "civilizacion"],
       "los grupos salen en el orden documentado, sin intercalarse",
     );
   });
 
-  await check("cada objetivo trae rótulo y descripción de la regla", () => {
+  await check("cada objetivo trae rótulo, descripción, tipo y grupo con rótulo", () => {
     for (const definition of OBJECTIVE_DEFINITIONS) {
       assert.ok(definition.label.trim().length > 0, `${definition.id}: falta el rótulo`);
       assert.ok(
         definition.description.trim().length > 0,
         `${definition.id}: falta la descripción de la regla`,
       );
+      assert.ok(definition.points > 0, `${definition.id}: los puntos por defecto son positivos`);
       assert.ok(
-        definition.description.length <= 90,
-        `${definition.id}: la descripción es una frase, no un párrafo`,
+        definition.kind === "competition" || definition.kind === "achievement",
+        `${definition.id}: el tipo no es válido`,
       );
-      assert.equal(
-        definition.description.endsWith("."),
-        true,
-        `${definition.id}: la descripción es una frase completa`,
-      );
-      assert.ok(definition.points > 0, `${definition.id}: los puntos por defecto son un entero`);
       assert.equal(
         definition.group in OBJECTIVE_GROUP_LABELS,
         true,
@@ -946,50 +1063,47 @@ async function checkObjectiveCatalogue(): Promise<void> {
     }
   });
 
-  await check("ninguna descripción escribe un número del ruleset", () => {
-    // El único número configurable que aparece en una regla es el mínimo
-    // (`minimums.masterizar`), y por eso las descripciones no lo escriben: si lo
-    // hicieran, dejarían de ser ciertas el día que se cambiara en `Setting`.
-    // Los dígitos de "1v1" o de un nombre de civ no son números de configuración.
-    for (const definition of OBJECTIVE_DEFINITIONS) {
-      for (const minimum of Object.values(DEFAULT_RULESET.minimums)) {
-        assert.equal(
-          new RegExp(`\\b${minimum}\\b`).test(definition.description),
-          false,
-          `${definition.id}: la descripción escribe el mínimo ${minimum}, que es configurable`,
-        );
-      }
-    }
-  });
+  await check("las familias de civilización: cabeza, hijos y umbral", () => {
+    const polifacetico = OBJECTIVE_DEFINITIONS.find(
+      (definition) => definition.id === POLIFACETICO_ID,
+    );
+    const jugon = OBJECTIVE_DEFINITIONS.find((definition) => definition.id === JUGON_ID);
 
-  await check("masterizarlos-a-todos: carrera al final del grupo de civilizaciones", () => {
-    const ultimo = OBJECTIVE_DEFINITIONS.at(-1);
-    const masterizarlos = OBJECTIVE_DEFINITIONS.find(
-      (definition) => definition.id === MASTERIZAR_TODOS_ID,
+    assert.ok(polifacetico !== undefined, "existe la cabeza polifacetico");
+    assert.ok(jugon !== undefined, "existe la cabeza jugon");
+    assert.equal(polifacetico.kind, "achievement");
+    assert.equal(jugon.kind, "achievement");
+    assert.equal(polifacetico.parent, null);
+    assert.equal(jugon.parent, null);
+
+    const lideres = OBJECTIVE_DEFINITIONS.filter(
+      (definition) => definition.parent === POLIFACETICO_ID,
+    );
+    const acolitos = OBJECTIVE_DEFINITIONS.filter(
+      (definition) => definition.parent === JUGON_ID,
     );
 
-    assert.ok(masterizarlos !== undefined, "el objetivo existe en el catálogo");
-    assert.equal(ultimo?.id, MASTERIZAR_TODOS_ID, "se presenta al final del grupo");
-    assert.equal(masterizarlos.group, "civilizacion");
-    assert.equal(masterizarlos.label, "Masterízalos a todos", "el rótulo es copy del cliente");
+    assert.equal(lideres.length, CIVILIZATIONS.length, "un lider-* por civilización");
+    assert.equal(acolitos.length, CIVILIZATIONS.length, "un acolito-* por civilización");
     assert.equal(
-      masterizarlos.description,
-      "El primero en ganar una partida con cada civilización.",
+      lideres.every((definition) => definition.kind === "achievement"),
+      true,
     );
-    assert.equal(masterizarlos.metric, "victorias", "ordena por civilizaciones de forma entera");
+    assert.equal(
+      acolitos.every((definition) => definition.kind === "achievement"),
+      true,
+    );
+
+    const indexOf = (id: string): number =>
+      OBJECTIVE_DEFINITIONS.findIndex((definition) => definition.id === id);
+
     assert.ok(
-      masterizarlos.points > Math.max(...CIVILIZATIONS.map(() => 70)),
-      "los 100 puntos superan a los 70 de un masterizar-*",
+      indexOf(POLIFACETICO_ID) < indexOf(lideres[0].id),
+      "la cabeza se presenta antes que sus hijos",
     );
-    assert.equal(
-      DEFAULT_RULESET.objectives[MASTERIZAR_TODOS_ID],
-      masterizarlos.points,
-      "los puntos por defecto están en el ruleset",
-    );
-    assert.equal(
-      MASTERIZAR_TODOS_ID.startsWith("masterizar-"),
-      false,
-      "el id no empieza por `masterizar-`, que es el prefijo de las civilizaciones",
+    assert.ok(
+      indexOf(JUGON_ID) < indexOf(acolitos[0].id),
+      "la cabeza se presenta antes que sus hijos",
     );
   });
 
@@ -1011,35 +1125,42 @@ async function checkObjectiveCatalogue(): Promise<void> {
     }
   });
 
-  await check("los puntos en juego son los de la tabla de §4", () => {
+  await check("los puntos del catálogo por grupo son los de `docs/OBJETIVOS.md`", () => {
+    // Son los puntos que reparte **una** copia de cada objetivo. En los logros el
+    // reparto se multiplica por el número de beneficiarios, así que la suma no es
+    // un tope del torneo, solo la tabla del catálogo.
     const porGrupo = new Map<string, number>();
 
     for (const definition of OBJECTIVE_DEFINITIONS) {
       porGrupo.set(definition.group, (porGrupo.get(definition.group) ?? 0) + definition.points);
     }
 
-    assert.equal(porGrupo.get("actividad"), 130, "Actividad");
-    assert.equal(porGrupo.get("racha"), 110, "Racha");
-    assert.equal(porGrupo.get("division"), 290, "Divisiones");
-    assert.equal(porGrupo.get("formato"), 180, "Formatos");
-    assert.equal(porGrupo.get("civilizacion"), 1710, "Civilizaciones");
-    assert.equal(
-      [...porGrupo.values()].reduce((suma, puntos) => suma + puntos, 0),
-      2420,
-      "el total en juego",
-    );
+    assert.equal(porGrupo.get("actividad"), 64, "Actividad");
+    assert.equal(porGrupo.get("racha"), 232, "Racha");
+    assert.equal(porGrupo.get("hazanas"), 129, "Hazañas");
+    assert.equal(porGrupo.get("formato"), 720, "Formatos");
+    assert.equal(porGrupo.get("civilizacion"), 1601, "Civilizaciones");
   });
 
-  await check("sin partidas no hay poseedores, y el ranking sale vacío", () => {
-    const { options, pointsByPlayer, holders } = computeObjectives([], DEFAULT_RULESET);
+  await check("sin partidas no hay cobradores, y el ranking sale vacío", () => {
+    const { options, pointsByPlayer, holders } = computeObjectives(
+      [],
+      DEFAULT_RULESET,
+      DEFAULT_MAP_POOL,
+    );
 
     assert.equal(options.length, OBJECTIVE_COUNT, "los objetivos existen aunque no haya datos");
-    assert.equal(holders, 0, "nadie posee nada sin partidas");
-    assert.equal(pointsByPlayer.size, 0, "y nadie cobra");
+    assert.equal(holders, 0, "nadie cobra nada sin partidas");
+    assert.equal(pointsByPlayer.size, 0, "y nadie suma puntos");
     assert.equal(
-      options.every((option) => option.holder === null && option.ranking.length === 0),
+      options.every(
+        (option) =>
+          option.holder === null &&
+          option.ranking.length === 0 &&
+          option.beneficiaries.length === 0,
+      ),
       true,
-      "cada objetivo sale sin poseedor y con el ranking vacío, no relleno con ceros",
+      "cada objetivo sale sin cobrador y con el ranking vacío, no relleno con ceros",
     );
   });
 }
@@ -1230,6 +1351,9 @@ async function runWindowChecks(
               revertedAt: null,
             },
             ventana,
+            // `registeredAt` ausente: es lo que tiene el jugador de esta
+            // comprobación, y el caso mayoritario de toda la base.
+            null,
           ),
           caso.dentro,
           `${caso.etiqueta} (${new Date(caso.at).toISOString()})`,
@@ -1368,6 +1492,92 @@ async function runWindowChecks(
       const agregados = await loadObjectivePlayers(db, (await readRuleset()));
       const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
       assert.equal(suyo?.matches, esperada, "los objetivos también las cuentan");
+    });
+
+    /**
+     * El corte de inscripción, contra datos de verdad.
+     *
+     * Las tres traducciones de la regla se contrastan aquí a la vez, y no solo la
+     * regla de partida: se le pone al jugador de la ventana un `registeredAt` a
+     * mitad de torneo y se mira que el `UPDATE` de `Match.points` pone a 0 lo que
+     * es anterior al alta, que el agregado de `PlayerScore` deja de contar esas
+     * partidas y que los objetivos cuentan exactamente las mismas. Si alguna de las
+     * tres se quedara sin el corte, es justo aquí donde se vería.
+     *
+     * El corte se pone **después** de comprobar que sin él todo cuadra, y se vuelve
+     * a dejar en `null` al final para que la comprobación de `to: null` siga viendo
+     * el caso mayoritario.
+     */
+    await check("un alta posterior no cuenta las partidas anteriores al alta", async () => {
+      const { loadObjectivePlayers } = await import("@/lib/objectives");
+      // Un milisegundo después de `from`: la partida de "justo en `from`" queda
+      // justo fuera y la de "justo antes de `to`" justo dentro, así que el corte se
+      // contrasta contra los dos bordes de la ventana a la vez.
+      const alta = new Date(from + 1);
+
+      await db.player.update({ where: { id: jugador.id }, data: { registeredAt: alta } });
+      await recomputeScores();
+
+      const puntos = await db.match.findMany({
+        where: { playerId: jugador.id },
+        orderBy: { startedAt: "asc" },
+        select: { gameId: true, startedAt: true, points: true },
+      });
+
+      const despuesDelAlta = casos.filter((caso) => caso.at >= from + 1 && caso.at < to).length;
+      assert.equal(
+        puntos.filter((fila) => fila.points > 0).length,
+        despuesDelAlta,
+        "solo puntúan las partidas de después del alta",
+      );
+      assert.equal(
+        puntos.find((fila) => fila.gameId === "9000102")?.points,
+        0,
+        "la partida de justo en `from`, un milisegundo antes del alta, deja de puntuar",
+      );
+
+      const score = await db.playerScore.findUnique({
+        where: {
+          playerId_ruleSetVersion: { playerId: jugador.id, ruleSetVersion: RULESET_VERSION },
+        },
+      });
+      assert.equal(
+        score?.matches,
+        despuesDelAlta,
+        "y la clasificación cuenta solo las de después del alta",
+      );
+
+      // Los objetivos van con el mismo corte: sin esto, un alta tardía con muchas
+      // partidas se llevaría un objetivo por partidas que no puntúan.
+      const agregados = await loadObjectivePlayers(db, (await readRuleset()));
+      const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
+      assert.equal(
+        suyo?.matches,
+        despuesDelAlta,
+        "los objetivos tampoco cuentan las partidas anteriores al alta",
+      );
+
+      // Y `countsAsRanked()`, que es lo que decide el botón de revertir del panel,
+      // tiene que dar la misma respuesta fila a fila.
+      const ventanaActiva = (await readRuleset()).window;
+      const enJs = puntos.filter(
+        (fila) =>
+          countsAsRanked(
+            {
+              mode: "rm_solo",
+              result: "WIN",
+              startedAt: fila.startedAt,
+              finishedAt: new Date(fila.startedAt.getTime() + 1_800_000),
+              revertedAt: null,
+            },
+            ventanaActiva,
+            alta,
+          ),
+      );
+      assert.equal(enJs.length, despuesDelAlta, "las tres traducciones cuentan lo mismo");
+
+      // Se deja como estaba: el resto de la comprobación usa el `null`.
+      await db.player.update({ where: { id: jugador.id }, data: { registeredAt: null } });
     });
   } finally {
     // Se devuelve el ruleset como estaba y se recalcula, para que la
@@ -1689,6 +1899,64 @@ async function runDatabaseChecks(): Promise<void> {
       );
     });
 
+    await check(
+      "una partida sin resolver más nueva que el cursor pero fuera de la ventana se abandona",
+      async () => {
+        // El caso que dejaba la fila colgada: la partida abandonada es la más nueva
+        // del jugador, así que `startedAt >= since` (el cursor es `maxStartedAt − 60
+        // min`) y el criterio del cursor no la alcanzaba. Ya fuera de la ventana de
+        // directo, el worker tiene que ir a por su desenlace igualmente.
+        const startedAt = new Date(now.getTime() - 70 * 60_000);
+
+        await writePlayerSyncState(SAMPLE_PROFILE_ID, {
+          since: new Date(now.getTime() - 180 * 60_000).toISOString(),
+          maxStartedAt: new Date(now.getTime() - 150 * 60_000).toISOString(),
+          lastSyncedAt: now.toISOString(),
+          historyTruncated: false,
+          abandonedCount: 0,
+          abandonedGameIds: [],
+          lastAbandonedAt: null,
+        });
+
+        await db.match.create({
+          data: {
+            gameId: "9000013",
+            playerId: player.id,
+            leaderboard: "rm_solo",
+            result: null,
+            startedAt,
+            finishedAt: null,
+            rawJson: fixture.live,
+          },
+        });
+
+        // La API la sigue dando sin desenlace: pasada la ventana, se abandona.
+        const details = new Map<string, Aoe4WorldGame>([
+          [
+            "9000013",
+            parsedGame({
+              ...fixture.live,
+              game_id: 9_000_013,
+              started_at: startedAt.toISOString(),
+            }),
+          ],
+        ]);
+
+        const summary = await syncApprovedPlayers({
+          profileIds: [SAMPLE_PROFILE_ID],
+          client: createFakeClient(games, details),
+        });
+
+        const playerResult = summary.players[0];
+        assert.equal(playerResult.matchesAbandoned, 1, "la partida fuera de la ventana se abandona");
+        assert.equal(
+          await db.match.count({ where: { playerId: player.id, gameId: "9000013" } }),
+          0,
+          "la fila abandonada no puede quedar con finishedAt = null",
+        );
+      },
+    );
+
     await check("la clave de Setting es la documentada", async () => {
       const setting = await db.setting.findUnique({
         where: { key: playerSyncKey(SAMPLE_PROFILE_ID) },
@@ -1814,11 +2082,16 @@ async function runDatabaseChecks(): Promise<void> {
       );
 
       // `countsAsRanked()` (que decide fila a fila, en memoria) tiene que contar
-      // lo mismo que el `groupBy` y que el `UPDATE` de `Match.points`, que son sus
+      // lo mismo que el agregado y que el `UPDATE` de `Match.points`, que son sus
       // dos traducciones a SQL. Es la comprobación que avisa si las tres se
       // desincronizan: se recorren todas las partidas del jugador de muestra y se
-      // comparan las dos cuentas.
+      // comparan las dos cuentas. El `registeredAt` del jugador va en la llamada
+      // porque es la condición que depende de él.
       const ventana = (await readRuleset()).window;
+      const { registeredAt } = await db.player.findUniqueOrThrow({
+        where: { id: player.id },
+        select: { registeredAt: true },
+      });
       const filas = await db.match.findMany({
         where: { playerId: player.id },
         select: {
@@ -1830,7 +2103,7 @@ async function runDatabaseChecks(): Promise<void> {
           points: true,
         },
       });
-      const enJs = filas.filter((fila) => countsAsRanked(fila, ventana));
+      const enJs = filas.filter((fila) => countsAsRanked(fila, ventana, registeredAt));
 
       assert.equal(
         enJs.length,
@@ -1848,16 +2121,21 @@ async function runDatabaseChecks(): Promise<void> {
         "los puntos de `Match.points` son los que suman en la clasificación",
       );
       assert.equal(
-        filas.filter((fila) => !countsAsRanked(fila, ventana)).every((fila) => fila.points === 0),
+        filas.filter((fila) => !countsAsRanked(fila, ventana, registeredAt)).every(
+          (fila) => fila.points === 0,
+        ),
         true,
         "ninguna partida que no cuenta puede tener puntos",
       );
     });
 
     await check("los objetivos se publican con el contrato previsto", async () => {
-      const { MASTERIZAR_TODOS_ID, OBJECTIVE_COUNT, OBJECTIVE_GROUP_LABELS } = await import(
-        "@/lib/objectives"
-      );
+      const {
+        JUGON_ID,
+        OBJECTIVE_COUNT,
+        OBJECTIVE_GROUP_LABELS,
+        POLIFACETICO_ID,
+      } = await import("@/lib/objectives");
 
       const view = unwrapRead(await getObjectives(), "verify:objetivos/contrato");
 
@@ -1873,27 +2151,27 @@ async function runDatabaseChecks(): Promise<void> {
         DEFAULT_RULESET.pointsPerWin,
         "los puntos por victoria salen del ruleset activo",
       );
-      assert.deepEqual(
-        view.minimums,
-        DEFAULT_RULESET.minimums,
-        "los mínimos salen del ruleset activo",
+      assert.equal(
+        Array.isArray(view.mapPool) && view.mapPool.length > 0,
+        true,
+        "la vista publica el pool de mapas activo",
       );
       assert.equal(
         view.options.length,
         OBJECTIVE_COUNT,
-        `hay los ${OBJECTIVE_COUNT} objetivos de docs/PUNTUACION.md`,
+        `hay los ${OBJECTIVE_COUNT} objetivos de docs/OBJETIVOS.md`,
       );
 
       const groups = view.options.map((option) => option.group);
       assert.deepEqual(
         [...new Set(groups)],
-        ["actividad", "racha", "division", "formato", "civilizacion"],
+        ["actividad", "racha", "hazanas", "formato", "civilizacion"],
         "los grupos salen en el orden documentado, sin intercalarse",
       );
       assert.deepEqual(
         view.options.slice(0, 4).map((option) => option.id),
-        ["loco-por-ganar", "otp", "golpe-de-suerte", "prohibido-perder"],
-        "otp va con Actividad y prohibido-perder con Racha, en ese orden",
+        ["loco-por-ganar", "imparable", "bienhadado", "imbatible"],
+        "Actividad y Racha salen en el orden documentado",
       );
       assert.equal(
         groups.every((group) => group in OBJECTIVE_GROUP_LABELS),
@@ -1901,117 +2179,31 @@ async function runDatabaseChecks(): Promise<void> {
         "todo grupo tiene rótulo",
       );
 
-      // Copy exacto del cliente y métricas de Actividad y Racha (§3.2-§3.3).
+      // Las familias de civilización: cabeza, hijos y sus etiquetas.
       const porId = new Map(view.options.map((option) => [option.id, option]));
+      const polifacetico = porId.get(POLIFACETICO_ID);
+      const jugon = porId.get(JUGON_ID);
 
+      assert.ok(polifacetico !== undefined, "polifacetico existe");
+      assert.ok(jugon !== undefined, "jugon existe");
+      assert.equal(polifacetico.kind, "achievement");
+      assert.equal(jugon.kind, "achievement");
+      assert.equal(polifacetico.parent, null);
       assert.equal(
-        porId.get("golpe-de-suerte")?.label,
-        "¿Golpe de suerte?",
-        "el rótulo de `golpe-de-suerte` es copy del cliente",
+        view.options.filter((option) => option.parent === POLIFACETICO_ID).length,
+        CIVILIZATIONS.length,
+        "los lider-* apuntan a polifacetico",
       );
       assert.equal(
-        porId.get("sensei-oro")?.label,
-        "El Sensei de Oro",
-        "los rótulos de `sensei-*` son copy del cliente",
+        view.options.filter((option) => option.parent === JUGON_ID).length,
+        CIVILIZATIONS.length,
+        "los acolito-* apuntan a jugon",
       );
+      assert.equal(porId.get("masterizando-japanese")?.kind, "competition");
       assert.equal(
-        porId.get("otp")?.group,
-        "actividad",
-        "otp se agrupa en Actividad (sin grupo Dominio)",
-      );
-      assert.equal(
-        porId.get("prohibido-perder")?.group,
-        "racha",
-        "prohibido-perder se agrupa en Racha (sin grupo Dominio)",
-      );
-      assert.equal(
-        porId.get("otp")?.metric,
-        "victorias",
-        "otp lo decide el máximo de victorias con una misma civ, sin umbral",
-      );
-      assert.equal(
-        porId.get("prohibido-perder")?.metric,
-        "winrate",
-        "prohibido-perder sigue decidiéndose por ratio",
-      );
-
-      // `masterizarlos-a-todos`: el objetivo que abarca las 23 civilizaciones,
-      // al final del grupo y con la etiqueta fijada por el cliente.
-      const todos = porId.get(MASTERIZAR_TODOS_ID);
-
-      assert.ok(todos !== undefined, "masterizarlos-a-todos existe");
-      assert.equal(
-        view.options.at(-1)?.id,
-        MASTERIZAR_TODOS_ID,
-        "masterizarlos-a-todos se presenta al final del grupo de civilizaciones",
-      );
-      assert.equal(
-        todos.group,
-        "civilizacion",
-        "masterizarlos-a-todos va en el grupo Civilizaciones",
-      );
-      assert.equal(
-        todos.label,
-        "Masterízalos a todos",
-        "el rótulo de `masterizarlos-a-todos` es copy del cliente",
-      );
-      assert.equal(
-        todos.points,
-        DEFAULT_RULESET.objectives[MASTERIZAR_TODOS_ID],
-        "los 100 de masterizarlos-a-todos salen del ruleset, como los demás",
-      );
-      assert.equal(
-        porId.get("masterizar-japanese")?.points,
-        DEFAULT_RULESET.objectives["masterizar-japanese"],
-        "y un masterizar-* sigue valiendo lo que diga el ruleset",
-      );
-      // Nadie que no haya ganado con todas las civs puede tenerlo, así que en
-      // la prueba (que no llega a las 23) el objetivo tiene que salir vacío.
-      assert.equal(
-        todos.holder,
-        null,
-        "sin las 23 civilizaciones dominadas el objetivo no tiene poseedor",
-      );
-      for (const contender of todos.ranking) {
-        assert.ok(
-          contender.value <= CIVILIZATIONS.length,
-          `masterizarlos-a-todos: ${contender.value} civilizaciones no puede pasar de ${CIVILIZATIONS.length}`,
-        );
-        assert.equal(
-          contender.eligible,
-          contender.value === CIVILIZATIONS.length,
-          "masterizarlos-a-todos: solo es elegible quien las tiene todas",
-        );
-        assert.ok(
-          contender.matches >= contender.value,
-          "masterizarlos-a-todos: cada civ dominada necesita al menos una partida",
-        );
-      }
-
-      // El detalle de `otp`: la civilización del jugador, en el catálogo.
-      const otp = porId.get("otp");
-
-      assert.ok(otp !== undefined, "otp existe");
-
-      for (const contender of otp.ranking) {
-        assert.ok(contender.detail, `otp: ${contender.name} lleva su civ en detail`);
-        assert.equal(
-          isKnownCivilization(contender.detail.id),
-          true,
-          `otp: ${contender.detail.id} es una civ del catálogo`,
-        );
-        assert.ok(
-          contender.detail.label.length > 0,
-          `otp: la civ ${contender.detail.id} tiene nombre en español`,
-        );
-      }
-
-      assert.equal(
-        view.options
-          .filter((option) => option.id !== "otp")
-          .every((option) => option.ranking.every((contender) => contender.detail == null)),
+        porId.get("lider-japanese")?.label.includes("Japoneses"),
         true,
-        "solo otp rellena detail",
+        "el rótulo de un lider-* nombra la civilización",
       );
 
       const holders = new Set<string>();
@@ -2026,18 +2218,6 @@ async function runDatabaseChecks(): Promise<void> {
           option.description.trim().length > 0,
           `${option.id}: la descripción de la regla no está vacía`,
         );
-        // Sin mínimos dentro: el único configurable es `minimums.masterizar`
-        // (y los de ratio y racha), y si uno estuviera escrito en la
-        // descripción dejaría de ser cierto el día que se cambiara en
-        // `Setting`. Los dígitos de "1v1" o de una civ no cuentan: no son
-        // números de configuración.
-        for (const minimum of Object.values(view.minimums)) {
-          assert.equal(
-            new RegExp(`\\b${minimum}\\b`).test(option.description),
-            false,
-            `${option.id}: la descripción no escribe el mínimo ${minimum}, que es configurable`,
-          );
-        }
         assert.equal(
           new Set(option.ranking.map((contender) => contender.profileId)).size,
           option.ranking.length,
@@ -2049,7 +2229,7 @@ async function runDatabaseChecks(): Promise<void> {
           assert.equal(
             typeof contender.eligible,
             "boolean",
-            `${option.id}: eligible marca si cumple el mínimo`,
+            `${option.id}: eligible es un booleano`,
           );
           assert.equal(
             contender.profileUrl,
@@ -2058,17 +2238,58 @@ async function runDatabaseChecks(): Promise<void> {
           );
         }
 
-        if (option.holder !== null) {
-          holders.add(option.id);
-          assert.equal(option.holder.eligible, true, `${option.id}: el poseedor cumple el mínimo`);
-          // El ranking va entero, así que el poseedor tiene que salir en él con
-          // la posición que le da su métrica: no se extrae ni se pone el primero.
-          assert.ok(
-            option.ranking.some(
-              (contender) => contender.profileId === option.holder?.profileId,
-            ),
-            `${option.id}: el poseedor aparece en el ranking, marcado por holder`,
+        if (option.kind === "competition") {
+          assert.equal(option.target, null, `${option.id}: una competición no tiene umbral`);
+          assert.equal(
+            option.beneficiaries.length,
+            0,
+            `${option.id}: una competición no reparte entre varios`,
           );
+
+          if (option.holder !== null) {
+            holders.add(option.id);
+            assert.equal(
+              option.holder.eligible,
+              true,
+              `${option.id}: el poseedor cumple la condición`,
+            );
+            assert.ok(
+              option.ranking.some(
+                (contender) => contender.profileId === option.holder?.profileId,
+              ),
+              `${option.id}: el poseedor aparece en el ranking, marcado por holder`,
+            );
+          }
+        } else {
+          assert.equal(option.holder, null, `${option.id}: un logro no tiene poseedor único`);
+          assert.ok(option.target !== null, `${option.id}: un logro tiene umbral`);
+          assert.equal(
+            new Set(option.beneficiaries.map((beneficiary) => beneficiary.profileId)).size,
+            option.beneficiaries.length,
+            `${option.id}: los beneficiarios no se repiten`,
+          );
+
+          if (option.beneficiaries.length > 0) {
+            holders.add(option.id);
+          }
+
+          for (const beneficiary of option.beneficiaries) {
+            assert.ok(
+              beneficiary.points > 0,
+              `${option.id}: un beneficiario cobra puntos positivos`,
+            );
+            assert.ok(
+              beneficiary.points <= option.points,
+              `${option.id}: nadie cobra por encima de los puntos del objetivo`,
+            );
+            assert.ok(
+              option.ranking.some(
+                (contender) =>
+                  contender.profileId === beneficiary.profileId && contender.eligible,
+              ),
+              `${option.id}: todo beneficiario aparece en el ranking como cumplido`,
+            );
+          }
         }
       }
 
@@ -3417,7 +3638,7 @@ async function checkHistoryOrder(): Promise<void> {
 
   const objetivos = [
     filaHistorial({ id: "o1", fecha: H3, objetivo: "loco-por-ganar" }),
-    filaHistorial({ id: "o2", fecha: H2, objetivo: "otp" }),
+    filaHistorial({ id: "o2", fecha: H2, objetivo: "lider-french" }),
   ];
 
   const todas = [...partidas, ...objetivos];

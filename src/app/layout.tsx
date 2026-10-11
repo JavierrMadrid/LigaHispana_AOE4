@@ -1,15 +1,10 @@
 import type { Metadata } from "next";
-import { Cinzel, Geist, Geist_Mono } from "next/font/google";
+import { Cinzel, Geist } from "next/font/google";
 import { BackToTop } from "@/components/back-to-top";
 import "./globals.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
   subsets: ["latin"],
 });
 
@@ -74,7 +69,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="es"
-      className={`${geistSans.variable} ${geistMono.variable} ${cinzel.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${cinzel.variable} h-full antialiased`}
     >
       {/* `relative` ancla el centinela de `BackToTop` al inicio del documento. */}
       <body className="relative min-h-full flex flex-col">

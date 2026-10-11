@@ -124,12 +124,24 @@ const ALIGN = {
   right: "text-right",
 } as const;
 
+/**
+ * Cabecera que se queda fija mientras el cuerpo de la tabla se desplaza.
+ *
+ * Se aplica a partir de `lg`, que es donde el contenedor acota su altura y
+ * habilita el scroll vertical interno (`lg:max-h-[70vh] lg:overflow-y-auto`); por
+ * debajo no hay scroll anidado y la cabecera se comporta como siempre. El fondo
+ * sólido es imprescindible: sin él, las filas se verían a través de la cabecera.
+ * Como el contenedor aplica `overflow`, el `sticky` se ancla a él y no a la
+ * ventana, que es justo lo que se busca.
+ */
+const STICKY_HEAD = "lg:sticky lg:top-0 lg:z-10 bg-surface";
+
 function ariaSortFor(state: ColumnState): "ascending" | "descending" | "none" {
   return state === "asc" ? "ascending" : state === "desc" ? "descending" : "none";
 }
 
 const CONTROL_CLASS =
-  "group/header inline-flex items-center gap-1 whitespace-nowrap rounded-sm transition-colors hover:text-foreground";
+  "group/header -m-1 inline-flex items-center gap-1 whitespace-nowrap rounded-sm p-1 transition-colors hover:text-foreground";
 
 type HeaderVisualProps = {
   /** Texto accesible: alimenta el `aria-label` de la pista de ordenación. */
@@ -204,7 +216,7 @@ export function SortableHeaderLink({
     <th
       scope="col"
       aria-sort={ariaSortFor(state)}
-      className={`${ALIGN[align]} ${className ?? ""}`}
+      className={`${ALIGN[align]} ${STICKY_HEAD} ${className ?? ""}`}
     >
       <Link href={href} aria-label={sortHint(label, state)} className={CONTROL_CLASS}>
         {visual ?? label}
@@ -236,7 +248,7 @@ export function SortableHeaderButton({
     <th
       scope="col"
       aria-sort={ariaSortFor(state)}
-      className={`${ALIGN[align]} ${className ?? ""}`}
+      className={`${ALIGN[align]} ${STICKY_HEAD} ${className ?? ""}`}
     >
       <button
         type="button"

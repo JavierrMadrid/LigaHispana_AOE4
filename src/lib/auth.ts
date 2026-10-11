@@ -42,7 +42,7 @@ export async function requireAdmin() {
  * por el "atrás" del navegador, y plantedle delante un formulario que ya no le
  * sirve no aporta nada — el login es solo la puerta de `/admin` (todo usuario
  * autenticado es admin y los registros públicos de Supabase están desactivados,
- * ver `docs/PLAN.md`).
+ * ver `README.md`).
  *
  * Reutiliza el `getCurrentUser()` memoizado, el mismo que `requireAdmin()`, y
  * solo actúa sobre un usuario confirmado. Un `null` puede querer decir también

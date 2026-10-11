@@ -2,7 +2,7 @@ import "server-only";
 
 import { PlayerStatus } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
-import { rankedMatchWhere } from "@/lib/ranked-match";
+import { countsWithinWindow, rankedMatchWhere } from "@/lib/ranked-match";
 import { readRuleset, type ScoringRuleset } from "@/lib/scoring";
 import { computePlayerAlerts, type AlertMatch, type AlertPlayer, type OpenStreak } from "./compute";
 import type { LadderCutoffsTable } from "./division-cutoffs";
@@ -38,8 +38,8 @@ import {
  *
  * **No sale a la red.** Todo sale de `Match` y de su `rawJson`, con la única
  * excepción de los cortes de división, que no se derivan aquí sino que se leen de
- * `Setting` (ver `derive-cutoffs.ts`): derivarlos son del orden de 130 llamadas a
- * la ladder por ladder, y esto corre cada 5 minutos. Sin cortes, R5 se omite con
+ * `Setting` (ver `derive-cutoffs.ts`): derivarlos son del orden de 130 llamadas
+ * por familia de ladder, y esto corre cada 5 minutos. Sin cortes, R5 se omite con
  * un aviso y las otras siete reglas siguen funcionando.
  */
 
@@ -108,7 +108,6 @@ type MatchRow = {
   playerId: string;
   gameId: string;
   mode: string | null;
-  leaderboard: string;
   opponentProfileId: number | null;
   opponentName: string | null;
   startedAt: Date;
@@ -151,7 +150,10 @@ async function evaluatePlayers(
       status: PlayerStatus.APPROVED,
       ...(profileIds === undefined ? {} : { profileId: { in: profileIds } }),
     },
-    select: { id: true, profileId: true, name: true, rankLevel: true },
+    // `registeredAt` viene aquí y no en la consulta de partidas porque el corte de
+    // inscripción no se puede escribir en un `where` de Prisma que abarca a todos los
+    // jugadores (ver `ranked-match.ts`): se aplica por jugador, en memoria.
+    select: { id: true, profileId: true, name: true, registeredAt: true },
     orderBy: { profileId: "asc" },
   });
 
@@ -159,20 +161,28 @@ async function evaluatePlayers(
     return pass;
   }
 
+  const registeredAtPorJugador = new Map(players.map((row) => [row.id, row.registeredAt]));
+
   // **El filtro de clasificatorias sale de `rankedMatchWhere()`**, o sea de la única
   // definición que hay: familia del ruleset de puntos, partida resuelta, dentro de
   // la ventana y no revertida. El motor de alertas no vuelve a decidir qué cuenta,
   // y por eso no puede discrepar del motor de puntos.
+  //
+  // **El corte de inscripción no cabe en ese `where` y va justo después**, y por eso
+  // el `null` de abajo es explícito: un `where` de Prisma que abarca a todos los
+  // jugadores no puede compararlo (ver el docblock de `ranked-match.ts`). Lo que
+  // decide es `countsWithinWindow()` con el `registeredAt` de cada uno —la misma
+  // comparación en memoria—, así que una alerta no puede acusar a nadie de una
+  // partida que tampoco puntúa.
   const rows: MatchRow[] = await db.match.findMany({
     where: {
       playerId: { in: players.map((player) => player.id) },
-      ...rankedMatchWhere(context.scoring.modes, context.scoring.window),
+      ...rankedMatchWhere(context.scoring.modes, context.scoring.window, null),
     },
     select: {
       playerId: true,
       gameId: true,
       mode: true,
-      leaderboard: true,
       opponentProfileId: true,
       opponentName: true,
       startedAt: true,
@@ -186,15 +196,22 @@ async function evaluatePlayers(
     orderBy: [{ startedAt: "asc" }, { gameId: "asc" }],
   });
 
-  pass.matchesRead = rows.length;
+  const clasificatorias = rows.filter((row) =>
+    countsWithinWindow(
+      row.startedAt,
+      context.scoring.window,
+      registeredAtPorJugador.get(row.playerId) ?? null,
+    ),
+  );
+
+  pass.matchesRead = clasificatorias.length;
 
   const porJugador = new Map<string, AlertMatch[]>();
 
-  for (const row of rows) {
+  for (const row of clasificatorias) {
     const match: AlertMatch = {
       gameId: row.gameId,
       mode: row.mode,
-      leaderboard: row.leaderboard,
       opponentProfileId: row.opponentProfileId,
       opponentName: row.opponentName,
       startedAt: row.startedAt,
@@ -216,7 +233,6 @@ async function evaluatePlayers(
       id: row.id,
       profileId: row.profileId,
       name: row.name,
-      rankLevel: row.rankLevel,
     };
 
     const evaluation = computePlayerAlerts({

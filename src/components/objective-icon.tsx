@@ -1,39 +1,28 @@
 import type { ReactNode } from "react";
-import type { DivisionId, ObjectiveOption } from "@/lib/public";
+import type { ObjectiveOption } from "@/lib/public";
 import {
   CivilizationIcon,
   CivilizationPlaceholderIcon,
   civilizationFile,
 } from "@/components/civilization-icon";
-import { DIVISION_UI, divisionColor } from "@/components/division-icon";
-import { LeagueIcon, leagueFilterRank } from "@/components/league-icon";
 
 /**
  * Icono de un objetivo especial, al inicio de su tarjeta.
  *
- * Tres familias, una por origen del objetivo:
- *  - División (`sensei-*`): el emblema oficial de la liga, el mismo asset que
- *    usan los filtros de la clasificación.
- *  - Civilización (`masterizar-*`): la imagen del juego de esa civilización,
- *    que resuelve `CivilizationIcon`.
- *  - Actividad, racha y formato: glifos propios del proyecto, porque no hay
- *    asset oficial para ellos. Se eligen por grupo y métrica, y los formatos
- *    dibujan tantos jugadores por bando como indique el tamaño (1v1 a 4v4).
+ * Dos familias, una por origen del objetivo:
+ *  - Civilización (`masterizando-*`, `lider-*`, `acolito-*`): la imagen del juego
+ *    de esa civilización, que resuelve `CivilizationIcon`.
+ *  - Actividad, racha, hazañas, formato y los logros globales: glifos propios del
+ *    proyecto, porque no hay asset oficial para ellos. Se eligen por grupo y
+ *    métrica, y los formatos dibujan tantos jugadores por bando como indique el
+ *    tamaño (1v1 a 4v4).
  *
  * Aquí el icono es decorativo: el nombre de la civilización ya lo dice la
  * etiqueta del objetivo, así que no se pide texto alternativo.
  */
 
-/** Solo los `sensei-*` llevan emblema; el id trae la división. */
-function senseiDivision(id: string): DivisionId | null {
-  if (!id.startsWith("sensei-")) {
-    return null;
-  }
-
-  const slug = id.slice("sensei-".length);
-
-  return DIVISION_UI.some((item) => item.id === slug) ? (slug as DivisionId) : null;
-}
+/** Prefijos de id que llevan la civilización pegada (`lider-japanese` → `japanese`). */
+const CIV_PREFIXES = ["masterizando-", "lider-", "acolito-"] as const;
 
 /**
  * Forma mínima que necesita el icono para elegir el glifo. La comparten
@@ -49,23 +38,19 @@ type ObjectiveIconProps = {
   className?: string;
 };
 
-export function ObjectiveIcon({ option, className = "size-6 shrink-0" }: ObjectiveIconProps) {
-  const division = senseiDivision(option.id);
-
-  if (division !== null) {
-    return (
-      <span
-        className={`${className} inline-flex items-center justify-center`}
-        style={{ color: divisionColor(division) }}
-      >
-        <LeagueIcon rank={leagueFilterRank(division)} className="h-full w-full" />
-      </span>
-    );
+/** La civilización de un id de objetivo, o `null` si el id no es de civilización. */
+function objectiveCiv(id: string): string | null {
+  for (const prefix of CIV_PREFIXES) {
+    if (id.startsWith(prefix)) {
+      return id.slice(prefix.length);
+    }
   }
 
-  const civ = option.id.startsWith("masterizar-")
-    ? option.id.slice("masterizar-".length)
-    : null;
+  return null;
+}
+
+export function ObjectiveIcon({ option, className = "size-6 shrink-0" }: ObjectiveIconProps) {
+  const civ = objectiveCiv(option.id);
   const civFile = civ === null ? null : civilizationFile(civ);
 
   if (civFile !== null) {
@@ -86,25 +71,19 @@ function GenericIcon({ option, className }: { option: ObjectiveIconInput; classN
   }
 
   if (option.group === "actividad") {
-    return option.metric === "victorias" ? (
-      <VictoryIcon className={className} />
+    return option.metric === "dias" ? (
+      <StreakIcon className={className} />
     ) : (
       <MatchesIcon className={className} />
     );
   }
 
-  if (option.group === "racha") {
-    return option.metric === "winrate" ? (
-      <BalanceIcon className={className} />
-    ) : (
-      <StreakIcon className={className} />
-    );
+  if (option.group === "racha" || option.group === "hazanas") {
+    return <VictoryIcon className={className} />;
   }
 
-  // `masterizarlos-a-todos` es el único objetivo de civilización que no es un
-  // `masterizar-<civ>`: su id no encaja con ninguna del catálogo, así que llega
-  // aquí. Se pinta con el escudo estrellado que evoca "todas las
-  // civilizaciones", no con el estandarte de reserva.
+  // `polifacetico` y `jugon` son los logros globales del grupo de civilización:
+  // se pintan con el escudo estrellado que evoca "todas las civilizaciones".
   if (option.group === "civilizacion") {
     return <AllCivsIcon className={className} />;
   }
@@ -172,9 +151,9 @@ function StreakIcon({ className }: { className?: string }) {
 }
 
 /**
- * `masterizarlos-a-todos`: un escudo con estrella, emblema de haber dominado
- * las 23 civilizaciones. El escudo es el blasón de la liga; la estrella que
- * carga dentro es el distintivo de la gesta completa.
+ * Los logros globales de civilización: un escudo con estrella, emblema de haber
+ * jugado o ganado con todas ellas. El escudo es el blasón de la liga; la estrella
+ * que carga dentro es el distintivo de la gesta completa.
  */
 function AllCivsIcon({ className }: { className?: string }) {
   return (
@@ -185,19 +164,6 @@ function AllCivsIcon({ className }: { className?: string }) {
         fill="currentColor"
         stroke="none"
       />
-    </Glyph>
-  );
-}
-
-/** Winrate: la balanza, el mejor ratio pesado contra el resto. */
-function BalanceIcon({ className }: { className?: string }) {
-  return (
-    <Glyph className={className}>
-      <path d="M12 4.5v14" />
-      <path d="M8.5 19.5h7" />
-      <path d="M4.5 8h15" />
-      <path d="M4.5 8 2.5 12.5h4Z" />
-      <path d="M19.5 8 17.5 12.5h4Z" />
     </Glyph>
   );
 }

@@ -7,8 +7,7 @@
  * aparece por aquí: usarlo rompería la correspondencia con la base de datos.
  *
  * `name` es la traducción al español propuesta para la interfaz: es la única
- * parte discutible del catálogo y está pendiente de validación (§9 de
- * `docs/PUNTUACION.md`).
+ * parte discutible del catálogo y está pendiente de validación.
  *
  * El orden del array es el orden del grupo `civilizacion` en la vista de
  * objetivos: alfabético por `id`, estable y sin sorpresas.

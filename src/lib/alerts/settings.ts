@@ -22,7 +22,7 @@ import {
  * | Clave | Qué guarda | Quién la escribe |
  * |---|---|---|
  * | `alerts.ruleset` | los umbrales, con la versión fijada por el código | `ensureAlertsRuleset()`, una vez |
- * | `alerts.divisionCutoffs` | los cortes rating → subdivisión por ladder | `npm run alerts:cutoffs`, a mano |
+ * | `alerts.divisionCutoffs` | los cortes rating → subdivisión por familia de ladder | `npm run alerts:cutoffs`, a mano |
  * | `alerts.tournamentClose` | la marca de que el cierre de torneo ya se evaluó | `evaluateAlerts()`, una vez por ventana |
  *
  * `Setting` es el sitio donde ya vive la memoria del worker (`sync.lastRun`), el

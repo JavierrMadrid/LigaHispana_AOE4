@@ -16,24 +16,25 @@ import {
   RANKED_MODES,
   parseWindow,
   rankedMatchSql,
-  rankedMatchWhere,
   type ScoringWindow,
 } from "@/lib/ranked-match";
-import { writeScoringLastRun } from "@/lib/settings";
+import { readMapPool, writeScoringLastRun } from "@/lib/settings";
 
 /**
- * Motor de puntuación (reglas v2).
+ * Motor de puntuación (reglas v3).
  *
- * La regla completa está en `docs/PUNTUACION.md`: 10 puntos por victoria
- * clasificatoria más los 38 objetivos winner-takes-all de `objectives.ts`.
- * Aquí vive lo que no es cálculo: el ruleset (configurable en `Setting`),
- * el agregado (`PlayerScore`) y el orden final de la clasificación.
+ * La regla completa está en `docs/PUNTUACION.md`: 2 puntos por victoria
+ * clasificatoria más los objetivos de `objectives.ts`, que son de dos formas:
+ * competiciones (un único poseedor) y logros (los cobra quien los cumple). Aquí
+ * vive lo que no es cálculo: el ruleset (configurable en `Setting`), el agregado
+ * (`PlayerScore`) y el orden final de la clasificación.
  *
  * Qué cuenta como partida clasificatoria **no** está aquí: vive en
  * `src/lib/ranked-match.ts`, que es donde se puede definir sin que `scoring.ts` y
- * `objectives.ts` se importen mutuamente. De ahí vienen los dos filtros que usan
- * las consultas de abajo (`rankedMatchWhere` para el agregado y `rankedMatchSql`
- * para el SQL crudo), así que el modo, el resultado, la ventana y la marca de
+ * `objectives.ts` se importen mutuamente. De ahí viene `rankedMatchSql()`, el
+ * predicado que usan **las tres** consultas de abajo —el `UPDATE` de
+ * `Match.points`, el agregado y la carga de objetivos—, así que el modo, el
+ * resultado, el corte de inscripción, el final de la ventana y la marca de
  * revertida se filtran igual en todas partes.
  *
  * Cosas que no cambian entre versiones de las reglas y ya estaban resueltas:
@@ -42,9 +43,9 @@ import { writeScoringLastRun } from "@/lib/settings";
  *   se publiquen reglas nuevas se recalcula al lado de las anteriores.
  * - Los puntos por partida se materializan en `Match.points`, así que se pueden
  *   auditar sin volver a agregarlos.
- * - El desempate es `total desc, wins desc, profileId asc`, que termina en un
- *   valor único (`profileId` es único), de modo que el puesto es un entero
- *   denso y estable.
+ * - El desempate es `total desc, wins desc, winrate desc, profileId asc`, que
+ *   termina en un valor único (`profileId` es único), de modo que el puesto es un
+ *   entero denso y estable.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -67,7 +68,7 @@ export {
 /* Ruleset                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Clave de `Setting` donde vive el ruleset activo (§8 de `docs/PUNTUACION.md`). */
+/** Clave de `Setting` donde vive el ruleset activo. */
 export const SCORING_RULESET_KEY = "scoring.ruleset";
 
 /**
@@ -75,14 +76,14 @@ export const SCORING_RULESET_KEY = "scoring.ruleset";
  *
  * La fija **el código**, no el documento guardado: cambiar un número de
  * `scoring.ruleset` no requiere despliegue, pero un cambio estructural sí
- * (nuevos mínimos, nueva familia de modos, …) y para eso sube esta constante.
+ * (nuevos objetivos, nueva familia de modos, …) y para eso sube esta constante.
  *
  * La ventana de fechas **no** sube la versión: es una reconfiguración, igual que
  * `pointsPerWin` o un mínimo. Lo que sí exigiría subirla es cambiar la forma de la
  * ventana (por ejemplo, pasar de un intervalo a una lista de Ventanas), porque
  * entonces un documento guardado dejaría de describir lo que el código espera.
  */
-export const RULESET_VERSION = 2;
+export const RULESET_VERSION = 3;
 
 /**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
@@ -92,16 +93,7 @@ export const RULESET_VERSION = 2;
  * guardada para que un lector directo de la tabla no vea texto de otra versión.
  */
 export const RULE_LABEL =
-  "10 puntos por victoria clasificatoria más 38 objetivos especiales; solo el primero los cobra";
-
-export type ScoringMinimums = {
-  /** Mínimo de partidas clasificatorias para `prohibido-perder`. */
-  winrate: number;
-  /** Mínimo de partidas para `golpe-de-suerte`. */
-  streak: number;
-  /** Victorias con una civilización para `masterizar-*`. */
-  masterizar: number;
-};
+  "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros";
 
 export type ScoringRuleset = {
   version: number;
@@ -114,8 +106,7 @@ export type ScoringRuleset = {
    */
   window: ScoringWindow;
   pointsPerWin: number;
-  minimums: ScoringMinimums;
-  /** ¿Las partidas con civ aleatoria cuentan para `otp` y `masterizar-*`? */
+  /** ¿Las partidas con civ aleatoria cuentan para los objetivos de civilización? */
   countRandomizedCivs: boolean;
   /** Puntos de cada objetivo por id; los que no aparecen usan los suyos. */
   objectives: Record<string, number>;
@@ -136,8 +127,7 @@ export const DEFAULT_RULESET: ScoringRuleset = {
   label: RULE_LABEL,
   modes: [...RANKED_MODES],
   window: { from: "2026-09-15T00:00:00.000Z", to: "2026-10-15T00:00:00.000Z" },
-  pointsPerWin: 10,
-  minimums: { winrate: 10, streak: 10, masterizar: 10 },
+  pointsPerWin: 2,
   countRandomizedCivs: false,
   objectives: { ...OBJECTIVE_POINTS },
 };
@@ -147,7 +137,6 @@ function defaultRuleset(): ScoringRuleset {
     ...DEFAULT_RULESET,
     modes: [...DEFAULT_RULESET.modes],
     window: { ...DEFAULT_RULESET.window },
-    minimums: { ...DEFAULT_RULESET.minimums },
     objectives: { ...DEFAULT_RULESET.objectives },
   };
 }
@@ -229,28 +218,6 @@ export function mergeRuleset(stored: unknown): RulesetMergeResult {
 
     ruleset.window = parsed.window;
     warnings.push(...parsed.warnings);
-  }
-
-  if (stored.minimums !== undefined) {
-    if (isRecord(stored.minimums)) {
-      for (const key of ["winrate", "streak", "masterizar"] as const) {
-        const raw = stored.minimums[key];
-
-        if (raw === undefined) {
-          continue;
-        }
-
-        const parsed = positiveInt(raw);
-
-        if (parsed === null) {
-          warnings.push(`minimums.${key} no es un entero positivo: ${JSON.stringify(raw)}`);
-        } else {
-          ruleset.minimums[key] = parsed;
-        }
-      }
-    } else {
-      warnings.push("minimums no es un objeto");
-    }
   }
 
   if (typeof stored.countRandomizedCivs === "boolean") {
@@ -369,11 +336,11 @@ export type ScoreBreakdownMode = {
  *
  * ```json
  * {
- *   "ruleSetVersion": 2,
- *   "rule": "10 puntos por victoria clasificatoria más 38 objetivos…",
+ *   "ruleSetVersion": 3,
+ *   "rule": "2 puntos por victoria clasificatoria más 82 objetivos…",
  *   "byMode": {
- *     "rm_solo": { "wins": 3, "points": 30, "matches": 5 },
- *     "rm_team": { "wins": 1, "points": 10, "matches": 2 }
+ *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
+ *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
  *   },
  *   "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1"] }
  * }
@@ -405,37 +372,38 @@ function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode
 /* -------------------------------------------------------------------------- */
 
 /**
- * Los 38 objetivos con sus poseedores, listos para pintar.
+ * El catálogo de objetivos con sus poseedores y beneficiarios, listo para pintar.
  *
  * Dos consultas y ninguna por fila: una para el ruleset (una clave de
  * `Setting`) y una para las partidas clasificatorias. Se lee en cada llamada,
  * igual que `getStandings`, así que la página que la use tiene que ser
  * dinámica.
  *
- * `window` se publica para que `/reglas` y `/objetivos` puedan decir qué periodo
- * cuenta, sin que el copy de la interfaz tenga que escribir fechas a mano que
- * acabarían mintiendo el día que se cambien en `Setting`.
+ * `window` y `mapPool` se publican para que `/puntuacion` y `/objetivos` puedan
+ * decir qué periodo cuenta y qué mapas entran, sin que el copy de la interfaz
+ * tenga que escribir datos a mano que acabarían mintiendo el día que se cambien
+ * en `Setting`.
  *
- * Con la base de datos caída devuelve `{ status: "degraded", data: null }`: los
- * 38 objetivos existen siempre (es el catálogo), pero **quién posee cada uno**
- * solo existe en la base, y publicar una tabla de objetivos sin poseedores
- * serían los 38 sin dueño, que no es lo que hay.
+ * Con la base de datos caída devuelve `{ status: "degraded", data: null }`: el
+ * catálogo existe siempre (es código), pero **quién cobra cada objetivo** solo
+ * existe en la base, y publicar una tabla de objetivos sin cobradores sería una
+ * tabla de nadie, que no es lo que hay.
  */
 export async function getObjectives(): Promise<PublicRead<ObjectiveView>> {
   return readFromDatabase("public/getObjectives", loadObjectives);
 }
 
 async function loadObjectives(): Promise<ObjectiveView> {
-  const ruleset = await readRuleset();
+  const [ruleset, mapPool] = await Promise.all([readRuleset(), readMapPool()]);
   const players = await loadObjectivePlayers(db, ruleset);
-  const { options } = computeObjectives(players, ruleset);
+  const { options } = computeObjectives(players, ruleset, mapPool);
 
   return {
     ruleSetVersion: ruleset.version,
     rule: ruleset.label,
     pointsPerWin: ruleset.pointsPerWin,
     window: { ...ruleset.window },
-    minimums: { ...ruleset.minimums },
+    mapPool: [...mapPool],
     options,
   };
 }
@@ -459,7 +427,7 @@ export type RecomputeScoresResult = {
   playersUnranked: number;
   /** Suma de `PlayerScore.total`: partidas y objetivos. */
   totalPoints: number;
-  /** Objetivos con poseedor en este recálculo (de 38). */
+  /** Objetivos con al menos un cobrador en este recálculo. */
   objectivesAwarded: number;
   /** Puntos repartidos por objetivos. */
   objectivesPoints: number;
@@ -474,6 +442,24 @@ type AggregatedRow = {
 };
 
 /**
+ * Una fila del agregado de la clasificación, tal y como la devuelve el SQL crudo.
+ *
+ * Los dos `cast` son los que hace falta para no pelearse con el adaptador: el
+ * `status` de `Player` es un enum y un parámetro llega como texto, así que hay que
+ * castearlo a `"PlayerStatus"` para que la comparación sea válida; y `result`
+ * sale como texto porque en la fila de arriba es lo que se compara con el enum de
+ * Prisma. `count`/`sum` van a `int` porque en `bigint` Prisma devolvería un
+ * `BigInt` que después hay que convertir en cada suma.
+ */
+type AggregatedMatchRow = {
+  playerId: string;
+  mode: string | null;
+  result: string;
+  partidas: number;
+  points: number;
+};
+
+/**
  * Nombre del cerrojo de la clasificación.
  *
  * `hashtext()` lo convierte en la clave que `pg_advisory_xact_lock` espera, así que
@@ -483,6 +469,31 @@ type AggregatedRow = {
  * reinicie la base.
  */
 const SCORING_LOCK_NAME = "ligahispana.recomputeScores";
+
+/**
+ * Orden de la clasificación. Función pura y exportada para poder comprobarla sin
+ * base de datos.
+ *
+ * `total` y `wins` descendentes; entre dos filas con el mismo total y las mismas
+ * victorias decide el **porcentaje de victorias**, y cierra `profileId`
+ * ascendente, que es único. El winrate se compara con **producto cruzado**
+ * (`b.wins * a.matches` frente a `a.wins * b.matches`) y no con `wins / matches`:
+ * la división en coma flotante puede ordenar mal por el redondeo binario, y aquí
+ * el orden tiene que ser exacto. Con `matches` 0 (que no se da en una fila
+ * publicada, pero por si acaso) el producto es 0 y el desempate cae a
+ * `profileId`.
+ */
+export function compareStandings(
+  a: { total: number; wins: number; matches: number; profileId: number },
+  b: { total: number; wins: number; matches: number; profileId: number },
+): number {
+  return (
+    b.total - a.total ||
+    b.wins - a.wins ||
+    b.wins * a.matches - a.wins * b.matches ||
+    a.profileId - b.profileId
+  );
+}
 
 /**
  * Reescribe los puntos por partida y la clasificación completa.
@@ -501,8 +512,10 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
   const startedAtMs = Date.now();
 
   // El ruleset se lee fuera de la transacción: es configuración, no datos de la
-  // clasificación, y su publicación no debe quedarse esperando al resto.
+  // clasificación, y su publicación no debe quedarse esperando al resto. El pool de
+  // mapas, igual.
   const ruleset = await ensureRuleset();
+  const mapPool = await readMapPool();
 
   const result = await db.$transaction(
     async (tx) => {
@@ -530,11 +543,21 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       //
       // El predicado del `case` es el de `rankedMatchSql()`, o sea **el mismo** que
       // usa el agregado y la carga de objetivos: familia del ruleset, partida
-      // resuelta, `startedAt` dentro de `[window.from, window.to)` y no revertida.
-      // Una partida fuera de la ventana —o revertida— acaba con `points = 0` sin más
-      // que por no pasar el filtro, y por eso deshacer un revert devuelve los
-      // puntos sin tener que tocar esta fila a mano.
-      const clasificatoria = rankedMatchSql(Prisma.sql`m`, ruleset.modes, ruleset.window);
+      // resuelta, `startedAt` después del corte del jugador y antes de `window.to`,
+      // y no revertida. Una partida anterior a la inscripción del jugador, o fuera
+      // de la ventana, o revertida, acaba con `points = 0` sin más que por no pasar
+      // el filtro, y por eso deshacer un revert devuelve los puntos sin tener que
+      // tocar esta fila a mano.
+      //
+      // El `join` con `Player` no es decorativo: el corte de inscripción sale de
+      // `p."registeredAt"`. Es un `join` interior sobre la clave foránea, que no
+      // admite nulos, así que no deja fuera ninguna partida.
+      const clasificatoria = rankedMatchSql(
+        Prisma.sql`m`,
+        Prisma.sql`p`,
+        ruleset.modes,
+        ruleset.window,
+      );
 
       const updated = await tx.$executeRaw`
         with deseados as (
@@ -546,6 +569,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
               else 0
             end as puntos
           from "Match" m
+          join "Player" p on p."id" = m."playerId"
         )
         update "Match" m
         set points = d.puntos
@@ -554,7 +578,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       `;
 
       const objectivePlayers = await loadObjectivePlayers(tx, ruleset);
-      const objectives = computeObjectives(objectivePlayers, ruleset);
+      const objectives = computeObjectives(objectivePlayers, ruleset, mapPool);
 
       // Registro de hitos, en esta misma transacción y a continuación del cómputo:
       // el feed del historial de `/admin/historial` mezcla partidas y objetivos, y
@@ -571,18 +595,34 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       await reconcileObjectiveEvents(tx, ruleset, objectives.awarded);
 
       // Mismo filtro que el `UPDATE` de arriba y que la carga de objetivos (y por
-      // tanto también `revertedAt is null`), y con el estado del jugador, que aquí
-      // sí se puede filtrar sin `join`. Es `mode = any(...)` y `startedAt` en rango,
-      // así que lo cubre el índice `@@index([mode, startedAt])`.
-      const aggregated = await tx.match.groupBy({
-        by: ["playerId", "mode", "result"],
-        where: {
-          ...rankedMatchWhere(ruleset.modes, ruleset.window),
-          player: { status: PlayerStatus.APPROVED },
-        },
-        _count: { _all: true },
-        _sum: { points: true },
-      });
+      // tanto también `revertedAt is null`), y con el estado del jugador.
+      //
+      // **Es SQL crudo y no un `groupBy`, y el motivo es el corte de inscripción.**
+      // El filtro necesita `m."startedAt" >= p."registeredAt"`, y el `where` de
+      // Prisma compara un campo con un valor, nunca dos columnas: una referencia a
+      // campo solo vale entre campos del modelo que se consulta (probado en esta
+      // versión de Prisma, que responde *"Expected a referenced scalar field of
+      // model Match, but found a field of model Player"*). Como esta consulta
+      // abarca a todos los jugadores, el corte solo se puede escribir trayendo la
+      // fila de `Player`, y entonces lo natural es que el predicado sea el mismo
+      // `rankedMatchSql()` de las otras dos consultas y no una traducción nueva.
+      //
+      // El plan sigue siendo el mismo: `mode = any(...)` y `startedAt` en rango lo
+      // cubre el índice `@@index([mode, startedAt])`, y el `join` con `Player` es
+      // sobre su clave primaria con muy pocas filas.
+      const aggregated = await tx.$queryRaw<AggregatedMatchRow[]>`
+        select
+          m."playerId" as "playerId",
+          m."mode" as "mode",
+          m."result"::text as "result",
+          count(*)::int as "partidas",
+          coalesce(sum(m."points"), 0)::int as "points"
+        from "Match" m
+        join "Player" p on p."id" = m."playerId"
+        where p."status" = ${PlayerStatus.APPROVED}::"PlayerStatus"
+          and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window)}
+        group by m."playerId", m."mode", m."result"
+      `;
 
       const totals = new Map<string, AggregatedRow>();
 
@@ -594,8 +634,8 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         }
 
         const mode = row.mode;
-        const count = row._count._all;
-        const points = row._sum.points ?? 0;
+        const count = row.partidas;
+        const points = row.points;
         const won = row.result === MatchResult.WIN;
         const current = totals.get(row.playerId) ?? {
           matchPoints: 0,
@@ -632,9 +672,10 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
 
       const profileIdByPlayer = new Map(players.map((player) => [player.id, player.profileId]));
 
-      // Desempate provisional. `profileId` es único, así que el orden es total y
-      // el puesto un entero denso: no hay empates que repartir. Una fila sin
-      // `profileId` no se publica en lugar de publicarse con un desempate falso.
+      // Desempate: total, victorias, winrate y `profileId`. Este último es único,
+      // así que el orden es total y el puesto un entero denso: no hay empates que
+      // repartir. Una fila sin `profileId` no se publica en lugar de publicarse
+      // con un desempate falso.
       const ranked = [...totals.entries()]
         .flatMap(([playerId, aggregate]) => {
           const profileId = profileIdByPlayer.get(playerId);
@@ -653,7 +694,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
                 },
               ];
         })
-        .sort((a, b) => b.total - a.total || b.wins - a.wins || a.profileId - b.profileId)
+        .sort(compareStandings)
         .map((row, index) => ({ ...row, rank: index + 1 }));
 
       const previousCount = await tx.playerScore.count({

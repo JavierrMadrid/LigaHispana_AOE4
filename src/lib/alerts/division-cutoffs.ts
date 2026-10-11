@@ -8,27 +8,34 @@ import { isRecord } from "@/lib/json";
  *
  * ## Qué son y por qué hacen falta
  *
- * R5 compara la **media de elo de una partida de equipos** con la división 1v1
- * del jugador, y las dos cosas están en unidades distintas: la división del
- * jugador es un `rank_level` (`gold_3`) y la media de la partida es un número
- * (`average_mmr`). Para pasar de una a otra hace falta saber, para una ladder
- * concreta, **a partir de qué rating empieza cada subdivisión**.
+ * R5 compara **dos ratings de la misma partida de equipos**: el del jugador en
+ * esa partida (`team.self.rating`) y la media de **rating** de la partida
+ * (`average_rating`). Necesita saber a qué subdivisión corresponde cada uno para
+ * contar los escalones que los separan. El rating es un número y la subdivisión
+ * un `rank_level` (`gold_3`), así que hace falta saber, para una ladder concreta,
+ * **a partir de qué rating empieza cada subdivisión**. La decisión de por qué se
+ * usa el `rating` y no el `mmr` está en el docblock de `lowDivisionFlags()`
+ * (`compute.ts`), que es su única fuente.
  *
  * La API no lo publica: `rating_min`, `rating_max` y `rank_level` se ignoran en
  * silencio en `/leaderboards/:ladder` y siempre devuelven la página 1. La única
  * forma de averiguarlo es recorrer la ladder (ver `derive-cutoffs.ts`) y quedarse
  * con el rating más bajo de cada bloque, que es justo lo que se guarda aquí.
  *
- * ## Por qué hay cortes **por ladder**
+ * ## Por qué hay cortes **por familia de ladder**
  *
- * `average_mmr` es elo de equipos, así que los cortes que sirven son los de la
- * ladder de la partida (`Match.leaderboard`), no los de `rm_solo`. Comprobado
- * contra la API real en septiembre de 2026: un jugador con 252 de rating en la
- * ladder `rm_team` aparece con 337 de `mmr` en su partida de equipos, o sea que
- * las dos escalas son la misma, y `rank_level` sale del rating con umbrales
- * globales. Aun así se derivan y se cachean por ladder, porque es lo que hace
- * que el dato sea **correcto por construcción** y no por una suposición sobre
- * los umbrales de AoE4World.
+ * Los dos ratings que compara R5 son de la **familia** de la partida
+ * (`Match.mode`: para equipos, `rm_team`), así que los cortes que sirven son los
+ * de esa familia, no los de `rm_solo`. Se busca por la familia resuelta y no por
+ * el literal `Match.leaderboard` porque un ranked por equipos puede publicarse
+ * como `rm_2v2`, `rm_3v3` o `rm_4v4`, y entonces el literal no coincidiría con la
+ * clave cacheada.
+ *
+ * Los cortes se derivan del campo `rating` de la ladder porque es la escala que
+ * el `rank_level` traduce: el `mmr` que aparece en los payloads de partido es
+ * **otra** escala y no se usa para nada aquí. Aun así se derivan y se cachean por
+ * familia, porque es lo que hace que el dato sea **correcto por construcción** y
+ * no por una suposición sobre los umbrales de AoE4World.
  */
 
 /** Un corte: el rating más bajo que se ha visto en esa subdivisión. */
@@ -40,7 +47,7 @@ export type LadderCutoff = {
 };
 
 export type LadderCutoffs = {
-  /** Ladder de la que salen los cortes (`rm_solo`, `rm_team`). */
+  /** Familia de ladder de la que salen los cortes (`rm_team`). */
   ladder: string;
   /** Instante de la derivación, ISO-8601. */
   derivedAt: string;
@@ -59,7 +66,7 @@ export type LadderCutoffs = {
   requests: number;
 };
 
-/** Los cortes de todas las ladders derivadas, indexados por nombre de ladder. */
+/** Los cortes de todas las familias de ladder derivadas, indexados por nombre de familia. */
 export type LadderCutoffsTable = Record<string, LadderCutoffs>;
 
 /** Forma guardada en `Setting["alerts.divisionCutoffs"]`. */
@@ -73,6 +80,102 @@ export type MatchedSubdivision = {
   rankLevel: string;
 };
 
+/* -------------------------------------------------------------------------- */
+/* Lectura de la frontera de un bloque                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Lo mínimo de una fila de la ladder para derivar un corte.
+ *
+ * Es estructural a propósito: `Aoe4WorldLeaderboardEntry` ya tiene estos dos
+ * campos (y más), así que `derive-cutoffs.ts` puede pasar sus filas tal cual sin
+ * que este módulo tenga que importar los tipos de la API.
+ */
+export type LadderPageRow = {
+  rankLevel: string | null;
+  rating: number | null;
+};
+
+/**
+ * La subdivisión **mayoritaria** de una página de la ladder, por índice.
+ *
+ * La búsqueda binaria de `derive-cutoffs.ts` necesita un predicado monótono sobre
+ * el número de página, y el `rank_level` de una fila suelta no lo es: la ladder
+ * viene ordenada por puesto, pero Glicko deja etiquetas sueltas incoherentes
+ * (una fila `gold_3` de rating 745 en medio de un bloque de `gold_1`, por
+ * ejemplo). La moda de la página sí es estable y avanza de la más fuerte a la más
+ * débil con el número de página.
+ *
+ * Las filas con un `rank_level` desconocido o vacío no cuentan. Un empate se
+ * resuelve hacia la subdivisión **más fuerte** (el índice más bajo) para que el
+ * valor sea determinista y no dependa del orden en que aparezcan las filas.
+ * Devuelve `null` si no hay ninguna fila reconocible.
+ */
+export function majoritySubdivisionIndex(
+  rows: readonly LadderPageRow[],
+): number | null {
+  const counts = new Map<number, number>();
+
+  for (const row of rows) {
+    const index = subdivisionIndex(row.rankLevel);
+
+    if (index === null) {
+      continue;
+    }
+
+    counts.set(index, (counts.get(index) ?? 0) + 1);
+  }
+
+  let best: number | null = null;
+  let bestCount = 0;
+
+  for (const [index, count] of [...counts.entries()].sort(([a], [b]) => a - b)) {
+    if (count > bestCount) {
+      bestCount = count;
+      best = index;
+    }
+  }
+
+  return best;
+}
+
+/**
+ * El rating más bajo de la subdivisión `target` que aparece en estas páginas, o
+ * `null` si no hay ninguna fila suya.
+ *
+ * Filtra por subdivisión a propósito: en una página de frontera conviven dos
+ * bloques y queremos el rating de `target`, no el mínimo de toda la página (que
+ * sería de la subdivisión siguiente, más débil). Las filas de otras
+ * subdivisiones, las de `rank_level` desconocido y las que no traen `rating`
+ * quedan fuera.
+ *
+ * Es la pieza con la que `derive-cutoffs.ts` lee el **final** del bloque: el
+ * rating más bajo de una subdivisión está donde la ladder deja de ser de esa
+ * subdivisión, no donde empieza.
+ */
+export function lowestRatingInSubdivision(
+  rows: readonly LadderPageRow[],
+  target: number,
+): number | null {
+  let min: number | null = null;
+
+  for (const row of rows) {
+    if (typeof row.rating !== "number" || !Number.isFinite(row.rating)) {
+      continue;
+    }
+
+    if (subdivisionIndex(row.rankLevel) !== target) {
+      continue;
+    }
+
+    if (min === null || row.rating < min) {
+      min = row.rating;
+    }
+  }
+
+  return min;
+}
+
 /**
  * A qué subdivisión pertenece un rating, con los cortes de una ladder.
  *
@@ -83,7 +186,7 @@ export type MatchedSubdivision = {
  *
  * Un rating **por debajo del corte de la última subdivisión** (es decir, por
  * debajo de bronce 1) se devuelve como `bronze_1`. Se recorta a propósito: por
- * debajo de bronce 1 la ladder no dice nada, y un `average_mmr` por debajo del
+ * debajo de bronce 1 la ladder no dice nada, y un `average_rating` por debajo del
  * corte de bronce es un dato raro, no un comportamiento. Recortar solo puede
  * **reducir** la cuenta de escalones en un caso patológico (un jugador a un
  * escalón de bronce con una media imposible), y no cambia ninguna decisión cerca
@@ -116,6 +219,31 @@ export function subdivisionForRating(
   return ultimo === undefined || indiceUltimo === null
     ? null
     : { index: indiceUltimo, rankLevel: ultimo.rankLevel };
+}
+
+/**
+ * Deja en la tabla **solo** las familias de ladder indicadas.
+ *
+ * La caché es un retrato de lo que el motor puede leer, no un histórico: cuando
+ * una familia deja de derivarse —el `rm_solo`, que R5 ya no consulta— su entrada
+ * queda obsoleta y no tiene por qué sobrevivir a la siguiente reescritura de
+ * `Setting["alerts.divisionCutoffs"]`. Es pura para poder comprobar la poda sin
+ * red ni base de datos.
+ */
+export function pruneCutoffsTable(
+  table: LadderCutoffsTable,
+  ladders: readonly string[],
+): LadderCutoffsTable {
+  const keep = new Set(ladders);
+  const pruned: LadderCutoffsTable = {};
+
+  for (const [ladder, cutoffs] of Object.entries(table)) {
+    if (keep.has(ladder)) {
+      pruned[ladder] = cutoffs;
+    }
+  }
+
+  return pruned;
 }
 
 /* -------------------------------------------------------------------------- */

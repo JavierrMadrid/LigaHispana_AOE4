@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { unwrapRead } from "@/lib/db-errors";
 import { getStandings } from "@/lib/public";

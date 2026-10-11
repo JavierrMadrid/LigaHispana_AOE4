@@ -90,6 +90,11 @@ type MockGameBase = {
   state: string;
   ongoing: boolean;
   averageMmr: number;
+  /**
+   * Media de **rating** de la partida (`average_rating`), la que compara R5. Es
+   * distinta de `averageMmr`: la API publica las dos y sus escalas no coinciden.
+   */
+  averageRating: number;
   teams: MockGameSide[][];
 };
 
@@ -151,6 +156,13 @@ function averageMmr(sides: MockGameSide[][]): number {
   return Math.round(total / all.length);
 }
 
+function averageRating(sides: MockGameSide[][]): number {
+  const all = sides.flat();
+  const total = all.reduce((sum, side) => sum + side.rating, 0);
+
+  return Math.round(total / all.length);
+}
+
 function baseFields(
   gameIndex: number,
   leaderboard: string,
@@ -168,6 +180,7 @@ function baseFields(
     state: "processed",
     ongoing: false,
     averageMmr: averageMmr(teams),
+    averageRating: averageRating(teams),
     teams,
   };
 }
@@ -285,6 +298,7 @@ function makeLiveGame(
     state: "unprocessed",
     ongoing: true,
     averageMmr: averageMmr(teams),
+    averageRating: averageRating(teams),
     teams,
   };
 }
@@ -382,6 +396,7 @@ type MockGamePayload = {
   server: string;
   patch: number;
   average_mmr: number;
+  average_rating: number;
   ongoing: boolean;
   just_finished: boolean;
   teams: SidePayload[][];
@@ -425,6 +440,7 @@ export function serializeMockGame(game: MockGame, now: Date, form: "listing" | "
     server: "EU",
     patch: 11_308,
     average_mmr: game.averageMmr,
+    average_rating: game.averageRating,
     ongoing: game.ongoing,
     just_finished: false,
     teams: game.teams.map((team) =>

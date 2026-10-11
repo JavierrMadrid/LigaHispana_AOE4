@@ -4,11 +4,11 @@ import type { CivilizationId } from "@/lib/civs";
  * Icono de una civilización de Age of Empires IV.
  *
  * Vivía dentro de `objective-icon.tsx`, donde solo servía a los objetivos de
- * `masterizar-*`; la tarjeta de partidas en juego necesita el mismo asset para
- * cada jugador, así que el mapa de ficheros y su `<img>` se extraen aquí y las
- * dos pantallas usan el mismo componente. El icono es solo la imagen: el nombre
- * de la civilización no se pinta al lado, va como texto para lectores de
- * pantalla.
+ * civilización (`masterizando-*`, `lider-*`, `acolito-*`); la tarjeta de partidas
+ * en juego necesita el mismo asset para cada jugador, así que el mapa de ficheros
+ * y su `<img>` se extraen aquí y las dos pantallas usan el mismo componente. El
+ * icono es solo la imagen: el nombre de la civilización no se pinta al lado, va
+ * como texto para lectores de pantalla.
  *
  * Un `civ` desconocido (una civilización de un DLC reciente, o `null` porque la
  * partida no la publicó) cae a un recuadro neutro con el mismo tamaño, para que

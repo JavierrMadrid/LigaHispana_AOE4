@@ -55,13 +55,6 @@ export default async function LiveMatchesPage() {
       ) : (
         <LiveMatchesBrowser matches={matches} />
       )}
-
-      <p className="max-w-[68ch] border-t border-line pt-6 text-xs leading-relaxed text-muted">
-        Una partida abandonada no se queda colgada: el sincronizador la borra en
-        cuanto confirma que ya no se va a resolver. En las partidas por equipos se
-        ve la alineación completa, con el compañero y los rivales; solo los
-        jugadores de la liga llevan su división junto al nombre.
-      </p>
     </div>
   );
 }

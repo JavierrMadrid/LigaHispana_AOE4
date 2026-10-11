@@ -57,6 +57,22 @@ export function isLiveGame(game: Aoe4WorldGame, now: Date = new Date()): boolean
 }
 
 /**
+ * Corte por el que una partida **guardada** sin resolver deja de poder estar viva.
+ *
+ * `finishedAt = null` significa "en curso" para F4, así que una fila así solo es
+ * legítima mientras la partida pueda seguir jugándose. Pasada la ventana de
+ * directo ya no: hay que ir a por su desenlace (resolverla o abandonarla). El
+ * sincronizador usa este corte para elegir qué pendientes reconciliar, y por eso
+ * la condición **no** depende del cursor `since`: una partida abandonada que fuera
+ * la más nueva del jugador tiene `startedAt >= since` (el cursor es
+ * `maxStartedAt − 60 min`) y con el criterio del cursor se quedaría sin
+ * reconciliar para siempre.
+ */
+export function reconciliationCutoff(now: Date = new Date()): Date {
+  return new Date(now.getTime() - LIVE_GAME_WINDOW_MS);
+}
+
+/**
  * Correspondencia mecánica entre el `kind` de la API y la familia de ladder.
  *
  * La API usa el mismo nombre para cosas distintas según el endpoint: un ranked

@@ -29,7 +29,11 @@ export function LoginPanel({ message }: { message?: string }) {
         <p className="text-sm text-muted">
           Solo para la organización. Inicia sesión con tu cuenta de Supabase.
         </p>
-        {message ? <p className="mt-2 text-sm text-red-400">{message}</p> : null}
+        {message ? (
+          <p role="alert" className="mt-2 text-sm text-danger">
+            {message}
+          </p>
+        ) : null}
       </div>
       <LoginForm />
     </div>

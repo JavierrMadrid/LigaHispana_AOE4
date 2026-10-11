@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env.mjs";
 
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 

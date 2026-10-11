@@ -23,8 +23,9 @@ import { AdminActionType } from "@/generated/prisma/enums";
  *
  * El enum (`AdminActionType`) es corto a propósito: registra lo que **alguien más ve**
  * —un jugador entra o sale, una partida deja de contar o vuelve a contar—. Editar
- * nombre, canales o país también cambia lo que ve el resto (el nombre y el canal salen
- * en la clasificación, en `/partidas` y en el propio panel), así que también está.
+ * nombre, correo, canales o país también cambia lo que ve el resto (el nombre y el
+ * canal salen en la clasificación, en `/partidas` y en el propio panel, y el correo
+ * en el panel), así que también está.
  * Aprobar o rechazar una solicitud no está, y por eso tampoco hay tipo: cuando la
  * pestaña de acciones lo necesite se añade el valor al enum y el `switch` de este
  * módulo deja de ser exhaustivo solo, que es lo que evita que un tipo nuevo salga con
@@ -36,15 +37,25 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * |---|---|
  * | `PLAYER_CREATED` | `Alta de BeastWizard (AoE4World 123456)` |
  * | `PLAYER_EDITED` | `Edición de BeastWizard (AoE4World 123456): nombre, canal de Twitch` |
- * | `PLAYER_REMOVED` | `Baja de BeastWizard y sus 87 partidas` |
- * | `MATCH_POINTS_REVERTED` | `Revertidos 10 puntos de la partida G-12345 de BeastWizard` |
- * | `MATCH_POINTS_RESTORED` | `Restaurados 10 puntos de la partida G-12345 de BeastWizard` |
+ * | `PLAYER_REMOVED` | `Baja de BeastWizard y sus 87 partidas clasificatorias` |
+ * | `MATCH_POINTS_REVERTED` | `Revertidos 2 puntos de la partida G-12345 de BeastWizard` |
+ * | `MATCH_POINTS_RESTORED` | `Restaurados 2 puntos de la partida G-12345 de BeastWizard` |
  *
  * En las dos últimas el nombre del jugador va al final y no escondido en `details`:
  * es la parte que se lee, y un historial de "G-12345" a secas obligaría a ir al filtro
  * de la pestaña de partidas para saber de quién era. Una partida de 0 puntos (una
  * derrota) produce "Revertidos 0 puntos…", que es la verdad: no puntuaba, y aun así
  * sale de las partidas, de los ratios y de los objetivos.
+ *
+ * En `PLAYER_REMOVED` el número son las **partidas clasificatorias** del jugador, no
+ * las filas de `Match` que caen en cascada: una baja borra todo lo suyo, pero el
+ * historial cuenta lo que de verdad ha jugado en el torneo —familia del ruleset,
+ * resueltas, dentro de la ventana con su corte de inscripción y sin revertir—. Decir
+ * las filas importadas (incluidas las anteriores a la inscripción y las de modos que
+ * no puntúan) describiría algo que a nadie le interesa y que no es lo que ve el panel
+ * en la columna "Partidas". El estado del jugador no forma parte de la definición (lo
+ * pone quien consulta), así que la baja cuenta las clasificatorias de un APPROVED sin
+ * añadir ese estado como condición.
  *
  * `PLAYER_EDITED` lleva **qué campos** cambiaron en la frase y no solo el jugador, por
  * la misma razón: "Edición de BeastWizard" sin más no dice qué se editó, que es justo
@@ -69,12 +80,17 @@ type PlayerCreatedEntry = {
   status: string;
 };
 
-/** Baja de jugador, con cuántas partidas caen con ella. */
+/** Baja de jugador, con cuántas partidas clasificatorias caen con ella. */
 type PlayerRemovedEntry = {
   type: "PLAYER_REMOVED";
   name: string;
   profileId: number;
-  /** Filas de `Match` que tenía: se borran en cascada con el jugador. */
+  /**
+   * Partidas **clasificatorias** del jugador dentro de la ventana, con la misma
+   * definición que la columna "Partidas" del panel (`rankedMatchWhere`). No son las
+   * filas de `Match` que se borran en cascada: esas incluyen el histórico importado
+   * entero, modos que no puntúan y partidas anteriores a la inscripción.
+   */
   matchCount: number;
 };
 
@@ -109,7 +125,7 @@ type PlayerEditedEntry = {
   name: string;
   profileId: number;
   /**
-   * Solo los campos que han cambiado, nunca los cinco, y **siempre al menos uno**.
+   * Solo los campos que han cambiado, nunca todos, y **siempre al menos uno**.
    *
    * Que no esté vacío es lo que decide si hace falta escribir la fila: abrir el
    * formulario y cerrarlo sin tocar nada es lo más normal del mundo y no deja rastro
@@ -166,12 +182,12 @@ export function adminActionSummary(entry: AdminActionEntry): string {
         .join(", ")}`;
     case AdminActionType.PLAYER_REMOVED:
       if (entry.matchCount === 0) {
-        return `Baja de ${entry.name}, que no tenía partidas`;
+        return `Baja de ${entry.name}, que no tenía partidas clasificatorias`;
       }
 
       return entry.matchCount === 1
-        ? `Baja de ${entry.name} y su 1 partida`
-        : `Baja de ${entry.name} y sus ${entry.matchCount} partidas`;
+        ? `Baja de ${entry.name} y su 1 partida clasificatoria`
+        : `Baja de ${entry.name} y sus ${entry.matchCount} partidas clasificatorias`;
     case AdminActionType.MATCH_POINTS_REVERTED:
       return `Revertidos ${puntos(entry.points)} ${deLaPartida(entry)}`;
     case AdminActionType.MATCH_POINTS_RESTORED:
