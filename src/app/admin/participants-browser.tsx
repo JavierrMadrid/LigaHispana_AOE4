@@ -76,8 +76,9 @@ const STATUS_ORDER: Record<PlayerStatus, number> = {
 
 /**
  * Los nulos van al final en los dos sentidos: un jugador sin perfil oficial, sin
- * país, sin partidas o sin fila en la clasificación no debe encabezar la tabla ni
- * al ordenar ascendente ni al descendente.
+ * país o fuera de la clasificación —el que no está aprobado, el único que llega
+ * con las cifras en blanco— no debe encabezar la tabla ni al ordenar ascendente ni
+ * al descendente.
  */
 function compareNullableText(a: string | null, b: string | null, dir: 1 | -1): number {
   if (a === null && b === null) {
@@ -143,8 +144,9 @@ function comparePlayers(
  * paginación es de cliente a propósito**: con la búsqueda filtrando sobre lo que ya
  * hay, paginar en servidor haría que buscar solo encontrara lo de la página visible,
  * que es el fallo clásico de combinar las dos cosas. Los estados no aprobados no se
- * esconden: se marcan, y cuando el jugador no tiene fila en la clasificación los
- * números salen como raya y no como cero, que afirmaría algo falso.
+ * esconden: se marcan, y sus cifras salen como raya y no como cero, porque fuera de
+ * la clasificación un cero afirmaría algo falso. Un aprobado, en cambio, siempre
+ * tiene fila: si no ha jugado nada todavía, sus cifras son 0.
  *
  * El orden sigue el ciclo de tres estados de la tabla pública (ascendente →
  * descendente → orden original del servidor, que aquí es `status` y después `name`),
@@ -362,11 +364,12 @@ export function ParticipantsBrowser({
                 <caption className="sr-only">
                   Jugadores del torneo: nombre, perfil de AoE4World, canales de directo,
                   cuenta de Discord y su pertenencia al servidor, país, estado, partidas
-                  clasificatorias y puntos. Una raya significa que el jugador no tiene fila
-                  en la clasificación; un jugador sin cuenta de Discord aparece como Sin
-                  Discord, y su pertenencia se marca como En el servidor, Fuera del
-                  servidor o Sin comprobar. Las columnas de jugador, perfil, país, estado,
-                  partidas y puntos se pueden ordenar.
+                  clasificatorias y puntos. Una raya en partidas o puntos significa que el
+                  jugador no está aprobado y por tanto no está en la clasificación; un
+                  participante aprobado sin partidas clasificatorias muestra 0. Un jugador
+                  sin cuenta de Discord aparece como Sin Discord, y su pertenencia se marca
+                  como En el servidor, Fuera del servidor o Sin comprobar. Las columnas de
+                  jugador, perfil, país, estado, partidas y puntos se pueden ordenar.
                 </caption>
                 <thead className="bg-surface text-muted">
                   <tr>
@@ -615,7 +618,7 @@ function ParticipantRow({
 
       <td className={`${CELL} hidden text-right tabular-nums lg:table-cell`}>
         {player.matchCount === null ? (
-          <span className="text-muted" title="No tiene partidas clasificatorias">
+          <span className="text-muted" title="No está aprobado, así que no está en la clasificación">
             —
           </span>
         ) : (
@@ -625,7 +628,7 @@ function ParticipantRow({
 
       <td className={`${CELL} hidden text-right tabular-nums lg:table-cell`}>
         {player.points === null ? (
-          <span className="text-muted" title="No tiene fila en la clasificación">
+          <span className="text-muted" title="No está aprobado, así que no está en la clasificación">
             —
           </span>
         ) : (

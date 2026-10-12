@@ -30,6 +30,17 @@ La llamada manual la hace un admin desde `/admin` con la Server Action `syncNow`
 `src/lib/manual-sync.ts`) para que el admin y el cron no se pisen. No escribe en `AdminAction`: ya
 deja el rastro en `Setting["sync.lastRun"]`.
 
+**Aprobar o dar de alta no lanza una pasada.** Tanto el aprobado de una solicitud (`approvePlayer`)
+como el alta de admin (`createPlayer`) **solo escriben el estado**: el jugador entra en la
+clasificación en la siguiente pasada del cron (hasta 10 minutos) o con la llamada manual
+(`syncNow`). No es un olvido, es lo que permite que el botón no se cuelgue: una pasada gasta ~500 ms
+de CPU y el plan Free de Cloudflare da 10 ms por invocación, así que lanzarla dentro de la petición
+del botón mataba el *isolate* con `Worker exceeded CPU time limit` (1102) en cuanto se apilaban dos
+clics (ver [El límite de CPU del plan Free](#el-límite-de-cpu-del-plan-free)). En cuanto pase esa
+pasada, un `APPROVED` aparece **siempre** en la clasificación: si aún no tiene ninguna partida
+clasificatoria, sale con 0 puntos y 0 partidas, con su puesto por el desempate de siempre. Un
+`PENDING` o un `REJECTED` no tiene fila y no aparece.
+
 ```bash
 npm run sync                        # desde la terminal, sin levantar el servidor
 npm run sync -- 4635035 8139502     # solo esos profileId
@@ -148,6 +159,11 @@ pestaña es para comportamientos de jugadores, no para salud de procesos). Tres 
 
 El rastro lleva `lastSuccessAt`, que **no avanza si la pasada sale a medias**: responde "¿desde cuándo
 está roto?". No hay histórico de pasadas: solo la última y el marcador de la última buena.
+
+La portada pinta **«Actualizado a las …»** con `getLastSyncFinishedAt()` (`src/lib/public.ts`), que
+publica el `finishedAt` de la última pasada **registrada, aunque haya salido a medias** —no
+`lastSuccessAt`—: la frase mide cuándo se tocaron los datos por última vez, no si esa pasada salió
+bien. Es una lectura ligera de `Setting["sync.lastRun"]`, sin el rastro de salud de `/admin`.
 
 ## El límite de CPU del plan Free
 

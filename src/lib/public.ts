@@ -23,7 +23,7 @@ import {
   type ObjectiveTarget,
 } from "@/lib/objectives";
 import { rankedModesWhere } from "@/lib/ranked-match";
-import { readMatcherinoDonations } from "@/lib/settings";
+import { readMatcherinoDonations, readSyncRunTrace } from "@/lib/settings";
 import {
   RULESET_VERSION,
   loadObjectiveView,
@@ -333,9 +333,9 @@ function earnedObjectivesPoints(breakdown: unknown): number {
  * Clasificación de la versión de reglas activa, de la primera posición a la
  * última.
  *
- * Solo aparecen los jugadores **aprobados** que tienen al menos una partida
- * clasificatoria resuelta (decisión P-02 del modelo de datos): un aprobado que
- * aún no ha jugado no tiene fila, y por tanto tampoco sitio en la tabla.
+ * Aparecen **todos** los jugadores aprobados: un aprobado que aún no ha jugado
+ * ninguna clasificatoria sale con todo a cero y con su puesto por el desempate de
+ * siempre. Un `PENDING` o un `REJECTED` no tiene fila y no aparece.
  *
  * Tres consultas planas, ninguna por fila: la de partidas en directo sirve para
  * marcar `isPlaying` sin N+1 y la del ruleset (una clave de `Setting`) trae los
@@ -1157,6 +1157,30 @@ export async function getTournamentWindow(): Promise<PublicRead<TournamentWindow
     const ruleset = await readRuleset();
 
     return { ...ruleset.window };
+  });
+}
+
+/**
+ * La hora en que terminó la última pasada **registrada** del sincronizador.
+ *
+ * Es una lectura ligera de `Setting["sync.lastRun"]`, como `getTournamentWindow()`:
+ * la portada la usa para decir «Actualizado a las …» sin arrastrar el cálculo de los
+ * objetivos. Publica el `finishedAt` de la última pasada **aunque haya salido a
+ * medias**: lo que promete la frase es cuándo se tocaron los datos por última vez,
+ * no si esa pasada salió entera. Para «¿desde cuándo está roto?» está
+ * `lastSuccessAt`, que responde a la otra pregunta y se enseña en el aviso de
+ * `/admin` (`getSyncHealth()`), no aquí.
+ *
+ * `{ status: "ok", data: null }` cuando nunca se ha escrito una pasada, que es un
+ * caso distinto de `degraded`: quien pinte tiene que poder distinguir "todavía no ha
+ * corrido" de "no lo hemos podido saber", y con `degraded` no debe pintar una hora
+ * inventada.
+ */
+export async function getLastSyncFinishedAt(): Promise<PublicRead<string | null>> {
+  return readFromDatabase("public/getLastSyncFinishedAt", async () => {
+    const trace = await readSyncRunTrace();
+
+    return trace?.finishedAt ?? null;
   });
 }
 

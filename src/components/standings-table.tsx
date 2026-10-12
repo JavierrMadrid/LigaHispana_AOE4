@@ -147,8 +147,9 @@ const SORT_FIELDS: { key: SortKey; label: string; visual?: ReactNode }[] = [
 
 /**
  * Los nulos nunca participan del sentido de la ordenación: van al final tanto en
- * ascendente como en descendente. Así un jugador sin clasificar no encabeza la
- * tabla al ordenar por elo o racha en un sentido o en el otro.
+ * ascendente como en descendente. Así un jugador que todavía no ha jugado —sin
+ * elo ni racha— no encabeza la tabla al ordenar por elo o racha en un sentido o
+ * en el otro.
  */
 function compareNullable(
   a: number | null,
@@ -306,7 +307,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
     return (
       <EmptyState
         title="Todavía no hay nadie en la clasificación"
-        body="Solo tienen fila los jugadores aprobados que ya han terminado al menos una partida clasificatoria. En cuanto alguien cierre su primera partida de ranked, aparecerá aquí."
+        body="Aparecen todos los participantes aprobados, aunque todavía no hayan jugado ninguna partida clasificatoria: salen con 0 puntos y 0 partidas hasta que cierren una de las que cuentan. Si la tabla sigue vacía, es que aún no hay ningún participante aprobado o que la clasificación no se ha recalculado."
         action={
           <Link
             href="/puntuacion"

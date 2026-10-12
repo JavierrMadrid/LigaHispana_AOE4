@@ -2327,7 +2327,7 @@ async function runDatabaseChecks(): Promise<void> {
     await check("la clasificación pública solo muestra a los aprobados", async () => {
       const { getStandings, getLiveMatches, getTwitchChannels } = await import("@/lib/public");
 
-      // Un segundo jugador, aprobado, sin partidas: no debe tener fila.
+      // Un segundo jugador, aprobado, sin partidas: sale con todo a cero.
       const vacio = await db.player.create({
         data: { profileId: SAMPLE_PENDING_PROFILE_ID + 1, name: "Sin Partidas", status: "APPROVED" },
       });
@@ -2354,6 +2354,11 @@ async function runDatabaseChecks(): Promise<void> {
             rawJson: fixture.live,
           },
         });
+
+        // El `vacio` acaba de nacer, así que su fila en `PlayerScore` no existe
+        // hasta que el motor recalcule. Se recálcula aquí para poder comprobar la
+        // regla nueva: todo aprobado tiene fila, aunque no haya jugado.
+        await recomputeScores();
 
         const standings = unwrapRead(await getStandings(), "verify:clasificacion");
         const fila = standings.find((row) => row.profileId === SAMPLE_PROFILE_ID);
@@ -2385,10 +2390,24 @@ async function runDatabaseChecks(): Promise<void> {
           true,
           "con los objetivos no se puede sumar menos que con las partidas solas",
         );
+        const vacioFila = standings.find((row) => row.profileId === vacio.profileId);
+
+        assert.ok(
+          vacioFila !== undefined,
+          "un aprobado sin partidas clasificatorias también sale en la clasificación",
+        );
+        assert.equal(vacioFila.points, 0, "y con 0 puntos");
+        assert.equal(vacioFila.wins, 0);
+        assert.equal(vacioFila.losses, 0);
         assert.equal(
-          standings.some((row) => row.profileId === vacio.profileId),
+          vacioFila.rank,
+          standings.length,
+          "aparece en el último puesto: no ha puntuado nada",
+        );
+        assert.equal(
+          standings.some((row) => row.profileId === SAMPLE_PENDING_PROFILE_ID),
           false,
-          "un aprobado sin partidas clasificatorias no tiene fila (P-02)",
+          "un jugador pendiente no tiene fila",
         );
         assert.deepEqual(
           standings.map((row) => row.rank),

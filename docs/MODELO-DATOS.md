@@ -118,7 +118,10 @@ la web; `Match` no se lee para pintar la clasificación.
 | `computedAt` | `DateTime` | |
 
 Índices: pk `(playerId, ruleSetVersion)` e `(ruleSetVersion, rank)`, que sostiene la clasificación
-sin `sort`. Un aprobado sin ninguna clasificatoria resuelta **no tiene fila**, así que no aparece.
+sin `sort`. Todo jugador **aprobado** tiene fila, aunque todavía no haya jugado ninguna clasificatoria:
+sale con `total`, `wins` y `matches` a 0 y el `breakdown` con ceros (las familias del ruleset, con 0,
+y `objectives` a 0 y vacío). Un jugador **no aprobado** (`PENDING`/`REJECTED`) no tiene fila y no
+aparece.
 
 Formato de `breakdown` (tipo `ScoreBreakdown` en `src/lib/scoring.ts`): las dos familias están
 siempre presentes, con ceros si no aplican.
@@ -243,7 +246,7 @@ Claves vivas en producción, con quién las escribe:
 | `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel de admin |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube ya resuelto. | Worker |
-| `aoe4world.sync.player.<profileId>` | Cursor de sincronización por jugador. | Worker |
+| `aoe4world.sync.player.<profileId>` | Cursor de sincronización por jugador. | Worker; la baja de `/admin` lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede un cursor viejo. |
 
 ## Índices
 

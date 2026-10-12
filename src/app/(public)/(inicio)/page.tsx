@@ -6,7 +6,12 @@ import { LiveRefresh } from "@/components/live-refresh";
 import { PageHead } from "@/components/page-head";
 import { StandingsTable } from "@/components/standings-table";
 import { TournamentCountdown } from "@/components/tournament-countdown";
-import { getLiveMatches, getStandings, getTournamentWindow } from "@/lib/public";
+import {
+  getLastSyncFinishedAt,
+  getLiveMatches,
+  getStandings,
+  getTournamentWindow,
+} from "@/lib/public";
 
 export const metadata: Metadata = {
   title: "Clasificación general",
@@ -20,11 +25,17 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function StandingsPage() {
-  const [standings, liveMatches, tournamentWindow] = await Promise.all([
+  const [standings, liveMatches, tournamentWindow, lastSync] = await Promise.all([
     getStandings(),
     getLiveMatches(),
     getTournamentWindow(),
+    getLastSyncFinishedAt(),
   ]);
+
+  // El contador necesita el instante del render para que su primer pintado —el
+  // de servidor y el de la hidratación— salga igual sin llamar a `new Date()` en
+  // el cliente, que daría otro valor.
+  const now = new Date().toISOString();
 
   // `data` es `null` cuando la base de datos no ha podido leer. No se sustituye
   // por una lista vacía a propósito: un vacío aquí se leería como "no hay
@@ -82,28 +93,33 @@ export default async function StandingsPage() {
                   </span>{" "}
                   {rows.length === 1 ? "participante" : "participantes"}
                 </p>
-                {tournamentWindow.status === "ok" && tournamentWindow.data.to !== null ? (
-                  <>
-                    {/* Barras verticales sueltas, no bordes por campo: al envolver,
-                        un borde quedaría pegado al texto. En móvil se ocultan
-                        porque los campos se apilan. */}
-                    <span
-                      aria-hidden="true"
-                      className="hidden h-4 w-px shrink-0 bg-line sm:block"
-                    />
-                    <TournamentCountdown
-                      to={tournamentWindow.data.to}
-                      serverNow={new Date().toISOString()}
-                    />
-                  </>
+                {/* El contador se pinta con la ventana entera y decide él qué
+                    cuenta (inicio o cierre) y si hay algo que contar: con el
+                    torneo terminado o con una ventana abierta ya arrancada
+                    desaparece, barra de separación incluida. */}
+                {tournamentWindow.status === "ok" ? (
+                  <TournamentCountdown
+                    from={tournamentWindow.data.from}
+                    to={tournamentWindow.data.to}
+                    serverNow={now}
+                  />
                 ) : null}
+                {/* Bordes verticales sueltos, no bordes por campo: al envolver,
+                    un borde quedaría pegado al texto. En móvil se ocultan porque
+                    los campos se apilan. */}
                 <span
                   aria-hidden="true"
                   className="hidden h-4 w-px shrink-0 bg-line sm:block"
                 />
                 {/* El recuento de partidas en juego solo se refresca cada 150 s:
-                    sin la hora, el número envejecería sin que se note. */}
-                <LiveRefresh showStatus />
+                    sin la hora, el número envejecería sin que se note. La hora
+                    que enseña es la de la última pasada del sincronizador, no la
+                    del refresco del navegador: un `degraded` o la ausencia de
+                    pasadas se le pasan como "sin hora", para no inventarla. */}
+                <LiveRefresh
+                  showStatus
+                  dataUpdatedAt={lastSync.status === "ok" ? lastSync.data : null}
+                />
               </div>
             </div>
           </div>
