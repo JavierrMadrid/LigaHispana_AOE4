@@ -26,7 +26,7 @@ export default async function LiveMatchesPage() {
   return (
     <div className="flex flex-col gap-6">
       {/* El temporizador va fuera de la cabecera porque no pinta nada: solo
-          vuelve a leer la base cada 75 s. Va aquí y no dentro del `aside` para
+          vuelve a leer la base cada 150 s. Va aquí y no dentro del `aside` para
           que, cuando no hay ninguna partida en juego, la cabecera no monte un
           contenedor vacío. */}
       <LiveRefresh />

@@ -11,6 +11,11 @@ import { useRouter } from "next/navigation";
  * nuevas se encargan el cron de Supabase y, en su defecto, la llamada manual del
  * panel de admin (`syncNow`), que es la única vía manual que queda.
  *
+ * Los 150 s no son arbitrarios: la frescura de los datos la marca el sync (cada
+ * 10 minutos), así que sondear más a menudo no adelanta nada, y cada refresco es
+ * una render dinámica con consultas a Postgres dentro del presupuesto de CPU del
+ * plan Free (ver `docs/OPERACION.md`, "El límite de CPU del plan Free").
+ *
  * Se salta cuando la pestaña no está visible, para no interrogar la base desde
  * pestañas en segundo plano.
  *
@@ -22,7 +27,7 @@ import { useRouter } from "next/navigation";
  * coincidan y la hora local (`es-ES`) no rompa la hidratación.
  */
 
-const REFRESH_MS = 75_000;
+const REFRESH_MS = 150_000;
 
 export function LiveRefresh({ showStatus = false }: { showStatus?: boolean }) {
   const router = useRouter();

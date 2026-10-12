@@ -157,7 +157,7 @@ compiler* en WASM, el parseo del JSON y el recálculo): unas **50 veces** el pre
 tolera pasarse de forma esporádica; de forma consistente lo mata con `Worker exceeded CPU time limit`
 (error 1102).
 
-No hay cambio de plan a la vista, así que se mitiga **recortando el trabajo**, en dos frentes:
+No hay cambio de plan a la vista, así que se mitiga **recortando el trabajo**, en tres frentes:
 
 - **Menos pasadas**: el reloj pasa de 5 a **10 minutos**. La mitad de CPU gastada, y las partidas se
   siguen viendo (en la pasada siguiente).
@@ -167,6 +167,9 @@ No hay cambio de plan a la vista, así que se mitiga **recortando el trabajo**, 
   transacción y **solo si la huella del contenido cambió**; las páginas leen esa clave. Si falta, no
   valida o es de otra versión de las reglas, caen al cómputo en vivo de siempre, de modo que la
   degradación es segura.
+- **Menos sondeos del navegador**: el refresco automático de `/` y `/partidas` (`LiveRefresh`) pasa de
+  75 s a **150 s**. La frescura real la marca el sync (cada 10 minutos), así que la mitad de sondeos
+  apenas se nota en pantalla y recorta a la mitad las renders dinámicas de las pestañas abiertas.
 
 Cómo se llegó aquí:
 

@@ -101,7 +101,7 @@ export default async function StandingsPage() {
                   aria-hidden="true"
                   className="hidden h-4 w-px shrink-0 bg-line sm:block"
                 />
-                {/* El recuento de partidas en juego solo se refresca cada 75 s:
+                {/* El recuento de partidas en juego solo se refresca cada 150 s:
                     sin la hora, el número envejecería sin que se note. */}
                 <LiveRefresh showStatus />
               </div>
