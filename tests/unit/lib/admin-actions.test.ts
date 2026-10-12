@@ -8,8 +8,8 @@ import { adminActionDetails, adminActionSummary, puntos } from "@/lib/admin-acti
  * cual, así que sus formas son un contrato: si la baja de un jugador dijera "y sus N
  * partidas" a secas, el número se leería como las filas de `Match` importadas en vez
  * de como las partidas clasificatorias del torneo. Aquí se fijan las tres formas de
- * `PLAYER_REMOVED` (0, 1 y N) y las de los tipos que ya existían, para que un cambio
- * de redacción no cuele sin querer.
+ * `PLAYER_REMOVED` (0, 1 y N), las de las dos direcciones de aprobar/rechazar y las de
+ * los tipos que ya existían, para que un cambio de redacción no cuele sin querer.
  */
 
 function daDeBaja(matchCount: number): string {
@@ -67,6 +67,30 @@ describe("adminActionSummary", () => {
     ).toBe("Edición de BeastWizard (AoE4World 123456): nombre, canal de Twitch");
   });
 
+  it("PLAYER_APPROVED dice quién y con qué perfil", () => {
+    expect(
+      adminActionSummary({
+        type: AdminActionType.PLAYER_APPROVED,
+        name: "Vortix",
+        profileId: 5364911,
+        statusBefore: "PENDING",
+        statusAfter: "APPROVED",
+      }),
+    ).toBe("Aprobación de Vortix (AoE4World 5364911)");
+  });
+
+  it("PLAYER_REJECTED dice quién y con qué perfil", () => {
+    expect(
+      adminActionSummary({
+        type: AdminActionType.PLAYER_REJECTED,
+        name: "Vortix",
+        profileId: 5364911,
+        statusBefore: "PENDING",
+        statusAfter: "REJECTED",
+      }),
+    ).toBe("Rechazo de Vortix (AoE4World 5364911)");
+  });
+
   it("MATCH_POINTS_REVERTED dice los puntos y la partida", () => {
     expect(
       adminActionSummary({
@@ -110,5 +134,39 @@ describe("adminActionDetails", () => {
         matchCount: 12,
       }),
     ).toEqual({ name: "BeastWizard", profileId: 123456, matchCount: 12 });
+  });
+
+  it("la aprobación guarda el estado de antes y el de después", () => {
+    expect(
+      adminActionDetails({
+        type: AdminActionType.PLAYER_APPROVED,
+        name: "Vortix",
+        profileId: 5364911,
+        statusBefore: "PENDING",
+        statusAfter: "APPROVED",
+      }),
+    ).toEqual({
+      name: "Vortix",
+      profileId: 5364911,
+      statusBefore: "PENDING",
+      statusAfter: "APPROVED",
+    });
+  });
+
+  it("el rechazo distingue de dónde venía: un APPROVED que sale de la clasificación", () => {
+    expect(
+      adminActionDetails({
+        type: AdminActionType.PLAYER_REJECTED,
+        name: "Vortix",
+        profileId: 5364911,
+        statusBefore: "APPROVED",
+        statusAfter: "REJECTED",
+      }),
+    ).toEqual({
+      name: "Vortix",
+      profileId: 5364911,
+      statusBefore: "APPROVED",
+      statusAfter: "REJECTED",
+    });
   });
 });

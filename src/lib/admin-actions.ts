@@ -26,10 +26,11 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * nombre, correo, canales o país también cambia lo que ve el resto (el nombre y el
  * canal salen en la clasificación, en `/partidas` y en el propio panel, y el correo
  * en el panel), así que también está.
- * Aprobar o rechazar una solicitud no está, y por eso tampoco hay tipo: cuando la
- * pestaña de acciones lo necesite se añade el valor al enum y el `switch` de este
- * módulo deja de ser exhaustivo solo, que es lo que evita que un tipo nuevo salga con
- * una frase inventada.
+ * Aprobar o rechazar una solicitud también deja rastro: aprobar mete al jugador en la
+ * clasificación y rechazar lo deja fuera, y esos dos movimientos son justo lo que la
+ * organización viene a auditar. Sus dos tipos van al final del enum, y el `switch` de
+ * este módulo es exhaustivo sobre él para que un tipo nuevo no pueda salir con una
+ * frase inventada.
  *
  * ## El texto de cada tipo
  *
@@ -38,6 +39,8 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * | `PLAYER_CREATED` | `Alta de BeastWizard (AoE4World 123456)` |
  * | `PLAYER_EDITED` | `Edición de BeastWizard (AoE4World 123456): nombre, canal de Twitch` |
  * | `PLAYER_REMOVED` | `Baja de BeastWizard y sus 87 partidas clasificatorias` |
+ * | `PLAYER_APPROVED` | `Aprobación de BeastWizard (AoE4World 123456)` |
+ * | `PLAYER_REJECTED` | `Rechazo de BeastWizard (AoE4World 123456)` |
  * | `MATCH_POINTS_REVERTED` | `Revertidos 2 puntos de la partida G-12345 de BeastWizard` |
  * | `MATCH_POINTS_RESTORED` | `Restaurados 2 puntos de la partida G-12345 de BeastWizard` |
  *
@@ -56,6 +59,13 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * en la columna "Partidas". El estado del jugador no forma parte de la definición (lo
  * pone quien consulta), así que la baja cuenta las clasificatorias de un APPROVED sin
  * añadir ese estado como condición.
+ *
+ * `PLAYER_APPROVED` y `PLAYER_REJECTED` guardan en `details` el estado **de antes y el
+ * de después** aunque la frase solo diga cuál es el nuevo, porque el mismo "Rechazo"
+ * no describe lo mismo según de dónde venga: de un `PENDING` es una solicitud
+ * descartada y de un `APPROVED` es un participante que estaba puntuando y sale de la
+ * clasificación. Sin el estado anterior el historial no podría distinguir esos dos
+ * movimientos.
  *
  * `PLAYER_EDITED` lleva **qué campos** cambiaron en la frase y no solo el jugador, por
  * la misma razón: "Edición de BeastWizard" sin más no dice qué se editó, que es justo
@@ -92,6 +102,17 @@ type PlayerRemovedEntry = {
    * entero, modos que no puntúan y partidas anteriores a la inscripción.
    */
   matchCount: number;
+};
+
+/** Aprobación o rechazo de una solicitud, en las dos direcciones. */
+type PlayerStatusEntry = {
+  type: "PLAYER_APPROVED" | "PLAYER_REJECTED";
+  name: string;
+  profileId: number;
+  /** Estado que tenía el jugador antes del cambio (`PENDING`, `APPROVED`, `REJECTED`). */
+  statusBefore: string;
+  /** Estado con el que queda. */
+  statusAfter: string;
 };
 
 /**
@@ -153,6 +174,7 @@ export type AdminActionEntry =
   | PlayerCreatedEntry
   | PlayerEditedEntry
   | PlayerRemovedEntry
+  | PlayerStatusEntry
   | MatchPointsEntry;
 
 /** `1 punto` y `0 puntos`: el plural no es un detalle de estilo en un historial. */
@@ -188,6 +210,10 @@ export function adminActionSummary(entry: AdminActionEntry): string {
       return entry.matchCount === 1
         ? `Baja de ${entry.name} y su 1 partida clasificatoria`
         : `Baja de ${entry.name} y sus ${entry.matchCount} partidas clasificatorias`;
+    case AdminActionType.PLAYER_APPROVED:
+      return `Aprobación de ${entry.name} (AoE4World ${entry.profileId})`;
+    case AdminActionType.PLAYER_REJECTED:
+      return `Rechazo de ${entry.name} (AoE4World ${entry.profileId})`;
     case AdminActionType.MATCH_POINTS_REVERTED:
       return `Revertidos ${puntos(entry.points)} ${deLaPartida(entry)}`;
     case AdminActionType.MATCH_POINTS_RESTORED:
@@ -231,6 +257,14 @@ export function adminActionDetails(entry: AdminActionEntry): Prisma.InputJsonObj
     }
     case AdminActionType.PLAYER_REMOVED:
       return { name: entry.name, profileId: entry.profileId, matchCount: entry.matchCount };
+    case AdminActionType.PLAYER_APPROVED:
+    case AdminActionType.PLAYER_REJECTED:
+      return {
+        name: entry.name,
+        profileId: entry.profileId,
+        statusBefore: entry.statusBefore,
+        statusAfter: entry.statusAfter,
+      };
     case AdminActionType.MATCH_POINTS_REVERTED:
       return {
         playerName: entry.playerName,

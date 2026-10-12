@@ -657,6 +657,12 @@ export type PlayerAggregate = {
   /** Victorias seguidas más larga y cuándo terminó. */
   streak: number;
   streakEndsAt: number;
+  /**
+   * Racha **actual** del torneo, firmada (positiva = victorias seguidas,
+   * negativa = derrotas), o `null` sin ninguna clasificatoria. Es distinta de
+   * `streak` (la más larga del torneo): ver `currentTournamentStreak`.
+   */
+  currentStreak: number | null;
   /** Victorias cortas (`< 10 min`) y largas (`> 20 min`). */
   shortWins: number;
   longWins: number;
@@ -734,6 +740,7 @@ function emptyPlayer(meta: PlayerMeta): PlayerAggregate {
     lastWinAt: 0,
     streak: 0,
     streakEndsAt: 0,
+    currentStreak: null,
     shortWins: 0,
     longWins: 0,
     playedDays: new Set(),
@@ -741,6 +748,37 @@ function emptyPlayer(meta: PlayerMeta): PlayerAggregate {
     byCiv: new Map(),
     byMap: new Map(),
   };
+}
+
+/**
+ * Racha **actual** del torneo, firmada, a partir de las partidas ya ordenadas
+ * cronológicamente (`finishedAt`, desempate `gameId`).
+ *
+ * Positiva = victorias seguidas, negativa = derrotas seguidas, `null` sin
+ * ninguna partida. Mira solo el tramo que **termina en la última partida**, así
+ * que es distinta de `PlayerAggregate.streak`, que es la racha de victorias
+ * **más larga** del torneo (`bienhadado`/`imbatible`). Es la que publica la
+ * columna "Racha" de la clasificación.
+ *
+ * Es pura y se prueba aparte (`tests/unit/lib/objectives.test.ts`); la usa
+ * `loadObjectivePlayers` sobre las filas ya ordenadas.
+ */
+export function currentTournamentStreak(rows: readonly { result: string }[]): number | null {
+  let sign = 0;
+  let length = 0;
+
+  for (const row of rows) {
+    const won = row.result === "WIN";
+
+    if (won ? sign === 1 : sign === -1) {
+      length += 1;
+    } else {
+      sign = won ? 1 : -1;
+      length = 1;
+    }
+  }
+
+  return sign === 0 ? null : sign * length;
 }
 
 /**
@@ -874,6 +912,9 @@ export async function loadObjectivePlayers(
 
     const aggregate = emptyPlayer(meta);
     aggregatePlayer(aggregate, ordered, ruleset);
+    // La racha actual sale del mismo orden cronológico; se calcula aparte para
+    // que la parte pura sea comprobable por sí sola.
+    aggregate.currentStreak = currentTournamentStreak(ordered);
     players.push(aggregate);
   }
 

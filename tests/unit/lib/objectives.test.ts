@@ -7,6 +7,7 @@ import {
   OBJECTIVE_POINTS,
   POLIFACETICO_ID,
   computeObjectives,
+  currentTournamentStreak,
   objectiveStanding,
   objectivesSnapshotFingerprint,
   readObjectivesSnapshotValue,
@@ -46,6 +47,7 @@ function aggregate(profileId: number, overrides: Partial<PlayerAggregate> = {}):
     lastWinAt: 0,
     streak: 0,
     streakEndsAt: 0,
+    currentStreak: null,
     shortWins: 0,
     longWins: 0,
     playedDays: new Set(),
@@ -69,6 +71,33 @@ function optionById(options: ObjectiveOption[], id: string): ObjectiveOption {
 function playerIds(profileIds: { profileId: number }[]): number[] {
   return profileIds.map((item) => item.profileId).sort((a, b) => a - b);
 }
+
+/** Filas mínimas para la racha actual: solo cuenta el `result`. */
+function results(...values: string[]): { result: string }[] {
+  return values.map((result) => ({ result }));
+}
+
+describe("currentTournamentStreak", () => {
+  it("sin partidas devuelve null (no 0)", () => {
+    expect(currentTournamentStreak([])).toBeNull();
+  });
+
+  it("una victoria es +1", () => {
+    expect(currentTournamentStreak(results("WIN"))).toBe(1);
+  });
+
+  it("una victoria seguida de una derrota es -1", () => {
+    expect(currentTournamentStreak(results("WIN", "LOSS"))).toBe(-1);
+  });
+
+  it("una derrota y dos victorias es +2 (mira el tramo final)", () => {
+    expect(currentTournamentStreak(results("LOSS", "WIN", "WIN"))).toBe(2);
+  });
+
+  it("dos derrotas seguidas es -2", () => {
+    expect(currentTournamentStreak(results("LOSS", "LOSS"))).toBe(-2);
+  });
+});
 
 describe("objetivos de logro: los cobra todo el que cumple", () => {
   it("un lider-<civ> reparte entre todos los que llegan al umbral de victorias", () => {

@@ -280,7 +280,7 @@ async function runMockTournament(): Promise<void> {
       player.status === "ok"
         ? [
             `${player.gamesSeen} partidas vistas`,
-            `${player.matchesInserted} nuevas`,
+            `${player.matchesInserted} insertadas, ${player.matchesCounted} al torneo`,
             player.matchesUpdated > 0 ? `${player.matchesUpdated} actualizadas` : null,
             player.matchesAbandoned > 0 ? `${player.matchesAbandoned} abandonadas` : null,
           ]
@@ -291,7 +291,7 @@ async function runMockTournament(): Promise<void> {
     console.log(`- ${player.profileId} ${player.name}: ${detail}`);
   }
 
-  console.log(`Partidas insertadas: ${summary.newMatches}`);
+  console.log(`Partidas al torneo: ${summary.newMatches}`);
   console.log(
     `Partidas en directo detectadas: ${liveGameIds.size} (${liveRows.length} filas del torneo: 2 por cruce entre participantes, 1 por cruce con externo)`,
   );
@@ -440,7 +440,8 @@ async function runMockTournament(): Promise<void> {
     }
   }
 
-  // Comprobaciones de la ladder (elo, división, racha, Twitch y partido en curso).
+  // Comprobaciones de la ladder (elo, división, Twitch y partido en curso) y de las
+  // rachas de la clasificación, que ahora son las del torneo.
   if (summary.ladder.error !== null) {
     problems.push(`la instantánea de la ladder ha fallado: ${summary.ladder.error}`);
   }
@@ -459,12 +460,23 @@ async function runMockTournament(): Promise<void> {
     );
   }
 
-  const hayPositiva = standings.some((row) => (row.streak ?? 0) > 0);
-  const hayNegativa = standings.some((row) => (row.streak ?? 0) < 0);
-  const hayNula = standings.some((row) => row.streak === null);
+  // La racha de la clasificación es la **del torneo** (partidas clasificatorias
+  // seguidas), no la de la ladder: quien no tiene ninguna partida contada sale
+  // `null`, y quien las tiene sale distinto de 0 (positivo o negativo). Se
+  // comprueba contra `wins + losses`, que es el número de clasificatorias de la
+  // fila.
+  const rachasIncoherentes = standings.filter((row) => {
+    const contadas = row.wins + row.losses;
 
-  if (!hayPositiva || !hayNegativa || !hayNula) {
-    problems.push("las rachas deben incluir valores positivos, negativos y null");
+    return contadas === 0 ? row.streak !== null : (row.streak ?? 0) === 0;
+  });
+
+  if (rachasIncoherentes.length > 0) {
+    problems.push(
+      `rachas incoherentes con las partidas contadas: ${rachasIncoherentes
+        .map((row) => `${row.profileId}(${row.streak})`)
+        .join(", ")}`,
+    );
   }
 
   if (!standings.some((row) => row.twitchIsLive)) {

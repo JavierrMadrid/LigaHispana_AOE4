@@ -258,7 +258,7 @@ async function runSimulation(argv: string[]): Promise<void> {
       player.status === "ok"
         ? [
             `${player.gamesSeen} partidas vistas`,
-            `${player.matchesInserted} nuevas`,
+            `${player.matchesInserted} insertadas, ${player.matchesCounted} al torneo`,
             player.matchesSkipped > 0 ? `${player.matchesSkipped} descartadas` : null,
             player.matchesAbandoned > 0 ? `${player.matchesAbandoned} abandonadas` : null,
             player.historyTruncated ? "histórico recortado" : null,
@@ -270,7 +270,7 @@ async function runSimulation(argv: string[]): Promise<void> {
     console.log(`- ${player.profileId} ${player.name}: ${detail}`);
   }
 
-  console.log(`Partidas nuevas: ${sync.newMatches} (actualizadas: ${sync.updatedMatches}).`);
+  console.log(`Partidas al torneo: ${sync.newMatches} (actualizadas: ${sync.updatedMatches}).`);
   console.log(
     `Ladder: ${sync.ladder.batches} llamada(s), ${sync.ladder.playersUpdated} jugador(es) con ` +
       `elo/división/avatar${sync.ladder.error === null ? "" : ` — ERROR: ${sync.ladder.error}`}`,

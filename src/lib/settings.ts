@@ -305,6 +305,12 @@ export type SyncRunTrace = {
   playersOk: number;
   playersFailed: number;
   playersCancelled: number;
+  /**
+   * Partidas que **entran a contar para el torneo** en la pasada, no filas
+   * insertadas: es la suma de `SyncPlayerResult.matchesCounted`. Cuenta las que se
+   * importan ya resueltas y cumplen la regla, más las que estaban en curso y han
+   * quedado resueltas cumpliéndola. Ver `docs/OPERACION.md`.
+   */
   newMatches: number;
   updatedMatches: number;
   resolvedByRefetch: number;
