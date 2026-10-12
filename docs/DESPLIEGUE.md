@@ -29,7 +29,7 @@ está en [`docs/OPERACION.md`](./OPERACION.md).
 | Hyperdrive (Cloudflare) | Pool de conexiones a Postgres delante de Supabase. |
 | Custom Domain (Cloudflare) | `laligahispana.es` apuntando al Worker. |
 | Supabase Postgres | Base de datos. |
-| Supabase Cron (`pg_cron` + `pg_net`) | Reloj del torneo: `POST /api/sync` cada 5 minutos. |
+| Supabase Cron (`pg_cron` + `pg_net`) | Reloj del torneo: `POST /api/sync` cada 10 minutos. |
 
 ## Canales de despliegue
 
@@ -62,7 +62,7 @@ está en [`docs/OPERACION.md`](./OPERACION.md).
 
 - [`ci.yml`](../.github/workflows/ci.yml): solo en pull requests. Dos jobs en paralelo, cada uno con su
   `npm ci` y Node 22: `verificar` (`npm run lint`, `npm run build`) y `test` (`npm test`). **No despliega.**
-- [`cron-sync.yml`](../.github/workflows/cron-sync.yml): cada 5 minutos (`workflow_dispatch` para lanzarlo
+- [`cron-sync.yml`](../.github/workflows/cron-sync.yml): cada 10 minutos (`workflow_dispatch` para lanzarlo
   a mano). Llama a `POST $SITE_URL/api/cron/sync` con `Authorization: Bearer $CRON_SECRET`. Necesita, en el
   repositorio, la variable `SITE_URL` y el secreto `CRON_SECRET`.
 - `cron-sync` es el **respaldo** del reloj. El reloj principal es Supabase Cron.
@@ -178,7 +178,7 @@ npm run db:push                  # sincroniza el schema
 npm run db:security -- --check   # RLS; obligatorio tras un db:push que añada tablas
 npm run countries:seed           # lista de países del formulario de inscripción
 npm run db:window                # ventana de fechas del torneo (opcional, recomendado)
-npm run db:cron                  # reloj cada 5 minutos (Supabase Cron)
+npm run db:cron                  # reloj cada 10 minutos (Supabase Cron)
 ```
 
 - La variable de Hyperdrive en la build del trigger, o el despliegue no publica.

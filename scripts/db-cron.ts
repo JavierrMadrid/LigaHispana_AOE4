@@ -4,7 +4,7 @@ import { Client } from "pg";
 
 /**
  * Disparo periódico del sync con AoE4World desde la propia base de datos:
- * Supabase Cron (`pg_cron`) llama a `net.http_post` (`pg_net`) cada 5 minutos.
+ * Supabase Cron (`pg_cron`) llama a `net.http_post` (`pg_net`) cada 10 minutos.
  *
  *   npm run db:cron              # aplica extensiones + job (idempotente)
  *   npm run db:cron -- --check   # solo comprueba, no escribe; sale con 1 si no cuadra
@@ -24,7 +24,7 @@ import { Client } from "pg";
  * **Es una prueba, y hay que vigilarla.** La hipótesis es que el fallo anterior
  * no lo causaba el volumen sino el *self-fetch* del cron nativo (dos invocaciones
  * sobre el mismo isolate). Aquí no hay self-fetch: el disparo es una petición
- * HTTP externa, una invocación cada 5 minutos. Si el isolate vuelve a morir con
+ * HTTP externa, una invocación cada 10 minutos. Si el isolate vuelve a morir con
  * 1102, la conclusión es que el límite no perdona ni así, y toca el plan Paid.
  *
  * ## Por qué apunta a `/api/sync` (público) y no a `/api/cron/sync` (con secreto)
@@ -49,11 +49,11 @@ import { Client } from "pg";
  * Action con la que un admin dispara una pasada a mano cuando el cron falla (ver
  * `src/app/admin/actions.ts`). Que sea el **mismo** es lo que evita que las dos
  * vías se pisen: si un admin sincroniza dentro de la ventana, el cron recibe
- * `{"status":"cooldown"}` con 200 y no duplica trabajo, y al revés. El precio es
- * el de siempre —la cadencia real queda entre 5 y 10 minutos en vez de exactamente
- * 5— y la alternativa (dos candados) sería dejar la API de AoE4World y el
- * presupuesto de CPU del plan Free sin nada que los protegiera el día que
- * coincidieran.
+ * `{"status":"cooldown"}` con 200 y no duplica trabajo, y al revés. Con el reloj
+ * a 10 minutos y el candado a 5, esa colisión ya no se da en el día a día: la
+ * vuelta solo se salta si una pasada manual cae justo antes del disparo del cron.
+ * La alternativa (dos candados) sería dejar la API de AoE4World y el presupuesto
+ * de CPU del plan Free sin nada que los protegiera el día que coincidieran.
  *
  * `/api/cron/sync` no se toca: sigue siendo el del workflow de GitHub, que queda
  * como red de seguridad. Aquel va con `CRON_SECRET` y sin candado, y por eso es
@@ -118,7 +118,7 @@ import { Client } from "pg";
 
 const JOB_NAME = "ligahispana-sync";
 
-const SCHEDULE = "*/5 * * * *";
+const SCHEDULE = "*/10 * * * *";
 
 /**
  * URL pública del Worker a la que dispara el job. Es un valor por defecto, no un
@@ -467,7 +467,7 @@ async function check(sql: Client, despuesDeQuitar = false): Promise<boolean> {
     console.log(
       job === null
         ? "  ninguna. No hay ningún job programado, así que no se espera ninguna."
-        : "  ninguna todavía. El job dispara en el siguiente múltiplo de 5 minutos.",
+        : "  ninguna todavía. El job dispara en el siguiente múltiplo de 10 minutos.",
     );
   } else {
     for (const respuesta of respuestas) {
@@ -562,7 +562,7 @@ async function main(): Promise<void> {
     console.log(
       quitar
         ? "Ya no hay disparo periódico desde la base de datos: el workflow de GitHub vuelve a ser el único."
-        : "Lo que toca ahora: esperar al siguiente múltiplo de 5 minutos y mirar la respuesta " +
+        : "Lo que toca ahora: esperar al siguiente múltiplo de 10 minutos y mirar la respuesta " +
           "de pg_net en la comprobación, o en net._http_response desde el panel de Supabase.",
     );
   } catch (error) {

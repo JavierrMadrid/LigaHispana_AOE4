@@ -233,6 +233,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
+| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
 | `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder que necesita la regla R5 (hoy solo `rm_team`). | `npm run alerts:cutoffs` |

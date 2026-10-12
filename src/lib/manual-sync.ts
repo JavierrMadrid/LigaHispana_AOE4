@@ -36,8 +36,9 @@ import { consumeRateLimit } from "@/lib/rate-limit";
  * plan Free".
  *
  * De ahí que el cron de Supabase reutilice este mismo candado en vez de tener el suyo:
- * es el precio de no llevar un secreto en la base de datos, y significa que la cadencia
- * real del sync queda entre 5 y 10 minutos.
+ * es el precio de no llevar un secreto en la base de datos. Con el reloj a 10 minutos,
+ * una ventana de 5 solo recorta una vuelta si una pasada manual cae justo antes del
+ * disparo, así que las dos vías ya no se pisan en el día a día.
  */
 
 /**
@@ -48,8 +49,9 @@ import { consumeRateLimit } from "@/lib/rate-limit";
 export const MANUAL_SYNC_LOCK_KEY = "public/manual-sync";
 
 /**
- * Lo que hay que esperar entre dos pasadas a mano. El cron de Supabase dispara cada 5
- * minutos y **comparte** este valor, así que también es su ventana.
+ * Lo que hay que esperar entre dos pasadas a mano. El cron de Supabase **comparte** este
+ * candado para que las dos vías no se pisen; con su reloj ya a 10 minutos, esta ventana
+ * solo corta una vuelta del cron si una pasada manual cae justo antes del disparo.
  */
 export const MANUAL_SYNC_COOLDOWN_SECONDS = 300;
 

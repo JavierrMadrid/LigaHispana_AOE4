@@ -22,7 +22,7 @@ import { createAoe4WorldClient } from "@/lib/aoe4world/client";
  * del bloque, no su principio; ver `derive-cutoffs.ts`).
  *
  * Con búsqueda binaria son del orden de 130 llamadas por familia, y el
- * sincronizador corre cada 5 minutos: 288 × 130 peticiones al día por una tabla
+ * sincronizador corre cada 10 minutos: 144 × 130 peticiones al día por una tabla
  * que solo cambia cuando cambia el reparto de la temporada. Los cortes se
  * derivan una vez, se cachean en `Setting["alerts.divisionCutoffs"]` y se
  * refrescan a mano. **El motor nunca sale a la red**: sin cortes, R5 se omite con

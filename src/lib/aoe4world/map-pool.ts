@@ -36,7 +36,7 @@ import {
  * `refreshMapPool()` lo llama el worker de sincronización antes del recálculo, y
  * solo cuando el último refresco tiene más de `MAP_POOL_REFRESH_INTERVAL_HOURS`
  * (24 h, ver `src/lib/map-pool.ts`): la rotación es mensual y el worker corre cada
- * 5 minutos, así que una petición al día sobra. Con `AOE4WORLD_MOCK` activo no se
+ * 10 minutos, así que una petición al día sobra. Con `AOE4WORLD_MOCK` activo no se
  * sale a la red (igual que el sondeo del historial): no hay fixture para el
  * homepage y preguntar por el sitio real desde una simulación no tiene sentido.
  */
@@ -303,7 +303,7 @@ export type MapPoolRefreshOptions = MapPoolFetchOptions & {
  * Es el único punto que **escribe** el pool. Reglas:
  *
  * - **Como mucho una vez al día** (`mapPoolRefreshDue`): el pool rota una vez al
- *   mes y el worker corre cada 5 minutos.
+ *   mes y el worker corre cada 10 minutos.
  * - Con el mock activo **no sale a la red** y no es un fallo (`skipped`).
  * - Un fallo de red, HTTP o formato devuelve `failed` y **no toca `Setting`**: el
  *   motor sigue leyendo el último pool bueno (o el de por defecto si nunca se

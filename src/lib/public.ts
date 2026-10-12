@@ -12,8 +12,6 @@ import { aoe4WorldProfileUrl, describeMode, describeTeamSize } from "@/lib/forma
 import { isRecord } from "@/lib/json";
 import {
   OBJECTIVE_DEFINITIONS,
-  computeObjectives,
-  loadObjectivePlayers,
   objectiveStanding,
   type ObjectiveBeneficiary,
   type ObjectiveContender,
@@ -25,9 +23,10 @@ import {
   type ObjectiveTarget,
 } from "@/lib/objectives";
 import { rankedModesWhere } from "@/lib/ranked-match";
-import { readMapPool, readMatcherinoDonations } from "@/lib/settings";
+import { readMatcherinoDonations } from "@/lib/settings";
 import {
   RULESET_VERSION,
+  loadObjectiveView,
   readRuleset,
   type ScoringRuleset,
 } from "@/lib/scoring";
@@ -86,7 +85,7 @@ export type { PublicRead };
  * de que un lector vea una clasificación vieja. Pero eso hace que **la página que
  * las llama tenga que ser dinámica**. Una página estática se genera en el `next
  * build` y su resultado se queda congelado en el HTML, así que la clasificación
- * dejaría de moverse sola por mucho que el worker recalcule cada 5 minutos. Lo más
+ * dejaría de moverse sola por mucho que el worker recalcule cada 10 minutos. Lo más
  * simple y explícito es declararlo en la propia página:
  *
  * ```tsx
@@ -567,9 +566,9 @@ export type ParticipantObjective = {
 export type ParticipantObjectives = {
   player: ParticipantIdentity;
   /**
-   * Pool de mapas activo, copiado tal cual de `Setting` (igual que hace
-   * `loadObjectives`). La ficha lo necesita para explicar `por-tierra-y-agua` sin
-   * volver a leer la configuración.
+   * Pool de mapas activo, copiado tal cual de la vista de objetivos (que lo saca de
+   * `Setting`). La ficha lo necesita para explicar `por-tierra-y-agua` sin volver a
+   * leer la configuración.
    */
   mapPool: string[];
   options: ParticipantObjective[];
@@ -578,10 +577,11 @@ export type ParticipantObjectives = {
 /**
  * Avance de **un participante** en los objetivos, para su ficha pública.
  *
- * Reutiliza exactamente el mismo motor que `/objetivos` (`computeObjectives`
- * sobre `loadObjectivePlayers`) en vez de recalcular nada: el avance de un
- * jugador tiene que salir del mismo ranking que ve el resto del sitio, o la
- * ficha podría contradecir a la clasificación del objetivo.
+ * Reutiliza exactamente la misma vista que `/objetivos` (`loadObjectiveView()`,
+ * que sale del snapshot guardado o, si no lo hay, del cómputo en vivo) en vez de
+ * recalcular nada: el avance de un jugador tiene que salir del mismo ranking que
+ * ve el resto del sitio, o la ficha podría contradecir a la clasificación del
+ * objetivo.
  *
  * Devuelve `null` —dentro de `PublicRead`, así que `{ status: "ok", data: null }`—
  * cuando no hay ningún participante **aprobado** con ese `profileId`; la página
@@ -609,15 +609,14 @@ export const getParticipantObjectives = cache(
 async function loadParticipantObjectives(
   profileId: number,
 ): Promise<ParticipantObjectives | null> {
-  // La identidad y el ruleset son independientes entre sí, así que van en
-  // paralelo; las partidas clasificatorias dependen del ruleset.
-  const [player, ruleset, mapPool] = await Promise.all([
+  // La identidad del jugador y la vista de objetivos (snapshot o cómputo) son
+  // independientes entre sí, así que van en paralelo.
+  const [player, view] = await Promise.all([
     db.player.findUnique({
       where: { profileId },
       select: { profileId: true, name: true, avatarUrl: true, status: true, rankLevel: true },
     }),
-    readRuleset(),
-    readMapPool(),
+    loadObjectiveView(),
   ]);
 
   // Solo los aprobados tienen ficha pública: un `PENDING` o un `REJECTED` no
@@ -626,9 +625,6 @@ async function loadParticipantObjectives(
   if (player === null || player.status !== PlayerStatus.APPROVED) {
     return null;
   }
-
-  const players = await loadObjectivePlayers(db, ruleset);
-  const { options } = computeObjectives(players, ruleset, mapPool);
 
   return {
     player: {
@@ -639,8 +635,8 @@ async function loadParticipantObjectives(
       division: divisionFromRankLevel(player.rankLevel),
       rankLevel: player.rankLevel,
     },
-    mapPool: [...mapPool],
-    options: options.map((option) => participantObjective(option, profileId)),
+    mapPool: [...view.mapPool],
+    options: view.options.map((option) => participantObjective(option, profileId)),
   };
 }
 
