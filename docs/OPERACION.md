@@ -376,7 +376,22 @@ la web a dos APIs externas. El DAL solo lee lo que el worker escribió. Twitch n
 - Kick **no necesita clave**; si su endpoint no responde, el estado se queda en `false` con un aviso.
 - Solo se escribe lo que cambia, y **lo que no se ha podido comprobar no se escribe**: un `false` por
   un fallo publicaría "no está en directo", que no se sabe.
-- Los `channelId` de YouTube resueltos se cachean en `Setting["streams.youtube.channel.<handle>"]`.
+- **YouTube no usa `search.list`**: ese endpoint tiene su **propia cuota de 100 llamadas al día**, aparte
+  del fondo de 10 000 unidades/día del resto de la API, y con una pasada cada 10 minutos se agotaba
+  **todos los días**. Desde que se agotaba hasta la medianoche del Pacífico (07:00 UTC) cada
+  comprobación fallaba con un `429` de "Search Queries per day" y, como no saber no escribe nada, el
+  estado del directo quedaba congelado horas. La comprobación va por tres endpoints del fondo común, en
+  este orden: `channels.list?part=contentDetails&forHandle=@handle` (1 unidad, **una vez** por canal),
+  `playlistItems.list?part=contentDetails&playlistId=<uploads>&maxResults=5` (1 unidad) y
+  `videos.list?part=snippet,liveStreamingDetails&id=<ids separados por comas>` (1 unidad para todos los
+  ids; este endpoint cobra por llamada, no por id). En directo = el `snippet` dice `live` **y** no hay
+  `actualEndTime`: hacen falta las dos señales, porque al terminar el `snippet` puede seguir diciendo
+  `live` unos minutos y hay emisiones viejas con `actualStartTime` sin `actualEndTime` que YouTube sigue
+  marcando como `upcoming`.
+- La resolución del canal se cachea: `channelId` **y** playlist de subidas en
+  `Setting["streams.youtube.channel.<handle>"]` (ninguno de los dos cambia, y `channels.list` es el
+  endpoint con el límite por minuto más estricto). Un documento de la versión anterior, sin la playlist,
+  se vuelve a resolver una sola vez.
 - Un fallo **no** mueve `lastSuccessAt`; sale en `streamsError`.
 
 ## Pool de mapas
@@ -433,7 +448,7 @@ de los directos.
 | Qué | Cuánto |
 |---|---|
 | Con lista de miembros | `ceil(miembros / 1000)` cada **12 h** (`discord.roster`); cero si el roster está al día |
-| Sin lista de miembros | Una por cuenta, `GET /guilds/{id}/members/{user}` |
+| Sin lista, y para confirmar una ausencia | Una por cuenta, `GET /guilds/{id}/members/{user}` |
 | Cadencia por jugador | Una vez cada **12 h** (`Player.discordCheckedAt`) |
 | Jugadores por pasada | **10** (`DISCORD_CHECK_MAX_PER_RUN`) |
 
@@ -441,8 +456,15 @@ de los directos.
   tenga ninguno no se le pregunta ni se le avisa.
 - **Sin credenciales no se comprueba, y no es un fallo**: si falta `DISCORD_BOT_TOKEN` o
   `DISCORD_GUILD_ID`, no lee ni una fila y deja un aviso permanente en `discordError`.
-- Un `unknown` (timeout, `5xx`, `401`, lista vacía) **no escribe nada**. Solo un `404` (o una lista
-  real donde el id no aparece) afirma algo.
+- La lista de miembros **solo afirma presencias**: es una foto de cuándo se leyó, así que quien entró
+  al servidor después de esa lectura no aparece en ella (con la inscripción abierta, pasa cada hora).
+  Una cuenta **con id** que no sale en la lista se confirma por cuenta —`404` fuera, `200` dentro—; un
+  **`@usuario`** que no aparece (o aparece dos veces) solo se concluye si la lista se leyó en esta
+  misma pasada, y si no el jugador vuelve a la cola.
+- Un `unknown` (timeout, `5xx`, `401`, lista vacía) **no escribe nada**. Afirma una ausencia solo un
+  `404`; una lista **leída en esta pasada** donde el `@usuario` no aparece también, pero una lista
+  cacheada nunca.
+- El resumen de `discordError` dice cuántas ausencias del roster se confirmaron por cuenta.
 - Dónde mirar: `discordError` (`[sync] Discord: …`). **No** mueve `lastSuccessAt`.
 
 ## Simulaciones

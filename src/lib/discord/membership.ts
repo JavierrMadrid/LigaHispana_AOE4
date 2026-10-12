@@ -37,11 +37,15 @@
  *
  * Con una lectura de la lista de miembros del servidor (`src/lib/discord/roster.ts`)
  * la misma pregunta se responde para **todos** los jugadores sin una petición por
- * jugador, así que hay un camino más. Con ese criterio ya resuelto, lo único que
- * queda por decidir aquí son las dos cosas puras de ese camino —cuándo hay que
- * refrescar la lista y cómo se busca en ella un `@usuario`—, y las dos tienen el
- * mismo cuidado: un `unknown` y un "no encontrado" **no son lo mismo**, y por eso el
- * segundo se devuelve con su propio valor en vez de como `false`.
+ * jugador, así que hay un camino más. Pero esa lista es una **foto** de cuándo se
+ * leyó y por eso solo puede **afirmar presencias**: un "no está" leído de ella no es
+ * un "no está en el servidor" —quien se ha unido después de la lectura no aparece en
+ * ella— y hay que confirmarlo por cuenta. De ese camino se deciden aquí las tres cosas
+ * puras —cuándo hay que refrescar la lista, cómo se busca un `@usuario` en ella y qué
+ * se puede afirmar de lo que se encuentre (`rosterMembershipClaim()` y
+ * `rosterAbsenceIsConclusive()`)—, y las tres tienen el mismo cuidado: un `unknown` y
+ * un "no encontrado" **no son lo mismo**, y por eso el segundo se devuelve con su
+ * propio valor en vez de como `false`.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -54,8 +58,12 @@
  * así que comprobar en cada pasada sería una petición por jugador cada diez minutos
  * para no aprender nada nuevo.
  *
- * Es caché y no "una comprobación por algo que haya pasado" porque el dato es
- * lento: a alguien le da por salir del servidor del torneo, y eso tarda días.
+ * No es "una comprobación por algo que haya pasado" porque el dato es de estado y no
+ * una secuencia: estar dentro del servidor no cambia de un minuto a otro. Lo que sí
+ * cambia rápido es la gente que **entra**, y mientras la inscripción está abierta eso
+ * pasa cada hora; de que una entrada reciente no se lea como un "no está" se encargan
+ * la confirmación por cuenta y el roster (`rosterMembershipClaim()`), **no** este
+ * plazo, que sigue siendo de doce horas porque tampoco tiene por qué bajar.
  */
 export const DISCORD_CHECK_TTL_HOURS = 12;
 
@@ -165,10 +173,16 @@ export function discordCheckIsDue(
 
 /**
  * Cuánto se cachea la lista de miembros del servidor, en horas. **12 h**, la misma
- * cifra que la del veredicto por jugador y por el mismo motivo: quien entra o sale
- * del servidor tarda **días**, y la lista entera es una petición por cada mil
- * miembros, así que refrescarla en cada pasada (288 al día) sería gastar una
- * petición más para no aprender nada.
+ * cifra que la del veredicto por jugador, pero por un motivo que no es el que
+ * parecía: **este reloj ya no decide si una ausencia se puede afirmar**. Eso lo
+ * decide la confirmación (`rosterMembershipClaim()`), así que una lista de doce horas
+ * ya no puede provocar un "fuera del servidor" falso —lo que hacía de verdad con la
+ * inscripción abierta, donde entran personas cada hora—. Una lista cacheada solo
+ * afirma presencias, y las presencias cambian despacio.
+ *
+ * Lo que justifica el plazo, entonces, es el coste: la lista entera son
+ * `ceil(miembros / 1000)` peticiones **compartidas por todos**, así que refrescarla en
+ * cada pasada (288 al día) sería gastarlas para confirmar un dato que se mueve lento.
  *
  * El valor por defecto sale de `DiscordConfig.rosterTtlHours` (variable
  * `DISCORD_ROSTER_TTL_HOURS`) y aquí está como respaldo, para que quien llame sin
@@ -277,4 +291,60 @@ export function matchRosterUsername(
   }
 
   return encontrado === null ? "no-encontrado" : { id: encontrado };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Qué se puede afirmar de una lectura del roster                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Lo que una lectura de la lista de miembros puede afirmar sobre una cuenta.
+ *
+ * - `"member"`: la cuenta está en la lista. Es un hecho —estaba dentro cuando se
+ *   leyó— y es lo que se escribe.
+ * - `"unconfirmed-absence"`: no está, y eso **no** afirma que esté fuera. La lista es
+ *   una foto de cuándo se leyó y quien ha entrado al servidor después de esa lectura
+ *   —el caso de todo recién aprobado, cada hora, mientras la inscripción está
+ *   abierta— no aparece en ella, así que una ausencia leída de aquí se confirma por
+ *   cuenta (`GET /guilds/{id}/members/{user_id}`), que pregunta por el estado de
+ *   ahora.
+ *
+ * Devolver `"not-member"` para la ausencia es exactamente el fallo que este módulo
+ * existe para no cometer: un participante que entró al servidor a las 13:00 y una
+ * lista leída a las 10:00 lo dejarían "fuera" sin que Discord haya dicho nada. Es el
+ * mismo cuidado que `matchRosterUsername()` tiene al devolver `"no-encontrado"` en
+ * vez de `false`.
+ */
+export type RosterMembershipClaim = "member" | "unconfirmed-absence";
+
+/**
+ * Traduce "está / no está en la lista" a lo que se puede afirmar.
+ *
+ * Es una igualdad de un `Set.has()` en quien llama, pero la decisión de que el "no"
+ * **no** se escribe es del módulo puro: quien comprueba contra el roster no puede
+ * tener su propia opinión de si una ausencia de la lista es un veredicto, porque es
+ * justo lo que hay que decidir en un solo sitio (y probar sin base de datos).
+ */
+export function rosterMembershipClaim(inRoster: boolean): RosterMembershipClaim {
+  return inRoster ? "member" : "unconfirmed-absence";
+}
+
+/**
+ * Si un `@usuario` no aparece en la lista (o aparece dos veces), ¿se puede concluir
+ * que está fuera del servidor?
+ *
+ * Solo si la lista se ha leído **en esta pasada** (`rosterRefreshed`): entonces es el
+ * estado de ahora y su ausencia es un hecho, igual que la de un `404`. Una lista
+ * cacheada es una foto de hace horas y no puede afirmar una ausencia, así que en ese
+ * caso no se concluye nada: el jugador vuelve a la cola y se resolverá en la pasada en
+ * que toque el refresco de la lista.
+ *
+ * Esta es la única rama en la que una ausencia leída del roster puede acabar en
+ * alerta, y lo es porque este jugador **no tiene `discordUserId`** con el que
+ * confirmarla por cuenta: es el alta de admin, donde solo se conoce el `@usuario`. Sin
+ * esta rama no habría forma de avisar de que el nombre que le dieron a la organización
+ * no está dentro.
+ */
+export function rosterAbsenceIsConclusive(rosterRefreshed: boolean): boolean {
+  return rosterRefreshed;
 }

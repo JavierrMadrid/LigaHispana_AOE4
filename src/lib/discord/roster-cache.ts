@@ -18,7 +18,10 @@ import type { DiscordRosterMember } from "./membership";
  * deje de ser una petición por jugador, y a cambio es la única lectura de esta fase
  * que no se puede pedir "solo para un jugador": es de todo el servidor. Sin caché, el
  * worker la pediría cada cinco minutos (`ceil(miembros / 1000)` peticiones cada vez)
- * para aprender lo mismo: quién entra y sale de un servidor de torneo tarda días.
+ * para volver a leer casi lo mismo. Las **presencias** —lo único que una lista
+ * cacheada puede afirmar (ver `check.ts`)— cambian despacio; lo que cambia deprisa,
+ * con la inscripción abierta, es la gente que **entra**, y de eso no se encarga esta
+ * caché sino la confirmación por cuenta, que pregunta por el estado de ahora.
  *
  * ## Por qué una clave de `Setting` y no una tabla
  *

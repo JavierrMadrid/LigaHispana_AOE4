@@ -1007,9 +1007,11 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   // Y en el worker y no en el motor de alertas, igual que las dos reglas de F11: son
   // datos de `Player` y de una API externa, no de `Match`, y el motor es puro. La
   // comprobación usa la **lista de miembros del servidor** cuando puede leerla —una
-  // lectura por cada mil miembros, cacheada doce horas, que además resuelve el
-  // `discordUserId` de quien solo tiene `@usuario`— y solo si esa lista no está
-  // disponible cae a una petición por cuenta (`GET /guilds/{id}/members/{user}`).
+  // lectura por cada mil miembros, cacheada doce horas, que resuelve el `discordUserId`
+  // de quien solo tiene `@usuario` y afirma las presencias—, y cae a una petición por
+  // cuenta (`GET /guilds/{id}/members/{user}`) cuando no hay lista y para **confirmar
+  // cualquier ausencia** que la lista no puede afirmar (una foto puede ser anterior a
+  // la entrada de alguien).
   let discord: DiscordChecksResult | null = null;
   let discordError: string | null = null;
 

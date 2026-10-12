@@ -12,13 +12,13 @@ import type { DiscordRosterMember } from "./membership";
  * ## Qué gana con esto
  *
  * `GET /guilds/{guild_id}/members/{user_id}` (lo que usa `check.ts` cuando no hay
- * roster) responde sobre **una** cuenta. Con treinta participantes son treinta
- * peticiones cada doce horas para aprender, de cada una, un sí o un no. La lista de
- * miembros dice lo mismo de los treinta en `ceil(miembros / 1000)` peticiones, y de
- * paso trae algo que la consulta por id **no** puede dar: el `userId` de una cuenta
- * de la que solo se conoce el `@usuario`, que es exactamente lo que deja el alta de
- * admin, donde la organización escribe el `@usuario` que le dicen y no hay paso de
- * OAuth.
+ * roster, y para confirmar una ausencia leída del roster) responde sobre **una**
+ * cuenta. Con treinta participantes son treinta peticiones cada doce horas para
+ * aprender, de cada una, un sí o un no. La lista de miembros dice de quién **está**
+ * dentro de los treinta en `ceil(miembros / 1000)` peticiones, y de paso trae algo que
+ * la consulta por id **no** puede dar: el `userId` de una cuenta de la que solo se
+ * conoce el `@usuario`, que es exactamente lo que deja el alta de admin, donde la
+ * organización escribe el `@usuario` que le dicen y no hay paso de OAuth.
  *
  * ## La regla que manda sobre las demás: una lista vacía no es "no hay nadie"
  *
@@ -31,7 +31,7 @@ import type { DiscordRosterMember } from "./membership";
  *
  * | Lectura | Resultado | Qué puede afirmar quien lo recibe |
  * |---|---|---|
- * | Lista con al menos un miembro | `{ status: "roster", members }` | sí o no por cada cuenta |
+ * | Lista con al menos un miembro | `{ status: "roster", members }` | un **sí** por cada cuenta; un no **no** sale de aquí (se confirma por cuenta) |
  * * Lista vacía, ilegible o a medias | `{ status: "unknown", reason }` | **nada** |
  *
  * Es el mismo modelado que el `unknown` de `discordMembershipVerdictFromStatus()`:
