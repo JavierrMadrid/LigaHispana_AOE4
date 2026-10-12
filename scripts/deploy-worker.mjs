@@ -15,7 +15,10 @@
  * evita el `shell: true` que en Windows haría falta para los shims `.cmd`.
  *
  * `--keep-vars` es lo que OpenNext recomienda para que un despliegue no borre las
- * variables y secretos que están en el panel del Worker.
+ * variables de **texto** que están en el panel del Worker. Los secretos no se borran
+ * nunca. Equivale a la clave `keep_vars: true` de `wrangler.jsonc` (wrangler las suma,
+ * `args.keepVars || config.keep_vars`), así que se pasa igualmente para que el camino
+ * manual no dependa de que el archivo conserve la clave.
  */
 
 import { spawn } from "node:child_process";

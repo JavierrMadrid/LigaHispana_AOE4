@@ -71,7 +71,7 @@ está en [`docs/OPERACION.md`](./OPERACION.md).
 
 | Archivo | Por qué está versionado |
 |---|---|
-| `wrangler.jsonc` | Si falta, OpenNext lo genera en cada build y `wrangler deploy` reconstruye el Worker sin las variables ni los bindings del panel. |
+| `wrangler.jsonc` | Si falta, OpenNext lo genera en cada build y `wrangler deploy` reconstruye el Worker sin los bindings ni el `observability` del panel, y sin el `keep_vars` que conserva las `vars` de texto. |
 | `open-next.config.ts` | Igual: sin el archivo, se pierde en cada build. |
 | `next.config.ts` | `outputFileTracingIncludes` mete la rama `workerd` de `pg-cloudflare` en el trace; sin ella el build muere con `Could not resolve "pg-cloudflare"`. |
 | `scripts/deploy-worker.mjs` | Exporta `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>` desde `.dev.vars` antes de lanzar el CLI; sin ella el deploy falla al emular Hyperdrive. |
@@ -89,6 +89,7 @@ Claves de `wrangler.jsonc`:
 - `triggers.crons: []`: un array vacío es lo único que borra los Cron Triggers en un deploy.
 - `hyperdrive`: binding `HYPERDRIVE`, id `04fab935a8f34fce814ccebfc4301042`.
 - `observability`: logs y trazas activos, muestreo al máximo (`head_sampling_rate: 1`).
+- `keep_vars: true`: las `vars` de texto del panel sobreviven al despliegue (los secretos, siempre).
 - Sin bloque `routes`: el Custom Domain no se declara.
 - `previews`: bloque obligatorio para `wrangler preview`.
 
@@ -130,6 +131,23 @@ Son **dos listas distintas y no intercambiables**:
 - Sin la variable de Hyperdrive en build, el `next build` termina bien y el `npx wrangler deploy` muere con
   un mensaje engañoso que habla de *developing locally*; mientras tanto, producción se queda en la versión anterior.
 
+### Qué sobrevive a un despliegue
+
+`wrangler deploy` (y `wrangler versions upload`) toman `wrangler.jsonc` como **fuente de verdad** de la
+configuración, como un fichero de Terraform: por defecto las `vars` de texto del panel **se borran** y
+solo quedan las declaradas en el archivo. Como `wrangler.jsonc` **no** tiene bloque `vars`, sin
+protección quedan cero.
+
+| Tipo en el panel | ¿Sobrevive a un despliegue? |
+|---|---|
+| Variable de **texto** (`vars`) | Solo con `keep_vars: true`, ya activo en `wrangler.jsonc`. |
+| **Secreto** (`secret`) | **Siempre**: un despliegue nunca borra secretos. |
+
+- Workers Builds ejecuta `npx wrangler deploy` **sin** `--keep-vars`: la protección depende del
+  `keep_vars` del archivo. `npm run deploy` pasa `--keep-vars`, que equivale a `keep_vars: true`.
+- Un despliegue sin `keep_vars` y sin `--keep-vars` es el que dejó al Worker sin las credenciales de
+  Discord en octubre de 2026 (ver [Problemas conocidos](#problemas-conocidos)).
+
 ## Hyperdrive
 
 | Dónde | Cadena |
@@ -165,7 +183,8 @@ npm run deploy     # opennextjs-cloudflare build + scripts/deploy-worker.mjs (de
 npm run preview    # opennextjs-cloudflare build + preview local
 ```
 
-- `--keep-vars` evita que un despliegue borre las variables y secretos del panel.
+- `--keep-vars` evita que un despliegue borre las **variables de texto** del panel (los secretos no se
+  borran nunca; equivale al `keep_vars: true` de `wrangler.jsonc`).
 - Los secretos van en el panel, **nunca** en `wrangler.jsonc`.
 - Requiere `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` en `.dev.vars` (o en el entorno).
 
@@ -196,3 +215,4 @@ npm run db:cron                  # reloj cada 10 minutos (Supabase Cron)
 | `WARN workerd compatibility_date: 2025-03-25...` | Aviso esperado; la fecha está por debajo del umbral a propósito. |
 | Un Preview sin YouTube ni Turnstile, y `/api/cron/sync` sin autorizar | Un Preview no hereda los secretos del Worker (por diseño). |
 | El dominio nuevo no carga para algunos visitantes | Caché DNS antigua; se resuelve sola. |
+| Una variable del panel desaparece tras un despliegue | Era una variable de **texto** y el despliegue no llevaba `keep_vars`: el archivo es la fuente de verdad y las borra. Ya está activo en `wrangler.jsonc` (y los secretos nunca se borran). |
