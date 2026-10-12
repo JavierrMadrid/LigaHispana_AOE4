@@ -1168,7 +1168,7 @@ function ObjectivesLink({
       className={`inline-flex items-center rounded-md text-muted underline-offset-4 transition-colors hover:text-accent focus-visible:text-accent ${
         showLabel
           ? "gap-1.5 py-1 text-xs font-medium"
-          : "size-9 justify-center hover:bg-surface-raised"
+          : "size-9 justify-center"
       } ${className}`}
     >
       <TargetIcon className="size-4 shrink-0" />
