@@ -917,7 +917,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   // en el rastro, y sin que un fallo suyo pueda parar la pasada. Y por el mismo motivo
   // que las alertas, se ejecuta aquí y no en el DAL: son peticiones salientes a dos
   // APIs externas, y en el plan Free de Cloudflare eso solo cabe una vez por pasada
-  // (README, "El límite de CPU del plan Free"), no en cada visita a la web.
+  // (docs/OPERACION.md, "El límite de CPU del plan Free"), no en cada visita a la web.
   //
   // La llamada se hace siempre, salvo que quien la llama la apague (el mock del
   // torneo, que no toca APIs externas), y `refreshStreamLiveStatus()` sale antes de

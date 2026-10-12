@@ -158,7 +158,7 @@ export function parseMapPoolSync(value: unknown): MapPoolSyncState | null {
  * Sí cuando no hay contabilidad, cuando no se puede leer o cuando el último refresco
  * es más viejo que `MAP_POOL_REFRESH_INTERVAL_HOURS`. La rotación es mensual, así que
  * una cadencia diaria detecta el cambio de temporada con holgura sin castigar al
- * sitio con una petición por pasada (el worker corre cada 5 minutos).
+ * sitio con una petición por pasada (el worker corre cada 10 minutos).
  */
 export function mapPoolRefreshDue(
   state: MapPoolSyncState | null,

@@ -7,10 +7,15 @@ import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { isRecord } from "@/lib/json";
 import { reconcileObjectiveEvents } from "@/lib/objective-events";
 import {
+  OBJECTIVES_SNAPSHOT_VERSION,
   OBJECTIVE_POINTS,
   computeObjectives,
   loadObjectivePlayers,
+  objectivesSnapshotFingerprint,
+  readObjectivesSnapshotValue,
+  type ObjectiveOption,
   type ObjectiveView,
+  type ObjectivesSnapshot,
 } from "@/lib/objectives";
 import {
   RANKED_MODES,
@@ -70,6 +75,16 @@ export {
 
 /** Clave de `Setting` donde vive el ruleset activo. */
 export const SCORING_RULESET_KEY = "scoring.ruleset";
+
+/**
+ * Clave de `Setting` donde `recomputeScores()` publica la vista de objetivos.
+ *
+ * Existe para que las páginas de objetivos (`/objetivos` y la ficha de participante)
+ * lean el resultado ya calculado en vez de barrer todas las clasificatorias y
+ * recomputar el catálogo en JS en cada visita. El detalle y el porqué, en
+ * `docs/OPERACION.md`, "El límite de CPU del plan Free".
+ */
+export const OBJECTIVES_SNAPSHOT_KEY = "scoring.objectives";
 
 /**
  * Versión de las reglas activas.
@@ -374,10 +389,10 @@ function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode
 /**
  * El catálogo de objetivos con sus poseedores y beneficiarios, listo para pintar.
  *
- * Dos consultas y ninguna por fila: una para el ruleset (una clave de
- * `Setting`) y una para las partidas clasificatorias. Se lee en cada llamada,
- * igual que `getStandings`, así que la página que la use tiene que ser
- * dinámica.
+ * Sale del snapshot que dejó `recomputeScores()` (una fila de `Setting`) y, si no
+ * hay o no valida, del cómputo en vivo (el ruleset más todas las partidas
+ * clasificatorias). Se lee en cada llamada, igual que `getStandings`, así que la
+ * página que la use tiene que ser dinámica.
  *
  * `window` y `mapPool` se publican para que `/puntuacion` y `/objetivos` puedan
  * decir qué periodo cuenta y qué mapas entran, sin que el copy de la interfaz
@@ -390,14 +405,39 @@ function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode
  * tabla de nadie, que no es lo que hay.
  */
 export async function getObjectives(): Promise<PublicRead<ObjectiveView>> {
-  return readFromDatabase("public/getObjectives", loadObjectives);
+  return readFromDatabase("public/getObjectives", loadObjectiveView);
 }
 
-async function loadObjectives(): Promise<ObjectiveView> {
+/**
+ * La vista de objetivos: del snapshot guardado si es válido, y del cómputo en vivo
+ * si no.
+ *
+ * El snapshot lo publica `recomputeScores()` en su propia transacción, así que
+ * leerlo es una fila de `Setting` en lugar de una consulta a `Match` más el cómputo
+ * del catálogo entero en JS. El respaldo **no** es opcional: en el primer despliegue
+ * la clave todavía no existe, y un bump de `RULESET_VERSION` invalida el documento
+ * anterior; en los dos casos se cae al camino de siempre y la vista sigue saliendo.
+ */
+export async function loadObjectiveView(): Promise<ObjectiveView> {
+  const snapshot = await readObjectivesSnapshot();
+
+  if (snapshot !== null) {
+    return snapshot;
+  }
+
   const [ruleset, mapPool] = await Promise.all([readRuleset(), readMapPool()]);
   const players = await loadObjectivePlayers(db, ruleset);
   const { options } = computeObjectives(players, ruleset, mapPool);
 
+  return buildObjectiveView(ruleset, mapPool, options);
+}
+
+/** Arma la `ObjectiveView` con las reglas y el pool activos. */
+function buildObjectiveView(
+  ruleset: ScoringRuleset,
+  mapPool: readonly string[],
+  options: ObjectiveOption[],
+): ObjectiveView {
   return {
     ruleSetVersion: ruleset.version,
     rule: ruleset.label,
@@ -406,6 +446,43 @@ async function loadObjectives(): Promise<ObjectiveView> {
     mapPool: [...mapPool],
     options,
   };
+}
+
+/** La vista guardada, si la clave existe y el documento valida. */
+async function readObjectivesSnapshot(client: RulesetClient = db): Promise<ObjectiveView | null> {
+  const setting = await client.setting.findUnique({ where: { key: OBJECTIVES_SNAPSHOT_KEY } });
+
+  return setting === null ? null : readObjectivesSnapshotValue(setting.value, RULESET_VERSION);
+}
+
+/**
+ * Publica la vista, salvo que la huella coincida con la guardada.
+ *
+ * La comparación es contra la huella y no contra el JSON guardado: `jsonb` normaliza
+ * el orden de las claves, así que el documento leído nunca es textualmente igual al
+ * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (82
+ * objetivos con sus rankings completos) para dejarlos idénticos.
+ */
+async function writeObjectivesSnapshot(view: ObjectiveView, client: RulesetClient): Promise<void> {
+  const fingerprint = objectivesSnapshotFingerprint(view);
+  const current = await client.setting.findUnique({ where: { key: OBJECTIVES_SNAPSHOT_KEY } });
+
+  if (isRecord(current?.value) && current.value.fingerprint === fingerprint) {
+    return;
+  }
+
+  const snapshot: ObjectivesSnapshot = {
+    snapshotVersion: OBJECTIVES_SNAPSHOT_VERSION,
+    fingerprint,
+    ...view,
+  };
+  const value = snapshot as unknown as Prisma.InputJsonObject;
+
+  await client.setting.upsert({
+    where: { key: OBJECTIVES_SNAPSHOT_KEY },
+    create: { key: OBJECTIVES_SNAPSHOT_KEY, value },
+    update: { value },
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -593,6 +670,14 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       // `reconcileObjectiveEvents` es idempotente y solo escribe lo que difiere de
       // lo que ya había.
       await reconcileObjectiveEvents(tx, ruleset, objectives.awarded);
+
+      // La vista pública, en la misma transacción que el cómputo del que sale: así
+      // las páginas de objetivos leen el snapshot en vez de repetir el barrido, y el
+      // snapshot no puede describir un reparto de puntos distinto del que acaba de
+      // escribirse en `PlayerScore`. `writeObjectivesSnapshot` decide si hay que
+      // tocarlo comparando la huella, de modo que una pasada sin novedades no
+      // reescribe el documento.
+      await writeObjectivesSnapshot(buildObjectiveView(ruleset, mapPool, objectives.options), tx);
 
       // Mismo filtro que el `UPDATE` de arriba y que la carga de objetivos (y por
       // tanto también `revertedAt is null`), y con el estado del jugador.

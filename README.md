@@ -107,7 +107,7 @@ Supabase Cron ──► Worker (Cloudflare) ──► API de AoE4World
                        └── Panel /admin (solo organización)
 ```
 
-- El **reloj** es un job de `pg_cron` en la base de datos que dispara la sincronización cada 5 minutos;
+- El **reloj** es un job de `pg_cron` en la base de datos que dispara la sincronización cada 10 minutos;
   un workflow de GitHub queda como red de seguridad.
 - El **motor de puntuación** lee las partidas guardadas, aplica el ruleset activo y escribe la
   clasificación. Se recalcula solo.

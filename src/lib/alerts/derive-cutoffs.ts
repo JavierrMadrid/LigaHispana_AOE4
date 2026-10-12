@@ -71,7 +71,7 @@ import { readDivisionCutoffs, writeDivisionCutoffs } from "./settings";
  * separación mínima entre peticiones que impone `http.ts`. Es un trabajo de una
  * sola vez, cacheado en `Setting["alerts.divisionCutoffs"]` y refrescable a mano
  * con `npm run alerts:cutoffs`: el motor **no** lo deriva nunca, porque el
- * sincronizador corre cada 5 minutos y eso no cabe ni de lejos.
+ * sincronizador corre cada 10 minutos y eso no cabe ni de lejos.
  */
 
 /** Cuántas páginas vecinas como mucho se recorren corrigiendo un límite. */

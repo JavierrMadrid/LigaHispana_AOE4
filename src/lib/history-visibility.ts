@@ -109,8 +109,8 @@ export const HISTORY_PROBE_GAMES = 3;
 
 /**
  * Cuánto se cachea el veredicto, en horas. **12 h** es la decisión ya tomada: el
- * worker corre cada ~5 minutos, así que comprobar en cada pasada serían tres
- * peticiones por jugador cada cinco minutos para no aprender nada nuevo.
+ * worker corre cada ~10 minutos, así que comprobar en cada pasada serían tres
+ * peticiones por jugador cada diez minutos para no aprender nada nuevo.
  *
  * Es caché y no "una comprobación por partida nueva" porque el dato es lento: a
  * alguien le da por abrir el historial en el menú y eso tarda días, no minutos.

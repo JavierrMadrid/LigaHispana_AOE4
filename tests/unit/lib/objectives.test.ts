@@ -3,15 +3,19 @@ import { describe, expect, it } from "vitest";
 import {
   IMPARABLE_ID,
   JUGON_ID,
+  OBJECTIVES_SNAPSHOT_VERSION,
   OBJECTIVE_POINTS,
   POLIFACETICO_ID,
   computeObjectives,
   objectiveStanding,
+  objectivesSnapshotFingerprint,
+  readObjectivesSnapshotValue,
   type ObjectiveContender,
   type ObjectiveOption,
+  type ObjectiveView,
   type PlayerAggregate,
 } from "@/lib/objectives";
-import { DEFAULT_RULESET } from "@/lib/scoring";
+import { DEFAULT_RULESET, RULESET_VERSION } from "@/lib/scoring";
 
 /**
  * El motor de objetivos en lo que se puede comprobar sin base de datos.
@@ -235,5 +239,107 @@ describe("catálogo de puntos", () => {
     for (const [id, points] of Object.entries(OBJECTIVE_POINTS)) {
       expect(points, `puntos de ${id}`).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("snapshot de la vista de objetivos", () => {
+  /** Documento guardado mínimo y válido: `ObjectiveView` más la marca de forma. */
+  function snapshot(overrides: Record<string, unknown> = {}) {
+    return {
+      snapshotVersion: OBJECTIVES_SNAPSHOT_VERSION,
+      fingerprint: "00000000",
+      ruleSetVersion: RULESET_VERSION,
+      rule: "regla",
+      pointsPerWin: 2,
+      window: { from: "2026-09-15T00:00:00.000Z", to: null },
+      mapPool: ["Gorge"],
+      options: [{ id: "loco-por-ganar", ranking: [], beneficiaries: [] }],
+      ...overrides,
+    };
+  }
+
+  it("un documento válido se devuelve como vista", () => {
+    const view = readObjectivesSnapshotValue(snapshot(), RULESET_VERSION);
+
+    expect(view).not.toBeNull();
+    expect(view?.ruleSetVersion).toBe(RULESET_VERSION);
+    expect(view?.mapPool).toEqual(["Gorge"]);
+    expect(view?.options.map((option) => option.id)).toEqual(["loco-por-ganar"]);
+  });
+
+  it("sin la marca de forma o con otra se cae al cómputo en vivo", () => {
+    expect(readObjectivesSnapshotValue(snapshot({ snapshotVersion: 2 }), RULESET_VERSION)).toBeNull();
+    expect(
+      readObjectivesSnapshotValue(snapshot({ snapshotVersion: undefined }), RULESET_VERSION),
+    ).toBeNull();
+  });
+
+  it("un snapshot de otra versión de las reglas no vale", () => {
+    expect(
+      readObjectivesSnapshotValue(snapshot({ ruleSetVersion: RULESET_VERSION - 1 }), RULESET_VERSION),
+    ).toBeNull();
+  });
+
+  it("rechaza lo que no es un objeto", () => {
+    expect(readObjectivesSnapshotValue(null, RULESET_VERSION)).toBeNull();
+    expect(readObjectivesSnapshotValue("vista", RULESET_VERSION)).toBeNull();
+    expect(readObjectivesSnapshotValue([], RULESET_VERSION)).toBeNull();
+  });
+
+  it("rechaza unas opciones que no son lista o una ventana ilegible", () => {
+    expect(readObjectivesSnapshotValue(snapshot({ options: {} }), RULESET_VERSION)).toBeNull();
+    expect(readObjectivesSnapshotValue(snapshot({ window: { to: null } }), RULESET_VERSION)).toBeNull();
+  });
+
+  it("rechaza una opción sin id, ranking o beneficiarios", () => {
+    expect(
+      readObjectivesSnapshotValue(
+        snapshot({ options: [{ ranking: [], beneficiaries: [] }] }),
+        RULESET_VERSION,
+      ),
+    ).toBeNull();
+    expect(
+      readObjectivesSnapshotValue(
+        snapshot({ options: [{ id: "x", beneficiaries: [] }] }),
+        RULESET_VERSION,
+      ),
+    ).toBeNull();
+    expect(
+      readObjectivesSnapshotValue(snapshot({ options: [{ id: "x", ranking: [] }] }), RULESET_VERSION),
+    ).toBeNull();
+  });
+
+  it("no valida de más: un campo desconocido no invalida el snapshot", () => {
+    expect(
+      readObjectivesSnapshotValue(snapshot({ extra: "lo que sea" }), RULESET_VERSION),
+    ).not.toBeNull();
+  });
+});
+
+describe("objectivesSnapshotFingerprint", () => {
+  function view(overrides: Partial<ObjectiveView> = {}): ObjectiveView {
+    return {
+      ruleSetVersion: RULESET_VERSION,
+      rule: "regla",
+      pointsPerWin: 2,
+      window: { from: "2026-09-15T00:00:00.000Z", to: null },
+      mapPool: ["Gorge"],
+      options: [],
+      ...overrides,
+    };
+  }
+
+  it("es estable para la misma vista", () => {
+    expect(objectivesSnapshotFingerprint(view())).toBe(objectivesSnapshotFingerprint(view()));
+  });
+
+  it("cambia cuando cambia cualquier parte de la vista", () => {
+    const base = objectivesSnapshotFingerprint(view());
+
+    expect(objectivesSnapshotFingerprint(view({ pointsPerWin: 3 }))).not.toBe(base);
+    expect(objectivesSnapshotFingerprint(view({ mapPool: ["Gorge", "Dry Arabia"] }))).not.toBe(base);
+    expect(
+      objectivesSnapshotFingerprint(view({ window: { from: "2026-09-16T00:00:00.000Z", to: null } })),
+    ).not.toBe(base);
   });
 });

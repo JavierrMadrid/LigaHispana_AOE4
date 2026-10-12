@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { CIVILIZATIONS, CIVILIZATION_IDS } from "@/lib/civs";
 import { aoe4WorldProfileUrl } from "@/lib/format";
+import { isRecord } from "@/lib/json";
 import { rankedMatchSql, type ScoringWindow } from "@/lib/ranked-match";
 import type { ScoringRuleset } from "@/lib/scoring";
 
@@ -185,6 +186,135 @@ export type ObjectiveView = {
    */
   options: ObjectiveOption[];
 };
+
+/* -------------------------------------------------------------------------- */
+/* Snapshot de la vista en `Setting`                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Versión de la **forma** del snapshot de `Setting["scoring.objectives"]`.
+ *
+ * Sube cuando cambia la forma de `ObjectiveView` (no cuando cambian los datos): un
+ * documento con otra marca se rechaza y la vista se recalcula en vivo. Es lo que
+ * permite desplegar una vista nueva sin que el primer lector interprete mal un
+ * documento guardado con la forma anterior.
+ */
+export const OBJECTIVES_SNAPSHOT_VERSION = 1;
+
+/**
+ * La vista de objetivos tal y como se guarda: `ObjectiveView` más la marca de forma
+ * y la huella de contenido.
+ *
+ * La escribe `recomputeScores()` en su transacción, y de ahí que las páginas puedan
+ * leerla en vez de barrer todas las clasificatorias y recomputar el catálogo en JS
+ * en cada visita (ver `docs/OPERACION.md`, "El límite de CPU del plan Free").
+ */
+export type ObjectivesSnapshot = ObjectiveView & {
+  snapshotVersion: number;
+  fingerprint: string;
+};
+
+/**
+ * Huella de contenido de una vista, para decidir si hay que reescribir el snapshot.
+ *
+ * FNV-1a de 32 bits en JS puro: `node:crypto` no está garantizado en el runtime de
+ * los Workers y aquí no hace falta resistencia a colisiones —que dos vistas
+ * distintas compartan huella solo significa saltarse una reescritura, que se
+ * recupera en la siguiente pasada—. El hash va sobre la **serialización canónica
+ * que producimos aquí** (un objeto con el orden de campos fijo), nunca sobre lo que
+ * devuelve Postgres: `jsonb` normaliza el orden de las claves, así que comparar el
+ * JSON guardado con el nuevo daría siempre distinto. La marca de forma entra en el
+ * hash para que subir `OBJECTIVES_SNAPSHOT_VERSION` fuerce una reescritura.
+ */
+export function objectivesSnapshotFingerprint(view: ObjectiveView): string {
+  const canonical = JSON.stringify({
+    snapshotVersion: OBJECTIVES_SNAPSHOT_VERSION,
+    ruleSetVersion: view.ruleSetVersion,
+    rule: view.rule,
+    pointsPerWin: view.pointsPerWin,
+    window: view.window,
+    mapPool: view.mapPool,
+    options: view.options,
+  });
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < canonical.length; index += 1) {
+    hash ^= canonical.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Valida el documento guardado en `Setting["scoring.objectives"]`.
+ *
+ * Puro y deliberadamente **poco estricto**: corre en cada visita, así que solo
+ * comprueba lo que hace falta para no mentir —la marca de forma, la versión de las
+ * reglas (un bump invalida el snapshot) y que cada opción traiga `id`, `ranking` y
+ * `beneficiaries`— y deja pasar el resto sin recorrerlo a fondo. Devuelve `null` si
+ * algo no cuadra; quien llama cae entonces al cómputo en vivo.
+ *
+ * La versión de reglas esperada llega **como argumento** y no se importa de
+ * `scoring.ts` a propósito: `scoring.ts` ya importa este módulo, y traer aquí un
+ * valor suyo cerraría un ciclo entre los dos (ver el docblock del módulo).
+ */
+export function readObjectivesSnapshotValue(
+  value: unknown,
+  ruleSetVersion: number,
+): ObjectiveView | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (value.snapshotVersion !== OBJECTIVES_SNAPSHOT_VERSION) {
+    return null;
+  }
+
+  if (value.ruleSetVersion !== ruleSetVersion) {
+    return null;
+  }
+
+  const { rule, pointsPerWin, window, mapPool, options } = value;
+
+  if (typeof rule !== "string" || typeof pointsPerWin !== "number") {
+    return null;
+  }
+
+  if (!isRecord(window) || typeof window.from !== "string") {
+    return null;
+  }
+
+  if (window.to !== null && typeof window.to !== "string") {
+    return null;
+  }
+
+  if (!Array.isArray(mapPool) || !Array.isArray(options)) {
+    return null;
+  }
+
+  // Solo la forma mínima de cada opción: validar el ranking y los beneficiarios
+  // entero costaría tanto como recomputarlos, que es justo lo que se evita.
+  for (const option of options) {
+    if (
+      !isRecord(option) ||
+      typeof option.id !== "string" ||
+      !Array.isArray(option.ranking) ||
+      !Array.isArray(option.beneficiaries)
+    ) {
+      return null;
+    }
+  }
+
+  return {
+    ruleSetVersion,
+    rule,
+    pointsPerWin,
+    window: { from: window.from, to: window.to },
+    mapPool: mapPool.filter((item): item is string => typeof item === "string"),
+    options: options as ObjectiveOption[],
+  };
+}
 
 export type ObjectiveGroupLabel = Record<ObjectiveGroup, string>;
 

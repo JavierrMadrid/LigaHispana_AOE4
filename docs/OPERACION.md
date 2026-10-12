@@ -37,21 +37,23 @@ curl -X POST localhost:3000/api/cron/sync -H "Authorization: Bearer $CRON_SECRET
 curl -X POST localhost:3000/api/sync -H "content-type: application/json" -d '{}'
 ```
 
-**Cadencia: cada 5 minutos.** La API ya ha devuelto 429; por debajo de 3 minutos se disparan
+**Cadencia: cada 10 minutos.** La API ya ha devuelto 429; por debajo de 3 minutos se disparan
 demasiadas peticiones. Con más jugadores, sube `AOE4WORLD_MIN_REQUEST_INTERVAL_MS` antes que la
-frecuencia. Para las partidas en directo, 5 minutos basta: se detectan en la siguiente pasada.
+frecuencia. Para las partidas en directo, 10 minutos basta: se detectan en la siguiente pasada. Son
+10 y no 5 por el presupuesto de CPU del plan Free de Cloudflare: la mitad de pasadas es la mitad de
+CPU gastada (ver [El límite de CPU del plan Free](#el-límite-de-cpu-del-plan-free)).
 
 Hay **dos relojes**, y el primario no es GitHub:
 
 | Reloj | Qué es | Frecuencia real |
 |---|---|---|
-| **Supabase Cron** (primario) | Job de `pg_cron` que llama por HTTP a `POST /api/sync` con `pg_net` | 5 minutos (alguna vuelta se salta: ver abajo) |
+| **Supabase Cron** (primario) | Job de `pg_cron` que llama por HTTP a `POST /api/sync` con `pg_net` | 10 minutos |
 | [Workflow de GitHub](../.github/workflows/cron-sync.yml) (red de seguridad) | `POST /api/cron/sync` con `Bearer $CRON_SECRET` | GitHub lo retrasa a una cada 4-6 h |
 
 ## El reloj: Supabase Cron
 
 ```bash
-npm run db:cron              # aplica extensiones + job de 5 min (idempotente)
+npm run db:cron              # aplica extensiones + job de 10 min (idempotente)
 npm run db:cron -- --check   # comprueba y no escribe; sale con 1 si no cuadra
 npm run db:cron -- --remove  # desprograma el job
 ```
@@ -67,7 +69,7 @@ create extension if not exists pg_net with schema extensions;
 
 select cron.schedule(
   'ligahispana-sync',
-  '*/5 * * * *',
+  '*/10 * * * *',
   $$select net.http_post(
        url := 'https://laligahispana.es/api/sync',
        body := '{}'::jsonb,
@@ -82,9 +84,10 @@ Cuatro decisiones que no son obvias:
 - **Apunta a `/api/sync` (público), no a `/api/cron/sync`.** `cron.job.command` es texto plano y
   `cron.job_run_details` guarda una copia de cada ejecución, así que un secreto allí quedaría escrito
   en la base. El endpoint público no es una puerta abierta: lo cierran el `content-type` y el candado
-  global, **compartido con la llamada manual de admin**. Consecuencia real: el cron llega a veces unos
-  segundos antes de que expire el candado de la pasada anterior y esa vuelta se salta sola (medido: 1
-  de cada 5). No es un fallo; la cadencia queda entre 5 y 10 minutos.
+  global, **compartido con la llamada manual de admin**. Con el reloj a 10 minutos y el candado a 5, el
+  cron ya no llega al filo de la ventana anterior (era el motivo del "se salta 1 de cada 5" cuando el
+  reloj iba a 5), así que esa vuelta solo se pierde si una pasada manual cae justo antes del disparo; en
+  el día a día la cadencia es de 10 minutos clavados.
 - **El nombre del job es fijo** (`ligahispana-sync`): `cron.schedule(nombre, …)` hace *upsert* sobre
   `jobname_username_uniq`, así que repetir el script actualiza en vez de crear un segundo job.
 - **`timeout_milliseconds` a 240 s**: el valor por defecto de `net.http_post` son 2-5 s y una pasada
@@ -154,6 +157,22 @@ compiler* en WASM, el parseo del JSON y el recálculo): unas **50 veces** el pre
 tolera pasarse de forma esporádica; de forma consistente lo mata con `Worker exceeded CPU time limit`
 (error 1102).
 
+No hay cambio de plan a la vista, así que se mitiga **recortando el trabajo**, en tres frentes:
+
+- **Menos pasadas**: el reloj pasa de 5 a **10 minutos**. La mitad de CPU gastada, y las partidas se
+  siguen viendo (en la pasada siguiente).
+- **Menos trabajo por visita**: `/objetivos` y la ficha de participante ya **no** barren todas las
+  clasificatorias ni recomputan el catálogo en JS. `recomputeScores()` publica la vista de objetivos
+  entera (objetivos, rankings, pool y ventana) en `Setting["scoring.objectives"]`, en la misma
+  transacción y **solo si la huella del contenido cambió**; las páginas leen esa clave. Si falta, no
+  valida o es de otra versión de las reglas, caen al cómputo en vivo de siempre, de modo que la
+  degradación es segura.
+- **Menos sondeos del navegador**: el refresco automático de `/` y `/partidas` (`LiveRefresh`) pasa de
+  75 s a **150 s**. La frescura real la marca el sync (cada 10 minutos), así que la mitad de sondeos
+  apenas se nota en pantalla y recorta a la mitad las renders dinámicas de las pestañas abiertas.
+
+Cómo se llegó aquí:
+
 - Un Cron Trigger nativo cada 5 minutos se probó y se retiró (commit `459ed27`): el *isolate* aguantó
   una hora y luego mató todas las pasadas (44 errores en una hora). Con GitHub, que retrasa a cada
   4-6 h, el exceso es esporádico y pasa.
@@ -161,12 +180,13 @@ tolera pasarse de forma esporádica; de forma consistente lo mata con `Worker ex
   sola invocación por evento, sin *self-fetch* sobre el mismo *isolate*. La hipótesis va respaldada
   (trece pasadas con `200` y cero 1102 en la primera hora de prueba), pero **no es una garantía**:
   merece la pena mirar Workers Logs de vez en cuando.
-- Si vuelve a morir con 1102, la conclusión es que hace falta el **plan Workers Paid** ($5/mes):
-  30 s por Cron Trigger y 5 min por petición. El mecanismo ya está andado (un `scheduled` sobre un
-  *custom worker* de OpenNext funcionó); lo que no cabía era la CPU.
+- Las dos mitigaciones de arriba recortan el gasto, pero **no cambian el presupuesto**: si vuelve a
+  morir con 1102, la conclusión es que hace falta el **plan Workers Paid** ($5/mes): 30 s por Cron
+  Trigger y 5 min por petición. El mecanismo ya está andado (un `scheduled` sobre un *custom worker* de
+  OpenNext funcionó); lo que no cabía era la CPU.
 - Mientras se siga en Free, la llamada manual de un admin está sujeta a lo mismo. Por eso su candado
   es de **5 minutos** y comparte el del cron: insistir es lo único que garantiza que Cloudflare
-  empiece a matar pasadas.
+  empiece a matar pasadas. Con el reloj a 10 minutos, además, las dos vías ya no se solapan.
 
 ## Inscripción pública
 
@@ -345,7 +365,7 @@ de `<home-leaderboard>` con el JSON escapado.
 | Qué | Cuánto |
 |---|---|
 | Petición | Una a `https://aoe4world.com/`, HTML, mismo `User-Agent` y plazo que el cliente de AoE4World |
-| Cadencia | Una vez cada **24 h** (`MAP_POOL_REFRESH_INTERVAL_HOURS`); la rotación es mensual y el worker corre cada 5 min |
+| Cadencia | Una vez cada **24 h** (`MAP_POOL_REFRESH_INTERVAL_HOURS`); la rotación es mensual y el worker corre cada 10 min |
 | Claves | `scoring.mapPool` (lo que lee el motor) y `scoring.mapPoolSync` (fecha y metadatos) |
 
 - **Parseo frágil, fallo contenido**: `parseMapPoolHomepage()` es puro y **nunca lanza**; si el HTML no
@@ -372,7 +392,7 @@ Las dos reglas `HISTORY_NOT_PUBLIC` y `MISSING_LADDER_MATCHES` se comprueban en
 | Regla de la ladder | Cero peticiones: lee `Player.ladderGamesCount` y `ladderLastGameAt` |
 
 - El tope existe por el despliegue: al activarlo todas las filas vencen a la vez; con 6 se escalona en
-  cinco pasadas (~25 min) y luego el ritmo es de uno por jugador cada 12 h.
+  cinco pasadas (~50 min) y luego el ritmo es de uno por jugador cada 12 h.
 - **No hay permiso ni rate limit declarados en esa ruta.** Si el volumen creciera, lo correcto es
   avisar a AoE4World por su Discord, no subir el ritmo.
 - Un `unknown` (timeout, `5xx`, red) **no escribe nada**: el jugador vuelve a la cola.
@@ -484,7 +504,7 @@ npm run db:push                  # sincroniza el schema
 npm run db:security -- --check   # comprueba RLS; aplica con db:security si sale mal
 npm run countries:seed           # publica la lista de países del formulario
 npm run db:window                # publica la ventana de fechas del torneo (recomendado)
-npm run db:cron                  # programa el reloj cada 5 minutos
+npm run db:cron                  # programa el reloj cada 10 minutos
 ```
 
 - `db:security` es obligatorio **después de cada `db:push` que añada tablas**: una tabla nueva nace

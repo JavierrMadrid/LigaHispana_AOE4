@@ -251,7 +251,7 @@ export async function writeMapPool(state: MapPoolSyncState): Promise<void> {
 /**
  * Cuándo se espera una pasada del sincronizador para poder llamarla "al día".
  *
- * El cron de Supabase dispara cada 5 minutos y una pasada tarda unos segundos, así
+ * El cron de Supabase dispara cada 10 minutos y una pasada tarda unos segundos, así
  * que 20 minutos es holgura de sobra para un turno lento o un par de disparos
  * perdidos. Medir en contra también: si dos pasadas seguidas se paran a los 5
  * minutos por un 429 de AoE4World, la última de las dos está "al día" y por eso
