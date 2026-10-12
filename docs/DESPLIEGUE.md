@@ -159,6 +159,22 @@ protección quedan cero.
 - `src/lib/db.ts` lee `env.HYPERDRIVE.connectionString` y, si no está, cae a `DATABASE_URL`.
 - Plan Free: 100.000 consultas al día.
 
+### Caché de consultas: desactivada a propósito
+
+- La configuración `ligahispana-aoe4-db` (id `04fab935a8f34fce814ccebfc4301042`, binding `HYPERDRIVE`)
+  tiene la caché de consultas **desactivada** (`caching.disabled: true`), no por defecto.
+- Porqué: este panel lee inmediatamente después de escribir (aprobar, editar, borrar) y Hyperdrive
+  **no invalida** las lecturas cacheadas cuando la aplicación escribe. Con la caché activa
+  (`max_age` 60 s, `stale_while_revalidate` 15 s), la relectura del propio action y el re-render de
+  `/admin` seguían viendo el estado anterior hasta 60-75 s: la interfaz mostraba el estado viejo, el
+  botón parecía muerto y cada clic repetía la acción (el historial de acciones acumulaba aprobaciones
+  repetidas).
+- El *pool* de conexiones y su arranque rápido se conservan: solo se apaga la caché.
+- Cómo rehacerlo: al **crear** una configuración, `wrangler hyperdrive create <nombre> --caching-disabled`;
+  para una existente, `wrangler hyperdrive update <ID> --caching-disabled`.
+- Si algún día se quiere caché para lecturas que la toleren, sería una **segunda** configuración con su
+  propio binding, y **nunca** para el panel ni para la autenticación.
+
 ## Dominio propio
 
 - `laligahispana.es` es **Custom Domain** del Worker: zona `active` desde el 4 de octubre de 2026,
@@ -216,3 +232,4 @@ npm run db:cron                  # reloj cada 10 minutos (Supabase Cron)
 | Un Preview sin YouTube ni Turnstile, y `/api/cron/sync` sin autorizar | Un Preview no hereda los secretos del Worker (por diseño). |
 | El dominio nuevo no carga para algunos visitantes | Caché DNS antigua; se resuelve sola. |
 | Una variable del panel desaparece tras un despliegue | Era una variable de **texto** y el despliegue no llevaba `keep_vars`: el archivo es la fuente de verdad y las borra. Ya está activo en `wrangler.jsonc` (y los secretos nunca se borran). |
+| El panel de admin no refleja una aprobación o edición reciente (y el historial de acciones repite la misma acción) | La caché de consultas de Hyperdrive servía `SELECT` anteriores a la escritura. La configuración va **sin caché** (`caching.disabled`) a propósito. |

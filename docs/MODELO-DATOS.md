@@ -248,7 +248,7 @@ Claves vivas en producción, con quién las escribe:
 | `registration.open` | Si la inscripción está abierta. | Panel de admin |
 | `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel de admin |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
-| `streams.youtube.channel.<handle>` | `channelId` de YouTube ya resuelto. | Worker |
+| `streams.youtube.channel.<handle>` | `channelId` de YouTube y su playlist de subidas, ya resueltos (30 días). | Worker |
 | `aoe4world.sync.player.<profileId>` | Cursor de sincronización por jugador. | Worker; la baja de `/admin` lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede un cursor viejo. |
 
 ## Índices

@@ -5,16 +5,22 @@ import { db } from "@/lib/db";
 import { isRecord } from "@/lib/json";
 
 /**
- * Caché de `handle -> channelId` de YouTube, en `Setting`.
+ * Caché de la resolución de un canal de YouTube (`handle -> channelId` y playlist de
+ * subidas), en `Setting`.
  *
  * ## Por qué hay que cachearlo
  *
- * `search.list` es el endpoint barato (1 unidad de cuota) pero **exige un
- * `channelId`**, no un handle; el `channelId` sale de `channels.list?forHandle=@…`,
- * que cuesta 1 unidad y además tiene un límite mucho más estricto de llamadas por
- * minuto. Si se resolviera el handle en cada pasada, con 288 pasadas al día y N
- * participantes se gastarían dos unidades por participante y por pasada para
- * aprender **lo mismo** todas las veces: el `channelId` de un canal **no cambia**.
+ * El resto de la comprobación trabaja con datos que **no vienen del handle**: la
+ * playlist de subidas (`playlistItems.list`) y los detalles de emisión
+ * (`videos.list`) necesitan el `channelId` y el id de esa playlist, y los dos salen
+ * de `channels.list?forHandle=@…`. Nada de eso cambia con el tiempo —el canal de un
+ * handle no se muda de `channelId`, y su playlist de subidas es la misma siempre—,
+ * así que resolverlo en cada pasada sería preguntar **lo mismo** 288 veces al día.
+ *
+ * El coste de resolverlo no es solo la unidad de cuota: `channels.list` es el
+ * endpoint con el límite **por minuto** más estricto de la API, y ese es el motivo
+ * por el que esta caché no es un lujo sino parte del diseño (el límite por minuto sí
+ * muerde con una pasada cada diez minutos).
  *
  * Por eso se resuelve una vez y se guarda aquí, con la fecha, para que el rastro
  * diga cuándo se resolvió y no solo que hay algo guardado.
@@ -27,15 +33,19 @@ import { isRecord } from "@/lib/json";
  * lo usa. Una tabla exigiría un `db push` con RLS y GRANTs, y esto es una caché que
  * se puede perder entera sin que pase nada (se vuelve a resolver).
  *
- * ## Un canal que no existe
+ * ## Un canal que no existe, y los documentos de la versión anterior
  *
  * Se guarda también el `null` (con su fecha), porque un handle mal escrito es lo más
  * probable y volver a preguntarlo en cada pasada sería la forma más rápida de
  * vaciar la cuota. Se reintenta pasado `CHANNEL_ID_TTL_DAYS`, porque un canal
  * puede aparecer después.
+ *
+ * Un documento con el `channelId` pero **sin** la playlist de subidas es de cuando
+ * esta caché solo guardaba el `channelId`: se trata como no resuelto y se vuelve a
+ * preguntar, que cuesta una unidad **una sola vez** por canal.
  */
 
-/** Prefijo de las claves de `Setting` que guardan un `channelId` de YouTube. */
+/** Prefijo de las claves de `Setting` que guardan la resolución de un canal de YouTube. */
 export const YOUTUBE_CHANNEL_KEY_PREFIX = "streams.youtube.channel.";
 
 /**
@@ -48,9 +58,14 @@ export const YOUTUBE_CHANNEL_KEY_PREFIX = "streams.youtube.channel.";
  */
 export const CHANNEL_ID_TTL_DAYS = 30;
 
-export type YouTubeChannelResolution = {
+export type YouTubeChannelIds = {
   /** `UC…` del canal, o `null` si YouTube no conoce ese handle. */
   channelId: string | null;
+  /** `UU…` de su playlist de subidas, o `null` si la respuesta no la traía. */
+  uploadsPlaylistId: string | null;
+};
+
+export type YouTubeChannelResolution = YouTubeChannelIds & {
   /** Cuándo se resolvió, en ISO-8601. */
   resolvedAt: string;
 };
@@ -59,26 +74,39 @@ export function youtubeChannelKey(handle: string): string {
   return `${YOUTUBE_CHANNEL_KEY_PREFIX}${handle}`;
 }
 
+function readId(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
 function readResolution(value: unknown): YouTubeChannelResolution | null {
   if (!isRecord(value)) {
     return null;
   }
 
-  const { channelId, resolvedAt } = value;
+  const { channelId, uploadsPlaylistId, resolvedAt } = value;
 
   if (typeof resolvedAt !== "string" || Date.parse(resolvedAt) === Number.NaN) {
     return null;
   }
 
-  return {
-    channelId: typeof channelId === "string" && channelId !== "" ? channelId : null,
-    resolvedAt,
-  };
+  const channel = readId(channelId);
+  const uploads = readId(uploadsPlaylistId);
+
+  // Un canal conocido **sin** playlist de subidas es un documento de la versión
+  // anterior de esta caché (o una respuesta a la que le faltaba el campo): sin la
+  // playlist no se puede comprobar nada, así que se trata como no resuelto y se
+  // vuelve a preguntar. El `null` de `channelId` sí es una respuesta completa: no hay
+  // canal, no hay playlist que buscar.
+  if (channel !== null && uploads === null) {
+    return null;
+  }
+
+  return { channelId: channel, uploadsPlaylistId: uploads, resolvedAt };
 }
 
 /**
- * Resolución guardada de un handle, o `null` si no hay, no se entiende o ha
- * caducado.
+ * Resolución guardada de un handle, o `null` si no hay, no se entiende, le falta la
+ * playlist de subidas o ha caducado.
  *
  * Un documento que no se entiende se descarta entero, con el mismo criterio que
  * `readRuleset()` y `readAlertsRuleset()`: una caché mal escrita no puede dejar la
@@ -110,12 +138,16 @@ export async function readYoutubeChannelResolution(
  */
 export async function writeYoutubeChannelResolution(
   handle: string,
-  channelId: string | null,
+  ids: YouTubeChannelIds,
   now: Date = new Date(),
 ): Promise<void> {
   const key = youtubeChannelKey(handle);
   const value = JSON.parse(
-    JSON.stringify({ channelId, resolvedAt: now.toISOString() }),
+    JSON.stringify({
+      channelId: ids.channelId,
+      uploadsPlaylistId: ids.uploadsPlaylistId,
+      resolvedAt: now.toISOString(),
+    }),
   ) as Prisma.InputJsonObject;
 
   await db.setting.upsert({

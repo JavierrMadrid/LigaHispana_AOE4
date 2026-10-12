@@ -121,12 +121,14 @@ export const DISCORD_ROSTER_MAX_PAGES = 20;
 /**
  * Horas que se cachea la lista de miembros del servidor, por defecto.
  *
- * Es el mismo número que `DISCORD_CHECK_TTL_HOURS` y por el mismo motivo —quien
- * entra o sale del servidor tarda días—, pero son **dos relojes distintos**: este es
- * el del dato compartido por todos los jugadores y aquel el del veredicto de cada
- * fila. Se ajustan por separado porque el que de verdad cuesta es este: la lista
- * entera son `ceil(miembros / 1000)` peticiones, mientras que un veredicto es una
- * por jugador.
+ * Es el mismo número que `DISCORD_CHECK_TTL_HOURS`, pero son **dos relojes
+ * distintos**: este es el del dato compartido por todos los jugadores y aquel el del
+ * veredicto de cada fila. Y el motivo del plazo no es que la gente tarde en entrar o
+ * salir —con la inscripción abierta, entra gente cada hora—, sino el coste: la lista
+ * entera son `ceil(miembros / 1000)` peticiones compartidas, y refrescarla en cada
+ * pasada (288 al día) sería gastarlas para nada. Que el plazo no haga daño lo
+ * garantiza la confirmación, no el número: una lista cacheada solo afirma presencias,
+ * y cualquier ausencia se confirma por cuenta (ver `membership.ts`).
  */
 export const DISCORD_ROSTER_TTL_HOURS = 12;
 
