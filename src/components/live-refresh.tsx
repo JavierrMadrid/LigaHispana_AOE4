@@ -19,32 +19,50 @@ import { useRouter } from "next/navigation";
  * Se salta cuando la pestaña no está visible, para no interrogar la base desde
  * pestañas en segundo plano.
  *
- * Con `showStatus` pinta además la hora del último refresco. Es opcional porque
- * en `/partidas` el temporizador va suelto y no debe ocupar sitio; en la portada
- * sí interesa, para que el recuento de partidas en juego no envejezca en
- * silencio. El estado arranca en `null` —nada de texto— y se rellena ya en el
- * cliente tras montar, para que el render de servidor y el primero de cliente
- * coincidan y la hora local (`es-ES`) no rompa la hidratación.
+ * Con `showStatus` pinta además «Actualizado a las …», y la hora que enseña es
+ * `dataUpdatedAt`: el `finishedAt` de la última pasada del sincronizador, que
+ * llega del servidor. **No** es la hora del refresco del navegador: esa diría
+ * cuándo se pidió la página, no cuándo se tocaron los datos, y son cosas
+ * distintas. Como el valor es una prop, cada `router.refresh()` lo trae al día
+ * solo, sin que el cliente lleve ninguna cuenta.
+ *
+ * Es opcional porque en `/partidas` el temporizador va suelto y no debe ocupar
+ * sitio; en la portada sí interesa, para que el recuento de partidas en juego no
+ * envejezca en silencio.
+ *
+ * `dataUpdatedAt` en `null` significa "no hay hora que enseñar" —nunca se ha
+ * registrado una pasada, o su lectura falló— y entonces se dice que sigue sin
+ * actualizar en vez de inventar una hora. La frase se formatea ya en cliente y no
+ * en el servidor porque `toLocaleTimeString` usa la zona del navegador: el render
+ * de servidor y el primero de cliente pintan `null`, y el texto aparece tras
+ * montar, así que la hidratación no se desajusta.
  */
 
 const REFRESH_MS = 150_000;
 
-export function LiveRefresh({ showStatus = false }: { showStatus?: boolean }) {
+export function LiveRefresh({
+  showStatus = false,
+  dataUpdatedAt = null,
+}: {
+  /** Pinta «Actualizado a las …» con la hora de la última pasada. */
+  showStatus?: boolean;
+  /** `finishedAt` ISO de la última pasada registrada, o `null` si no hay ninguna. */
+  dataUpdatedAt?: string | null;
+}) {
   const router = useRouter();
   const [, startTransition] = useTransition();
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    // La primera marca es la del montaje: la página acaba de leer los datos. Va
-    // en un `requestAnimationFrame` y no en el cuerpo del efecto para no provocar
-    // un render en cascada síncrono; el valor sigue siendo `null` en el render de
-    // servidor y en el primero de cliente.
-    const frame = requestAnimationFrame(() => setUpdatedAt(new Date()));
+    // El texto se enciende ya en cliente, un fotograma después de montar: el
+    // `setState` va ahí y no en el cuerpo del efecto porque el linter lo marca
+    // como render en cascada. En el render de servidor y en el primero de
+    // cliente sigue siendo `null`.
+    const frame = requestAnimationFrame(() => setMounted(true));
 
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") {
         startTransition(() => router.refresh());
-        setUpdatedAt(new Date());
       }
     }, REFRESH_MS);
 
@@ -60,12 +78,14 @@ export function LiveRefresh({ showStatus = false }: { showStatus?: boolean }) {
 
   return (
     <span className="text-xs text-muted">
-      {updatedAt === null
+      {!mounted
         ? null
-        : `Actualizado a las ${updatedAt.toLocaleTimeString("es-ES", {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}`}
+        : dataUpdatedAt === null
+          ? "Sin actualizar todavía"
+          : `Actualizado a las ${new Date(dataUpdatedAt).toLocaleTimeString("es-ES", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}`}
     </span>
   );
 }

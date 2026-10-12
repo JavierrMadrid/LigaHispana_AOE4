@@ -118,6 +118,50 @@ export function countdownParts(
   };
 }
 
+/** En qué punto del torneo está el contador: aún no ha empezado, o ya corre. */
+export type CountdownPhase = "before" | "running";
+
+/**
+ * Qué cuenta el contador de la portada, y en qué fase está el torneo.
+ *
+ * Decide **el objetivo** de `countdownParts` a partir de la ventana del ruleset
+ * (`{ from, to }`, con `to` opcional). Antes de empezar apunta al inicio; una vez
+ * empezado apunta al final; y si no hay nada que contar —ventana abierta ya
+ * arrancada, o torneo terminado— devuelve `null` para que la portada no pinte un
+ * contador a cero.
+ *
+ * La fase la decide aquí y no en el componente para que el texto («empieza en» /
+ * «termina en») salga del mismo cálculo que el objetivo, sin que la interfaz tenga
+ * que comparar fechas por su cuenta.
+ *
+ * `now` entra por parámetro, como en `countdownParts`: la función es pura y se
+ * prueba sin temporizadores reales.
+ */
+export function countdownTarget(
+  window: { from: string; to: string | null },
+  now: Date,
+): { target: Date; phase: CountdownPhase } | null {
+  const from = new Date(window.from);
+
+  // `now < from` en el instante exacto de inicio ya no es "antes": cae a la fase de
+  // en curso (o a `null` con ventana abierta, que es lo que dice la regla).
+  if (now.getTime() < from.getTime()) {
+    return { target: from, phase: "before" };
+  }
+
+  if (window.to === null) {
+    return null;
+  }
+
+  const to = new Date(window.to);
+
+  if (now.getTime() < to.getTime()) {
+    return { target: to, phase: "running" };
+  }
+
+  return null;
+}
+
 /**
  * Enlace al perfil de un jugador en AoE4World.
  *

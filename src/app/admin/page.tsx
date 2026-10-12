@@ -181,6 +181,12 @@ export default async function AdminPage() {
           <p className="mt-1 text-sm text-muted">
             Aprueba o rechaza para que la clasificación refleje el estado real.
           </p>
+          <p className="mt-2 border-t border-line pt-2 text-xs text-muted">
+            Aprobar solo guarda el estado: no trae partidas ni recalcula en el momento. El jugador
+            entra en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos) o al
+            pulsar «Sincronizar ahora», con 0 puntos y 0 partidas hasta que tenga partidas
+            clasificatorias.
+          </p>
 
           <ul className="mt-4 flex flex-col gap-2">
             {pending.map((player) => (

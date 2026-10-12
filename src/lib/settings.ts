@@ -164,6 +164,27 @@ export async function writePlayerSyncState(
   });
 }
 
+/**
+ * Borra el cursor de sincronización de un jugador.
+ *
+ * Existe porque el cursor es la **memoria** del worker sobre un jugador y no cuelga
+ * de él por una FK: borrar el `Player` no lo toca. Un cursor huérfano es un fallo
+ * silencioso, porque al volver a dar de alta el mismo perfil el worker cree que ya
+ * tiene el histórico y solo pide partidas desde esa fecha: importa cero y el
+ * recién aprobado no aparece en la clasificación nunca.
+ *
+ * Acepta el cliente porque quien la llama lo hace **dentro** de la transacción que
+ * borra al jugador: o se van los dos o no se va ninguno, y no puede quedar un
+ * cursor describiendo a alguien que ya no está. Es idempotente: borrar un cursor
+ * que no existe no es un error.
+ */
+export async function deletePlayerSyncState(
+  profileId: number,
+  client: SettingWriter = db,
+): Promise<void> {
+  await client.setting.deleteMany({ where: { key: playerSyncKey(profileId) } });
+}
+
 /** Cliente con la única tabla que necesita escribir (`db` o una `tx`). */
 export type SettingWriter = Pick<Prisma.TransactionClient, "setting">;
 

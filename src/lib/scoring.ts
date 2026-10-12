@@ -13,6 +13,7 @@ import {
   loadObjectivePlayers,
   objectivesSnapshotFingerprint,
   readObjectivesSnapshotValue,
+  type ObjectiveAward,
   type ObjectiveOption,
   type ObjectiveView,
   type ObjectivesSnapshot,
@@ -498,9 +499,16 @@ export type RecomputeScoresResult = {
    * ya estaba bien.
    */
   matchesUpdated: number;
-  /** Jugadores con fila en la clasificación. */
+  /**
+   * Jugadores con fila en la clasificación. Con la regla actual es **todos los
+   * aprobados**, tengan o no partidas: quien no ha jugado sale con todo a cero.
+   */
   playersRanked: number;
-  /** Jugadores cuya fila anterior se ha retirado (ya no rankean). */
+  /**
+   * Filas de la clasificación anterior que ya no se publican: jugadores que dejaron
+   * de estar aprobados (o se borraron). Un aprobado sin partidas ya no cuenta aquí:
+   * tiene fila con ceros.
+   */
   playersUnranked: number;
   /** Suma de `PlayerScore.total`: partidas y objetivos. */
   totalPoints: number;
@@ -511,11 +519,36 @@ export type RecomputeScoresResult = {
   durationMs: number;
 };
 
-type AggregatedRow = {
+/**
+ * Agregado de partidas de un jugador: lo que aporta el SQL a la clasificación.
+ *
+ * `matchPoints` son solo los puntos de partidas (sin objetivos); los objetivos se
+ * suman al montar la fila, en `rankApprovedPlayers()`. Un jugador aprobado sin
+ * ninguna clasificatoria **no aparece** aquí: quien llama lo trata como ceros.
+ */
+export type AggregatedRow = {
   matchPoints: number;
   wins: number;
   matches: number;
   byMode: Record<string, ScoreBreakdownMode>;
+};
+
+/**
+ * Una fila de la clasificación ya resuelta: lo que necesita `PlayerScore` más el
+ * `rank` y el `breakdown` de objetivos, antes de montar el documento JSON.
+ *
+ * La devuelve `rankApprovedPlayers()`, que es pura y se prueba sin base de datos.
+ */
+export type RankedStanding = {
+  playerId: string;
+  profileId: number;
+  total: number;
+  wins: number;
+  matches: number;
+  byMode: Record<string, ScoreBreakdownMode>;
+  objectives: { points: number; earned: string[] };
+  /** Puesto 1-based, denso sobre todos los aprobados. */
+  rank: number;
 };
 
 /**
@@ -570,6 +603,61 @@ export function compareStandings(
     b.wins * a.matches - a.wins * b.matches ||
     a.profileId - b.profileId
   );
+}
+
+/**
+ * Arma las filas de la clasificación a partir de los aprobados y sus agregados.
+ *
+ * Es la parte **pura** del motor: recibe todos los aprobados —con o sin partidas—,
+ * los agregados de partidas por jugador (puede faltar quien no ha jugado), los
+ * puntos de objetivos por jugador y el ruleset (solo para el `byMode` de ceros), y
+ * devuelve las filas ya ordenadas y con su `rank`. El SQL y la transacción se
+ * quedan en `recomputeScores()`, que es quien no se puede probar sin base.
+ *
+ * Dos reglas que decide esta función:
+ *
+ * - **Todo aprobado tiene fila.** Quien no está en `totals` no se salta: entra con
+ *   todo a cero (`emptyByMode(ruleset)` para que las familias del ruleset sigan
+ *   apareciendo en el desglose). Es la regla de producto: un participante aprobado
+ *   tiene que verse en la clasificación desde el primer día, aunque no haya jugado
+ *   nada todavía. Un `PENDING` o un `REJECTED` no llega hasta aquí.
+ * - **Una entrada de `totals` que no sea de un aprobado se ignora.** Se itera sobre
+ *   los aprobados, no sobre los agregados, así que no puede colarse alguien que
+ *   dejó de estar aprobado entre el agregado y esta llamada.
+ *
+ * El `rank` es denso 1..N y sale de `compareStandings`, sin cambios: los que no
+ * tienen partidas van con 0 puntos y 0 victorias, así que quedan detrás de
+ * cualquiera que haya puntuado, y entre ellos desempata `profileId`.
+ */
+export function rankApprovedPlayers(
+  players: readonly { id: string; profileId: number }[],
+  totals: ReadonlyMap<string, AggregatedRow>,
+  objectives: ReadonlyMap<string, ObjectiveAward>,
+  ruleset: ScoringRuleset,
+): RankedStanding[] {
+  return players
+    .map((player) => {
+      const aggregate = totals.get(player.id) ?? {
+        matchPoints: 0,
+        wins: 0,
+        matches: 0,
+        byMode: emptyByMode(ruleset),
+      };
+      const award = objectives.get(player.id);
+      const objectivePoints = award?.points ?? 0;
+
+      return {
+        playerId: player.id,
+        profileId: player.profileId,
+        wins: aggregate.wins,
+        matches: aggregate.matches,
+        byMode: aggregate.byMode,
+        total: aggregate.matchPoints + objectivePoints,
+        objectives: { points: objectivePoints, earned: award?.earned ?? [] },
+      };
+    })
+    .sort(compareStandings)
+    .map((row, index) => ({ ...row, rank: index + 1 }));
 }
 
 /**
@@ -665,8 +753,8 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       // mismos que los del resto del motor: dentro de la transacción, con el cerrojo
       // ya tomado, o el registro y la clasificación describen lo mismo o no cambia
       // ninguno; y en **todos** los caminos que recalculan —el worker, `npm run
-      // score`, revertir o restaurar los puntos de una partida, aprobar o dar de
-      // alta a un jugador— sin tener que acordarse de un segundo paso. El
+      // score`, revertir o restaurar los puntos de una partida y la baja de un
+      // jugador— sin tener que acordarse de un segundo paso. El
       // `reconcileObjectiveEvents` es idempotente y solo escribe lo que difiere de
       // lo que ya había.
       await reconcileObjectiveEvents(tx, ruleset, objectives.awarded);
@@ -748,39 +836,19 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         totals.set(row.playerId, current);
       }
 
-      // Solo se consulta el perfil de quien tiene alguna partida clasificatoria:
-      // los aprobados sin partidas no tienen fila (P-02 del modelo de datos).
+      // Se traen **todos** los aprobados, no solo quien tiene partidas: un aprobado
+      // sin ninguna clasificatoria también tiene fila, con todo a cero. Un `PENDING`
+      // o un `REJECTED` no entra. Los agregados que no correspondan a un aprobado se
+      // ignoran en `rankApprovedPlayers()`, que itera sobre esta lista.
       const players = await tx.player.findMany({
-        where: { id: { in: [...totals.keys()] }, status: PlayerStatus.APPROVED },
+        where: { status: PlayerStatus.APPROVED },
         select: { id: true, profileId: true },
       });
 
-      const profileIdByPlayer = new Map(players.map((player) => [player.id, player.profileId]));
-
-      // Desempate: total, victorias, winrate y `profileId`. Este último es único,
-      // así que el orden es total y el puesto un entero denso: no hay empates que
-      // repartir. Una fila sin `profileId` no se publica en lugar de publicarse
-      // con un desempate falso.
-      const ranked = [...totals.entries()]
-        .flatMap(([playerId, aggregate]) => {
-          const profileId = profileIdByPlayer.get(playerId);
-          const award = objectives.pointsByPlayer.get(playerId);
-          const objectivePoints = award?.points ?? 0;
-
-          return profileId === undefined
-            ? []
-            : [
-                {
-                  playerId,
-                  profileId,
-                  ...aggregate,
-                  total: aggregate.matchPoints + objectivePoints,
-                  objectives: { points: objectivePoints, earned: award?.earned ?? [] },
-                },
-              ];
-        })
-        .sort(compareStandings)
-        .map((row, index) => ({ ...row, rank: index + 1 }));
+      // El orden y el `rank` los pone la parte pura (ver su docblock): total,
+      // victorias, winrate y `profileId`. Este último es único, así que el orden es
+      // total y el puesto un entero denso sobre todos los aprobados.
+      const ranked = rankApprovedPlayers(players, totals, objectives.pointsByPlayer, ruleset);
 
       const previousCount = await tx.playerScore.count({
         where: { ruleSetVersion: RULESET_VERSION },

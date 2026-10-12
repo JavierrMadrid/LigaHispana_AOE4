@@ -59,6 +59,10 @@ cruzado, sin coma flotante, para que el orden sea exacto. Como `profileId` es ú
 el puesto un entero denso. (El desempate **dentro de un objetivo** es otro:
 ver [`OBJETIVOS.md`](./OBJETIVOS.md).)
 
+Aparecen **todos los jugadores aprobados**: quien todavía no haya cerrado ninguna clasificatoria figura
+con 0 puntos y 0 partidas, así que queda detrás de cualquiera que haya puntuado (y entre ellos desempata
+`profileId`). Un jugador no aprobado no figura.
+
 ## El ruleset
 
 El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:

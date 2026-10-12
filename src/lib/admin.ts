@@ -591,9 +591,10 @@ const ACTION_ORDER_BY: Record<
 /**
  * Una fila de la pestaña de participantes.
  *
- * `matchCount` y `points` vienen del mismo agregado y valen `null` cuando el
- * jugador no tiene fila en la clasificación: es el caso de cualquiera que no esté
- * aprobado, o que no tenga todavía ninguna partida clasificatoria.
+ * `matchCount` y `points` vienen de la fila de `PlayerScore` y valen `null` cuando
+ * el jugador **no** tiene fila en la clasificación: es el caso de todo el que no esté
+ * aprobado. Un aprobado **sí** tiene fila desde que se aprueba, así que ahí ya no
+ * sale `null` sino `0` (lo que trae mientras no haya jugado ninguna clasificatoria).
  */
 export type AdminParticipant = {
   /** `Player.id`: es lo que viajan los formularios de las acciones de admin. */
@@ -660,9 +661,9 @@ export type AdminParticipant = {
   country: string | null;
   status: PlayerStatus;
   avatarUrl: string | null;
-  /** Partidas clasificatorias de las que tiene fila; `null` si no rankea. */
+  /** Partidas clasificatorias contadas; `null` si el jugador no está aprobado (sin fila). */
   matchCount: number | null;
-  /** Puntos del torneo, los mismos que publica la clasificación; `null` si no rankea. */
+  /** Puntos del torneo, los mismos que publica la clasificación; `null` si no está aprobado (sin fila). */
   points: number | null;
 };
 
@@ -707,9 +708,9 @@ const PARTICIPANT_SELECT = {
  * - Sale con las reglas vigentes: si `pointsPerWin` cambia en `Setting` sin
  *   desplegar, el panel cambia con la clasificación.
  *
- * Lo que se paga es que un jugador sin fila sale con `null` en vez de `0`, y es lo
- * honesto: `0` puntos significaría "está en la clasificación y no tiene nada", y un
- * `PENDING` todavía no está en ninguna.
+ * Un jugador **sin fila** —alguien no aprobado, que no está en la clasificación— sale
+ * con `null` en vez de `0`, y es lo honesto: `0` significa "está en la clasificación y
+ * no tiene nada", que es justo lo que ahora trae un aprobado que todavía no ha jugado.
  *
  * El orden es el que ya tenía la tabla (`status` y después `name`): agrupar por
  * estado deja juntas las solicitudes pendientes, que es lo que se mira primero.
@@ -722,7 +723,7 @@ export async function getAdminParticipants(): Promise<PublicRead<AdminParticipan
         select: PARTICIPANT_SELECT,
       }),
       // Solo la versión activa del ruleset: las filas de reglas anteriores se
-      // conservan (P-02 del modelo de datos) y son historia, no lo que se muestra.
+      // conservan y son historia, no lo que se muestra.
       db.playerScore.findMany({
         where: { ruleSetVersion: RULESET_VERSION },
         select: { playerId: true, matches: true, total: true },

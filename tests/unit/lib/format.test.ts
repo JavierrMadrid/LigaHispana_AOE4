@@ -4,6 +4,7 @@ import {
   aoe4WorldGameUrl,
   aoe4WorldProfileUrl,
   countdownParts,
+  countdownTarget,
   describeMode,
   describeTeamSize,
   formatRelativeTime,
@@ -209,6 +210,50 @@ describe("countdownParts", () => {
   it("cuando el torneo ya terminó devuelve `null`, no un contador a cero", () => {
     expect(countdownParts(AHORA, AHORA)).toBeNull();
     expect(countdownParts(new Date(AHORA.getTime() - 60_000), AHORA)).toBeNull();
+  });
+});
+
+describe("countdownTarget", () => {
+  const VENTANA = {
+    from: "2026-09-15T00:00:00.000Z",
+    to: "2026-10-15T00:00:00.000Z",
+  };
+
+  it("antes de empezar apunta al inicio y lo dice", () => {
+    const ahora = new Date("2026-09-20T20:00:00.000Z");
+    const futura = { from: "2026-10-01T00:00:00.000Z", to: "2026-11-01T00:00:00.000Z" };
+
+    expect(countdownTarget(futura, ahora)).toEqual({
+      target: new Date("2026-10-01T00:00:00.000Z"),
+      phase: "before",
+    });
+  });
+
+  it("en curso apunta al final", () => {
+    expect(countdownTarget(VENTANA, AHORA)).toEqual({
+      target: new Date("2026-10-15T00:00:00.000Z"),
+      phase: "running",
+    });
+  });
+
+  it("una ventana abierta antes de empezar sigue apuntando al inicio", () => {
+    // Sin `to` no hay final al que contar, pero el inicio sí es un objetivo.
+    expect(
+      countdownTarget({ from: "2026-10-01T00:00:00.000Z", to: null }, AHORA),
+    ).toEqual({ target: new Date("2026-10-01T00:00:00.000Z"), phase: "before" });
+  });
+
+  it("una ventana abierta ya arrancada no tiene nada que contar", () => {
+    // Empezó y no tiene final: el contador no tiene a qué apuntar.
+    expect(countdownTarget({ from: "2026-09-15T00:00:00.000Z", to: null }, AHORA)).toBeNull();
+  });
+
+  it("torneo terminado no tiene nada que contar", () => {
+    expect(countdownTarget(VENTANA, new Date("2026-10-20T00:00:00.000Z"))).toBeNull();
+  });
+
+  it("el instante exacto del final ya no cuenta", () => {
+    expect(countdownTarget(VENTANA, new Date("2026-10-15T00:00:00.000Z"))).toBeNull();
   });
 });
 

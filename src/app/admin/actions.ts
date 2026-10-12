@@ -30,7 +30,12 @@ import {
 import { countsAsRanked, rankedMatchWhere } from "@/lib/ranked-match";
 import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
-import { readRegistrationOpen, writeMatcherinoDonations, writeRegistrationOpen } from "@/lib/settings";
+import {
+  deletePlayerSyncState,
+  readRegistrationOpen,
+  writeMatcherinoDonations,
+  writeRegistrationOpen,
+} from "@/lib/settings";
 
 /**
  * Server Actions del panel de administración.
@@ -93,11 +98,12 @@ export type PlayerFormState = {
   /**
    * Lo que pasó **después** del alta, cuando el alta sí se hizo.
    *
-   * No es un error: el jugador está dado de alta sí o sí. Es para que el panel
-   * diga si ya sale en la clasificación, y sobre todo para el caso que más
-   * confunde: un jugador aprobado **sin ninguna partida clasificatoria** no tiene
-   * fila en `PlayerScore` y por tanto no aparece (P-02 del modelo de datos). Sin
-   * este aviso, el `—` de la columna de puntos parece un fallo.
+   * No es un error: el jugador está dado de alta sí o sí. Es para avisar de cuándo
+   * entra en la clasificación, que es la duda que deja el alta: como solo escribe el
+   * estado, es la siguiente pasada del sincronizador la que le crea la fila. Una vez
+   * aprobado aparece siempre en la tabla —con todo a cero si aún no tiene ninguna
+   * partida clasificatoria—, así que el aviso habla de la hora de entrada, no de si
+   * llegará a salir.
    */
   message: string | null;
 };
@@ -105,90 +111,6 @@ export type PlayerFormState = {
 /* -------------------------------------------------------------------------- */
 /* Utilidades                                                                  */
 /* -------------------------------------------------------------------------- */
-
-/**
- * Trae las partidas de un jugador recién aprobado y lo deja ranked al momento.
- *
- * Sin esto, dar de alta a alguien no lo mete en la clasificación: la web lee
- * `PlayerScore`, y esa tabla solo la rellena el sincronizador, que pasa cada 5
- * minutos. Un jugador recién añadido se quedaba hasta la siguiente pasada sin
- * aparecer, y con el sincronizador caído **no aparecía nunca**: el `—` de la
- * columna de puntos no distingue "todavía no le ha tocado" de "no le va a tocar".
- *
- * Recalcular **solo** no arregla nada, y es la parte que no es obvia: sin partidas
- * importadas el `groupBy` de `recomputeScores()` no ve al jugador, así que no le
- * crea fila. Hay que traer primero sus partidas de AoE4World, y el recálculo va
- * dentro de la misma pasada (`syncApprovedPlayers` lo llama al final).
- *
- * La pasada es solo de este jugador (`profileIds`), no de todo el torneo.
- *
- * Devuelve `""` cuando todo fue bien y un aviso cuando no. **Nunca lanza**: el
- * alta ya está escrita y desheacerla dejaría al jugador sin alta por un problema
- * puntual de la API externa, que es peor que un alta que tarda unos minutos más
- * en verse. Es el mismo criterio que `avisoDeRecalculo()` en el borrado.
- */
-async function llevarAClasificacion(
-  scope: string,
-  player: { id: string; profileId: number; name: string },
-): Promise<string> {
-  const altaHecha = `Se ha dado de alta a ${player.name}.`;
-
-  try {
-    const summary = await syncApprovedPlayers({ profileIds: [player.profileId] });
-    const jugados = summary.players[0];
-
-    if (summary.scoringError !== null) {
-      return frase(
-        altaHecha,
-        `No se ha podido recalcular la clasificación (${summary.scoringError}).`,
-        "Aparecerá en cuanto el sincronizador lo consiga.",
-      );
-    }
-
-    // `!== "ok"` y no `=== "failed"`: una pasada cancelada por plazo
-    // (`status: "cancelled"`) tampoco ha traído nada, y si no se distingue
-    // acabaría diciendo "no tiene partidas clasificatorias", que es mentira.
-    if (jugados === undefined || jugados.status !== "ok") {
-      return frase(
-        altaHecha,
-        `No se han podido traer sus partidas de AoE4World: ${
-          jugados?.error ?? "la pasada se quedó sin tiempo."
-        }`,
-        "Aparecerá en cuanto el sincronizador lo consiga.",
-      );
-    }
-
-    // La condición de aparecer en la clasificación es exactamente tener fila en
-    // `PlayerScore`, así que se pregunta a esa tabla y no se reimplementa la regla.
-    const fila = await db.playerScore.findFirst({
-      where: { playerId: player.id },
-      select: { rank: true, total: true },
-    });
-
-    if (fila === null) {
-      return frase(
-        altaHecha,
-        "Todavía no tiene ninguna partida clasificatoria, así que aún no sale en la clasificación.",
-        "En cuanto cierre su primera aparecería con su puesto y sus puntos.",
-      );
-    }
-
-    return frase(
-      altaHecha,
-      `Ya está en la clasificación: puesto ${fila.rank} con ${fila.total} ${
-        fila.total === 1 ? "punto" : "puntos"
-      }.`,
-    );
-  } catch (error) {
-    logDatabaseFailure(`${scope}/sync`, error);
-
-    return frase(
-      altaHecha,
-      "No se han podido traer sus partidas.",
-      "Aparecerá en la clasificación en cuanto el sincronizador lo consiga.",
-    );
-  }
-}
 
 /**
  * Campo de texto de un formulario, ya recortado.
@@ -387,11 +309,19 @@ function actorEmail(user: User): string {
  *
  * ## Qué se escribe y en qué orden
  *
- * Si el jugador queda **aprobado**, después del alta se le traen sus partidas y se
- * recalcula la clasificación, para que salga en la tabla en cuanto se pulse el
- * botón y no en la siguiente pasada del sincronizador. Va fuera de la transacción
- * a propósito: traer las partidas es una llamada a AoE4World de varios segundos, y
- * meterla dentro dejaría la fila bloqueada todo ese rato.
+ * El alta **solo escribe la fila**. No trae partidas ni recalcula en línea: el
+ * jugador entra en la clasificación en la siguiente pasada del sincronizador
+ * (hasta 10 minutos) o cuando la organización pulse «Sincronizar ahora» en esta
+ * misma pestaña. Es una decisión de producto, no un olvido: en el plan Free de
+ * Cloudflare el presupuesto es de 10 ms de CPU por invocación y una pasada gasta
+ * ~500 ms, así que lanzarla dentro de la petición del alta muere con `Worker
+ * exceeded CPU time limit` (1102) en cuanto se apilan dos altas. El aviso que
+ * devuelve el formulario lo explica.
+ *
+ * Un aprobado tiene fila en la clasificación aunque no haya jugado nada todavía:
+ * sale con todo a cero y con su puesto por el desempate. El aviso no promete que ya
+ * esté, porque la fila se la crea el recálculo: dice que entra en el siguiente, que
+ * es lo que hace el sincronizador.
  *
  * Los tres canales de directo —Twitch, YouTube y Kick— se validan con **el mismo
  * criterio y los mismos mensajes** que la edición (`updatePlayer`): opcionales, y
@@ -522,8 +452,6 @@ export async function createPlayer(
   // El `try` cubre **solo** la base de datos. Un fallo de validación tiene que
   // seguir siendo un error de aplicación, y por eso el bloque va aquí y no
   // alrededor de la acción entera.
-  let nuevo: { id: string; profileId: number; name: string } | null = null;
-
   try {
     const existing = await db.player.findUnique({ where: { profileId } });
 
@@ -575,8 +503,6 @@ export async function createPlayer(
         select: { id: true },
       });
 
-      nuevo = { id: created.id, profileId, name };
-
       await recordAdminAction(tx, {
         type: AdminActionType.PLAYER_CREATED,
         actorEmail: actorEmail(admin),
@@ -603,26 +529,25 @@ export async function createPlayer(
 
   revalidatePath("/admin");
 
-  // Solo si queda aprobado: un pendiente o un rechazado no debe traer partidas ni
-  // recalcular, porque `recomputeScores()` los deja fuera de la clasificación igual.
-  if (status !== PlayerStatus.APPROVED || nuevo === null) {
+  // El alta solo escribe el estado; quién entra en la clasificación lo decide la
+  // siguiente pasada del sincronizador. Por eso el mensaje de un aprobado avisa de
+  // cuándo entra y de que se puede forzar: todavía no tiene fila en `PlayerScore`
+  // (la crea el recálculo), así que decir que ya está lo haría mentir.
+  if (status === PlayerStatus.APPROVED) {
     return {
       error: null,
-      message:
-        status === PlayerStatus.PENDING
-          ? `Se ha dado de alta a ${name} como pendiente. Al aprobarlo se traerán sus partidas y aparecerá en la clasificación.`
-          : null,
+      message: `Se ha dado de alta a ${name}. Aparecerá en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias; puedes forzarla con «Sincronizar ahora» en esta misma pestaña.`,
     };
   }
 
-  const message = await llevarAClasificacion("admin/createPlayer", nuevo);
+  if (status === PlayerStatus.PENDING) {
+    return {
+      error: null,
+      message: `Se ha dado de alta a ${name} como pendiente. Al aprobarlo aparecerá en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`,
+    };
+  }
 
-  // Otra vez, y no por descuido: el panel saca los puntos de `PlayerScore`, y esa
-  // tabla no cambia hasta que la pasada de arriba ha recalculado. Revalidar solo
-  // antes dejaría la fila con `—` aunque el jugador ya esté en la clasificación.
-  revalidatePath("/admin");
-
-  return { error: null, message };
+  return { error: null, message: null };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -765,7 +690,6 @@ function filaInexistente(error: unknown): boolean {
  *
  * ## Por eso no recalcula ni trae partidas
  *
- * Al revés que el alta, que sí trae las partidas de un jugador recién aprobado.
  * Ninguno de los siete campos entra en el motor de puntos ni en el de alertas —
  * `PlayerScore` y `Alert` hablan de partidas y de lo que se ha comprobado fuera del
  * juego, no de cómo se llama alguien—, así que no hay nada derivado que se quede
@@ -1103,12 +1027,16 @@ export async function updatePlayer(
  * panel. Cuando la pestaña de acciones quiera mostrarlas hay que añadir su tipo al
  * enum, su frase en `admin-actions.ts` y pasar estas dos a `AdminActionResult`.
  *
- * Aprobar **sí** tiene efecto en lo que ve el público, y por eso es la única de las
- * dos que hace trabajo de más: al pasar a `APPROVED` el jugador entra en el
- * sincronizador, así que se le traen sus partidas y se recalcula la clasificación.
- * Sin eso, aprobar una solicitud de `/participar` lo dejaría invisible hasta la
- * siguiente pasada. No hay estado de vuelta que informar —el botón no lleva
- * diálogo— así que un fallo solo se registra, y el alta ya está escrita.
+ * Aprobar cambia lo que ve el público, pero esta acción **solo escribe el estado**:
+ * al pasar a `APPROVED` el jugador entra en el siguiente cálculo del sincronizador,
+ * y ese cálculo lo hace el cron (cada 10 minutos) o la llamada manual
+ * (`syncNow`), no esta petición. No se traen partidas ni se recalcula aquí: una
+ * pasada gasta ~500 ms de CPU y el plan Free de Cloudflare da 10 ms por
+ * invocación, así que lanzarla dentro del aprobado mataba el *isolate* con
+ * `Worker exceeded CPU time limit` (1102) en cuanto se apilaban dos clics. Desde
+ * que solo escribe el estado, el botón no se queda colgado y el jugador aparece
+ * en la siguiente pasada. No hay estado de vuelta que informar —el botón no lleva
+ * diálogo— así que un fallo solo se registra, y el estado no ha cambiado.
  */
 async function setPlayerStatus(playerId: string, status: PlayerStatus) {
   await requireAdmin();
@@ -1117,16 +1045,8 @@ async function setPlayerStatus(playerId: string, status: PlayerStatus) {
     return;
   }
 
-  let jugador: { id: string; profileId: number; name: string } | null = null;
-
   try {
-    const row = await db.player.update({
-      where: { id: playerId },
-      data: { status },
-      select: { id: true, profileId: true, name: true },
-    });
-
-    jugador = row;
+    await db.player.update({ where: { id: playerId }, data: { status } });
   } catch (error) {
     // Sin estado de vuelta, un fallo aquí solo puede registrarse: la acción termina
     // sin cambiar nada y no hay superficie en la que informar a quien la pulsó.
@@ -1135,16 +1055,6 @@ async function setPlayerStatus(playerId: string, status: PlayerStatus) {
     return;
   }
 
-  if (status === PlayerStatus.APPROVED && jugador !== null) {
-    const aviso = await llevarAClasificacion("admin/approvePlayer", jugador);
-
-    if (aviso !== "") {
-      console.warn(`[admin/approvePlayer] ${aviso}`);
-    }
-  }
-
-  // Al final, no antes: aprobar también recalcula, y los puntos del panel salen de
-  // la tabla que esa pasada acaba de reescribir.
   revalidatePath("/admin");
 }
 
@@ -1305,6 +1215,12 @@ export async function setMatcherinoDonations(
  * es lo que garantiza que la pasada que se escriba a continuación describa la
  * clasificación que realmente queda, en vez de dejarlo para que lo arregle el cron.
  *
+ * El **cursor de sincronización** (`Setting["aoe4world.sync.player.<profileId>"]`)
+ * no cae con la cascada —vive en `Setting`, sin FK al jugador— y por eso se borra
+ * aquí, en la misma transacción: dejar el cursor huérfano hacía que un alta
+ * posterior del mismo perfil creyera que ya tenía el histórico y solo pidiera
+ * partidas desde esa fecha, importando cero.
+ *
  * **A diferencia del revert, aquí un fallo del recálculo no se compensa**, y es a
  * propósito: el jugador ya está borrado y no se puede deshacer un borrado sin
  * inventar un "deshacer" que nadie pidió. Pero tampoco queda nada incoherente: los
@@ -1394,6 +1310,13 @@ export async function deletePlayer(
   try {
     await db.$transaction(async (tx) => {
       await tx.player.delete({ where: { id: player.id } });
+
+      // El cursor de sincronización vive en `Setting`, sin FK al jugador, así que
+      // no cae con la cascada. Se borra **en la misma transacción** para que no
+      // quede un cursor sin jugador: si el mismo perfil se vuelve a dar de alta,
+      // un cursor viejo haría que el worker pidiera partidas solo desde ahí e
+      // importara cero, dejando al recién aprobado fuera de la clasificación.
+      await deletePlayerSyncState(player.profileId, tx);
 
       await recordAdminAction(tx, {
         type: AdminActionType.PLAYER_REMOVED,

@@ -10,6 +10,8 @@ import {
   compareStandings,
   countsAsRanked,
   mergeRuleset,
+  rankApprovedPlayers,
+  type AggregatedRow,
   type ScoringWindow,
 } from "@/lib/scoring";
 
@@ -348,11 +350,147 @@ describe("desempate de la clasificación", () => {
   });
 
   it("con `matches` 0 el winrate no rompe nada y decide `profileId`", () => {
-    // Una fila publicada siempre tiene partidas, pero el comparador se defiende
-    // del 0 en vez de producir `NaN` (que ordenaría de forma no determinista).
+    // Un aprobado sin partidas tiene fila con `matches` 0, así que el comparador
+    // se defiende del 0 en vez de producir `NaN` (que ordenaría de forma no
+    // determinista).
     const filas = [fila(5, 0, 0, 0), fila(2, 0, 0, 0)];
 
     expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([2, 5]);
+  });
+});
+
+describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
+  /** Agregado de ejemplo; por defecto, un jugador sin partidas. */
+  function agregado(overrides: Partial<AggregatedRow> = {}): AggregatedRow {
+    return { matchPoints: 0, wins: 0, matches: 0, byMode: {}, ...overrides };
+  }
+
+  const byModeCero = {
+    rm_solo: { wins: 0, points: 0, matches: 0 },
+    rm_team: { wins: 0, points: 0, matches: 0 },
+  };
+
+  it("un aprobado sin partidas sale con todo a cero, en el último puesto", () => {
+    // Es la regla nueva: un aprobado sin ninguna clasificatoria ya no desaparece de
+    // la tabla, y su desglose lleva las familias con ceros para que quien lo lea no
+    // tenga que tratar un objeto que puede faltar.
+    const filas = rankApprovedPlayers(
+      [
+        { id: "a", profileId: 1 },
+        { id: "b", profileId: 2 },
+      ],
+      new Map([["b", agregado({ matchPoints: 6, wins: 3, matches: 4 })]]),
+      new Map(),
+      DEFAULT_RULESET,
+    );
+
+    expect(filas).toHaveLength(2);
+    expect(filas[1]).toEqual({
+      playerId: "a",
+      profileId: 1,
+      total: 0,
+      wins: 0,
+      matches: 0,
+      byMode: byModeCero,
+      objectives: { points: 0, earned: [] },
+      rank: 2,
+    });
+    expect(filas[0].playerId).toBe("b");
+    expect(filas[0].rank).toBe(1);
+  });
+
+  it("nadie se pierde: hay una fila por cada aprobado", () => {
+    const players = [
+      { id: "a", profileId: 11 },
+      { id: "b", profileId: 22 },
+      { id: "c", profileId: 33 },
+    ];
+
+    const filas = rankApprovedPlayers(
+      players,
+      new Map([["b", agregado({ matchPoints: 2, wins: 1, matches: 1 })]]),
+      new Map(),
+      DEFAULT_RULESET,
+    );
+
+    expect(filas.map((f) => f.profileId).sort((x, y) => x - y)).toEqual([11, 22, 33]);
+  });
+
+  it("los puestos son densos 1..N", () => {
+    const filas = rankApprovedPlayers(
+      [
+        { id: "a", profileId: 1 },
+        { id: "b", profileId: 2 },
+        { id: "c", profileId: 3 },
+      ],
+      new Map([["c", agregado({ matchPoints: 4, wins: 2, matches: 2 })]]),
+      new Map(),
+      DEFAULT_RULESET,
+    );
+
+    expect(filas.map((f) => f.rank)).toEqual([1, 2, 3]);
+  });
+
+  it("los puntos de objetivos se suman a quien los tiene", () => {
+    const filas = rankApprovedPlayers(
+      [
+        { id: "a", profileId: 1 },
+        { id: "b", profileId: 2 },
+      ],
+      new Map([["a", agregado({ matchPoints: 4, wins: 2, matches: 3 })]]),
+      new Map([["a", { points: 125, earned: ["rey-1v1", "loco-por-ganar"] }]]),
+      DEFAULT_RULESET,
+    );
+
+    const filaA = filas.find((f) => f.playerId === "a");
+
+    expect(filaA?.total).toBe(129);
+    expect(filaA?.objectives).toEqual({
+      points: 125,
+      earned: ["rey-1v1", "loco-por-ganar"],
+    });
+  });
+
+  it("una entrada de `totals` que no sea de un aprobado se ignora", () => {
+    // Se itera sobre los aprobados, no sobre los agregados: alguien que dejó de
+    // estar aprobado entre el agregado y esta llamada no puede colarse.
+    const filas = rankApprovedPlayers(
+      [{ id: "a", profileId: 1 }],
+      new Map([["fantasma", agregado({ matchPoints: 99, wins: 9, matches: 9 })]]),
+      new Map(),
+      DEFAULT_RULESET,
+    );
+
+    expect(filas).toHaveLength(1);
+    expect(filas[0].playerId).toBe("a");
+    expect(filas[0].total).toBe(0);
+  });
+
+  it("el orden respeta `compareStandings`", () => {
+    // Mismo total: gana quien tiene más victorias; con las mismas, mejor winrate;
+    // y con lo mismo, `profileId` ascendente.
+    const filas = rankApprovedPlayers(
+      [
+        { id: "sinPartidas", profileId: 9 },
+        { id: "peorWinrate", profileId: 5 },
+        { id: "mismoTotalMenosVictorias", profileId: 1 },
+        { id: "mejor", profileId: 8 },
+      ],
+      new Map([
+        ["peorWinrate", agregado({ matchPoints: 10, wins: 3, matches: 5 })],
+        ["mismoTotalMenosVictorias", agregado({ matchPoints: 10, wins: 2, matches: 4 })],
+        ["mejor", agregado({ matchPoints: 10, wins: 3, matches: 4 })],
+      ]),
+      new Map(),
+      DEFAULT_RULESET,
+    );
+
+    expect(filas.map((f) => f.playerId)).toEqual([
+      "mejor",
+      "peorWinrate",
+      "mismoTotalMenosVictorias",
+      "sinPartidas",
+    ]);
   });
 });
 
