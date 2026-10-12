@@ -10,6 +10,7 @@ import { requireAdmin } from "@/lib/auth";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
+import { RULESET_VERSION } from "@/lib/scoring";
 import { readRegistrationOpen } from "@/lib/settings";
 
 export const metadata: Metadata = {
@@ -20,22 +21,36 @@ export const metadata: Metadata = {
  * Pestaña de participantes: resumen, cola de aprobación, estado del sincronizador,
  * alta y listado.
  *
- * Los cuatro contadores salen de consultas directas a la base y no del DAL
- * porque son agregados que `getAdminParticipants()` no publica (el total de
- * partidas del torneo no se deduce de ninguna fila). El listado, en cambio, sí
- * pasa por el DAL.
+ * Los contadores de jugadores salen de consultas directas a la base y no del DAL
+ * porque son agregados que `getAdminParticipants()` no publica. El de partidas
+ * tampoco sale del DAL: es la suma de `PlayerScore` de la versión activa del
+ * ruleset, la misma que la columna «Partidas» de la tabla y que la clasificación
+ * pública. El listado, en cambio, sí pasa por el DAL.
  */
 export default async function AdminPage() {
   await requireAdmin();
 
-  const [totalPlayers, approvedPlayers, pendingPlayers, totalMatches, syncHealth] =
+  const [totalPlayers, approvedPlayers, pendingPlayers, scoreTotals, syncHealth] =
     await Promise.all([
       db.player.count(),
       db.player.count({ where: { status: "APPROVED" } }),
       db.player.count({ where: { status: "PENDING" } }),
-      db.match.count(),
+      // Las partidas del torneo no son las filas de `Match`: ahí entra todo lo
+      // que importa el sincronizador —cualquier ladder, el histórico anterior a
+      // la ventana y lo previo a la inscripción de cada jugador—. La cifra que
+      // vale es la que ya suma el motor de puntos por participante aprobado, así
+      // que se agrega `PlayerScore` de la versión activa en vez de recontar
+      // partidas aquí.
+      db.playerScore.aggregate({
+        where: { ruleSetVersion: RULESET_VERSION },
+        _sum: { matches: true },
+      }),
       getSyncHealth(),
     ]);
+
+  // `_sum` llega `null` cuando no hay ninguna fila de la versión activa: el
+  // resumen enseña 0, no un hueco.
+  const totalMatches = scoreTotals._sum.matches ?? 0;
 
   const participantsRead = await getAdminParticipants();
   const participants = participantsRead.status === "ok" ? participantsRead.data : [];
