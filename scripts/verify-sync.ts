@@ -1138,8 +1138,13 @@ async function checkObjectiveCatalogue(): Promise<void> {
     assert.equal(porGrupo.get("actividad"), 64, "Actividad");
     assert.equal(porGrupo.get("racha"), 232, "Racha");
     assert.equal(porGrupo.get("hazanas"), 129, "Hazañas");
-    assert.equal(porGrupo.get("formato"), 720, "Formatos");
-    assert.equal(porGrupo.get("civilizacion"), 1601, "Civilizaciones");
+    assert.equal(porGrupo.get("formato"), 960, "Formatos");
+    assert.equal(porGrupo.get("civilizacion"), 3294, "Civilizaciones");
+    assert.equal(
+      [...porGrupo.values()].reduce((total, puntos) => total + puntos, 0),
+      4679,
+      "Total de puntos",
+    );
   });
 
   await check("sin partidas no hay cobradores, y el ranking sale vacío", () => {
