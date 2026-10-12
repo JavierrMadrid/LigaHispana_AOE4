@@ -2,15 +2,29 @@
   // Configuracion de OpenNext para Workers, versionada a proposito.
   //
   // Sin este archivo, `@opennextjs/cloudflare` lo genera durante el build y su
-  // contenido se pierde en cada despliegue: las variables y secretos que esten
-  // en el panel dejan de viajar al Worker, porque `wrangler deploy` reconstruye
-  // el Worker solo con lo que trae este archivo. Versionarlo hace que el
-  // despliegue sea reproducible y que las variables del panel sobrevivan.
+  // contenido se pierde en cada despliegue: el `observability`, los bindings y
+  // el resto de la config dejan de viajar al Worker, porque `wrangler deploy`
+  // reconstruye el Worker solo con lo que trae este archivo. Versionarlo hace
+  // que el despliegue sea reproducible.
+  //
+  // Versionar el archivo **no** basta por si solo para conservar lo que hay en
+  // el panel: `wrangler deploy` toma este archivo como fuente de verdad de las
+  // `vars` de texto y, por defecto (`keep_vars: false`), **borra** las del panel
+  // antes de escribir las que vengan de aqui. Los **secretos nunca se borran**.
+  // Con `keep_vars: true` (abajo) tambien sobreviven las variables de texto; y
+  // como no hay bloque `vars`, no hay ninguna de texto que declarar aqui.
   //
   // Plantilla oficial: https://opennext.js.org/cloudflare/get-started
   "$schema": "node_modules/wrangler/config-schema.json",
   "main": ".open-next/worker.js",
   "name": "ligahispana-aoe4",
+  // Sin esto, cada despliegue de Workers Builds borra las variables de texto del
+  // panel y deja el Worker sin ellas: las credenciales de Discord (paso de la
+  // inscripcion) se perdieron asi en los despliegues del 9 de octubre de 2026.
+  // Workers Builds ejecuta `npx wrangler deploy` **sin** `--keep-vars`, asi que
+  // la proteccion tiene que venir del archivo. `CRON_SECRET` se libro por ser
+  // secreto. Ver docs/DESPLIEGUE.md, "Que sobrevive a un despliegue".
+  "keep_vars": true,
   // El dominio publico de la liga, `laligahispana.es`, esta en produccion como
   // **Custom Domain** de este Worker (zona `active` y con certificado emitido
   // desde el 4 de octubre de 2026) y aun asi **no** hay un bloque `routes` aqui.
