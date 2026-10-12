@@ -30,7 +30,7 @@ Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent` y `Alert` apuntan a `Player
 |---|---|
 | `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED` |
 | `MatchResult` | `WIN`, `LOSS` |
-| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED` |
+| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED` |
 | `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP`, `LOW_DIVISION_TEAM_GAME`, `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD` |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
 
@@ -114,14 +114,15 @@ la web; `Match` no se lee para pintar la clasificación.
 | `rank` | `Int` | Puesto con el desempate ya aplicado. **Se guarda** porque el orden no se resuelve en SQL. |
 | `total` | `Int` | `sum(byMode.points) + objectives.points`. |
 | `wins`, `matches` | `Int` | Victorias y partidas clasificatorias. |
+| `streak` | `Int?` | Racha **actual del torneo**: positiva = victorias clasificatorias seguidas, negativa = derrotas seguidas. `null` sin ninguna clasificatoria contada (la web pinta "-"; no es `0`). No es la racha de la ladder: esa vive en `Player.streak`. |
 | `breakdown` | `Json` | Desglose (ver formato abajo). |
 | `computedAt` | `DateTime` | |
 
 Índices: pk `(playerId, ruleSetVersion)` e `(ruleSetVersion, rank)`, que sostiene la clasificación
 sin `sort`. Todo jugador **aprobado** tiene fila, aunque todavía no haya jugado ninguna clasificatoria:
-sale con `total`, `wins` y `matches` a 0 y el `breakdown` con ceros (las familias del ruleset, con 0,
-y `objectives` a 0 y vacío). Un jugador **no aprobado** (`PENDING`/`REJECTED`) no tiene fila y no
-aparece.
+sale con `total`, `wins` y `matches` a 0, el `breakdown` con ceros (las familias del ruleset, con 0,
+y `objectives` a 0 y vacío) y `streak` a `null`. Un jugador **no aprobado** (`PENDING`/`REJECTED`) no
+tiene fila y no aparece.
 
 Formato de `breakdown` (tipo `ScoreBreakdown` en `src/lib/scoring.ts`): las dos familias están
 siempre presentes, con ceros si no aplican.
@@ -187,7 +188,9 @@ porque un estado no tiene remate y si no insertaría una fila nueva cada 12 hora
 ## `AdminAction`
 
 Una acción del panel, para poder pintar su historial. **Append-only**: quién hizo qué y sobre qué
-fila. `summary` va ya redactado en español.
+fila. `summary` va ya redactado en español. Registra lo que cambia datos que se ven desde fuera:
+altas, bajas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
+jugador en la clasificación y rechazar lo deja fuera) y los revert/restore de puntos de una partida.
 
 | Campo | Tipo | Nota |
 |---|---|---|

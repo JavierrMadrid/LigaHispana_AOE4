@@ -20,6 +20,8 @@ export const metadata: Metadata = {
 const ACTION_LABELS: Record<AdminActionType, string> = {
   PLAYER_CREATED: "Alta de jugador",
   PLAYER_EDITED: "Edición de jugador",
+  PLAYER_APPROVED: "Aprobación de jugador",
+  PLAYER_REJECTED: "Rechazo de jugador",
   PLAYER_REMOVED: "Baja de jugador",
   MATCH_POINTS_REVERTED: "Puntos revertidos",
   MATCH_POINTS_RESTORED: "Puntos restaurados",
@@ -35,10 +37,19 @@ const ACTION_LABELS: Record<AdminActionType, string> = {
  * La edición comparte el tono neutro del alta: también es una anotación —el jugador
  * sigue en el torneo—, y darle un color propio haría que una fila de "corregir el
  * nombre" pesara más en la lista que un alta o una baja.
+ *
+ * Aprobar y rechazar sí deciden algo sobre un jugador, así que llevan el verde y el
+ * rojo con los que `participant-status.ts` pinta el estado en el que lo dejan
+ * ("Aprobado" / "Rechazado"): la misma decisión no puede verse de un color en el
+ * listado de participantes y de otro aquí. Repiten, por tanto, el verde de los
+ * puntos restaurados y el rojo de la baja —en los tres casos algo vuelve o se queda
+ * fuera—, y quien separa un tipo de otro es la etiqueta; el color solo la refuerza.
  */
 const ACTION_STYLES: Record<AdminActionType, string> = {
   PLAYER_CREATED: "border-line-strong text-foreground",
   PLAYER_EDITED: "border-line-strong text-foreground",
+  PLAYER_APPROVED: "border-win/40 text-win",
+  PLAYER_REJECTED: "border-loss/40 text-loss",
   PLAYER_REMOVED: "border-loss/40 text-loss",
   MATCH_POINTS_REVERTED: "border-accent/40 text-accent",
   MATCH_POINTS_RESTORED: "border-win/40 text-win",
@@ -68,8 +79,8 @@ export default async function AdminActionsPage({ searchParams }: PageProps<"/adm
       <section>
         <h1 className="text-2xl font-semibold">Historial de acciones</h1>
         <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Lo que hace la organización en el panel, de lo más reciente a lo más
-          antiguo. El texto de cada línea lo redacta la propia acción.
+          Lo que la organización decide y hace en el panel, de lo más reciente a lo
+          más antiguo. El texto de cada línea lo redacta la propia acción.
         </p>
       </section>
 
@@ -81,7 +92,7 @@ export default async function AdminActionsPage({ searchParams }: PageProps<"/adm
       ) : actions.data.rows.length === 0 ? (
         <EmptyState
           title="Todavía no hay acciones registradas"
-          body="Aquí se anotarán las altas y bajas de jugadores y los cambios de puntos de una partida, con quién los hizo."
+          body="Aquí se anotarán las altas, bajas y ediciones de jugadores, sus aprobaciones y rechazos, y los cambios de puntos de una partida, con quién los hizo."
         />
       ) : (
         <>

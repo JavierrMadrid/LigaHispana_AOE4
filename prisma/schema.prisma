@@ -39,25 +39,27 @@ enum MatchResult {
 /// Qué hizo una persona administradora del panel.
 ///
 /// Deliberadamente corto: son las acciones que **cambian datos que alguien más ve**
-/// (un jugador entra, sale o se le corrigen sus datos, una partida deja de puntuar o
-/// vuelve a puntuar). Lo que no cambia nada —aprobar o rechazar una solicitud—
-/// todavía no se registra; cuando haga falta, se añade el tipo y la fila, no se
-/// ensancha el enum a mano.
+/// (un jugador entra, sale, se le aprueba o se le rechaza la solicitud, o se le
+/// corrigen sus datos; una partida deja de puntuar o vuelve a puntuar). Aprobar mete
+/// al jugador en la clasificación y rechazar lo deja fuera, así que los dos dejan
+/// rastro aunque no lancen una pasada de sincronización.
 ///
-/// `PLAYER_EDITED` va **al final**, y no junto a las otras de jugador, a propósito:
-/// en Postgres el orden del enum es su orden de declaración y `ALTER TYPE … ADD
-/// VALUE` solo añade al final. Ponerlo en medio obligaría a recrear el tipo, que
-/// sobre la base de producción es un `db push` que rehace una columna entera por
-/// algo que se añade con una sentencia de milisegundos. Ese orden es además el que
-/// usa la columna "Acción" del panel al ordenar por tipo (`src/lib/admin.ts`), así
-/// que los valores nuevos salen detrás de los viejos, que es lo que espera quien
-/// ya tiene filas.
+/// Los valores nuevos van **al final del enum**, y no junto a las otras de su grupo,
+/// a propósito: en Postgres el orden del enum es su orden de declaración y `ALTER
+/// TYPE … ADD VALUE` solo añade al final. Poner uno en medio obligaría a recrear el
+/// tipo, que sobre la base de producción es un `db push` que rehace una columna
+/// entera por algo que se añade con una sentencia de milisegundos. Ese orden es
+/// además el que usa la columna "Acción" del panel al ordenar por tipo
+/// (`src/lib/admin.ts`), así que los valores nuevos salen detrás de los viejos, que
+/// es lo que espera quien ya tiene filas.
 enum AdminActionType {
   PLAYER_CREATED
   PLAYER_REMOVED
   MATCH_POINTS_REVERTED
   MATCH_POINTS_RESTORED
   PLAYER_EDITED
+  PLAYER_APPROVED
+  PLAYER_REJECTED
 }
 
 /// Qué comportamiento anómalo de un participante ha detectado el motor.
@@ -442,6 +444,15 @@ model PlayerScore {
   total   Int @default(0)
   wins    Int @default(0)
   matches Int @default(0)
+
+  // Racha **actual del torneo**, firmada: positiva = victorias clasificatorias
+  // seguidas, negativa = derrotas seguidas, `null` = sin ninguna clasificatoria
+  // contada (no es `0`: la UI pinta "-"). Sale del barrido de partidas
+  // clasificatorias (`aggregatePlayer` en `src/lib/objectives.ts`) y la escribe
+  // `recomputeScores()`. No confundir con `Player.streak`, que es la racha de la
+  // ladder 1v1 que publica AoE4World: esta es la que pinta la columna "Racha" de
+  // la clasificación pública.
+  streak Int?
 
   // Desglose por modo de la regla que produjo esta fila. Es JSON y no columnas
   // porque el número de categorías cambia con cada versión de las reglas.

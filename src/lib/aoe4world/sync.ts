@@ -16,7 +16,13 @@ import {
   writeSyncRunTrace,
   type SyncRunTrace,
 } from "@/lib/settings";
-import { recomputeScores, type RecomputeScoresResult } from "@/lib/scoring";
+import { countsAsRanked } from "@/lib/ranked-match";
+import {
+  recomputeScores,
+  readRuleset,
+  type RecomputeScoresResult,
+  type ScoringRuleset,
+} from "@/lib/scoring";
 import {
   describeStreamRefresh,
   refreshStreamLiveStatus,
@@ -115,6 +121,16 @@ export type SyncPlayerResult = {
   pages: number;
   gamesSeen: number;
   matchesInserted: number;
+  /**
+   * Partidas que **entran a contar para el torneo** en esta pasada: las que se
+   * insertan ya resueltas y cumplen la regla, más las que estaban **en curso**
+   * (`finishedAt = null`) y esta pasada quedan resueltas cumpliéndola —da igual
+   * la vía, el listado o el refetch de pendientes—. No es "filas tocadas": una
+   * partida en curso que sigue en curso, una anterior al corte de inscripción o
+   * al inicio de la ventana, o de un modo que no puntúa, se guarda (o se
+   * refresca) pero **no** cuenta aquí. Es lo que suma `SyncSummary.newMatches`.
+   */
+  matchesCounted: number;
   matchesUpdated: number;
   matchesSkipped: number;
   /** Partidas sin resolver que el refetch confirmó y resolvió (ya fuera de la ventana). */
@@ -135,6 +151,15 @@ export type SyncSummary = {
   playersOk: number;
   playersFailed: number;
   playersCancelled: number;
+  /**
+   * Partidas que **entran a contar para el torneo** en esta pasada, no filas
+   * insertadas: la suma de `SyncPlayerResult.matchesCounted`. Cuenta las que se
+   * insertan ya resueltas y cumplen la regla, más las que estaban en curso y han
+   * quedado resueltas cumpliéndola. Una partida que se guarda pero no puntúa
+   * (en curso, fuera de la ventana o del corte de inscripción, modo que no
+   * puntúa) **no** suma aquí, aunque sí en `updatedMatches` o en el detalle del
+   * jugador. Ver `docs/OPERACION.md`.
+   */
   newMatches: number;
   updatedMatches: number;
   resolvedByRefetch: number;
@@ -276,6 +301,12 @@ type SyncPlayerRow = {
   name: string;
   aoe4WorldName: string | null;
   avatarUrl: string | null;
+  /**
+   * Cuándo se inscribió la persona (`Player.registeredAt`). Es el corte por el que
+   * cuenta `countsAsRanked()`: una partida anterior a esta fecha no puntúa. `null`
+   * significa "desde el inicio de la ventana".
+   */
+  registeredAt: Date | null;
 };
 
 function nowIso(): string {
@@ -296,7 +327,14 @@ function readApprovedPlayers(profileIds: number[] | undefined): Promise<SyncPlay
       status: "APPROVED",
       ...(profileIds === undefined ? {} : { profileId: { in: profileIds } }),
     },
-    select: { id: true, profileId: true, name: true, aoe4WorldName: true, avatarUrl: true },
+    select: {
+      id: true,
+      profileId: true,
+      name: true,
+      aoe4WorldName: true,
+      avatarUrl: true,
+      registeredAt: true,
+    },
     orderBy: { profileId: "asc" },
   });
 }
@@ -313,6 +351,7 @@ function emptyPlayerResult(
     pages: 0,
     gamesSeen: 0,
     matchesInserted: 0,
+    matchesCounted: 0,
     matchesUpdated: 0,
     matchesSkipped: 0,
     matchesResolvedByRefetch: 0,
@@ -354,17 +393,72 @@ async function applyMatchUpdate(playerId: string, match: NormalizedMatch): Promi
 }
 
 /**
+ * ¿Cuenta esta partida recién vista para el torneo, con el ruleset y el
+ * `registeredAt` del jugador?
+ *
+ * Es la costura por la que el contador `matchesCounted` aplica la **regla única**
+ * (`countsAsRanked()` de `ranked-match.ts`) a una partida normalizada por el
+ * worker. `NormalizedMatch` no lleva `revertedAt`: una fila que el worker acaba
+ * de ver nunca está revertida —la marca la pone el panel sobre la fila guardada—,
+ * así que se le pasa `null`. El filtro de familia de ladder es el de la regla
+ * (las `RANKED_MODES`), el mismo que aplica el motor al puntuar.
+ */
+function countsForTournament(
+  match: NormalizedMatch,
+  ruleset: Pick<ScoringRuleset, "window">,
+  registeredAt: Date | null,
+): boolean {
+  return countsAsRanked({ ...match, revertedAt: null }, ruleset.window, registeredAt);
+}
+
+/**
+ * Cuántas de una lista de partidas **entran a contar para el torneo**.
+ *
+ * Es `countsForTournament()` fila a fila, y es pura: recibe las partidas
+ * normalizadas, la ventana del ruleset y el `registeredAt` del jugador, y no
+ * toca ni la base ni la red. Se prueba en
+ * `tests/unit/lib/aoe4world/sync.test.ts`.
+ *
+ * Una partida cuenta solo si está **resuelta**, es de una familia rankeada,
+ * empezó dentro del corte del jugador (`max(window.from, registeredAt)`) y antes
+ * del fin de la ventana. Una fila en curso (`finishedAt === null`) no cuenta
+ * todavía: contará en la pasada que la resuelva.
+ */
+export function countTournamentMatches(
+  matches: readonly NormalizedMatch[],
+  ruleset: Pick<ScoringRuleset, "window">,
+  registeredAt: Date | null,
+): number {
+  let counted = 0;
+
+  for (const match of matches) {
+    if (countsForTournament(match, ruleset, registeredAt)) {
+      counted += 1;
+    }
+  }
+
+  return counted;
+}
+
+/**
  * Dedup por `(playerId, gameId)`: las partidas terminadas son inmutables, así que
  * basta con insertar las que falten (`skipDuplicates`). Las que ya estaban
  * guardadas en curso sí hay que refrescarlas, porque al terminar les llega el
  * resultado y `finishedAt`.
+ *
+ * El `counted` que devuelve es la parte de `matchesCounted`: de las que se
+ * insertan de verdad (una fila que ya existía por `gameId` queda fuera del alta
+ * y del contador) y de las refrescadas que pasan de en curso a resuelta, cuántas
+ * cumplen la regla del torneo.
  */
 async function persistMatches(
   playerId: string,
   matches: NormalizedMatch[],
-): Promise<{ inserted: number; updated: number }> {
+  ruleset: Pick<ScoringRuleset, "window">,
+  registeredAt: Date | null,
+): Promise<{ inserted: number; updated: number; counted: number }> {
   if (matches.length === 0) {
-    return { inserted: 0, updated: 0 };
+    return { inserted: 0, updated: 0, counted: 0 };
   }
 
   const existing = await db.match.findMany({
@@ -372,12 +466,15 @@ async function persistMatches(
     select: { gameId: true, finishedAt: true },
   });
 
-  // Solo se refresca lo que estaba en curso; el resto ya es definitivo.
+  // Una fila que ya existe por `gameId` no se vuelve a insertar, así que queda
+  // fuera del alta y del contador. Solo se refresca la que estaba en curso; el
+  // resto ya es definitivo.
+  const existingGameIds = new Set(existing.map((row) => row.gameId));
   const unfinished = new Set(
     existing.filter((row) => row.finishedAt === null).map((row) => row.gameId),
   );
 
-  const toCreate = matches.filter((match) => !unfinished.has(match.gameId));
+  const toCreate = matches.filter((match) => !existingGameIds.has(match.gameId));
   const toRefresh = matches.filter((match) => unfinished.has(match.gameId));
 
   let inserted = 0;
@@ -415,11 +512,20 @@ async function persistMatches(
     await applyMatchUpdate(playerId, match);
   }
 
-  return { inserted, updated: toRefresh.length };
+  // Las de alta y las refrescadas se cuentan igual: una refrescada que cumple la
+  // regla estaba en curso (`finishedAt = null`) y ahora está resuelta, así que es
+  // una transición a clasificatoria. Las que siguen en curso no cuentan.
+  const counted =
+    countTournamentMatches(toCreate, ruleset, registeredAt) +
+    countTournamentMatches(toRefresh, ruleset, registeredAt);
+
+  return { inserted, updated: toRefresh.length, counted };
 }
 
 type ReconcileResult = {
   resolved: number;
+  /** De las resueltas, las que entran a contar para el torneo (regla única). */
+  counted: number;
   abandonedGameIds: string[];
 };
 
@@ -454,6 +560,7 @@ async function reconcileUnfinishedMatches(
   player: SyncPlayerRow,
   client: Aoe4WorldClient,
   signal: AbortSignal,
+  ruleset: Pick<ScoringRuleset, "window">,
 ): Promise<ReconcileResult> {
   const cutoff = reconciliationCutoff();
 
@@ -463,7 +570,7 @@ async function reconcileUnfinishedMatches(
     orderBy: { startedAt: "asc" },
   });
 
-  const result: ReconcileResult = { resolved: 0, abandonedGameIds: [] };
+  const result: ReconcileResult = { resolved: 0, counted: 0, abandonedGameIds: [] };
 
   const abandon = async (gameId: string) => {
     await db.match.delete({
@@ -515,6 +622,12 @@ async function reconcileUnfinishedMatches(
 
     await applyMatchUpdate(player.id, normalized.match);
     result.resolved += 1;
+
+    // La fila estaba en curso y ahora está resuelta: si cumple la regla, entra a
+    // contar en esta pasada.
+    if (countTournamentMatches([normalized.match], ruleset, player.registeredAt) > 0) {
+      result.counted += 1;
+    }
   }
 
   return result;
@@ -573,6 +686,7 @@ async function syncPlayer(
   client: Aoe4WorldClient,
   config: SyncConfig,
   signal: AbortSignal,
+  ruleset: Pick<ScoringRuleset, "window">,
 ): Promise<SyncPlayerResult> {
   const state = await readPlayerSyncState(player.profileId);
   const storedSince = state === null ? null : new Date(state.since);
@@ -618,7 +732,7 @@ async function syncPlayer(
   }
 
   // Antes de paginar: resuelve o abandona lo que ya no puede estar vivo.
-  const reconcile = await reconcileUnfinishedMatches(player, client, signal);
+  const reconcile = await reconcileUnfinishedMatches(player, client, signal, ruleset);
 
   const fetched = await fetchPlayerGames(client, player.profileId, since, config, signal);
   const now = new Date();
@@ -642,7 +756,12 @@ async function syncPlayer(
     matches.push(normalized.match);
   }
 
-  const { inserted, updated } = await persistMatches(player.id, matches);
+  const { inserted, counted, updated } = await persistMatches(
+    player.id,
+    matches,
+    ruleset,
+    player.registeredAt,
+  );
 
   // El cursor solo avanza si hemos visto alguna partida, y nunca retrocede.
   const nextSince =
@@ -678,6 +797,7 @@ async function syncPlayer(
     pages: fetched.pages,
     gamesSeen: fetched.games.length,
     matchesInserted: inserted,
+    matchesCounted: counted + reconcile.counted,
     matchesUpdated: updated,
     matchesSkipped,
     matchesResolvedByRefetch: reconcile.resolved,
@@ -730,6 +850,13 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
 
   const players = await readApprovedPlayers(options.profileIds);
 
+  // El ruleset se lee una vez por pasada y se pasa al bucle: es la ventana con la
+  // que cada jugador decide si una partida entra a contar (`matchesCounted`). El
+  // recálculo de la clasificación lo vuelve a leer por su cuenta, que es correcto:
+  // entre la lectura y el recálculo hay minutos de llamadas a la API, y lo que
+  // importa para puntuar es el ruleset vigente en ese momento.
+  const ruleset = await readRuleset();
+
   // Una sola llamada a la ladder para todos los aprobados, y antes del bucle:
   // así se ejecuta siempre, aunque el bucle se pase del plazo o algún jugador
   // falle. Si falla, se registra y la pasada continúa con lo que ya había.
@@ -745,7 +872,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     }
 
     try {
-      return await syncPlayer(player, client, config, signal);
+      return await syncPlayer(player, client, config, signal, ruleset);
     } catch (error) {
       return emptyPlayerResult(player, { status: "failed", error: toErrorMessage(error) });
     }
@@ -955,7 +1082,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     playersOk: settled.filter((result) => result.status === "ok").length,
     playersFailed: settled.filter((result) => result.status === "failed").length,
     playersCancelled: settled.filter((result) => result.status === "cancelled").length,
-    newMatches: settled.reduce((total, result) => total + result.matchesInserted, 0),
+    newMatches: settled.reduce((total, result) => total + result.matchesCounted, 0),
     updatedMatches: settled.reduce((total, result) => total + result.matchesUpdated, 0),
     resolvedByRefetch: settled.reduce(
       (total, result) => total + result.matchesResolvedByRefetch,

@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     `Jugadores: ${summary.playersOk} ok / ${summary.playersFailed} con errores / ${summary.playersCancelled} cancelados`,
   );
   console.log(
-    `Partidas nuevas: ${summary.newMatches} (actualizadas: ${summary.updatedMatches})`,
+    `Partidas al torneo: ${summary.newMatches} (actualizadas: ${summary.updatedMatches})`,
   );
   console.log(
     `Resueltas por refetch: ${summary.resolvedByRefetch} | abandonadas y borradas: ${summary.abandonedMatches}`,
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   for (const player of summary.players) {
     const detail = [
       `${player.gamesSeen} partidas`,
-      `${player.matchesInserted} nuevas`,
+      `${player.matchesInserted} insertadas, ${player.matchesCounted} al torneo`,
       player.matchesUpdated > 0 ? `${player.matchesUpdated} actualizadas` : null,
       player.matchesResolvedByRefetch > 0
         ? `${player.matchesResolvedByRefetch} resueltas por refetch`

@@ -745,6 +745,13 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       const objectivePlayers = await loadObjectivePlayers(tx, ruleset);
       const objectives = computeObjectives(objectivePlayers, ruleset, mapPool);
 
+      // La racha actual del torneo sale del mismo agregado que los objetivos: los
+      // agregados solo existen para quien tiene partidas clasificatorias, así que
+      // quien no tiene ninguna queda con `null` (y no con 0).
+      const currentStreaks = new Map(
+        objectivePlayers.map((player) => [player.playerId, player.currentStreak]),
+      );
+
       // Registro de hitos, en esta misma transacción y a continuación del cómputo:
       // el feed del historial de `/admin/historial` mezcla partidas y objetivos, y
       // un objetivo sin evento se contaría como un objetivo que nadie cumplió.
@@ -865,6 +872,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
             total: row.total,
             wins: row.wins,
             matches: row.matches,
+            streak: currentStreaks.get(row.playerId) ?? null,
             breakdown: {
               ruleSetVersion: RULESET_VERSION,
               rule: ruleset.label,

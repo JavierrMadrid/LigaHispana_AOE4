@@ -31,10 +31,11 @@ La llamada manual la hace un admin desde `/admin` con la Server Action `syncNow`
 deja el rastro en `Setting["sync.lastRun"]`.
 
 **Aprobar o dar de alta no lanza una pasada.** Tanto el aprobado de una solicitud (`approvePlayer`)
-como el alta de admin (`createPlayer`) **solo escriben el estado**: el jugador entra en la
-clasificación en la siguiente pasada del cron (hasta 10 minutos) o con la llamada manual
-(`syncNow`). No es un olvido, es lo que permite que el botón no se cuelgue: una pasada gasta ~500 ms
-de CPU y el plan Free de Cloudflare da 10 ms por invocación, así que lanzarla dentro de la petición
+como el alta de admin (`createPlayer`) **escriben sin lanzar una pasada**: el estado (o el jugador,
+en el alta), con su línea en `AdminAction`, y el jugador entra en la clasificación en la siguiente
+pasada del cron (hasta 10 minutos) o con la llamada manual (`syncNow`). No es un olvido, es lo que
+permite que el botón no se cuelgue: una pasada gasta ~500 ms de CPU y el plan Free de Cloudflare da
+10 ms por invocación, así que lanzarla dentro de la petición
 del botón mataba el *isolate* con `Worker exceeded CPU time limit` (1102) en cuanto se apilaban dos
 clics (ver [El límite de CPU del plan Free](#el-límite-de-cpu-del-plan-free)). En cuanto pase esa
 pasada, un `APPROVED` aparece **siempre** en la clasificación: si aún no tiene ninguna partida
@@ -159,6 +160,14 @@ pestaña es para comportamientos de jugadores, no para salud de procesos). Tres 
 
 El rastro lleva `lastSuccessAt`, que **no avanza si la pasada sale a medias**: responde "¿desde cuándo
 está roto?". No hay histórico de pasadas: solo la última y el marcador de la última buena.
+
+Los contadores del rastro son del **torneo**, no de filas tocadas. `newMatches` cuenta las partidas que
+**entran a contar** para el torneo en la pasada: las que se importan ya resueltas y cumplen la regla
+única (`countsAsRanked()`), más las que estaban **en curso** (`finishedAt = null`) y han quedado
+resueltas cumpliéndola. Una partida importada fuera de la ventana o del corte de inscripción, de un modo
+que no puntúa, o que sigue en curso, **no** suma ahí aunque se haya guardado: eso lo dicen
+`updatedMatches` y el detalle por jugador. Es la diferencia entre "499 partidas nuevas" y "partidas
+nuevas que cuentan para el torneo".
 
 La portada pinta **«Actualizado a las …»** con `getLastSyncFinishedAt()` (`src/lib/public.ts`), que
 publica el `finishedAt` de la última pasada **registrada, aunque haya salido a medias** —no

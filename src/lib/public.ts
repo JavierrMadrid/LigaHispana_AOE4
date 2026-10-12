@@ -201,7 +201,12 @@ export type StandingRow = {
   /** Derivada de `rankLevel`; `null` si no está clasificado. */
   division: DivisionId | null;
   rankLevel: string | null;
-  /** Racha firmada: positiva = victorias seguidas, negativa = derrotas. */
+  /**
+   * Racha **actual del torneo**, firmada: positiva = victorias clasificatorias
+   * seguidas, negativa = derrotas seguidas. `null` sin ninguna partida contada
+   * (la UI pinta "-"; no se usa `0` porque se pintaría "0"). Sale de
+   * `PlayerScore.streak`, no de la racha de la ladder de AoE4World.
+   */
   streak: number | null;
   /** Canal para el enlace: el registrado o el extraído de `twitchUrl`. */
   twitchChannel: string | null;
@@ -368,6 +373,8 @@ async function loadStandings(): Promise<StandingRow[]> {
         wins: true,
         // No sale en `StandingRow`, pero hace falta aquí para calcular `losses`.
         matches: true,
+        // La racha del torneo, que es la que pinta la columna "Racha".
+        streak: true,
         // Solo se lee la sección `objectives` de este JSON (`earned` y `points`).
         // Prisma no permite pedir una parte de una columna `Json`, así que entra
         // entero: son un puñado de ids por fila, no un documento grande.
@@ -388,7 +395,6 @@ async function loadStandings(): Promise<StandingRow[]> {
             kickIsLive: true,
             elo: true,
             rankLevel: true,
-            streak: true,
             avatarUrl: true,
           },
         },
@@ -453,7 +459,7 @@ async function loadStandings(): Promise<StandingRow[]> {
       elo: row.player.elo,
       division: divisionFromRankLevel(row.player.rankLevel),
       rankLevel: row.player.rankLevel,
-      streak: row.player.streak,
+      streak: row.streak,
       twitchChannel: registered ?? fromProfile,
       twitchIsLive: row.player.twitchIsLive,
       youtubeChannel,

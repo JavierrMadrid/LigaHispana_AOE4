@@ -1022,31 +1022,84 @@ export async function updatePlayer(
 /**
  * Aprueba o rechaza una solicitud.
  *
- * Estas dos **no** registran acción en `AdminAction` y por eso mantienen la firma
- * simple de un solo `FormData`: son botones que cambian una fila que solo mira el
- * panel. Cuando la pestaña de acciones quiera mostrarlas hay que añadir su tipo al
- * enum, su frase en `admin-actions.ts` y pasar estas dos a `AdminActionResult`.
+ * Escribe el estado **y su línea en el historial de acciones** en la misma
+ * transacción: aprobar mete al jugador en la clasificación y rechazar lo deja fuera,
+ * así que son los dos movimientos que la organización viene a auditar en
+ * `/admin/acciones` y tienen que quedar con quién y cuándo aunque la escritura del
+ * estado no llegue a confirmarse.
  *
- * Aprobar cambia lo que ve el público, pero esta acción **solo escribe el estado**:
- * al pasar a `APPROVED` el jugador entra en el siguiente cálculo del sincronizador,
- * y ese cálculo lo hace el cron (cada 10 minutos) o la llamada manual
- * (`syncNow`), no esta petición. No se traen partidas ni se recalcula aquí: una
- * pasada gasta ~500 ms de CPU y el plan Free de Cloudflare da 10 ms por
- * invocación, así que lanzarla dentro del aprobado mataba el *isolate* con
- * `Worker exceeded CPU time limit` (1102) en cuanto se apilaban dos clics. Desde
- * que solo escribe el estado, el botón no se queda colgado y el jugador aparece
- * en la siguiente pasada. No hay estado de vuelta que informar —el botón no lleva
- * diálogo— así que un fallo solo se registra, y el estado no ha cambiado.
+ * Repetir un POST no inventa un movimiento: si el jugador ya está en el estado pedido
+ * no se escribe ni el `update` ni la fila de `AdminAction`. Y si la fila ya no existe
+ * —la carrera con otro admin que lo haya borrado entretanto— no hay nada que cambiar
+ * y solo queda el rastro del fallo en el log.
+ *
+ * Sigue **sin traer partidas ni recalcular**: al pasar a `APPROVED` el jugador entra
+ * en el siguiente cálculo del sincronizador, y ese cálculo lo hace el cron (cada 10
+ * minutos) o la llamada manual (`syncNow`), no esta petición. Una pasada gasta
+ * ~500 ms de CPU y el plan Free de Cloudflare da 10 ms por invocación, así que
+ * lanzarla dentro del aprobado mataba el *isolate* con `Worker exceeded CPU time
+ * limit` (1102) en cuanto se apilaban dos clics. No hay estado de vuelta que
+ * informar —el botón no lleva diálogo— así que un fallo solo se registra, y el estado
+ * no ha cambiado.
  */
 async function setPlayerStatus(playerId: string, status: PlayerStatus) {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   if (!playerId) {
     return;
   }
 
+  let player: {
+    id: string;
+    name: string;
+    profileId: number;
+    status: PlayerStatus;
+  } | null;
+
   try {
-    await db.player.update({ where: { id: playerId }, data: { status } });
+    player = await db.player.findUnique({
+      where: { id: playerId },
+      select: { id: true, name: true, profileId: true, status: true },
+    });
+  } catch (error) {
+    logDatabaseFailure(`admin/${status}`, error);
+
+    return;
+  }
+
+  // El `P2025` que antes lanzaba el `update` a secas cuando la fila no estaba. Sin
+  // estado de vuelta, el log es el único rastro de que la acción no se pudo hacer.
+  if (player === null) {
+    logDatabaseFailure(`admin/${status}`, new Error(`No existe el jugador ${playerId}`));
+
+    return;
+  }
+
+  if (player.status === status) {
+    return;
+  }
+
+  // `const` a propósito: se usa dentro de un cierre (la transacción) y TypeScript
+  // solo estrecha un `let` si no puede haber sido reasignado entre medias.
+  const fila = player;
+
+  try {
+    await db.$transaction(async (tx) => {
+      await tx.player.update({ where: { id: fila.id }, data: { status } });
+
+      await recordAdminAction(tx, {
+        type:
+          status === PlayerStatus.APPROVED
+            ? AdminActionType.PLAYER_APPROVED
+            : AdminActionType.PLAYER_REJECTED,
+        actorEmail: actorEmail(admin),
+        targetId: fila.id,
+        name: fila.name,
+        profileId: fila.profileId,
+        statusBefore: fila.status,
+        statusAfter: status,
+      });
+    });
   } catch (error) {
     // Sin estado de vuelta, un fallo aquí solo puede registrarse: la acción termina
     // sin cambiar nada y no hay superficie en la que informar a quien la pulsó.
