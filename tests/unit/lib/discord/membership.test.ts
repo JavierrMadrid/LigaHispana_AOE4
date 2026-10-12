@@ -10,9 +10,12 @@ import {
   discordCheckIsDue,
   discordMembershipVerdictFromStatus,
   matchRosterUsername,
+  rosterAbsenceIsConclusive,
   rosterIsDue,
+  rosterMembershipClaim,
   type DiscordMembershipVerdict,
   type DiscordRosterMember,
+  type RosterMembershipClaim,
 } from "@/lib/discord/membership";
 
 /**
@@ -198,5 +201,37 @@ describe("buscar un @usuario en el roster", () => {
     ];
 
     expect(matchRosterUsername("pepito", mismaCuenta)).toEqual({ id: "42" });
+  });
+});
+
+describe("qué se puede afirmar de una lectura del roster", () => {
+  it("una presencia es un hecho; una ausencia, no", () => {
+    // Este es el invariante que impide que un recién aprobado salga "fuera del
+    // servidor": la lista es una foto de cuándo se leyó y quien entró después no
+    // aparece en ella. Por eso la ausencia **nunca** sale como `not-member`, que es lo
+    // que se escribiría como un `discordInGuild = false`.
+    expect(rosterMembershipClaim(true)).toBe("member");
+    expect(rosterMembershipClaim(false)).toBe("unconfirmed-absence");
+  });
+
+  it("solo hay dos respuestas posibles y ninguna es `not-member`", () => {
+    // Si algún día se añadiera un tercer valor, quien indexa por esto tendría que
+    // revisar los dos caminos (con id y sin id), porque el "no" no se escribe igual en
+    // cada uno.
+    const claims: RosterMembershipClaim[] = ["member", "unconfirmed-absence"];
+
+    expect(new Set(claims).size).toBe(2);
+    for (const dentro of [true, false]) {
+      expect(claims).toContain(rosterMembershipClaim(dentro));
+      expect(rosterMembershipClaim(dentro)).not.toBe("not-member");
+    }
+  });
+
+  it("una ausencia por `@usuario` solo se concluye con una lista leída en esta pasada", () => {
+    // Es la única rama en la que una ausencia del roster puede acabar en alerta, y lo
+    // es porque no hay `discordUserId` con el que confirmar por cuenta. Con una lista
+    // cacheada no se concluye nada: el jugador vuelve a la cola hasta el refresco.
+    expect(rosterAbsenceIsConclusive(true)).toBe(true);
+    expect(rosterAbsenceIsConclusive(false)).toBe(false);
   });
 });

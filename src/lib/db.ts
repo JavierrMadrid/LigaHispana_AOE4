@@ -99,6 +99,12 @@ let avisoAfterAusente = false;
  * runtime, dentro de `env.HYPERDRIVE.connectionString`, y no se puede copiar a
  * ninguna variable de entorno; mientras el binding no exista, `DATABASE_URL` es
  * lo que hay, y es también lo que necesitan `next dev` y los scripts de Node.
+ *
+ * Las lecturas que pasan por el binding tienen que ser **frescas**: el panel y
+ * los workers leen justo después de escribir, y Hyperdrive no invalida al
+ * escribir sus lecturas cacheadas. Por eso la configuración de Hyperdrive va
+ * **sin caché de consultas** (`caching.disabled`); si alguna vez se añadiera una,
+ * no debe cubrir estas lecturas. El porqué largo está en `docs/DESPLIEGUE.md`.
  */
 function connectionString(): string {
   const value = readHyperdriveConnectionString() ?? readRuntimeEnv("DATABASE_URL");

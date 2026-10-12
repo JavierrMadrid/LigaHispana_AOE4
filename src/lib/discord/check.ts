@@ -10,7 +10,9 @@ import {
   discordCheckIsDue,
   discordMembershipVerdictFromStatus,
   matchRosterUsername,
+  rosterAbsenceIsConclusive,
   rosterIsDue,
+  rosterMembershipClaim,
   type DiscordMembershipVerdict,
   type DiscordRosterMember,
 } from "./membership";
@@ -32,10 +34,10 @@ import { readDiscordRosterCache, writeDiscordRosterCache } from "./roster-cache"
  *
  * ## Dos caminos, y cuál manda
  *
- * | | Peticiones | Qué resuelve |
+ * | | Peticiones | Qué afirma |
  * |---|---|---|
- * | **Roster** (`GET /guilds/{id}/members`, la lista de miembros) | `ceil(miembros / 1000)` por refresco, cacheadas 12 h | pertenencia de **todos** y además el `discordUserId` de quien solo tiene `@usuario` |
- * | **Por id** (`GET /guilds/{id}/members/{user_id}`) | una por jugador, y solo a quien le vence su caché | pertenencia de quien ya tiene la cuenta |
+ * | **Roster** (`GET /guilds/{id}/members`, la lista de miembros) | `ceil(miembros / 1000)` por refresco, cacheadas 12 h | las **presencias** de todos y el `discordUserId` de quien solo tiene `@usuario`; **nunca** una ausencia |
+ * | **Por id** (`GET /guilds/{id}/members/{user_id}`) | una por jugador, y solo a quien le vence su caché | pertenencia de quien ya tiene la cuenta, y **la confirmación de cualquier ausencia** leída de la lista |
  *
  * Se usa el roster **si se ha podido leer**; si no, se cae al camino por id, que no
  * necesita el intent privilegiado `GUILD_MEMBERS`. Es el reparto que hace que el
@@ -54,21 +56,43 @@ import { readDiscordRosterCache, writeDiscordRosterCache } from "./roster-cache"
  * `checkPlayerHistory()`, y el mismo modelado que `fetchGuildRoster()`, cuyo
  * `unknown` es la razón por la que existe el camino de reserva.
  *
+ * ## Y una lista de miembros tampoco es "no está"
+ *
+ * La lista es una **foto** de cuándo se leyó, no el estado de ahora: quien ha entrado
+ * al servidor después de esa lectura —y con la inscripción abierta entra gente cada
+ * hora— no aparece en ella. Por eso **solo afirma presencias**, y una ausencia leída
+ * de la lista no se escribe tal cual:
+ *
+ * - Una cuenta **con `discordUserId`** que no está en la lista se confirma con la
+ *   consulta por cuenta (`checkOne()`), que sí pregunta por el estado de ahora: un
+ *   `404` escribe `false` y su alerta (con los dos números del `404`, no los del
+ *   roster), un `200` escribe `true` y deja constancia de que la lista iba por detrás,
+ *   y un `unknown` no escribe nada.
+ * - Un `@usuario` que no aparece (o aparece dos veces) **no tiene id** con el que
+ *   confirmar, así que solo se concluye si la lista se leyó **en esta pasada**
+ *   (`rosterAbsenceIsConclusive()`); con una lista cacheada no se escribe nada y el
+ *   jugador vuelve a la cola.
+ *
+ * El invariante vive en `membership.ts` (`rosterMembershipClaim()`), que es puro y se
+ * prueba sin base de datos: quien comprueba contra la lista no decide por su cuenta
+ * cuándo una ausencia es un veredicto.
+ *
  * ## Las tres cosas que solo puede hacer el roster
  *
- * 1. **Comprobar a todos con una lectura**, sin una petición por jugador.
+ * 1. **Afirmar las presencias de todos con una lectura**, sin una petición por jugador.
  * 2. **Resolver el `discordUserId` de quien solo tiene `@usuario`** (el alta de admin,
  *    donde la organización escribe el `@usuario` que le dan y no hay paso de OAuth).
  *    Solo si ese id **no está ya enlazado a otro participante**: escribirlo en otro
  *    saltaría el `P2002` de `Player.discordUserId`, y una cuenta no puede estar en dos
  *    jugadores.
  * 3. **Avisar de los que no aparecen por su `@usuario`**, que es un caso que la
- *    consulta por id no puede ni ver (no hay id con el que preguntar).
+ *    consulta por id no puede ni ver (no hay id con el que preguntar) —y solo con una
+ *    lista leída en esta pasada, o el aviso saldría de una foto vieja (arriba).
  *
- * Y las dos que **no** puede hacer, y son la parte incómoda: **no** puede afirmar que
- * alguien no está en el servidor cuando su lista está incompleta, y **no** puede
- * escribir un `discordInGuild` para quien no se ha podido identificar. Las dos cosas
- * salen como `unknown` o como alerta sin columnas, nunca como una afirmación.
+ * Y la que **no** puede hacer, que es la parte incómoda: **afirmar que alguien no está
+ * en el servidor**. Cualquier ausencia sale como `unknown` (nada), se confirma por
+ * cuenta o se queda para la siguiente pasada, nunca como una afirmación escrita desde
+ * la lista.
  *
  * ## Idempotencia
  *
@@ -133,10 +157,12 @@ export type DiscordChecksResult = {
   /**
    * Comprobaciones hechas de verdad, una por jugador.
    *
-   * **No** es un recuento de peticiones: con la lista de miembros disponible cada
-   * comprobación es una bùsqueda en un array y **cero** peticiones (la de la lista se
-   * paga una vez cada doce horas), y sin lista es una petición por cuenta. Por eso
-   * `checked` no es el número de veces que se ha salido a la red.
+   * **No** es un recuento de peticiones: una **presencia** en la lista de miembros es
+   * una búsqueda en un array y **cero** peticiones (la lectura de la lista se paga una
+   * vez cada doce horas), y sin lista es una petición por cuenta. Pero una **ausencia**
+   * leída de la lista no se escribe: se confirma por cuenta, así que ese caso —y solo
+   * ese— añade una petición dentro del camino del roster. Por eso `checked` no es el
+   * número de veces que se ha salido a la red.
    */
   checked: number;
   /**
@@ -148,11 +174,27 @@ export type DiscordChecksResult = {
    * propio contador, `notFoundByUsername`.
    */
   verdicts: DiscordVerdictCounts;
+  /**
+   * Ausencias leídas del roster que no se escribieron tal cual, sino que se confirmaron
+   * con la consulta por cuenta.
+   *
+   * Es la prueba de que la lista iba por detrás de la realidad: un `200` aquí significa
+   * que el jugador **sí** estaba y la lista era anterior a su entrada —y deja su aviso
+   * en `warnings`—; un `404`, que la ausencia era cierta y ya lleva su alerta con el
+   * estado del `404`. Los `unknown` no suman aquí: van en `verdicts.unknown`.
+   */
+  confirmedByAccount: number;
   /** Filas de `Player` escritas. */
   playersUpdated: number;
   /** Cuentas enlazadas por `@usuario` gracias al roster. */
   resolvedByUsername: number;
-  /** `@usuario` que no aparece en el roster, o que aparece dos veces. Todos alertan. */
+  /**
+   * `@usuario` que no aparece en el roster, o que aparece dos veces, **con una lista
+   * leída en esta pasada**. Todos alertan.
+   *
+   * Con una lista cacheada no se cuenta aquí: una ausencia de una foto vieja no se
+   * concluye (`rosterAbsenceIsConclusive()`), y esos casos van en `verdicts.unknown`.
+   */
   notFoundByUsername: number;
   /**
    * `@usuario` cuya cuenta ya está enlazada a **otro** participante.
@@ -324,8 +366,11 @@ async function resolveRoster(
  * `unknown` no se escribe alerta. El mensaje del `DiscordError` ya lleva el estado y
  * la ruta —y nunca el token—, así que no hace falta volver a componer aquí.
  *
- * Solo se llama cuando **no** hay roster: con la lista de miembros, la pregunta ya
- * está respondida y una petición por jugador sería tirar presupuesto.
+ * Se llama en dos casos: cuando **no** hay lista de miembros (y entonces es la única
+ * forma de comprobar a quien tiene cuenta) y para **confirmar una ausencia** leída de
+ * la lista. Lo segundo es deliberado: una presencia de la lista es un hecho, pero un
+ * "no está en la lista" es una foto de hace horas y la pregunta de ahora —¿sigue
+ * dentro?— solo la responde esta ruta.
  */
 async function checkOne(
   discordUserId: string,
@@ -430,8 +475,9 @@ function notInGuildAlert(input: {
  * **Sin candidatos no se crea el cliente HTTP.** La lista de candidatos entra vacía y
  * el paso termina sin una sola petición, que es lo que hace que no cueste nada en un
  * despliegue donde la inscripción de Discord todavía no se ha usado (y en la
- * simulación del torneo, cuyos participantes no tienen Discord). Y cuando sí hay
- * roster, el cliente ni siquiera se crea: la lista decide sin red.
+ * simulación del torneo, cuyos participantes no tienen Discord). Y cuando hay roster y
+ * todas las respuestas son presencias, el cliente tampoco sale a la red: solo lo hace
+ * si alguna ausencia de la lista hay que confirmarla por cuenta.
  *
  * `signal` no se pasa a la petición, y es a propósito: el cliente de Discord pone su
  * propio `AbortSignal.timeout(config.timeoutMs)` porque una comprobación nunca debe
@@ -441,11 +487,12 @@ function notInGuildAlert(input: {
  *
  * ## Lo que se escribe, y cuándo
  *
- * Solo con un veredicto que afirme algo. Con roster, un jugador **con cuenta** tiene
- * su veredicto en la lista; uno **sin cuenta** se resuelve por su `@usuario` y, si
- * aparece, se le escribe el `discordUserId` que el roster acaba de resolver. Un
- * `member` escribe `discordInGuild = true`, un `not-member` escribe `false` **y**
- * deja la alerta, y un `unknown` no toca nada: ni columnas ni alerta.
+ * Solo con un veredicto que afirme algo. Un `member` escribe `discordInGuild = true`,
+ * un `not-member` escribe `false` **y** deja la alerta, y un `unknown` no toca nada: ni
+ * columnas ni alerta. Con roster, un jugador **con cuenta** que aparece en la lista es
+ * una presencia y ya está resuelto; si **no** aparece, la lista no basta y se confirma
+ * por cuenta. Uno **sin cuenta** se resuelve por su `@usuario` y, si aparece, se le
+ * escribe el `discordUserId` que el roster acaba de resolver.
  *
  * ## El caso raro: el `@usuario` que sí aparece pero es de otro
  *
@@ -470,6 +517,7 @@ export async function checkDiscordMembership(
     dueForCheck: 0,
     checked: 0,
     verdicts: { member: 0, notMember: 0, unknown: 0 },
+    confirmedByAccount: 0,
     playersUpdated: 0,
     resolvedByUsername: 0,
     notFoundByUsername: 0,
@@ -528,8 +576,9 @@ export async function checkDiscordMembership(
       const rosterIds = roster === null ? null : new Set(roster.map((miembro) => miembro.id));
 
       // Crear el cliente no sale a la red (es solo un cierre sobre `fetch`), así que
-      // se crea aquí y se usa únicamente en el camino por id. Lo que cuesta son las
-      // peticiones, y de esas solo se hacen cuando hay roster y ningún jugador.
+      // se crea aquí y se usa en el camino por id y para confirmar una ausencia de la
+      // lista. Lo que cuesta son las peticiones, y de esas solo se hacen cuando no hay
+      // roster o cuando alguna ausencia hay que confirmarla.
       const client = createDiscordHttpClient(config);
 
       for (const player of vencidos) {
@@ -550,7 +599,18 @@ export async function checkDiscordMembership(
 
         try {
           if (roster !== null && rosterIds !== null) {
-            await checkAgainstRoster({ player, roster, rosterIds, now, result, alerts, warnings });
+            await checkAgainstRoster({
+              player,
+              roster,
+              rosterIds,
+              rosterRefreshed: result.roster.refreshed,
+              now,
+              result,
+              alerts,
+              warnings,
+              config,
+              client,
+            });
           } else if (player.discordUserId !== null) {
             const { verdict, status, reason } = await checkOne(
               player.discordUserId,
@@ -662,28 +722,44 @@ export async function checkDiscordMembership(
 }
 
 /**
- * Un jugador comprobado **contra el roster**, que es el camino que no sale a la red.
+ * Un jugador comprobado **contra el roster**.
  *
  * Son tres ramas y se distinguen por lo que tiene la fila, no por lo que devuelve
  * Discord:
  *
- * 1. **Con `discordUserId`**: decide si el id está en la lista. Es una presencia en un
- *    `Set`, y escribe `discordInGuild` + `discordCheckedAt`; si no está, alerta con
- *    `resolvedBy: "discordUserId"`.
+ * 1. **Con `discordUserId`**: si el id está en la lista es una **presencia**, y eso ya
+ *    está resuelto (`discordInGuild = true` + `discordCheckedAt`). Si **no** está, la
+ *    lista no basta —es una foto de cuándo se leyó— y se confirma con `checkOne()`, que
+ *    sí pregunta por el estado de ahora; la rama acaba como la del camino por id: `404`
+ *    escribe `false` y su alerta, `200` escribe `true` y deja constancia de que el
+ *    roster iba por detrás, y `unknown` no escribe nada.
  * 2. **Solo con `@usuario` y aparece**: se resuelve el `discordUserId` y se escribe.
  *    Solo si ese id no está enlazado a otro participante.
- * 3. **Solo con `@usuario` y no aparece (o aparece dos veces)**: alerta con
+ * 3. **Solo con `@usuario` y no aparece (o aparece dos veces)**: no hay id con el que
+ *    confirmar por cuenta, así que solo se concluye si la lista se leyó **en esta
+ *    pasada** (`rosterAbsenceIsConclusive()`); con una lista cacheada no se escribe
+ *    nada y el jugador vuelve a la cola. Con lista fresca, alerta con
  *    `resolvedBy: "username"` y **sin escribir el id**.
+ *
+ * ## Por qué la rama 1 no escribe un `false` de la lista
+ *
+ * Porque la lista es una **foto**: quien ha entrado al servidor después de leerla no
+ * aparece en ella, y con la inscripción abierta eso pasa cada hora. Escribir con eso
+ * dejaría "fuera" a todo recién aprobado hasta el siguiente refresco, que es
+ * exactamente el fallo que este módulo existe para no cometer. La decisión está en
+ * `rosterMembershipClaim()`, que es pura y se prueba sin base de datos.
  *
  * ## Lo que NO se escribe en la rama 3, y por qué
  *
  * Ni el `discordUserId` (no se sabe cuál es) ni el `discordInGuild` (no se ha
  * identificado ninguna cuenta, así que un `false` afirmaría algo de una cuenta que
- * nadie ha visto). Lo que sí se escribe es `discordCheckedAt`, y es lo único que
- * parece una excepción: **registra que la comprobación se ha hecho**, que es cierto, y
- * es lo que mantiene el ritmo de la pasada (doce horas como el resto) sin dejar a estos
- * jugadores reevaluándose en cada una de las 288 pasadas diarias. `discordInGuild` se
- * queda en `null`, que es exactamente "sin comprobar" y nunca "no está".
+ * nadie ha visto). Con lista fresca sí se escribe `discordCheckedAt`, y es lo único
+ * que parece una excepción: **registra que la comprobación se ha hecho**, que es
+ * cierto, y es lo que mantiene el ritmo de la pasada (doce horas como el resto) sin
+ * dejar a estos jugadores reevaluándose en cada una de las 288 pasadas diarias.
+ * `discordInGuild` se queda en `null`, que es exactamente "sin comprobar" y nunca "no
+ * está". Con lista cacheada **no** se escribe ni `discordCheckedAt`: no se ha
+ * concluido nada, y poner la marca aparcaría doce horas un aviso que quizá sí procede.
  *
  * Es además el dato que se le da a la interfaz: con `discordInGuild === null` y
  * `discordUsername !== null` se puede distinguir "nunca comprobado" de "comprobado y
@@ -694,38 +770,91 @@ async function checkAgainstRoster(input: {
   player: DiscordPlayerRow;
   roster: DiscordRosterMember[];
   rosterIds: Set<string>;
+  /** `true` si la lista se ha leído en esta pasada (ver `DiscordRosterStatus`). */
+  rosterRefreshed: boolean;
   now: Date;
   result: DiscordChecksResult;
   alerts: TriggeredAlert[];
   warnings: string[];
+  config: DiscordConfig;
+  client: DiscordHttpClient;
 }): Promise<void> {
-  const { player, roster, rosterIds, now, result, alerts, warnings } = input;
+  const {
+    player,
+    roster,
+    rosterIds,
+    rosterRefreshed,
+    now,
+    result,
+    alerts,
+    warnings,
+    config,
+    client,
+  } = input;
 
   result.checked += 1;
 
   if (player.discordUserId !== null) {
-    const dentro = rosterIds.has(player.discordUserId);
+    const claim = rosterMembershipClaim(rosterIds.has(player.discordUserId));
 
-    result.verdicts[dentro ? "member" : "notMember"] += 1;
+    if (claim === "member") {
+      result.verdicts.member += 1;
+
+      await db.player.update({
+        where: { id: player.id },
+        data: { discordInGuild: true, discordCheckedAt: now },
+      });
+
+      result.playersUpdated += 1;
+
+      return;
+    }
+
+    // `unconfirmed-absence`: la lista no puede afirmar una ausencia, así que se
+    // confirma por cuenta. Es el mismo camino que cuando no hay roster, y por eso
+    // escribe lo mismo: `404` un `false` con alerta, `200` un `true`, y `unknown` nada.
+    const { verdict, status, reason } = await checkOne(player.discordUserId, config, client);
+
+    result.verdicts[CONTADOR_DE[verdict]] += 1;
+
+    if (reason !== null) {
+      warnings.push(`${player.name}: ${reason}`);
+    }
+
+    if (verdict === "unknown") {
+      return;
+    }
+
+    result.confirmedByAccount += 1;
 
     await db.player.update({
       where: { id: player.id },
-      data: { discordInGuild: dentro, discordCheckedAt: now },
+      data: { discordInGuild: verdict === "member", discordCheckedAt: now },
     });
 
     result.playersUpdated += 1;
 
-    if (!dentro) {
-      alerts.push(
-        notInGuildAlert({
-          player,
-          checkedAt: now,
-          resolvedBy: "discordUserId",
-          httpStatus: null,
-          rosterMembers: roster.length,
-        }),
+    if (verdict === "member") {
+      // El roster la daba por fuera y la cuenta dice que está: la lista era anterior a
+      // su entrada. Queda en el rastro como evidencia de que el negativo salió del
+      // roster y no de Discord.
+      warnings.push(
+        `${player.name}: no aparecía en el roster pero la comprobación por cuenta dice ` +
+          "que está en el servidor (el roster era anterior a su entrada).",
       );
+
+      return;
     }
+
+    alerts.push(
+      notInGuildAlert({
+        player,
+        checkedAt: now,
+        resolvedBy: "discordUserId",
+        httpStatus: status,
+        rosterMembers: roster.length,
+      }),
+    );
 
     return;
   }
@@ -734,6 +863,18 @@ async function checkAgainstRoster(input: {
   const encontrado = matchRosterUsername(player.discordUsername ?? "", roster);
 
   if (typeof encontrado !== "object") {
+    // Ni aparece ni se puede desambiguar. La conclusión sale de la lista, y una lista
+    // cacheada no puede afirmar una ausencia: solo vale si se leyó en esta pasada.
+    if (!rosterAbsenceIsConclusive(rosterRefreshed)) {
+      result.verdicts.unknown += 1;
+      warnings.push(
+        `${player.name}: su @usuario @${player.discordUsername} no cuadra con el roster, ` +
+          "pero la lista es de una lectura anterior y no se concluye nada (se reintentará tras el próximo refresco).",
+      );
+
+      return;
+    }
+
     result.notFoundByUsername += 1;
 
     alerts.push(
@@ -825,6 +966,9 @@ export function describeDiscordChecks(result: DiscordChecksResult): string | nul
     result.dueForCheck === 0 ? null : `${result.dueForCheck} por comprobar`,
     result.checked > 0 ? `${result.checked} comprobados` : null,
     result.verdicts.notMember > 0 ? `${result.verdicts.notMember} fuera del servidor` : null,
+    result.confirmedByAccount > 0
+      ? `${result.confirmedByAccount} del roster confirmados por cuenta`
+      : null,
     result.resolvedByUsername > 0
       ? `${result.resolvedByUsername} enlazados por @usuario`
       : null,

@@ -3119,7 +3119,8 @@ async function checkStreamChannels(): Promise<void> {
 }
 
 /**
- * La lectura de las respuestas de YouTube y de Kick, con un cliente HTTP falso.
+ * La lectura de las respuestas de Kick y el recorrido de YouTube contra un cliente
+ * HTTP falso.
  *
  * Son las dos piezas más frágiles de la integración y las dos que no se pueden
  * comprobar de otra manera:
@@ -3128,10 +3129,14 @@ async function checkStreamChannels(): Promise<void> {
  *   ninguno: lo que se comprueba aquí es que se lee lo que se ve hoy y que lo que no
  *   se entiende se convierte en `null` (no se comprobará) en lugar de interpretar a
  *   medias. Un `404` sí es una respuesta —el canal no existe— y un `false`.
- * - **YouTube** con `eventType=live` devuelve también las emisiones ya terminadas, así
- *   que decidir por el `liveBroadcastContent` del `snippet` es lo que separa "está
- *   emitiendo" de "emitió hace un rato". Sin ese campo se cae al criterio de la
- *   llamada, que es lo que hay que decidir explícitamente y no por descuido.
+ * - **YouTube** pasó de `search.list` (cuota propia de 100 al día) a la playlist de
+ *   subidas del canal. Lo que se comprueba aquí es **el recorrido**: que las dos
+ *   llamadas van a los endpoints correctos con los parámetros que exige la API
+ *   —playlist de subidas primero, y detalles de los ids en **una** llamada—, que es
+ *   justo lo que no se ve en una función pura. El **parseo** de cada payload (qué
+ *   forma tiene un canal, cuándo un vídeo está emitiéndose y qué se hace con lo que
+ *   no se entiende) vive en `tests/unit/lib/streams/youtube.test.ts`, que es
+ *   puro y no necesita ni red ni base.
  *
  * Con un cliente falso no sale nada a la red: la clave que se le pasa es de mentira
  * y solo se comprueba que viaja en la `key` de la URL.
@@ -3153,20 +3158,28 @@ async function checkStreamPayloads(): Promise<void> {
   };
 
   /**
-   * Cliente falso: responde con el payload que le pasen y anota la URL que le
-   * pidieron, para poder comprobar los parámetros de la llamada. `stats` y `drain`
-   * están porque son parte del tipo: el cliente real los lleva y las funciones de
-   * plataforma no los usan, así que aquí solo tienen que existir.
+   * La forma del cliente falso: lo que usan las funciones de plataforma (`fetchJson`
+   * y `stats`), más las URLs que ha pedido, que es lo que miran estas comprobaciones.
+   */
+  type ClienteFalso = {
+    fetchJson: (url: URL, options?: { signal?: AbortSignal }) => Promise<unknown>;
+    pedidos: URL[];
+    stats: {
+      requests: number;
+      retries: number;
+      rateLimitResponses: number;
+      rateLimitPausesMs: number;
+    };
+    drain: () => Promise<void>;
+  };
+
+  /**
+   * Cliente falso: responde con el payload que le pasen, siempre el mismo.
    */
   const cliente = (
     payload: unknown,
     error?: unknown,
-  ): {
-    fetchJson: (url: URL, options?: { signal?: AbortSignal }) => Promise<unknown>;
-    pedidos: URL[];
-    stats: { requests: number; retries: number; rateLimitResponses: number; rateLimitPausesMs: number };
-    drain: () => Promise<void>;
-  } => {
+  ): ClienteFalso => {
     const pedidos: URL[] = [];
 
     return {
@@ -3183,59 +3196,107 @@ async function checkStreamPayloads(): Promise<void> {
     };
   };
 
-  await check("YouTube: hay items con liveBroadcastContent=live, está en directo", async () => {
-    const falso = cliente({
-      items: [{ id: { videoId: "abc" }, snippet: { liveBroadcastContent: "live" } }],
+  /**
+   * Cliente falso que responde **por endpoint**, que es lo que necesita YouTube:
+   * `playlistItems` primero y `videos` después, cada uno con su payload.
+   */
+  const clienteYoutube = (porRuta: {
+    playlistItems?: unknown;
+    videos?: unknown;
+  }): ClienteFalso => {
+    const pedidos: URL[] = [];
+
+    return {
+      pedidos,
+      stats: { requests: 0, retries: 0, rateLimitResponses: 0, rateLimitPausesMs: 0 },
+      drain: async () => undefined,
+      fetchJson: (url: URL) => {
+        pedidos.push(url);
+
+        const payload = url.pathname.endsWith("/playlistItems")
+          ? porRuta.playlistItems
+          : porRuta.videos;
+
+        return Promise.resolve(payload);
+      },
+    };
+  };
+
+  await check(
+    "YouTube: las subidas se piden a la playlist y los detalles, en una sola llamada",
+    async () => {
+      const falso = clienteYoutube({
+        playlistItems: {
+          items: [{ contentDetails: { videoId: "v1" } }, { contentDetails: { videoId: "v2" } }],
+        },
+        videos: {
+          items: [
+            { id: "v1", snippet: { liveBroadcastContent: "none" } },
+            {
+              id: "v2",
+              snippet: { liveBroadcastContent: "live" },
+              liveStreamingDetails: { actualStartTime: "2026-10-12T20:00:00Z" },
+            },
+          ],
+        },
+      });
+
+      assert.equal(await isYoutubeStreamLive("UU123", falso, config, {}), true);
+      assert.equal(falso.pedidos.length, 2, "una llamada por endpoint, no una por vídeo");
+
+      const [subidas, detalles] = falso.pedidos;
+
+      assert.equal(subidas?.hostname, "www.googleapis.com", "va a la Data API");
+      assert.equal(subidas?.pathname, "/youtube/v3/playlistItems");
+      assert.equal(subidas?.searchParams.get("part"), "contentDetails");
+      assert.equal(subidas?.searchParams.get("playlistId"), "UU123");
+      assert.equal(
+        subidas?.searchParams.get("maxResults"),
+        "5",
+        "cinco subidas: el directo no siempre es la primera",
+      );
+      assert.equal(subidas?.searchParams.get("key"), "clave-de-prueba");
+
+      assert.equal(detalles?.pathname, "/youtube/v3/videos");
+      assert.equal(
+        detalles?.searchParams.get("part"),
+        "snippet,liveStreamingDetails",
+        "el `snippet` es la mitad del criterio: `liveBroadcastContent`",
+      );
+      assert.equal(
+        detalles?.searchParams.get("id"),
+        "v1,v2",
+        "todos los ids en una llamada: `videos.list` cobra por llamada",
+      );
+      assert.equal(detalles?.searchParams.get("key"), "clave-de-prueba");
+    },
+  );
+
+  await check("YouTube: una emisión terminada no se pinta como directo", async () => {
+    const falso = clienteYoutube({
+      playlistItems: { items: [{ contentDetails: { videoId: "v1" } }] },
+      videos: {
+        items: [
+          {
+            id: "v1",
+            snippet: { liveBroadcastContent: "none" },
+            liveStreamingDetails: {
+              actualStartTime: "2026-10-12T18:00:00Z",
+              actualEndTime: "2026-10-12T19:30:00Z",
+            },
+          },
+        ],
+      },
     });
 
-    assert.equal(
-      await isYoutubeStreamLive("UC123", falso, config, {}),
-      true,
-    );
-    assert.equal(falso.pedidos[0]?.hostname, "www.googleapis.com", "va a la Data API");
-    assert.equal(falso.pedidos[0]?.searchParams.get("channelId"), "UC123");
-    assert.equal(falso.pedidos[0]?.searchParams.get("eventType"), "live");
-    assert.equal(falso.pedidos[0]?.searchParams.get("type"), "video");
-    assert.equal(falso.pedidos[0]?.searchParams.get("maxResults"), "1");
-    assert.equal(falso.pedidos[0]?.searchParams.get("key"), "clave-de-prueba");
+    assert.equal(await isYoutubeStreamLive("UU123", falso, config, {}), false);
   });
 
-  await check("YouTube: una emisión ya terminada no se pinta como directo", async () => {
-    // El caso que justifica mirar el `snippet`: `eventType=live` la devuelve igual.
-    for (const estado of ["completed", "upcoming", "none"]) {
-      const falso = cliente({ items: [{ snippet: { liveBroadcastContent: estado } }] });
+  await check("YouTube: sin subidas no hay directo, y no se pregunta por detalles", async () => {
+    const falso = clienteYoutube({ playlistItems: { items: [] } });
 
-      assert.equal(
-        await isYoutubeStreamLive("UC123", falso, config, {}),
-        false,
-        `liveBroadcastContent=${estado} no es un directo en curso`,
-      );
-    }
-  });
-
-  await check("YouTube: sin items no hay directo, y un payload raro avisa", async () => {
-    assert.equal(await isYoutubeStreamLive("UC123", cliente({ items: [] }), config, {}), false);
-
-    // Sin `liveBroadcastContent` se cae al criterio de la llamada: hay resultado,
-    // luego hay directo. Es una decisión explícita, no un descuido.
-    assert.equal(
-      await isYoutubeStreamLive("UC123", cliente({ items: [{ snippet: {} }] }), config, {}),
-      true,
-      "sin el campo se usa el criterio de la llamada",
-    );
-    assert.equal(
-      await isYoutubeStreamLive("UC123", cliente({ items: [{}] }), config, {}),
-      true,
-      "un item sin snippet tampoco invalida la respuesta",
-    );
-
-    // Un payload que no tiene la forma de `search.list` sí es un fallo: no se puede
-    // distinguir "no hay items" de "esto no es la respuesta que esperaba".
-    await assert.rejects(
-      isYoutubeStreamLive("UC123", cliente({ error: "nada" }), config, {}),
-      (error: unknown) => error instanceof StreamsError,
-      "un payload sin `items` se avisa, no se lee como que no hay directo",
-    );
+    assert.equal(await isYoutubeStreamLive("UU123", falso, config, {}), false);
+    assert.equal(falso.pedidos.length, 1, "sin ids no hay segunda llamada que hacer");
   });
 
   await check("Kick: el estado sale de livestream.is_live", async () => {
