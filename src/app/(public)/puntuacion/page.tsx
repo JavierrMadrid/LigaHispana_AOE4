@@ -9,7 +9,7 @@ import {
   type DocSection,
 } from "@/components/section-index";
 import { formatTournamentWindow } from "@/lib/format";
-import { getTournamentWindow } from "@/lib/public";
+import { getEditionConfig, getObjectives, getTournamentWindow } from "@/lib/public";
 
 export const metadata: Metadata = {
   title: "Puntuación",
@@ -25,17 +25,40 @@ const SECTIONS: readonly DocSection[] = [
   { id: "desempates", label: "Desempates" },
 ];
 
-// El periodo del torneo se lee de la base de datos en cada petición: la ventana
-// vive en el ruleset y la organización puede fijar o mover el fin sin desplegar,
-// así que una página generada en el `build` enseñaría fechas viejas.
+// El periodo, los puntos por victoria, los objetivos activos y el premio se leen
+// de la base de datos en cada petición: la ventana vive en el ruleset, el premio
+// en la configuración de la edición, y la organización los cambia sin desplegar.
+// Una página generada en el `build` enseñaría las cifras de la edición anterior.
 export const dynamic = "force-dynamic";
 
+/** Miles con el punto de español: 4.679, no 4679. */
+const countFormat = new Intl.NumberFormat("es-ES");
+
 export default async function ScoringPage() {
-  const windowRead = await getTournamentWindow();
-  // Degradada no se inventan fechas: la lista de condiciones ya dice "dentro de
+  const [windowRead, objectivesRead, editionRead] = await Promise.all([
+    getTournamentWindow(),
+    getObjectives(),
+    getEditionConfig(),
+  ]);
+
+  // Degradada no se inventan cifras: la lista de condiciones ya dice "dentro de
   // las fechas del torneo" y ese texto genérico se queda tal cual. Con `to: null`
   // la ventana sigue siendo válida (abierta) y se enseña como "Desde el …".
   const tournamentWindow = windowRead.status === "ok" ? windowRead.data : null;
+
+  // `getObjectives()` es la lectura que trae el ruleset activo entero: los puntos
+  // por victoria y los objetivos **activos**, cada uno con sus puntos ya
+  // resueltos. De ahí salen el recuento y el total, en vez de escribirlos a mano.
+  const objectives = objectivesRead.status === "ok" ? objectivesRead.data : null;
+  const pointsPerWin = objectives?.pointsPerWin ?? null;
+  const objectiveCount = objectives?.options.length ?? null;
+  const objectivePoints =
+    objectives === null
+      ? null
+      : objectives.options.reduce((total, option) => total + option.points, 0);
+
+  const edition = editionRead.status === "ok" ? editionRead.data : null;
+  const prize = edition !== null && edition.prize.amount !== null ? edition.prize : null;
 
   return (
     // Estas dos páginas de contenido conservan el ancho anterior (`max-w-6xl`):
@@ -63,34 +86,37 @@ export default async function ScoringPage() {
           datos van en una sola línea, anclados a los bordes de la banda
           (`justify-between`); si el ancho no da, envuelven a la línea siguiente.
           Solo las victorias van en el oro del acento; el cero y las cifras de
-          objetivos se quedan en el texto. */}
-      <section
-        aria-label="Resumen de la puntuación"
-        className="thread-top relative max-w-[68ch] overflow-hidden rounded-lg border border-line bg-surface px-5 py-4 text-[15px]"
-      >
-        <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3">
-          <div className="flex items-baseline gap-2">
-            <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
-              2
-            </dd>
-            <dt className="text-sm text-muted">puntos por victoria</dt>
-          </div>
-          <div className="flex items-baseline gap-2">
-            <dd className="font-display text-2xl font-semibold tabular-nums text-muted">
-              0
-            </dd>
-            <dt className="text-sm text-muted">por derrota</dt>
-          </div>
-          <div className="flex items-baseline gap-2">
-            <dd className="font-display text-2xl font-semibold tabular-nums text-foreground">
-              82
-            </dd>
-            <dt className="text-sm text-muted">
-              objetivos que reparten 4.679 puntos en total
-            </dt>
-          </div>
-        </dl>
-      </section>
+          objetivos se quedan en el texto. Sin la lectura del ruleset no se pinta:
+          los números no se inventan. */}
+      {pointsPerWin !== null && objectiveCount !== null && objectivePoints !== null ? (
+        <section
+          aria-label="Resumen de la puntuación"
+          className="thread-top relative max-w-[68ch] overflow-hidden rounded-lg border border-line bg-surface px-5 py-4 text-[15px]"
+        >
+          <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3">
+            <div className="flex items-baseline gap-2">
+              <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
+                {pointsPerWin}
+              </dd>
+              <dt className="text-sm text-muted">puntos por victoria</dt>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <dd className="font-display text-2xl font-semibold tabular-nums text-muted">
+                0
+              </dd>
+              <dt className="text-sm text-muted">por derrota</dt>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <dd className="font-display text-2xl font-semibold tabular-nums text-foreground">
+                {objectiveCount}
+              </dd>
+              <dt className="text-sm text-muted">
+                objetivos que reparten {countFormat.format(objectivePoints)} puntos en total
+              </dt>
+            </div>
+          </dl>
+        </section>
+      ) : null}
 
       <MobileSectionIndex
         sections={SECTIONS}
@@ -121,14 +147,20 @@ export default async function ScoringPage() {
                   aria-hidden="true"
                   className="font-display font-semibold tabular-nums text-accent"
                 >
-                  2
+                  {pointsPerWin ?? "-"}
                 </span>
                 <span>
-                  Cada victoria en una partida clasificatoria vale{" "}
-                  <strong className="font-semibold text-foreground">
-                    2 puntos
-                  </strong>
-                  .
+                  {pointsPerWin !== null ? (
+                    <>
+                      Cada victoria en una partida clasificatoria vale{" "}
+                      <strong className="font-semibold text-foreground">
+                        {pointsPerWin} {pointsPerWin === 1 ? "punto" : "puntos"}
+                      </strong>
+                      .
+                    </>
+                  ) : (
+                    "Cada victoria en una partida clasificatoria suma puntos."
+                  )}
                 </span>
               </li>
               <li className="flex gap-3">
@@ -257,7 +289,14 @@ export default async function ScoringPage() {
             <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
                 Además de las victorias, el torneo reparte puntos extra entre{" "}
-                <strong className="font-semibold text-foreground">82 objetivos</strong>.
+                {objectiveCount !== null ? (
+                  <strong className="font-semibold text-foreground">
+                    {objectiveCount} objetivos
+                  </strong>
+                ) : (
+                  "los objetivos especiales"
+                )}
+                .
               </p>
               <p>
                 Hay dos formas de cobrarlos: las{" "}
@@ -284,7 +323,9 @@ export default async function ScoringPage() {
                   href="/objetivos"
                   className="text-accent underline underline-offset-4 hover:text-accent-strong"
                 >
-                  Ver los 82 objetivos y quién los cobra
+                  {objectiveCount !== null
+                    ? `Ver los ${objectiveCount} objetivos y quién los cobra`
+                    : "Ver los objetivos y quién los cobra"}
                 </Link>
               </p>
             </div>
@@ -299,6 +340,15 @@ export default async function ScoringPage() {
               persiste, comparten posición (por ejemplo, 1, 2, 2, 4) y, si hay
               premios, se reparten a partes iguales.
             </p>
+            {prize !== null ? (
+              <p className="mt-3 max-w-[68ch] text-[15px] leading-relaxed text-muted">
+                El premio base de esta edición es de{" "}
+                <strong className="font-semibold text-foreground">
+                  {prize.amount} €
+                </strong>
+                {prize.note !== null ? `, ${prize.note}` : ""}.
+              </p>
+            ) : null}
           </section>
         </div>
 
