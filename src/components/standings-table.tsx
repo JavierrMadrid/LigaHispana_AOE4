@@ -1350,6 +1350,8 @@ function groupObjectives(
  *
  * El segundo se omite cuando no aporta: si aún no se ha sincronizado (`null`) o
  * si coincide con el de display, repetirlo bajo el primero solo añadiría ruido.
+ * Pero su sitio se reserva siempre, para que la identidad mida lo mismo tenga
+ * o no nombre oficial y ninguna fila crezca respecto a sus vecinas.
  * Todo el bloque enlaza con el perfil de AoE4World, así que la fila de la tabla
  * y la tarjeta de móvil comparten el enlace en la propia identidad.
  */
@@ -1382,7 +1384,12 @@ function PlayerName({ row }: { row: StandingRow }) {
         >
           {officialName}
         </span>
-      ) : null}
+      ) : (
+        // Sin nombre oficial la identidad ocupaba una línea menos y la fila
+        // quedaba más baja que las que sí lo tienen. Se reserva el alto de esa
+        // segunda línea (el de `text-xs`) para que todas midan lo mismo.
+        <span aria-hidden="true" className="min-h-4" />
+      )}
       <span className="sr-only">(se abre en una pestaña nueva)</span>
     </a>
   );
