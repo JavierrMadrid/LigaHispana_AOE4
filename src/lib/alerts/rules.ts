@@ -94,19 +94,26 @@ export type TotalAlertRule =
  *
  * No tienen racha ni acumulado: se comprueba una cosa (el historial de partidas del
  * jugador, la ladder por delante de lo que nos llega, si su cuenta de Discord está en
- * el servidor) y, mientras siga siendo cierto, el mismo hecho. Se evalúan en
- * `src/lib/history-checks.ts` y `src/lib/discord/check.ts`, desde el worker del
- * sincronizador, porque no leen `Match` sino columnas de `Player`, una ruta del sitio de
- * AoE4World y la API de Discord.
+ * el servidor, si tiene algún canal de directo) y, mientras siga siendo cierto, el
+ * mismo hecho. Las tres primeras se evalúan en `src/lib/history-checks.ts` y
+ * `src/lib/discord/check.ts`, desde el worker del sincronizador, porque no leen
+ * `Match` sino columnas de `Player`, una ruta del sitio de AoE4World y la API de
+ * Discord; la del canal la evalúa `evaluateAlerts()` (`src/lib/alerts/evaluate.ts`),
+ * que ya lee a los aprobados en cada pasada.
  *
  * Su `dedupeKey` es estable por (regla, tipo, jugador) —sin partida ancla ni número—,
  * porque si no, reevaluarlas cada 10 minutos insertaría una fila nueva cada 12 horas
  * para siempre. Ver el docblock de `alertDedupeKey()`.
+ *
+ * `NO_STREAM_CHANNEL` es la única **condicional**: solo se evalúa si la edición
+ * declara la retransmisión obligatoria (`Setting["edition.config"]`). Apagarla no
+ * borra las alertas ya escritas: `Alert` es *append-only*.
  */
 export type StateAlertRule =
   | "HISTORY_NOT_PUBLIC"
   | "MISSING_LADDER_MATCHES"
-  | "DISCORD_NOT_IN_GUILD";
+  | "DISCORD_NOT_IN_GUILD"
+  | "NO_STREAM_CHANNEL";
 
 export type AlertsRuleName = StreakAlertRule | TotalAlertRule | StateAlertRule;
 
@@ -148,6 +155,7 @@ export const ALERT_RULE_LABELS = {
   HISTORY_NOT_PUBLIC: "Historial de partidas no público",
   MISSING_LADDER_MATCHES: "Partidas de ladder que no nos llegan",
   DISCORD_NOT_IN_GUILD: "Discord sin estar en el servidor",
+  NO_STREAM_CHANNEL: "Participante sin canal de directo",
 } as const satisfies Record<AlertsRuleName, string>;
 
 /**
@@ -313,6 +321,35 @@ export type AlertSubject = {
 
 /** El sujeto de las reglas que hablan del propio jugador. */
 export const SELF_SUBJECT: AlertSubject = { key: "yo", profileId: null, name: null };
+
+/**
+ * Los cuatro sitios donde una ficha declara un canal de directo.
+ *
+ * Son columnas de `Player`: las tres que escribe el panel (o la inscripción) más el
+ * `twitchUrl` que publica AoE4World en el perfil, que es el respaldo del canal de
+ * Twitch (ver `src/lib/public.ts`).
+ */
+export type StreamChannels = {
+  twitchChannel: string | null;
+  youtubeChannel: string | null;
+  kickChannel: string | null;
+  twitchUrl: string | null;
+};
+
+/**
+ * ¿La ficha tiene algún canal de directo declarado? (`NO_STREAM_CHANNEL`)
+ *
+ * Es puro y se prueba aparte: lo que decide esta regla es una condición de columnas,
+ * no una partida. Se pregunta por **todas** las formas a la vez porque el canal puede
+ * estar en cualquiera de las cuatro, y un valor que no está vacío cuenta aunque no sea
+ * un canal válido —eso lo valida el formulario, no la alerta—: de lo que avisa la
+ * regla es de una ficha **sin ningún canal**, no de una con el canal mal escrito.
+ */
+export function hasStreamChannel(player: StreamChannels): boolean {
+  return [player.twitchChannel, player.youtubeChannel, player.kickChannel, player.twitchUrl].some(
+    (channel) => typeof channel === "string" && channel.trim() !== "",
+  );
+}
 
 /**
  * Cómo se resolvió que la cuenta de Discord de un participante no está en el
@@ -556,6 +593,11 @@ export function alertSummary(input: AlertTriggerInput): string {
     // hacer, y el equipo de Alertas no puede distinguir eso desde aquí.
     case "DISCORD_NOT_IN_GUILD":
       return "Su Discord no está en el servidor del torneo";
+    // La cuarta de estado, y la única que solo se comprueba si la edición la pide.
+    // Como las otras tres, dice **qué se ha comprobado** y no por qué: no consta
+    // ningún canal, y si es un olvido o una decisión no se sabe desde aquí.
+    case "NO_STREAM_CHANNEL":
+      return "Su ficha no tiene ningún canal de directo";
   }
 }
 

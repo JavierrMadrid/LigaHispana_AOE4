@@ -1,14 +1,16 @@
 import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
-import { MatchResult, PlayerStatus } from "@/generated/prisma/enums";
+import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
+import { recordAdminAction, type CampoEditado } from "@/lib/admin-actions";
 import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { db } from "@/lib/db";
-import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
+import { logDatabaseFailure, readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { isRecord } from "@/lib/json";
 import { reconcileObjectiveEvents } from "@/lib/objective-events";
 import {
   OBJECTIVES_SNAPSHOT_VERSION,
+  OBJECTIVE_DEFINITIONS,
   OBJECTIVE_POINTS,
   computeObjectives,
   loadObjectivePlayers,
@@ -28,13 +30,18 @@ import {
 import { readMapPool, writeScoringLastRun } from "@/lib/settings";
 
 /**
- * Motor de puntuación (reglas v3).
+ * Motor de puntuación (reglas v4).
  *
  * La regla completa está en `docs/PUNTUACION.md`: 2 puntos por victoria
  * clasificatoria más los objetivos de `objectives.ts`, que son de dos formas:
  * competiciones (un único poseedor) y logros (los cobra quien los cumple). Aquí
  * vive lo que no es cálculo: el ruleset (configurable en `Setting`), el agregado
  * (`PlayerScore`) y el orden final de la clasificación.
+ *
+ * La v4 añade **objetivos desactivados** (`disabledObjectives`): el ruleset puede
+ * apagar objetivos del catálogo, y uno apagado no se computa, no se publica, no da
+ * puntos y sus eventos reconciliados se borran. La etiqueta de la regla
+ * (`ruleLabel()`) deja de ser un texto fijo y se calcula con los objetivos activos.
  *
  * Qué cuenta como partida clasificatoria **no** está aquí: vive en
  * `src/lib/ranked-match.ts`, que es donde se puede definir sin que `scoring.ts` y
@@ -104,8 +111,21 @@ export const OBJECTIVES_SNAPSHOT_KEY = "scoring.objectives";
  * `pointsPerWin` o un mínimo. Lo que sí exigiría subirla es cambiar la forma de la
  * ventana (por ejemplo, pasar de un intervalo a una lista de Ventanas), porque
  * entonces un documento guardado dejaría de describir lo que el código espera.
+ *
+ * La v4 sube por los **objetivos desactivados**: un documento v3 no tiene ese campo
+ * y su forma ya no es la que el código espera. Un documento v3 **no se descarta**:
+ * se migra (ver `mergeRuleset`).
  */
-export const RULESET_VERSION = 3;
+export const RULESET_VERSION = 4;
+
+/**
+ * La versión anterior, que `mergeRuleset` migra en vez de descartar.
+ *
+ * Existe como constante y no como un número suelto porque es la única versión que
+ * el código sabe leer además de la suya: cualquier otra —más antigua o futura— es
+ * un documento que describe algo que no se conoce y se descarta con aviso.
+ */
+export const LEGACY_RULESET_VERSION = 3;
 
 /**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
@@ -113,12 +133,40 @@ export const RULESET_VERSION = 3;
  * Es texto de producto, así que lo fija **el código**: el `label` que haya en
  * `Setting` se ignora (ver `mergeRuleset`) y `ensureRuleset` corrige la copia
  * guardada para que un lector directo de la tabla no vea texto de otra versión.
+ *
+ * A diferencia de la v3 **no es una constante**: depende de los objetivos activos
+ * (un objetivo desactivado no cuenta ni se anuncia) y de `pointsPerWin`. Por eso es
+ * una función pura y se recalcula en cada fusión; el texto que se guarda es siempre
+ * el que sale de aquí.
  */
-export const RULE_LABEL =
-  "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros";
+export function ruleLabel(
+  ruleset: Pick<ScoringRuleset, "pointsPerWin" | "disabledObjectives">,
+): string {
+  const desactivados = new Set(ruleset.disabledObjectives);
+  const activos = OBJECTIVE_DEFINITIONS.filter((definition) => !desactivados.has(definition.id));
+  const competiciones = activos.filter((definition) => definition.kind === "competition").length;
+  const logros = activos.length - competiciones;
+  const puntos = `${ruleset.pointsPerWin} ${
+    ruleset.pointsPerWin === 1 ? "punto" : "puntos"
+  } por victoria clasificatoria`;
+
+  if (activos.length === 0) {
+    return `${puntos}, sin objetivos`;
+  }
+
+  return `${puntos} más ${activos.length} ${
+    activos.length === 1 ? "objetivo" : "objetivos"
+  }: ${competiciones} ${competiciones === 1 ? "competición" : "competiciones"} y ${logros} ${
+    logros === 1 ? "logro" : "logros"
+  }`;
+}
 
 export type ScoringRuleset = {
   version: number;
+  /**
+   * Etiqueta de la regla, **calculada** con `ruleLabel()`. Se guarda en el
+   * documento porque el desglose y la vista pública la publican tal cual.
+   */
   label: string;
   /** Familias de ladder que puntúan (`Match.mode`). */
   modes: string[];
@@ -132,6 +180,14 @@ export type ScoringRuleset = {
   countRandomizedCivs: boolean;
   /** Puntos de cada objetivo por id; los que no aparecen usan los suyos. */
   objectives: Record<string, number>;
+  /**
+   * Ids del catálogo de objetivos **desactivados** por la organización.
+   *
+   * Un objetivo desactivado no se computa, no se publica en la vista de objetivos,
+   * no reparte puntos y sus eventos de `ObjectiveEvent` se borran en la siguiente
+   * reconciliación. Vacío (lo normal) significa el catálogo entero activo.
+   */
+  disabledObjectives: string[];
 };
 
 /**
@@ -143,15 +199,23 @@ export type ScoringRuleset = {
  * porque el proyecto guarda los instantes en UTC y `Match.startedAt` es un
  * `timestamp` sin zona interpretado en UTC; el porqué largo está en
  * `ranked-match.ts`.
+ *
+ * El documento se arma en dos pasos porque la etiqueta **se calcula** con el resto
+ * de la regla: no se puede escribir a la vez que el objeto del que sale.
  */
-export const DEFAULT_RULESET: ScoringRuleset = {
+const DEFAULT_RULESET_DOCUMENT: Omit<ScoringRuleset, "label"> = {
   version: RULESET_VERSION,
-  label: RULE_LABEL,
   modes: [...RANKED_MODES],
   window: { from: "2026-09-15T00:00:00.000Z", to: "2026-10-15T00:00:00.000Z" },
   pointsPerWin: 2,
   countRandomizedCivs: false,
   objectives: { ...OBJECTIVE_POINTS },
+  disabledObjectives: [],
+};
+
+export const DEFAULT_RULESET: ScoringRuleset = {
+  ...DEFAULT_RULESET_DOCUMENT,
+  label: ruleLabel(DEFAULT_RULESET_DOCUMENT),
 };
 
 function defaultRuleset(): ScoringRuleset {
@@ -160,6 +224,7 @@ function defaultRuleset(): ScoringRuleset {
     modes: [...DEFAULT_RULESET.modes],
     window: { ...DEFAULT_RULESET.window },
     objectives: { ...DEFAULT_RULESET.objectives },
+    disabledObjectives: [...DEFAULT_RULESET.disabledObjectives],
   };
 }
 
@@ -176,13 +241,27 @@ export type RulesetMergeResult = {
 /**
  * Combina el documento guardado con los valores por defecto.
  *
- * Casi todo se puede editar en `Setting` (la excepción es `label`, que es
- * texto de producto y la fija el código); lo que no se puede es cambiar la
- * estructura desde fuera: si `version` no coincide con la del código, **se
- * ignoran todas las reglas guardadas** (podrían describir otra estructura) y se
- * usan los valores por defecto. Nunca se reescribe el documento desde aquí: si
- * está mal, se arregla a mano (la única corrección automática es la etiqueta,
- * en `ensureRuleset`).
+ * Casi todo se puede editar en `Setting` (la excepción es `label`, que es texto de
+ * producto y lo calcula el código); lo que no se puede es cambiar la **estructura**
+ * desde fuera: si `version` no es la del código —ni la anterior, que sí se sabe
+ * migrar—, **se ignoran todas las reglas guardadas** (podrían describir otra
+ * estructura) y se usan los valores por defecto. Nunca se reescribe el documento
+ * desde aquí: quien persiste la migración es `ensureRuleset`, y un documento
+ * retocado a mano se arregla a mano.
+ *
+ * ## La migración v3 → v4
+ *
+ * La v4 solo añade `disabledObjectives`, así que un documento v3 se puede leer
+ * entero: los campos son los mismos y el que falta se queda vacío (catálogo
+ * completo activo). Se migra con un aviso, y `ensureRuleset()` publica una vez el
+ * documento migrado para que la migración no se repita en cada lectura.
+ *
+ * ## Lo que se rechaza sin tumbar el documento
+ *
+ * Un valor suelto que no se entiende (`pointsPerWin` a `"10"`, un id de objetivo
+ * que no está en el catálogo, un `disabledObjectives` que no es una lista) se
+ * avisa y se queda en su valor por defecto, porque un documento a medias sigue
+ * describiendo un torneo jugable. Lo que no se admite a medias es la estructura.
  */
 export function mergeRuleset(stored: unknown): RulesetMergeResult {
   const warnings: string[] = [];
@@ -195,18 +274,17 @@ export function mergeRuleset(stored: unknown): RulesetMergeResult {
 
   const version = positiveInt(stored.version);
 
-  if (version !== RULESET_VERSION) {
+  if (version !== RULESET_VERSION && version !== LEGACY_RULESET_VERSION) {
     warnings.push(
-      `la versión guardada (${String(stored.version)}) no es ${RULESET_VERSION}; se ignoran las reglas guardadas`,
+      `la versión guardada (${String(stored.version)}) no es ${RULESET_VERSION} ni ${LEGACY_RULESET_VERSION}; se ignoran las reglas guardadas`,
     );
     return { ruleset, warnings };
   }
 
-  // La etiqueta no es configuración sino texto de producto: la fija
-  // `RULE_LABEL` para que la UI no dependa de un `label` guardado que puede
-  // describir otra versión de las reglas.
-  if (stored.label !== undefined && stored.label !== RULE_LABEL) {
-    warnings.push("label se ignora: el texto lo fija el código (RULE_LABEL)");
+  if (version === LEGACY_RULESET_VERSION) {
+    warnings.push(
+      `las reglas guardadas son de la versión ${LEGACY_RULESET_VERSION}; se migran a la ${RULESET_VERSION} (sin objetivos desactivados)`,
+    );
   }
 
   const pointsPerWin = positiveInt(stored.pointsPerWin);
@@ -269,6 +347,45 @@ export function mergeRuleset(stored: unknown): RulesetMergeResult {
     }
   }
 
+  // Los objetivos desactivados, uno a uno y sin tumbar el documento: un id que no
+  // está en el catálogo no puede apagar nada (y decirlo es más útil que ignorarlo
+  // en silencio), y uno repetido no significa dos cosas. La lista se queda en el
+  // orden en que se escribió, que es el de la edición que la guardó.
+  if (stored.disabledObjectives !== undefined) {
+    if (Array.isArray(stored.disabledObjectives)) {
+      const vistos = new Set<string>();
+
+      for (const raw of stored.disabledObjectives) {
+        if (typeof raw !== "string" || !(raw in OBJECTIVE_POINTS)) {
+          warnings.push(`el objetivo desactivado ${JSON.stringify(raw)} no existe; se ignora`);
+          continue;
+        }
+
+        if (vistos.has(raw)) {
+          warnings.push(`el objetivo desactivado "${raw}" está repetido; se ignora`);
+          continue;
+        }
+
+        vistos.add(raw);
+        ruleset.disabledObjectives.push(raw);
+      }
+    } else {
+      warnings.push("disabledObjectives no es una lista");
+    }
+  }
+
+  // La etiqueta no es configuración sino texto de producto, y además se **calcula**
+  // con lo que se acaba de fusionar (los puntos por victoria y los objetivos
+  // activos): un `label` guardado puede describir otra regla, así que se ignora y se
+  // avisa, y el que vale es el de `ruleLabel()`.
+  const label = ruleLabel(ruleset);
+
+  if (stored.label !== undefined && stored.label !== label) {
+    warnings.push("label se ignora: el texto lo calcula el código con los objetivos activos");
+  }
+
+  ruleset.label = label;
+
   return { ruleset, warnings };
 }
 
@@ -318,20 +435,157 @@ export async function ensureRuleset(client: RulesetClient = db): Promise<Scoring
     return ruleset;
   }
 
-  // Al leer, la etiqueta guardada se ignora porque la fija el código; aquí se
-  // corrige además la copia almacenada, para que quien mire `Setting` a mano
-  // (panel, SQL) no vea el texto de una versión anterior. Solo se toca ese
-  // campo: el resto del documento queda como está.
-  if (isRecord(setting.value) && setting.value.label !== RULE_LABEL) {
-    const value = { ...setting.value, label: RULE_LABEL } as Prisma.InputJsonObject;
+  // La copia guardada se normaliza **una vez** para que quien mire `Setting` a mano
+  // (panel, SQL) no vea el texto de otra versión de las reglas: la etiqueta se
+  // recalcula (ya no es una constante) y un documento de la versión anterior se
+  // migra a la actual. Solo se tocan esos campos: el resto queda como está, y un
+  // documento de una versión desconocida **no se toca** (descartarlo con aviso es lo
+  // que hace `readRuleset`).
+  if (!isRecord(setting.value)) {
+    return ruleset;
+  }
 
-    await client.setting.update({ where: { key: SCORING_RULESET_KEY }, data: { value } });
-    console.info(
-      `[scoring] Etiqueta de ${SCORING_RULESET_KEY} actualizada a la del código (RULE_LABEL).`,
+  const guardado = setting.value;
+  const version = positiveInt(guardado.version);
+
+  if (version !== RULESET_VERSION && version !== LEGACY_RULESET_VERSION) {
+    return ruleset;
+  }
+
+  const yaNormalizado =
+    version === RULESET_VERSION &&
+    guardado.label === ruleset.label &&
+    Array.isArray(guardado.disabledObjectives) &&
+    guardado.disabledObjectives.length === ruleset.disabledObjectives.length;
+
+  if (yaNormalizado) {
+    return ruleset;
+  }
+
+  const value = {
+    ...guardado,
+    version: RULESET_VERSION,
+    label: ruleset.label,
+    disabledObjectives: ruleset.disabledObjectives,
+  } as Prisma.InputJsonObject;
+
+  await client.setting.update({ where: { key: SCORING_RULESET_KEY }, data: { value } });
+  console.info(
+    `[scoring] ${SCORING_RULESET_KEY} normalizado a la versión ${RULESET_VERSION} y a la etiqueta del código.`,
+  );
+
+  return ruleset;
+}
+
+/**
+ * El documento a JSON de entrada, **sin castear a ciegas**.
+ *
+ * El ruleset de esta escritura lo arma un formulario del panel y pasa por
+ * `mergeRuleset()`, pero eso valida el contenido, no el tipo de Prisma: el viaje por
+ * `JSON` es el mismo recurso que `toInputJson()` en `src/lib/alerts/settings.ts`, y
+ * falla ruidosamente si algún día se cuela un `undefined` o una función en vez de
+ * guardarlos como `null` sin que nadie se entere.
+ */
+function rulesetToInputJson(ruleset: ScoringRuleset): Prisma.InputJsonObject {
+  return JSON.parse(JSON.stringify(ruleset)) as Prisma.InputJsonObject;
+}
+
+/** Lo que se escribe al publicar el ruleset desde el panel. */
+export type ScoringRulesetWriteResult = {
+  ruleset: ScoringRuleset;
+  /** `true` si el cambio movía puntos y el recálculo salió bien. */
+  recomputed: boolean;
+  /** Aviso cuando el recálculo falló: las reglas **sí** están guardadas. */
+  recomputeWarning: string | null;
+};
+
+/**
+ * Campos del ruleset que mueven la puntuación y por tanto obligan a recalcular.
+ *
+ * `label` no está: es texto de producto y lo calcula el código, no se edita. Todo lo
+ * demás —ventana, familias, puntos, civ aleatoria, puntos de objetivos y objetivos
+ * desactivados— cambia quién cobra qué, así que sin recálculo la clasificación
+ * publicada mentiría.
+ */
+const SCORING_FIELDS: ReadonlySet<string> = new Set([
+  "window",
+  "modes",
+  "pointsPerWin",
+  "countRandomizedCivs",
+  "objectives",
+  "disabledObjectives",
+]);
+
+/**
+ * Publica un ruleset validado, deja su rastro y recalcula si el cambio mueve puntos.
+ *
+ * Es la **escritura** del ruleset desde el panel (la única que hay: hasta ahora el
+ * documento solo lo publicaba `ensureRuleset`). Tres cosas, en este orden:
+ *
+ * 1. **Valida con `mergeRuleset()`** y se niega a escribir si queda algún aviso: un
+ *    documento que el motor va a descartar con un aviso no se publica. Quien llama
+ *    suele haber fusionado ya para poder enseñar el motivo en el formulario; esto es
+ *    la garantía de que no se puede persistir un documento inválido.
+ * 2. **El `upsert` y el rastro de `AdminAction` van en la misma transacción**: o se
+ *    ve el cambio de reglas y su línea en el historial, o no se ve ninguno. Es el
+ *    mismo criterio de `createPlayer`/`updatePlayer`, y el `AdminAction` es el único
+ *    sitio donde queda quién movió las reglas del torneo.
+ * 3. **El recálculo va después y fuera de la transacción**, como en revertir o
+ *    restaurar una partida: `recomputeScores()` es el motor entero, con su cerrojo y
+ *    su plazo, y meterlo dentro obligaría a mantener el cerrojo de la clasificación
+ *    durante la escritura de una fila de `Setting`. Un fallo del recálculo **no**
+ *    deshace el cambio de reglas —está confirmado—: se devuelve en
+ *    `recomputeWarning` para que el mensaje del panel diga que la clasificación que
+ *    se ve es la anterior y que el cron la pondrá al día.
+ */
+export async function writeScoringRuleset(
+  candidate: unknown,
+  cambios: readonly CampoEditado[],
+  actorEmail: string,
+): Promise<ScoringRulesetWriteResult> {
+  const merged = mergeRuleset(candidate);
+
+  if (merged.warnings.length > 0) {
+    throw new Error(
+      `${SCORING_RULESET_KEY}: documento no válido, no se publica (${merged.warnings.join("; ")})`,
     );
   }
 
-  return ruleset;
+  const ruleset = merged.ruleset;
+  const value = rulesetToInputJson(ruleset);
+
+  await db.$transaction(async (tx) => {
+    await tx.setting.upsert({
+      where: { key: SCORING_RULESET_KEY },
+      create: { key: SCORING_RULESET_KEY, value },
+      update: { value },
+    });
+
+    await recordAdminAction(tx, {
+      type: AdminActionType.CONFIG_CHANGED,
+      actorEmail,
+      cambios: [...cambios],
+    });
+  });
+
+  if (!cambios.some((cambio) => SCORING_FIELDS.has(cambio.campo))) {
+    return { ruleset, recomputed: false, recomputeWarning: null };
+  }
+
+  try {
+    await recomputeScores();
+
+    return { ruleset, recomputed: true, recomputeWarning: null };
+  } catch (error) {
+    logDatabaseFailure("scoring/writeScoringRuleset/recompute", error);
+
+    return {
+      ruleset,
+      recomputed: false,
+      recomputeWarning:
+        "La clasificación se recalculará sola en la próxima pasada del sincronizador.",
+    };
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -358,8 +612,8 @@ export type ScoreBreakdownMode = {
  *
  * ```json
  * {
- *   "ruleSetVersion": 3,
- *   "rule": "2 puntos por victoria clasificatoria más 82 objetivos…",
+ *   "ruleSetVersion": 4,
+ *   "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }

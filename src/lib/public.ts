@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
 import { type MatcherinoDonations } from "@/lib/donations";
+import { readEditionConfig, type EditionConfig } from "@/lib/edition";
 import { aoe4WorldProfileUrl, describeMode, describeTeamSize } from "@/lib/format";
 import { isRecord } from "@/lib/json";
 import {
@@ -59,6 +60,7 @@ export {
 export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
 export type { MatcherinoDonations } from "@/lib/donations";
+export type { EditionConfig } from "@/lib/edition";
 
 /**
  * El resultado de una lectura de las pantallas públicas: o los datos, o la
@@ -255,11 +257,20 @@ export type StandingRow = {
  * configuración guardada en `Setting`, que se puede retocar sin desplegar. El
  * orden de inserción es el de presentación del catálogo, y de ahí se apoya
  * `earnedObjectives` para publicar en ese mismo orden.
+ *
+ * Los objetivos **desactivados** no entran: el motor tampoco los reparte, así que
+ * publicarlos aquí sería enseñar en la ficha de un participante un objetivo que ya
+ * no existe (y una fila de `PlayerScore` de antes de desactivarlo podría nombrarlo).
  */
 function objectiveLookup(ruleset: ScoringRuleset): Map<string, StandingObjective> {
   const lookup = new Map<string, StandingObjective>();
+  const desactivados = new Set(ruleset.disabledObjectives);
 
   for (const definition of OBJECTIVE_DEFINITIONS) {
+    if (desactivados.has(definition.id)) {
+      continue;
+    }
+
     lookup.set(definition.id, {
       id: definition.id,
       label: definition.label,
@@ -1216,3 +1227,20 @@ export const getMatcherinoDonations = cache(
     return readFromDatabase("public/getMatcherinoDonations", () => readMatcherinoDonations());
   },
 );
+
+/**
+ * La configuración de la edición: nombre, premio base, retransmisión y marca.
+ *
+ * Es una lectura ligera de `Setting["edition.config"]`, como
+ * `getTournamentWindow()`: no arrastra el cálculo de nada. Con la base caída
+ * devuelve `{ status: "degraded", data: null }` y quien pinte decide qué hacer —
+ * el nombre de la edición o un premio no pueden inventarse—; lo que **no** hace es
+ * publicar la configuración por defecto, porque "no hay nada configurado" y "no lo
+ * hemos podido leer" son cosas distintas.
+ *
+ * Va envuelta en `cache()` de React: la lee el layout público (la marca) y la
+ * portada (el premio), y así una misma petición no repite la consulta.
+ */
+export const getEditionConfig = cache(async (): Promise<PublicRead<EditionConfig>> => {
+  return readFromDatabase("public/getEditionConfig", () => readEditionConfig());
+});

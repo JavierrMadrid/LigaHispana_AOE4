@@ -8,7 +8,9 @@ import {
   classificatoryWhere,
   countsAsRanked,
   countsWithinWindow,
+  formatMadridLocalInstant,
   isRankedMode,
+  parseMadridLocalInstant,
   parseWindow,
   rankedMatchSql,
   rankedMatchWhere,
@@ -656,5 +658,110 @@ describe("la condición de equipos", () => {
     };
 
     expect(countsAsRanked(partidaEquipo(plano), VENTANA, null, CON_CORTES)).toBe(false);
+  });
+});
+
+describe("la ventana escrita a mano en el panel", () => {
+  it("ida y vuelta en invierno y en verano: el mismo reloj de Madrid, dos desfases", () => {
+    // Enero va en +01:00 y septiembre en +02:00. Lo que se guarda es el instante
+    // UTC, que es lo que lee el motor; lo que se prefila es el reloj de Madrid.
+    expect(parseMadridLocalInstant("2026-01-15T12:00")).toBe("2026-01-15T11:00:00.000Z");
+    expect(parseMadridLocalInstant("2026-09-15T12:00")).toBe("2026-09-15T10:00:00.000Z");
+    expect(formatMadridLocalInstant("2026-01-15T11:00:00.000Z")).toBe("2026-01-15T12:00");
+    expect(formatMadridLocalInstant("2026-09-15T10:00:00.000Z")).toBe("2026-09-15T12:00");
+  });
+
+  it("ida y vuelta por muchos valores, para que no se escape ningún desfase", () => {
+    for (const local of [
+      "2026-01-01T00:00",
+      "2026-02-28T23:59",
+      "2026-06-15T08:30",
+      "2026-09-15T18:00",
+      "2026-12-31T23:59",
+    ]) {
+      const utc = parseMadridLocalInstant(local);
+
+      expect(utc, local).not.toBeNull();
+      expect(formatMadridLocalInstant(utc!), local).toBe(local);
+    }
+  });
+
+  it("acepta segundos, y el prefill los descarta", () => {
+    expect(parseMadridLocalInstant("2026-09-15T12:00:30")).toBe("2026-09-15T10:00:30.000Z");
+    expect(formatMadridLocalInstant("2026-09-15T10:00:30.000Z")).toBe("2026-09-15T12:00");
+  });
+
+  it("un instante ISO-8601 con zona sigue valiendo, y se normaliza a UTC", () => {
+    expect(parseMadridLocalInstant("2026-09-15T10:00:00Z")).toBe("2026-09-15T10:00:00.000Z");
+    expect(parseMadridLocalInstant("2026-09-15T12:00:00+02:00")).toBe("2026-09-15T10:00:00.000Z");
+    // El prefill lee el mismo texto que hay guardado en `Setting`, sea cual sea su
+    // offset: se pinta la hora de Madrid de ese instante.
+    expect(formatMadridLocalInstant("2026-09-15T12:00:00+02:00")).toBe("2026-09-15T12:00");
+    expect(formatMadridLocalInstant("2026-09-15T08:00:00-04:00")).toBe("2026-09-15T14:00");
+  });
+
+  it("en la hora ambigua del cambio de octubre se toma la segunda, la de invierno", () => {
+    // El domingo 2026-10-25, de 02:00 a 03:00 ocurre dos veces: 00:30Z (CEST,
+    // +02:00) y 01:30Z (CET, +01:00). Se elige la segunda, la del horario de
+    // invierno, y el prefill devuelve el mismo reloj de pared.
+    expect(parseMadridLocalInstant("2026-10-25T02:30")).toBe("2026-10-25T01:30:00.000Z");
+    expect(formatMadridLocalInstant("2026-10-25T01:30:00.000Z")).toBe("2026-10-25T02:30");
+    // La primera ocurrencia sigue siendo un instante válido por su cuenta: el
+    // criterio solo decide cuando hay que elegir.
+    expect(formatMadridLocalInstant("2026-10-25T00:30:00.000Z")).toBe("2026-10-25T02:30");
+    // Y las horas no ambiguas de alrededor no se mueven.
+    expect(parseMadridLocalInstant("2026-10-25T01:30")).toBe("2026-10-24T23:30:00.000Z");
+    expect(parseMadridLocalInstant("2026-10-25T03:30")).toBe("2026-10-25T02:30:00.000Z");
+  });
+
+  it("en la hora inexistente del cambio de marzo se toma el instante tras el salto", () => {
+    // El domingo 2026-03-29, de 02:00 a 03:00 no existe: el reloj salta de las
+    // 02:00 a las 03:00. Lo escrito se interpreta como el instante justo después
+    // del salto, que es una hora más tarde; el prefill lo deja ver.
+    expect(parseMadridLocalInstant("2026-03-29T02:30")).toBe("2026-03-29T01:30:00.000Z");
+    expect(formatMadridLocalInstant("2026-03-29T01:30:00.000Z")).toBe("2026-03-29T03:30");
+    // Los extremos del hueco no se mueven: 01:30 y 03:00 existen y son únicos.
+    expect(parseMadridLocalInstant("2026-03-29T01:30")).toBe("2026-03-29T00:30:00.000Z");
+    expect(parseMadridLocalInstant("2026-03-29T03:00")).toBe("2026-03-29T01:00:00.000Z");
+  });
+
+  it("lo que devuelve el parser lo acepta `parseWindow` sin avisos", () => {
+    // La frontera entre las dos piezas: el panel escribe local y `Setting` guarda
+    // UTC, y el validador del documento tiene que tragarse lo que sale del parser.
+    const from = parseMadridLocalInstant("2026-09-15T18:00");
+    const to = parseMadridLocalInstant("2026-10-15T23:59");
+
+    expect(from).not.toBeNull();
+    expect(to).not.toBeNull();
+
+    const { window, warnings } = parseWindow({ from, to }, VENTANA);
+
+    expect(warnings).toEqual([]);
+    expect(window).toEqual({ from, to });
+  });
+
+  it("rechaza lo que no es una fecha real, sin lanzar", () => {
+    for (const valor of [
+      "",
+      "ayer",
+      "15/09/2026",
+      "2026-09-15",
+      "2026-09-15T12",
+      "2026-09-15 12:00",
+      "2026-13-01T00:00",
+      "2026-02-31T00:00",
+      "2026-09-15T25:00",
+      "2026-09-15T12:60",
+      "2026-09-15T12:00:60",
+    ]) {
+      expect(parseMadridLocalInstant(valor), valor).toBeNull();
+    }
+  });
+
+  it("el prefill solo acepta un instante con zona", () => {
+    // Un `datetime-local` sin zona no es un instante: no se puede prefilar con él.
+    for (const valor of ["", "ayer", "2026-09-15", "2026-09-15T12:00", "2026-09-15T12:00:00"]) {
+      expect(formatMadridLocalInstant(valor), valor).toBeNull();
+    }
   });
 });

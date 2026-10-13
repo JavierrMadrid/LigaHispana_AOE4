@@ -180,6 +180,85 @@ describe("objetivos de logro: los cobra todo el que cumple", () => {
   });
 });
 
+describe("objetivos desactivados: no se computan, no se publican y no dan puntos", () => {
+  /**
+   * Un ruleset con objetivos apagados.
+   *
+   * Se arma a mano y no con `mergeRuleset()` porque lo que se prueba aquí es el
+   * **cómputo**, no la validación del documento: `computeObjectives` solo mira
+   * `disabledObjectives` y los puntos, no la etiqueta.
+   */
+  function conDesactivados(...ids: string[]): typeof DEFAULT_RULESET {
+    return { ...DEFAULT_RULESET, disabledObjectives: ids };
+  }
+
+  it("un objetivo desactivado no sale en las opciones ni reparte puntos", () => {
+    const players = [aggregate(1, { byCiv: new Map([["french", civ(3, 3)]]) })];
+
+    const { options, pointsByPlayer, awarded, holders } = computeObjectives(
+      players,
+      conDesactivados("lider-french"),
+      [],
+    );
+
+    expect(options.some((option) => option.id === "lider-french")).toBe(false);
+    expect(pointsByPlayer.get("p1")?.earned ?? []).not.toContain("lider-french");
+    expect(awarded.some((entry) => entry.id === "lider-french")).toBe(false);
+
+    // Y lo que **no** se apaga sigue igual: la hermana del mismo registro de civ, la
+    // cabeza de la familia y la competición.
+    expect(optionById(options, "acolito-french").beneficiaries.map((b) => b.profileId)).toEqual([1]);
+    expect(optionById(options, POLIFACETICO_ID)).toBeDefined();
+    expect(optionById(options, "masterizando-french").holder?.profileId).toBe(1);
+    // Los objetivos que quedan activos siguen contando como "cobrados".
+    expect(holders).toBeGreaterThan(0);
+  });
+
+  it("una competición desactivada no se lleva los puntos de nadie", () => {
+    const players = [
+      aggregate(1, { matches: 10, lastMatchAt: 100 }),
+      aggregate(2, { matches: 5, lastMatchAt: 200 }),
+    ];
+
+    const activo = computeObjectives(players, DEFAULT_RULESET, []);
+    const apagado = computeObjectives(players, conDesactivados("loco-por-ganar"), []);
+
+    // Con el objetivo activo lo cobra el que más partidas jugó…
+    expect(activo.pointsByPlayer.get("p1")?.earned).toContain("loco-por-ganar");
+    // …y apagado no lo cobra nadie, ni siquiera aparece en las opciones.
+    expect(apagado.pointsByPlayer.get("p1")?.earned ?? []).not.toContain("loco-por-ganar");
+    expect(apagado.options.some((option) => option.id === "loco-por-ganar")).toBe(false);
+  });
+
+  it("apagar la cabeza de una familia no apaga a sus hijos", () => {
+    // Es la decisión del documento: la familia es una agrupación de la interfaz, no
+    // una dependencia, así que cada objetivo se apaga por su id.
+    const players = [aggregate(1, { byCiv: new Map([["french", civ(3, 3)]]) })];
+
+    const { options } = computeObjectives(players, conDesactivados(POLIFACETICO_ID), []);
+
+    expect(options.some((option) => option.id === POLIFACETICO_ID)).toBe(false);
+    expect(optionById(options, "lider-french").parent).toBe(POLIFACETICO_ID);
+    expect(optionById(options, "lider-french").beneficiaries.map((b) => b.profileId)).toEqual([1]);
+  });
+
+  it("con el catálogo entero apagado no queda ninguna opción ni ningún punto", () => {
+    const players = [
+      aggregate(1, { matches: 5, wins: 3, byCiv: new Map([["french", civ(3, 3)]]) }),
+    ];
+
+    const { options, pointsByPlayer, awarded } = computeObjectives(
+      players,
+      conDesactivados(...Object.keys(OBJECTIVE_POINTS)),
+      [],
+    );
+
+    expect(options).toEqual([]);
+    expect(awarded).toEqual([]);
+    expect(pointsByPlayer.size).toBe(0);
+  });
+});
+
 describe("imparable: 1 punto por día natural, con tope", () => {
   function days(count: number): Set<string> {
     return new Set(Array.from({ length: count }, (_, index) => `2026-09-${index + 1}`));
@@ -369,6 +448,31 @@ describe("objectivesSnapshotFingerprint", () => {
     expect(objectivesSnapshotFingerprint(view({ mapPool: ["Gorge", "Dry Arabia"] }))).not.toBe(base);
     expect(
       objectivesSnapshotFingerprint(view({ window: { from: "2026-09-16T00:00:00.000Z", to: null } })),
+    ).not.toBe(base);
+    // Desactivar un objetivo quita su opción de la vista, y el snapshot tiene que
+    // reescribirse: si la huella no cambiara, la web seguiría publicando un objetivo
+    // apagado hasta el siguiente recálculo con novedades.
+    expect(
+      objectivesSnapshotFingerprint(
+        view({
+          options: [
+            {
+              id: "loco-por-ganar",
+              group: "actividad",
+              kind: "competition",
+              label: "Loco por ganar",
+              description: "…",
+              metric: "partidas",
+              points: 50,
+              parent: null,
+              holder: null,
+              ranking: [],
+              beneficiaries: [],
+              target: null,
+            },
+          ],
+        }),
+      ),
     ).not.toBe(base);
   });
 });

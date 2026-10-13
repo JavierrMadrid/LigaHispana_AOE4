@@ -86,13 +86,16 @@ enum AdminActionType {
 /// `src/lib/ranked-match.ts`). Se quedan porque hay filas ya escritas con ellos y
 /// el panel las pinta: lo que no puede borrarse es su etiqueta ni su frase.
 ///
-/// Los tres últimos no miran las partidas que ya tenemos, sino **el estado del
+/// Los últimos no miran las partidas que ya tenemos, sino **el estado del
 /// jugador fuera de AoE4World**: que el toggle "Share History" esté en "Public",
-/// que la última partida que la ladder le registra nos llegue y que su cuenta de
-/// Discord esté en el servidor del torneo. Las evalúa el worker del sync
+/// que la última partida que la ladder le registra nos llegue, que su cuenta de
+/// Discord esté en el servidor del torneo y que haya declarado algún canal de
+/// directo. Las tres primeras las evalúa el worker del sync
 /// (`src/lib/history-checks.ts` y `src/lib/discord/check.ts`), no
 /// `computePlayerAlerts()`, porque son datos de `Player` y de fuentes que no son
-/// `Match`. Van **al final del enum** por lo mismo que `PLAYER_EDITED`: `ALTER
+/// `Match`; la del canal la evalúa `evaluateAlerts()` (`src/lib/alerts/evaluate.ts`),
+/// porque es una columna de `Player` que el motor ya lee. Van **al final del enum**
+/// por lo mismo que `PLAYER_EDITED`: `ALTER
 /// TYPE … ADD VALUE` solo añade al final, y el panel ordena por el enum, así que
 /// lo nuevo sale detrás de lo ya escrito.
 enum AlertRule {
@@ -118,6 +121,14 @@ enum AlertRule {
   /// comprobar" y **no** dispara nada: como en `historyPublic`, un fallo no
   /// puede afirmar lo contrario de lo que se quería comprobar.
   DISCORD_NOT_IN_GUILD
+  /// El participante aprobado no tiene **ningún canal de directo** declarado
+  /// (`twitchChannel`, `youtubeChannel`, `kickChannel` ni `twitchUrl`).
+  ///
+  /// Es la única regla **condicional**: solo se evalúa cuando la configuración de
+  /// la edición (`Setting["edition.config"].streamingRequired`) declara la
+  /// retransmisión obligatoria. Apagarla no borra las alertas ya escritas: `Alert`
+  /// es *append-only* y lo que se dejó de comprobar no se desdice.
+  NO_STREAM_CHANNEL
 }
 
 /// Cuándo se ha detectado la alerta.

@@ -4,14 +4,16 @@ import { MatchResult } from "@/generated/prisma/enums";
 import { OBJECTIVE_COUNT, OBJECTIVE_POINTS } from "@/lib/objectives";
 import {
   DEFAULT_RULESET,
+  LEGACY_RULESET_VERSION,
   RULESET_VERSION,
-  RULE_LABEL,
   SCORING_RULESET_KEY,
   compareStandings,
   countsAsRanked,
   mergeRuleset,
   rankApprovedPlayers,
+  ruleLabel,
   type AggregatedRow,
+  type ScoringRuleset,
   type ScoringWindow,
 } from "@/lib/scoring";
 import type { TeamTierContext } from "@/lib/ranked-match";
@@ -50,10 +52,24 @@ function partida(overrides: Partial<Parameters<typeof countsAsRanked>[0]> = {}) 
   };
 }
 
-describe("reglas v3 (constantes del motor)", () => {
+describe("reglas v4 (constantes del motor)", () => {
   it("el ruleset por defecto es el de la versión que declara el código", () => {
     expect(DEFAULT_RULESET.version).toBe(RULESET_VERSION);
+    expect(RULESET_VERSION).toBe(4);
+    expect(LEGACY_RULESET_VERSION).toBe(3);
     expect(SCORING_RULESET_KEY).toBe("scoring.ruleset");
+  });
+
+  it("el catálogo arranca completo: ningún objetivo desactivado", () => {
+    expect(DEFAULT_RULESET.disabledObjectives).toEqual([]);
+  });
+
+  it("la etiqueta por defecto es la que calcula `ruleLabel()`", () => {
+    // Ya no es una constante: sale de los puntos por victoria y de los objetivos
+    // activos, así que el texto guardado y el del código no pueden divergir.
+    expect(DEFAULT_RULESET.label).toBe(ruleLabel(DEFAULT_RULESET));
+    expect(DEFAULT_RULESET.label).toContain("2 puntos por victoria clasificatoria");
+    expect(DEFAULT_RULESET.label).toContain(`más ${OBJECTIVE_COUNT} objetivos`);
   });
 
   it("las familias por defecto son las dos ladders ranked", () => {
@@ -187,12 +203,12 @@ describe("mergeRuleset: lo que se rechaza, siempre con aviso", () => {
     expect(warnings.some((w) => w.includes(`no es ${RULESET_VERSION}`))).toBe(true);
   });
 
-  it("la etiqueta la fija el código, no el documento guardado", () => {
+  it("la etiqueta la calcula el código, no el documento guardado", () => {
     // Es texto de producto y aparece en la interfaz: un `label` guardado que
     // describiera otra versión de las reglas haría que `/objetivos` mintiera.
     const { ruleset, warnings } = mergeRuleset({ ...VALIDO, label: "10 puntos por ganar" });
 
-    expect(ruleset.label).toBe(RULE_LABEL);
+    expect(ruleset.label).toBe(ruleLabel(DEFAULT_RULESET));
     expect(warnings.some((w) => w.startsWith("label se ignora"))).toBe(true);
   });
 
@@ -312,6 +328,151 @@ describe("mergeRuleset: no toca el documento por defecto", () => {
     };
 
     expect(mergeRuleset(guardado).ruleset).toEqual(mergeRuleset(guardado).ruleset);
+  });
+});
+
+describe("mergeRuleset: la migración v3 → v4", () => {
+  /**
+   * Documento v3 tal y como está hoy en producción: los mismos campos que la v4 salvo
+   * `disabledObjectives`, que en la v3 no existe.
+   */
+  const V3 = {
+    version: LEGACY_RULESET_VERSION,
+    label: "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+    modes: ["rm_solo"],
+    window: { from: "2026-09-15T00:00:00.000Z", to: "2026-10-15T00:00:00.000Z" },
+    pointsPerWin: 3,
+    countRandomizedCivs: true,
+    objectives: { "loco-por-ganar": 90 },
+  };
+
+  it("un documento v3 se migra en vez de descartarse", () => {
+    const { ruleset, warnings } = mergeRuleset(V3);
+
+    expect(ruleset.version).toBe(RULESET_VERSION);
+    expect(ruleset.pointsPerWin).toBe(3);
+    expect(ruleset.modes).toEqual(["rm_solo"]);
+    expect(ruleset.countRandomizedCivs).toBe(true);
+    expect(ruleset.objectives["loco-por-ganar"]).toBe(90);
+    expect(ruleset.disabledObjectives).toEqual([]);
+    expect(warnings.some((w) => w.includes("se migran"))).toBe(true);
+  });
+
+  it("el documento migrado lleva la etiqueta recalculada, no la guardada", () => {
+    // La etiqueta de la v3 se escribió cuando el catálogo entero estaba activo: si se
+    // copiara tal cual, el motor anunciaría unos objetivos que ya no son los suyos.
+    const { ruleset } = mergeRuleset(V3);
+
+    expect(ruleset.label).toBe(ruleLabel(ruleset));
+    expect(ruleset.label).not.toBe(V3.label);
+  });
+
+  it("el documento migrado se puede volver a guardar sin avisos", () => {
+    // Es la propiedad de la que depende `ensureRuleset()`: publica una vez el
+    // documento migrado y, a partir de ahí, ni avisa en cada lectura ni lo reescribe.
+    const migrado = mergeRuleset(V3).ruleset;
+    const segunda = mergeRuleset(migrado);
+
+    expect(segunda.warnings).toEqual([]);
+    expect(segunda.ruleset).toEqual(migrado);
+  });
+
+  it("una versión más antigua o futura sigue descartándose entera", () => {
+    for (const version of [1, 2, 5, 99]) {
+      const { ruleset, warnings } = mergeRuleset({ ...V3, version });
+
+      expect(ruleset).toEqual(DEFAULT_RULESET);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("se ignoran las reglas guardadas");
+    }
+  });
+});
+
+describe("mergeRuleset: los objetivos desactivados", () => {
+  it("aplica la lista y recalcula la etiqueta con los que quedan", () => {
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      disabledObjectives: ["loco-por-ganar", "rey-1v1"],
+    });
+
+    expect(warnings).toEqual([]);
+    expect(ruleset.disabledObjectives).toEqual(["loco-por-ganar", "rey-1v1"]);
+    expect(ruleset.label).toContain(`más ${OBJECTIVE_COUNT - 2} objetivos`);
+  });
+
+  it("un id que no está en el catálogo se avisa y se ignora, sin tumbar el resto", () => {
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      disabledObjectives: ["objetivo-inventado", "rey-1v1"],
+    });
+
+    expect(ruleset.disabledObjectives).toEqual(["rey-1v1"]);
+    expect(warnings.some((w) => w.includes("objetivo-inventado"))).toBe(true);
+  });
+
+  it("un id repetido cuenta una sola vez", () => {
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      disabledObjectives: ["rey-1v1", "rey-1v1"],
+    });
+
+    expect(ruleset.disabledObjectives).toEqual(["rey-1v1"]);
+    expect(warnings.some((w) => w.includes("repetido"))).toBe(true);
+  });
+
+  it("lo que no es una lista se descarta entero", () => {
+    for (const malo of ["rey-1v1", 3, { "rey-1v1": true }, null]) {
+      const { ruleset, warnings } = mergeRuleset({ ...VALIDO, disabledObjectives: malo });
+
+      expect(ruleset.disabledObjectives).toEqual([]);
+      expect(warnings.some((w) => w.startsWith("disabledObjectives"))).toBe(true);
+    }
+  });
+
+  it("un documento sin el campo deja el catálogo completo activo", () => {
+    const { ruleset, warnings } = mergeRuleset(VALIDO);
+
+    expect(ruleset.disabledObjectives).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+});
+
+describe("ruleLabel", () => {
+  const base: Pick<ScoringRuleset, "pointsPerWin" | "disabledObjectives"> = {
+    pointsPerWin: 2,
+    disabledObjectives: [],
+  };
+
+  it("cuenta los objetivos activos por forma de cobrar", () => {
+    // 29 competiciones (loco-por-ganar, bienhadado, los 4 rey-* y los 23 masterizando-*)
+    // y 53 logros: es el reparto de `docs/OBJETIVOS.md`, y la etiqueta lo dice.
+    expect(ruleLabel(base)).toBe(
+      "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+    );
+  });
+
+  it("un objetivo desactivado deja de anunciarse", () => {
+    expect(ruleLabel({ ...base, disabledObjectives: ["rey-1v1"] })).toBe(
+      "2 puntos por victoria clasificatoria más 81 objetivos: 28 competiciones y 53 logros",
+    );
+  });
+
+  it("los puntos por victoria van en singular cuando son uno", () => {
+    expect(ruleLabel({ ...base, pointsPerWin: 1 })).toContain("1 punto por victoria clasificatoria");
+  });
+
+  it("con todo el catálogo apagado no anuncia objetivos", () => {
+    expect(ruleLabel({ ...base, disabledObjectives: Object.keys(OBJECTIVE_POINTS) })).toBe(
+      "2 puntos por victoria clasificatoria, sin objetivos",
+    );
+  });
+
+  it("es puro: no toca el documento por defecto", () => {
+    const antes = structuredClone(DEFAULT_RULESET);
+
+    ruleLabel({ ...base, disabledObjectives: ["rey-1v1", "loco-por-ganar"] });
+
+    expect(DEFAULT_RULESET).toEqual(antes);
   });
 });
 

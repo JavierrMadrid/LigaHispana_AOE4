@@ -2,7 +2,7 @@ import "./load-env.mjs";
 
 import { unwrapRead } from "@/lib/db-errors";
 import { getStandings } from "@/lib/public";
-import { RULE_LABEL, recomputeScores } from "@/lib/scoring";
+import { readRuleset, recomputeScores } from "@/lib/scoring";
 
 /**
  * Recalcular la clasificación a mano, sin levantar el servidor.
@@ -19,10 +19,14 @@ import { RULE_LABEL, recomputeScores } from "@/lib/scoring";
 
 async function main(): Promise<void> {
   const result = await recomputeScores();
+  // La etiqueta sale del ruleset **activo** y no de una constante: se calcula con los
+  // objetivos que estén activos, así que el rastro no puede anunciar un catálogo que
+  // ya no es el que ha puntuado.
+  const ruleset = await readRuleset();
 
   console.log("");
   console.log("--- Clasificación ---");
-  console.log(`Versión de reglas: ${result.ruleSetVersion} (${RULE_LABEL})`);
+  console.log(`Versión de reglas: ${result.ruleSetVersion} (${ruleset.label})`);
   console.log(`Partidas con puntos actualizados: ${result.matchesUpdated}`);
   console.log(`Jugadores en la clasificación: ${result.playersRanked}`);
   console.log(`Filas retiradas: ${result.playersUnranked}`);
