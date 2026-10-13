@@ -5,6 +5,7 @@ import { evaluateAlerts, type EvaluateAlertsResult } from "@/lib/alerts/evaluate
 import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { checkDiscordMembership, describeDiscordChecks, type DiscordChecksResult } from "@/lib/discord/check";
 import { db } from "@/lib/db";
+import { announceEditionWindow } from "@/lib/edition-announcements";
 import {
   checkPlayerHistory,
   describeHistoryChecks,
@@ -83,6 +84,12 @@ import type { Aoe4WorldGame } from "./types";
  * nada de lo anterior y porque, si falla, lo único que se pierde es un icono. Vive
  * aquí y no en el DAL porque son peticiones salientes a dos APIs externas y en el
  * plan Free de Cloudflare eso solo cabe una vez por pasada.
+ *
+ * Y **lo último de todo** es el aviso del comienzo y el final del torneo en Discord
+ * (`src/lib/edition-announcements.ts`): mira la ventana del ruleset y manda un mensaje
+ * al canal de avisos cuando cruza cada extremo, una sola vez por edición. Sin nada que
+ * anunciar no lee el nombre de la edición ni crea ningún cliente HTTP, y un fallo suyo
+ * va al rastro (`announceError`) sin mover `lastSuccessAt`.
  */
 
 /**
@@ -258,6 +265,16 @@ export type SyncSummary = {
    * sobre un icono, no salud del sincronizador.
    */
   streamsError: string | null;
+  /**
+   * Lo que hay que saber del aviso del comienzo y el final del torneo en Discord
+   * (`src/lib/edition-announcements.ts`): un envío que ha fallado, o la falta de
+   * `DISCORD_BOT_TOKEN` o `DISCORD_ANNOUNCE_CHANNEL_ID`. `null` cuando no tocaba ningún
+   * aviso o los que tocaban salieron.
+   *
+   * **No** mueve `lastSuccessAt` del rastro, por el mismo motivo que `discordError`: no
+   * poder avisar del torneo no ha parado ni una partida.
+   */
+  announceError: string | null;
   players: SyncPlayerResult[];
 };
 
@@ -1098,6 +1115,30 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido comprobar el estado de directo: ${streamsError}`);
   }
 
+  // Los avisos del comienzo y el final del torneo van **los últimos**, con el mismo
+  // tratamiento tolerante que los tres pasos anteriores: no dependen de nada de lo de
+  // antes y un fallo suyo no para la pasada ni mueve `lastSuccessAt`. El paso sale antes
+  // de leer el nombre de la edición cuando no toca ningún aviso, así que en las pasadas
+  // normales es una comparación de fechas.
+  let announceError: string | null = null;
+
+  try {
+    const announced = await announceEditionWindow();
+
+    announceError = announced.error;
+
+    if (announced.sent.length > 0) {
+      console.info(`[sync] Avisos del torneo enviados a Discord: ${announced.sent.join(", ")}.`);
+    }
+
+    if (announceError !== null) {
+      console.warn(`[sync] ${announceError}`);
+    }
+  } catch (error) {
+    announceError = toErrorMessage(error);
+    console.error(`[sync] No se han podido enviar los avisos del torneo: ${announceError}`);
+  }
+
   const finishedAtMs = Date.now();
 
   const summary: SyncSummary = {
@@ -1134,6 +1175,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     discordError,
     streams,
     streamsError,
+    announceError,
     players: settled,
   };
 
@@ -1187,6 +1229,7 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       historyError: summary.historyError,
       discordError: summary.discordError,
       streamsError: summary.streamsError,
+      announceError: summary.announceError,
       mapPoolError: summary.mapPoolError,
       failures: summary.players
         .filter((result) => result.status !== "ok")

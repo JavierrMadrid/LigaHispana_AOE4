@@ -137,6 +137,15 @@ export type DiscordConfig = {
   botToken: string | null;
   /** Id del servidor del torneo. `null` = sin servidor, no se puede auto-unir ni comprobar. */
   guildId: string | null;
+  /**
+   * Canal donde el bot avisa del **comienzo y el final del torneo** (issue 62).
+   *
+   * `null` = sin canal, y entonces no se avisa de nada: el worker deja el aviso
+   * pendiente y lo dice en `announceError`, sin mover `lastSuccessAt`. Es el mismo
+   * criterio degradante que `YOUTUBE_API_KEY`: el proyecto funciona sin configurar
+   * nada nuevo, y lo que se apaga se ve en el rastro en vez de romper una pasada.
+   */
+  announceChannelId: string | null;
   /** Client ID de la aplicación OAuth2. */
   clientId: string | null;
   /** Client secret de la aplicación OAuth2. Nunca sale del servidor. */
@@ -254,6 +263,7 @@ export function getDiscordConfig(): DiscordConfig {
   return {
     botToken: readString("DISCORD_BOT_TOKEN"),
     guildId: readString("DISCORD_GUILD_ID"),
+    announceChannelId: readString("DISCORD_ANNOUNCE_CHANNEL_ID"),
     clientId: readString("DISCORD_CLIENT_ID"),
     clientSecret: readString("DISCORD_CLIENT_SECRET"),
     redirectUri: readString("DISCORD_REDIRECT_URI"),
@@ -317,6 +327,21 @@ export function isDiscordCheckConfigured(
   config: DiscordConfig = getDiscordConfig(),
 ): config is DiscordConfig & { botToken: string; guildId: string } {
   return config.botToken !== null && config.guildId !== null;
+}
+
+/**
+ * ¿Se puede avisar del comienzo y el final del torneo en un canal?
+ *
+ * Hacen falta el token del bot y el canal, y **no** el id del servidor: publicar en un
+ * canal se hace con `POST /channels/{id}/messages`, que no necesita saber de qué
+ * servidor es. Es un **guard de tipo** como `isDiscordCheckConfigured()` y por el mismo
+ * motivo: con `true` queda estrecho que los dos valores son cadenas, y quien llama los
+ * necesita para la ruta y la cabecera sin repetir la condición.
+ */
+export function isDiscordAnnounceConfigured(
+  config: DiscordConfig = getDiscordConfig(),
+): config is DiscordConfig & { botToken: string; announceChannelId: string } {
+  return config.botToken !== null && config.announceChannelId !== null;
 }
 
 /**

@@ -369,6 +369,19 @@ export type SyncRunTrace = {
    */
   discordError: string | null;
   /**
+   * Por qué no se pudo avisar del comienzo o el final del torneo en el canal de avisos,
+   * o qué hubo que avisar aunque no fuera un fallo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, por el mismo motivo que
+   * `discordError`: no haber podido avisar del torneo **no ha parado ni una partida**.
+   * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que sin
+   * `DISCORD_BOT_TOKEN` o sin `DISCORD_ANNOUNCE_CHANNEL_ID` los avisos están apagados
+   * (y que el aviso queda pendiente, no perdido).
+   *
+   * Ver `src/lib/edition-announcements.ts`.
+   */
+  announceError: string | null;
+  /**
    * Por qué no se pudo comprobar el estado de directo de YouTube o de Kick, si no se
    * pudo.
    *
@@ -478,6 +491,7 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     alertsError: readText(value["alertsError"]),
     historyError: readText(value["historyError"]),
     discordError: readText(value["discordError"]),
+    announceError: readText(value["announceError"]),
     streamsError: readText(value["streamsError"]),
     mapPoolError: readText(value["mapPoolError"]),
     failures: readFailures(value["failures"]),
@@ -524,7 +538,10 @@ export async function writeSyncRunTrace(
   // torneo entero con la comprobación apagada se publicaría como sincronizador roto.
   // Y con `mapPoolError`: no poder refrescar el pool solo deja el objetivo con el
   // último valor bueno, y el formato del homepage puede cambiar cualquier día sin
-  // que eso sea un fallo del sincronizador.
+  // que eso sea un fallo del sincronizador. Y con `announceError`: no poder avisar del
+  // comienzo o el final del torneo en Discord tampoco ha parado nada, y la falta de
+  // `DISCORD_ANNOUNCE_CHANNEL_ID` es tan permanente como la de `DISCORD_BOT_TOKEN`, así
+  // que si contara, una edición entera sin canal se publicaría como sincronizador roto.
 
   const value = {
     ...trace,

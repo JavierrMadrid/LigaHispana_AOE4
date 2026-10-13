@@ -40,9 +40,10 @@ enum MatchResult {
 ///
 /// Deliberadamente corto: son las acciones que **cambian datos que alguien más ve**
 /// (un jugador entra, sale, se le aprueba o se le rechaza la solicitud, o se le
-/// corrigen sus datos; una partida deja de puntuar o vuelve a puntuar). Aprobar mete
-/// al jugador en la clasificación y rechazar lo deja fuera, así que los dos dejan
-/// rastro aunque no lancen una pasada de sincronización.
+/// corrigen sus datos; una partida deja de puntuar o vuelve a puntuar; entra o sale
+/// una persona del panel; se revierte una acción anterior; o cambia la configuración
+/// de la edición). Aprobar mete al jugador en la clasificación y rechazar lo deja
+/// fuera, así que los dos dejan rastro aunque no lancen una pasada de sincronización.
 ///
 /// Los valores nuevos van **al final del enum**, y no junto a las otras de su grupo,
 /// a propósito: en Postgres el orden del enum es su orden de declaración y `ALTER
@@ -60,6 +61,11 @@ enum AdminActionType {
   PLAYER_EDITED
   PLAYER_APPROVED
   PLAYER_REJECTED
+  ADMIN_ADDED
+  ADMIN_DEACTIVATED
+  ADMIN_REACTIVATED
+  ACTION_REVERTED
+  CONFIG_CHANGED
 }
 
 /// Qué comportamiento anómalo de un participante ha detectado el motor.
@@ -136,19 +142,19 @@ enum AlertKind {
 }
 
 model Player {
-  id             String       @id @default(cuid())
-  profileId      Int          @unique
+  id               String       @id @default(cuid())
+  profileId        Int          @unique
   // Nombre de **display**: lo escribe quien participa (formulario de
   // inscripción) o el admin. No lo toca el worker nunca, para que el nombre que
   // alguien eligió no dependa de que AoE4World lo cambie por su cuenta.
-  name           String
+  name             String
   // Nombre **oficial de AoE4World**, separado del de display para poder publicar
   // los dos. Lo refresca el worker con `GET /players/:profile_id`; null = aún no
   // se ha sincronizado, que es lo que hay en toda fila creada hoy.
-  aoe4WorldName  String?
+  aoe4WorldName    String?
   // Canal registrado en el panel (lo escribe el admin). No es lo mismo que
   // `twitchUrl`, que es lo que AoE4World publica en el perfil del jugador.
-  twitchChannel  String?
+  twitchChannel    String?
   // Canal de **YouTube** y de **Kick**, con el mismo sentido y las mismas reglas
   // que `twitchChannel`: lo escribe quien se inscribe o el admin, en minúsculas y
   // ya canónico, y **AoE4World no publica ninguno de los dos**, así que aquí no
@@ -158,8 +164,8 @@ model Player {
   // **sin la arroba** (la forma que consume `forHandle` de la API y la que se
   // usa para componer la URL) y el de Kick es su slug, también sin arroba ni
   // https.
-  youtubeChannel String?
-  kickChannel    String?
+  youtubeChannel   String?
+  kickChannel      String?
   // Correo de contacto: lo **exige** el formulario público de `/participar` para
   // que la organización pueda responder dudas, y el panel de administración lo
   // pide **opcional** en el alta y en la edición (mismo criterio que `country`
@@ -170,7 +176,7 @@ model Player {
   // base de producción no lo tienen y no se van a rellenar, y en el panel es
   // opcional. El motor de puntos no lo lee nunca: es un dato de contacto, no de
   // juego, así que no entra en la clasificación ni en ningún desglose.
-  contactEmail   String?
+  contactEmail     String?
   // País del participante, guardado con el **rótulo canónico** de la lista que
   // admite el torneo (`Setting["registration.countries"]`, sembrada desde
   // `paises.txt` con `npm run countries:seed`): "República Dominicana", no "RD" ni
@@ -186,7 +192,7 @@ model Player {
   // para todas las filas y eso que unas no la informen es información —"no lo
   // sabemos"— y no una fila a medias. Como el correo, el motor de puntos no lo lee:
   // no entra en la clasificación ni en ningún desglose.
-  country        String?
+  country          String?
   // Identidad de Discord del participante.
   //
   // Lo único de F12 que **no** se escribe a mano en ningún sitio es el
@@ -221,7 +227,7 @@ model Player {
   // `Player` tiene **tres** unicidades, cada `P2002` se distingue por **qué** columna
   // lo saltó (`profileId`, `discordUserId` y `discordUsername`): son tres problemas
   // distintos y tres mensajes distintos.
-  discordUserId    String?     @unique
+  discordUserId    String?      @unique
   // **Nombre de usuario global de Discord** (`pepito`), guardado en su forma
   // canónica: **sin arroba y en minúsculas**, que es exactamente lo que devuelve
   // `GET /users/@me` y lo que trae la lista de miembros del servidor. Es lo que se
@@ -251,14 +257,14 @@ model Player {
   // fase pueden tener el mismo nombre con discriminador (`pepito#1234` y
   // `pepito#5678`), que al quitarlo son el mismo `@usuario`. Es el caso que hay que
   // mirar si `db push` se queja (ver `docs/OPERACION.md`).
-  discordUsername  String?     @unique
+  discordUsername  String?      @unique
   // ¿Está la cuenta en el servidor del torneo? `null` = sin comprobar (ver arriba).
   // El worker lo refresca con la caché de `DISCORD_CHECK_TTL_HOURS`.
   discordInGuild   Boolean?
   // Cuándo se comprobó lo anterior: es el plazo de la caché y, con
   // `discordUserId === null`, la señal de que esa fila nunca se ha comprobado.
   discordCheckedAt DateTime?
-  status         PlayerStatus @default(PENDING)
+  status           PlayerStatus @default(PENDING)
 
   // Cuándo se **inscribió** la persona, no cuándo la aprobó la organización:
   // es el instante del envío del alta (formulario público o alta de admin), y
@@ -578,13 +584,62 @@ model RateLimitCounter {
   updatedAt   DateTime @updatedAt
 }
 
+/// Una cuenta con acceso al panel de administración.
+///
+/// Es la lista explícita de quién puede entrar. Hasta ahora, **cualquier**
+/// usuario de Supabase Auth lo era —los registros públicos están desactivados, así
+/// que solo hay cuentas creadas por la organización— y eso hacía imposible dar de
+/// baja a nadie. Con esta tabla, la comprobación de acceso (`requireAdmin()`) deja
+/// pasar al correo del superadministrador (`SUPERADMIN_EMAIL`) o a una fila
+/// **activa** de aquí.
+///
+/// **La baja es `active = false`, no un borrado.** La organización quiere poder
+/// desactivar a alguien sin perder la relación con lo que hizo —su `authUserId` y
+/// la fecha en la que entró—, y una baja que borrara la fila obligaría a inventar un
+/// histórico aparte. El rastro de **quién** hizo qué no vive aquí: está en
+/// `AdminAction`, que es append-only y no depende de esta tabla.
+///
+/// **No hay columna de rol.** El superadministrador es **único** y sale del entorno
+/// (`SUPERADMIN_EMAIL`), no de la base: así esta tabla es solo "quién es admin
+/// normal" y el único poder que no se puede delegar por descuido —administrar a los
+/// propios admins— no se puede conceder por error desde el panel.
+///
+/// `email` es la clave de identidad y va **canónico** (en minúsculas y sin
+/// espacios): es lo que se compara en cada petición, y dos formas del mismo correo no
+/// pueden ser dos filas. `authUserId` es el vínculo con Supabase Auth —con el que se
+/// le banea al darle de baja y se le desbanea al reactivarlo— y es **opcional** a
+/// propósito: la fila se puede escribir antes de que el usuario exista en Auth, y las
+/// cuentas de los admins anteriores se vinculan al darse de alta por invitación. Es
+/// `@unique` porque una cuenta de Auth no puede ser dos admins, y los `null` no
+/// colisionan en Postgres (como en `Player.discordUserId`), así que las filas sin
+/// vincular no estorban entre sí.
+model Admin {
+  id            String    @id @default(cuid())
+  /// Correo canónico (minúsculas, sin espacios). Es lo que se compara al entrar.
+  email         String    @unique
+  /// `auth.users.id` de Supabase Auth. `null` = aún sin vincular.
+  authUserId    String?   @unique
+  /// `false` = dado de baja: pierde el acceso sin borrar la fila.
+  active        Boolean   @default(true)
+  /// Cuándo se dio de baja. `null` mientras está activa.
+  deactivatedAt DateTime?
+  /// Correo de quien le dio de alta. También queda en `AdminAction`; aquí se lee
+  /// sin recorrer el historial.
+  addedByEmail  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
 /// Una acción del panel de administración, para poder pintar su historial.
 ///
 /// Es un registro **append-only**: nadie edita filas y lo único que se borra es la
 /// que una compensación acaba de escribir, para que el rastro no describa un cambio
-/// que se ha deshecho. No guarda una foto del estado de la web, sino quién hizo qué
-/// y sobre qué fila, que es lo que hace falta cuando alguien pregunta por qué el
-/// torneo puntúa como puntúa.
+/// que se ha deshecho. La única excepción es la marca de revertida
+/// (`revertedAt`/`revertedByEmail`), que **se escribe encima** de la fila original en
+/// vez de borrarla: el rastro de lo que se hizo tiene que sobrevivir a que se
+/// deshaga, y la marca es lo que dice que ya no está vigente. No guarda una foto del
+/// estado de la web, sino quién hizo qué y sobre qué fila, que es lo que hace falta
+/// cuando alguien pregunta por qué el torneo puntúa como puntúa.
 ///
 /// `summary` está **ya redactado en español** en el momento de escribir la fila
 /// (`src/lib/admin-actions.ts`): la pestaña de acciones lo pinta tal cual y no monta
@@ -597,21 +652,30 @@ model AdminAction {
   type AdminActionType
 
   // Quién lo hizo. Es el correo del usuario de Supabase Auth que pasó
-  // `requireAdmin()`: el dato ya está en la sesión, así que no hace falta una
-  // tabla de admins para saber quién fue.
+  // `requireAdmin()`: el dato ya está en la sesión, así que el historial no depende de
+  // leer la tabla `Admin`, que es solo la lista de quién puede entrar.
   actorEmail String
 
   // Una línea en español, ya formateada. Ver `adminActionSummary()`.
   summary String
 
-  // `Player.id` o `Match.id` de la fila afectada, según el `type`. Es texto y no
-  // una FK a propósito: la misma columna vale para las dos tablas y no obliga a
-  // decidir la regla de borrado de una acción cuando se borre su jugador.
+  // `Player.id`, `Match.id` o `Admin.id` de la fila afectada, según el `type`. Es
+  // texto y no una FK a propósito: la misma columna vale para varias tablas y no
+  // obliga a decidir la regla de borrado de una acción cuando se borre su fila.
   targetId String?
 
   // Datos estructurados de la acción (`profileId`, `gameId`, puntos antes y
   // después…). Nullable porque no todos los tipos tienen los mismos.
   details Json?
+
+  // Marca de "esta acción se ha revertido", reversible, para las acciones que el
+  // panel permite deshacer. `null` = la acción sigue vigente. Se usa una marca y
+  // no un borrado por el mismo motivo que `Match.revertedAt`: el rastro vale aunque
+  // el cambio se deshaga, y borrar la fila dejaría el historial contando algo que ya
+  // no es verdad. Quién la revirtió va aparte para no depender del `actorEmail` de la
+  // fila —que es quien hizo la acción, no quien la deshizo—.
+  revertedAt      DateTime?
+  revertedByEmail String?
 
   createdAt DateTime @default(now())
 

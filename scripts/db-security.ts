@@ -84,6 +84,8 @@ type GrantRow = { granted: boolean };
  *
  * Se ha comprobado que las dos últimas (`Alert` y `ObjectiveEvent`) nacieron
  * exactamente así: con RLS desactivada y `SELECT` para `anon` y `authenticated`.
+ * Por eso `Admin`, que entra con la gestión de cuentas, se añade a la lista a mano:
+ * sin ella nacería legible con la clave publicable antes del primer `db:security`.
  */
 const TABLES = [
   "Player",
@@ -94,6 +96,7 @@ const TABLES = [
   "AdminAction",
   "Alert",
   "ObjectiveEvent",
+  "Admin",
 ] as const;
 
 const ROLES_CLIENTE = "anon, authenticated";

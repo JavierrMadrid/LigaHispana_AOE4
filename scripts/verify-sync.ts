@@ -32,7 +32,6 @@ import {
   DEFAULT_RULESET,
   mergeRuleset,
   RANKED_MODES,
-  RULE_LABEL,
   RULESET_VERSION,
   SCORING_RULESET_KEY,
 } from "@/lib/scoring";
@@ -568,6 +567,7 @@ async function checkNormalization(): Promise<void> {
       discordError: null,
       streamsError: null,
       mapPoolError: null,
+      announceError: null,
       failures: [],
     };
 
@@ -644,6 +644,20 @@ async function checkNormalization(): Promise<void> {
       buena.finishedAt,
       "no comprobar la pertenencia a Discord tampoco lo mueve",
     );
+    // Y `announceError`, con el mismo motivo y la misma permanencia: sin
+    // `DISCORD_ANNOUNCE_CHANNEL_ID` los avisos del comienzo y el final del torneo no
+    // salen nunca, y eso tampoco ha parado ni una partida.
+    assert.equal(
+      salida(
+        {
+          ...buena,
+          announceError: "sin DISCORD_ANNOUNCE_CHANNEL_ID no se avisa del comienzo del torneo",
+        },
+        { ...buena, lastSuccessAt: buena.finishedAt },
+      ),
+      buena.finishedAt,
+      "no poder avisar del torneo tampoco lo mueve",
+    );
   });
 
   await check("una pasada vieja se detecta como vieja y una ausente no", () => {
@@ -673,6 +687,7 @@ async function checkNormalization(): Promise<void> {
       discordError: null,
       streamsError: null,
       mapPoolError: null,
+      announceError: null,
       failures: [],
       lastSuccessAt: finishedAt,
     });
@@ -2362,12 +2377,15 @@ async function runDatabaseChecks(): Promise<void> {
       } = await import("@/lib/objectives");
 
       const view = unwrapRead(await getObjectives(), "verify:objetivos/contrato");
+      // La etiqueta ya no es una constante: se calcula con los objetivos activos del
+      // ruleset publicado, así que se compara contra el activo y no contra el código.
+      const activo = await readRuleset();
 
       assert.equal(view.ruleSetVersion, RULESET_VERSION);
-      assert.equal(view.rule, RULE_LABEL, "la etiqueta pública es la del código");
+      assert.equal(view.rule, activo.label, "la etiqueta pública es la del ruleset activo");
       assert.deepEqual(
         view.window,
-        (await readRuleset()).window,
+        activo.window,
         "la vista publica la ventana activa, para que el copy no lleve fechas escritas a mano",
       );
       assert.equal(
@@ -2525,7 +2543,12 @@ async function runDatabaseChecks(): Promise<void> {
 
       assert.ok(score !== null);
       const breakdown = score.breakdown as { rule: string; objectives: { earned: string[] } };
-      assert.equal(breakdown.rule, RULE_LABEL, "el desglose guarda la etiqueta del código");
+      const reglasActivas = await readRuleset();
+      assert.equal(
+        breakdown.rule,
+        reglasActivas.label,
+        "el desglose guarda la etiqueta del ruleset activo",
+      );
       assert.equal(
         breakdown.objectives.earned.every((id) => holders.has(id)),
         true,
@@ -2543,8 +2566,8 @@ async function runDatabaseChecks(): Promise<void> {
           !Array.isArray(stored.value)
           ? (stored.value as { label?: unknown }).label
           : undefined,
-        RULE_LABEL,
-        "el label guardado en scoring.ruleset es el del código",
+        reglasActivas.label,
+        "el label guardado en scoring.ruleset es el que calcula el código",
       );
     });
 
