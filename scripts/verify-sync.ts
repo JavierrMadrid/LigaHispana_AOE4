@@ -10,9 +10,11 @@ import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 
 import { CIVILIZATIONS } from "@/lib/civs";
 import { unwrapRead } from "@/lib/db-errors";
+import { SUBDIVISION_RANK_LEVELS } from "@/lib/divisions";
 import { describeMode, describeTeamSize, teamSizesFromRawJson } from "@/lib/format";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { AlertKind, AlertRule } from "@/generated/prisma/enums";
+import type { TeamTierContext } from "@/lib/ranked-match";
 import {
   historyComparator,
   historyHole,
@@ -67,6 +69,15 @@ const EXPECTED_OBJECTIVE_COUNT = 82;
  * de `[from, to)` y son las que deciden qué cuenta.
  */
 const WINDOW_PROFILE_ID = 9_000_006;
+
+/**
+ * Contexto de equipos **sin cortes** con el que corren las comprobaciones puras de
+ * este script: sin cortes cacheados la condición de compañeros no se puede
+ * comprobar, así que esas comprobaciones miden las otras cinco condiciones. La
+ * condición de equipos tiene la suya, más abajo y contra la base de datos, con unos
+ * cortes sintéticos publicados en `Setting` a propósito.
+ */
+const SIN_EQUIPOS: TeamTierContext = { profileId: SAMPLE_PROFILE_ID, cutoffs: null };
 
 /**
  * Los países de `paises.txt`, escritos aquí aparte a propósito: es la lista que la
@@ -388,7 +399,7 @@ async function checkNormalization(): Promise<void> {
     // `null` es el `Player.registeredAt` de toda la fila que ya estaba inscrita, así
     // que estas comprobaciones cubren el caso mayoritario.
     const cuenta = (m: Parameters<typeof countsAsRanked>[0], registeredAt: Date | null = null) =>
-      countsAsRanked(m, ventana, registeredAt);
+      countsAsRanked(m, ventana, registeredAt, SIN_EQUIPOS);
 
     assert.equal(cuenta(base), true);
     assert.equal(
@@ -430,22 +441,22 @@ async function checkNormalization(): Promise<void> {
     // Un alta posterior a la ventana no acorta nada: es el comportamiento que ya
     // había y el que le toca a todo el que se|Apuntó antes de empezar.
     assert.equal(
-      countsAsRanked(partida("2026-09-16T10:00:00.000Z"), ventana, new Date("2026-09-01T00:00:00Z")),
+      countsAsRanked(partida("2026-09-16T10:00:00.000Z"), ventana, new Date("2026-09-01T00:00:00Z"), SIN_EQUIPOS),
       true,
       "inscrito antes de la ventana: cuenta desde `window.from`",
     );
     assert.equal(
-      countsAsRanked(partida("2026-09-24T23:59:59.999Z"), ventana, alta),
+      countsAsRanked(partida("2026-09-24T23:59:59.999Z"), ventana, alta, SIN_EQUIPOS),
       false,
       "un alta posterior no cuenta las partidas de antes de la inscripcion",
     );
     assert.equal(
-      countsAsRanked(partida("2026-09-25T12:00:00.000Z"), ventana, alta),
+      countsAsRanked(partida("2026-09-25T12:00:00.000Z"), ventana, alta, SIN_EQUIPOS),
       true,
       "el corte es inclusivo",
     );
     assert.equal(
-      countsAsRanked(partida("2026-09-26T10:00:00.000Z"), ventana, alta),
+      countsAsRanked(partida("2026-09-26T10:00:00.000Z"), ventana, alta, SIN_EQUIPOS),
       true,
       "despues del alta si cuenta",
     );
@@ -459,8 +470,8 @@ async function checkNormalization(): Promise<void> {
       "2026-10-15T00:00:00.000Z",
     ]) {
       assert.equal(
-        countsAsRanked(partida(instante), ventana, new Date("2026-09-01T00:00:00Z")),
-        countsAsRanked(partida(instante), ventana, null),
+        countsAsRanked(partida(instante), ventana, new Date("2026-09-01T00:00:00Z"), SIN_EQUIPOS),
+        countsAsRanked(partida(instante), ventana, null, SIN_EQUIPOS),
         `registeredAt null debería ser lo mismo que inscritarse antes, en ${instante}`,
       );
     }
@@ -468,17 +479,17 @@ async function checkNormalization(): Promise<void> {
     // El `to` exclusivo no se mueve por el corte, y el corte no destapa el resto de
     // las condiciones.
     assert.equal(
-      countsAsRanked(partida("2026-10-15T00:00:00.000Z"), ventana, null),
+      countsAsRanked(partida("2026-10-15T00:00:00.000Z"), ventana, null, SIN_EQUIPOS),
       false,
       "`to` sigue siendo exclusivo",
     );
     assert.equal(
-      countsAsRanked({ ...partida("2026-09-26T10:00:00.000Z"), revertedAt: NOW }, ventana, alta),
+      countsAsRanked({ ...partida("2026-09-26T10:00:00.000Z"), revertedAt: NOW }, ventana, alta, SIN_EQUIPOS),
       false,
       "el corte no destapa la marca de revertida",
     );
     assert.equal(
-      countsAsRanked({ ...partida("2026-09-26T10:00:00.000Z"), finishedAt: null }, ventana, alta),
+      countsAsRanked({ ...partida("2026-09-26T10:00:00.000Z"), finishedAt: null }, ventana, alta, SIN_EQUIPOS),
       false,
       "el corte no destapa una partida sin resolver",
     );
@@ -501,7 +512,7 @@ async function checkNormalization(): Promise<void> {
     // El parámetro se toma del de `countsAsRanked` y no del literal de `clasificatoria`:
     // si se declarara con el tipo de este, `result: null` no entraría.
     const cuenta = (m: Parameters<typeof countsAsRanked>[0], registeredAt: Date | null = null) =>
-      countsAsRanked(m, ventana, registeredAt);
+      countsAsRanked(m, ventana, registeredAt, SIN_EQUIPOS);
 
     assert.equal(cuenta(clasificatoria), true, "una partida clasificatoria cuenta");
     assert.equal(
@@ -515,7 +526,7 @@ async function checkNormalization(): Promise<void> {
       "sin resolver no cuenta en ningún sentido",
     );
     assert.equal(
-      countsAsRanked({ ...clasificatoria, revertedAt: NOW }, ventana, null),
+      countsAsRanked({ ...clasificatoria, revertedAt: NOW }, ventana, null, SIN_EQUIPOS),
       false,
       "marcada no cuenta, que es justo lo que deshace el restore",
     );
@@ -697,23 +708,23 @@ async function checkNormalization(): Promise<void> {
     // estaba en la base. El corte de inscripción se comprueba al final de esta misma
     // comprobación.
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(from)), ventana, null),
+      countsAsRanked(resuelta(milisegundoAntes(from)), ventana, null, SIN_EQUIPOS),
       false,
       "un milisegundo antes de `from` no cuenta",
     );
-    assert.equal(countsAsRanked(resuelta(from), ventana, null), true, "`from` es inclusivo");
+    assert.equal(countsAsRanked(resuelta(from), ventana, null, SIN_EQUIPOS), true, "`from` es inclusivo");
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(to)), ventana, null),
+      countsAsRanked(resuelta(milisegundoAntes(to)), ventana, null, SIN_EQUIPOS),
       true,
       "un milisegundo antes de `to` todavía cuenta",
     );
     assert.equal(
-      countsAsRanked(resuelta(to), ventana, null),
+      countsAsRanked(resuelta(to), ventana, null, SIN_EQUIPOS),
       false,
       "`to` es exclusivo: una partida empezada exactamente ahí ya es de la siguiente",
     );
     assert.equal(
-      countsAsRanked(resuelta(new Date(Date.parse(to) + 1).toISOString()), ventana, null),
+      countsAsRanked(resuelta(new Date(Date.parse(to) + 1).toISOString()), ventana, null, SIN_EQUIPOS),
       false,
       "después de `to` no cuenta",
     );
@@ -725,7 +736,7 @@ async function checkNormalization(): Promise<void> {
       finishedAt: new Date(Date.parse("2030-01-01T00:00:00.000Z")),
     };
     assert.equal(
-      countsAsRanked(empezadaDentroTerminadaDespues, ventana, null),
+      countsAsRanked(empezadaDentroTerminadaDespues, ventana, null, SIN_EQUIPOS),
       true,
       "empezada dentro de la ventana cuenta aunque termine fuera",
     );
@@ -734,12 +745,12 @@ async function checkNormalization(): Promise<void> {
     // el fin del torneo más tarde sin tocar código.
     const abierta = { from, to: null };
     assert.equal(
-      countsAsRanked(resuelta("2031-06-01T12:00:00.000Z"), abierta, null),
+      countsAsRanked(resuelta("2031-06-01T12:00:00.000Z"), abierta, null, SIN_EQUIPOS),
       true,
       "con `to: null` no hay corte por la derecha",
     );
     assert.equal(
-      countsAsRanked(resuelta(milisegundoAntes(from)), abierta, null),
+      countsAsRanked(resuelta(milisegundoAntes(from)), abierta, null, SIN_EQUIPOS),
       false,
       "`from` sigue cortando por la izquierda con la ventana abierta",
     );
@@ -748,17 +759,17 @@ async function checkNormalization(): Promise<void> {
     // mitad de ventana, lo anterior a ella deja de contar aunque siga dentro.
     const alta = new Date((Date.parse(from) + Date.parse(to)) / 2);
     assert.equal(
-      countsAsRanked(resuelta(new Date(alta.getTime() - 1).toISOString()), ventana, alta),
+      countsAsRanked(resuelta(new Date(alta.getTime() - 1).toISOString()), ventana, alta, SIN_EQUIPOS),
       false,
       "con `registeredAt` a mitad de ventana, lo anterior al alta no cuenta",
     );
     assert.equal(
-      countsAsRanked(resuelta(alta.toISOString()), ventana, alta),
+      countsAsRanked(resuelta(alta.toISOString()), ventana, alta, SIN_EQUIPOS),
       true,
       "el corte de inscripción es inclusivo, como `from`",
     );
     assert.equal(
-      countsAsRanked(resuelta(to), ventana, alta),
+      countsAsRanked(resuelta(to), ventana, alta, SIN_EQUIPOS),
       false,
       "el corte no mueve el `to` exclusivo",
     );
@@ -1283,12 +1294,14 @@ function buildFixtureAt(now: Date) {
 }
 
 /**
- * Comprobaciones de la ventana de fechas contra la base de datos de verdad.
+ * Comprobaciones de la ventana de fechas y de la condición de equipos, contra la
+ * base de datos de verdad.
  *
  * Usa un jugador aparte cuyas partidas están **justo en los bordes** de
- * `[from, to)`, y para el `to = null` sustituye temporalmente el ruleset guardado
- * y lo deja como estaba (con un `finally`, y recalculando al final para que la
- * clasificación real no se quede calculada con la ventana de prueba).
+ * `[from, to)`, y para el `to = null` y para la condición de equipos sustituye
+ * temporalmente el documento guardado (ruleset o cortes) y lo deja como estaba (con
+ * un `finally`, y recalculando al final para que la clasificación real no se quede
+ * calculada con los valores de prueba).
  */
 async function runWindowChecks(
   db: PrismaClient,
@@ -1296,6 +1309,7 @@ async function runWindowChecks(
 ): Promise<void> {
   const { getObjectives, readRuleset, recomputeScores } = await import("@/lib/scoring");
   const { countsAsRanked } = await import("@/lib/ranked-match");
+  const { readDivisionCutoffs, ALERTS_DIVISION_CUTOFFS_KEY } = await import("@/lib/alerts/settings");
 
   const ventana = (await readRuleset()).window;
 
@@ -1359,6 +1373,7 @@ async function runWindowChecks(
             // `registeredAt` ausente: es lo que tiene el jugador de esta
             // comprobación, y el caso mayoritario de toda la base.
             null,
+            SIN_EQUIPOS,
           ),
           caso.dentro,
           `${caso.etiqueta} (${new Date(caso.at).toISOString()})`,
@@ -1414,7 +1429,7 @@ async function runWindowChecks(
     await check("los objetivos cuentan las mismas partidas de la ventana", async () => {
       const { loadObjectivePlayers } = await import("@/lib/objectives");
       const dentro = casos.filter((caso) => caso.dentro).length;
-      const agregados = await loadObjectivePlayers(db, (await readRuleset()));
+      const agregados = await loadObjectivePlayers(db, await readRuleset(), await readDivisionCutoffs());
       const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
 
       // Es el mismo filtro que el del `UPDATE` de `Match.points` y que el del
@@ -1494,7 +1509,7 @@ async function runWindowChecks(
       });
       assert.equal(puntos._count._all, esperada, "y todas ellas puntúan");
 
-      const agregados = await loadObjectivePlayers(db, (await readRuleset()));
+      const agregados = await loadObjectivePlayers(db, await readRuleset(), await readDivisionCutoffs());
       const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
       assert.equal(suyo?.matches, esperada, "los objetivos también las cuentan");
     });
@@ -1554,7 +1569,7 @@ async function runWindowChecks(
 
       // Los objetivos van con el mismo corte: sin esto, un alta tardía con muchas
       // partidas se llevaría un objetivo por partidas que no puntúan.
-      const agregados = await loadObjectivePlayers(db, (await readRuleset()));
+      const agregados = await loadObjectivePlayers(db, await readRuleset(), await readDivisionCutoffs());
       const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
       assert.equal(
         suyo?.matches,
@@ -1577,12 +1592,179 @@ async function runWindowChecks(
             },
             ventanaActiva,
             alta,
+            SIN_EQUIPOS,
           ),
       );
       assert.equal(enJs.length, despuesDelAlta, "las tres traducciones cuentan lo mismo");
 
       // Se deja como estaba: el resto de la comprobación usa el `null`.
       await db.player.update({ where: { id: jugador.id }, data: { registeredAt: null } });
+    });
+
+    /**
+     * La condición de equipos, contra la base de datos.
+     *
+     * Es la única de las seis que el `where` de Prisma no puede escribir, así que su
+     * contraste es el que más importa: se publican unos cortes **sintéticos** de
+     * `rm_team` (100 de elo por subdivisión, 3 por división), se cuelgan del jugador
+     * de la ventana dos partidas de equipo —una con un compañero al mismo escalón y
+     * otra con uno a dos escalones— y se comprueba que las dos traducciones que sí
+     * llevan la condición dicen lo mismo: el `UPDATE` de `Match.points` y el agregado
+     * del motor (SQL) y `countsAsRanked()` (memoria). Con los cortes fuera, la misma
+     * partida cuenta, que es la degradación acordada.
+     *
+     * Los cortes se publican en `Setting` y se devuelve el documento anterior al
+     * terminar. Es el mismo trato que la ventana de fechas de arriba: la base es de
+     * verdad y no puede quedar con valores de prueba.
+     */
+    await check("la condición de equipos deja fuera una partida con un compañero desequilibrado", async () => {
+      const { countsAsRanked: cuentaFila } = await import("@/lib/ranked-match");
+
+      const cortes = {
+        ladders: {
+          rm_team: {
+            ladder: "rm_team",
+            derivedAt: new Date(from).toISOString(),
+            totalCount: 50_000,
+            requests: 1,
+            cutoffs: SUBDIVISION_RANK_LEVELS.map((rankLevel, index) => ({
+              rankLevel,
+              minRating: 3000 - index * 100,
+            })),
+          },
+        },
+      };
+
+      const cortesGuardados = await db.setting.findUnique({
+        where: { key: ALERTS_DIVISION_CUTOFFS_KEY },
+      });
+
+      const entrada = (profileId: number, rating: number) => ({
+        player: { profile_id: profileId, name: "Jugador", rating, result: "win" },
+      });
+
+      /** Un 2v2 del jugador de la ventana con un compañero de rating dado. */
+      const rawJson = (companero: number) => ({
+        game_id: 9_001_020 + companero,
+        started_at: new Date(from + 3_600_000).toISOString(),
+        leaderboard: "rm_2v2",
+        teams: [
+          [entrada(WINDOW_PROFILE_ID, 2100), entrada(WINDOW_PROFILE_ID + 100, companero)],
+          [entrada(WINDOW_PROFILE_ID + 200, 1500)],
+        ],
+      });
+
+      // 2100 es oro (escalón 3). 1900 es oro también (el subrango no cuenta) y 1000
+      // es bronce (escalón 5): dos escalones, la partida no puntúa.
+      const desequilibrada = {
+        gameId: "9001020",
+        playerId: jugador.id,
+        leaderboard: "rm_team",
+        mode: "rm_team",
+        civ: "english",
+        result: "WIN" as const,
+        startedAt: new Date(from + 3_600_000),
+        finishedAt: new Date(from + 5_400_000),
+        rawJson: rawJson(1000),
+      };
+      const equilibrada = {
+        ...desequilibrada,
+        gameId: "9001021",
+        startedAt: new Date(from + 7_200_000),
+        finishedAt: new Date(from + 9_000_000),
+        rawJson: rawJson(1900),
+      };
+
+      try {
+        await db.setting.upsert({
+          where: { key: ALERTS_DIVISION_CUTOFFS_KEY },
+          create: { key: ALERTS_DIVISION_CUTOFFS_KEY, value: cortes },
+          update: { value: cortes },
+        });
+
+        await recomputeScores();
+        const antes = await db.playerScore.findUnique({
+          where: {
+            playerId_ruleSetVersion: { playerId: jugador.id, ruleSetVersion: RULESET_VERSION },
+          },
+        });
+
+        await db.match.createMany({ data: [desequilibrada, equilibrada] });
+        await recomputeScores();
+
+        const leidas = await db.match.findMany({
+          where: { playerId: jugador.id, gameId: { in: ["9001020", "9001021"] } },
+          select: { gameId: true, mode: true, startedAt: true, finishedAt: true, points: true },
+        });
+        const deEquipo = leidas.find((fila) => fila.gameId === "9001020");
+        const equilibradaLeida = leidas.find((fila) => fila.gameId === "9001021");
+
+        assert.ok(deEquipo !== undefined && equilibradaLeida !== undefined, "faltan las partidas");
+
+        // El SQL: la desequilibrada se queda a 0 y la equilibrada puntúa.
+        assert.equal(deEquipo.points, 0, "un compañero a dos escalones deja la partida sin puntos");
+        assert.equal(
+          equilibradaLeida.points,
+          DEFAULT_RULESET.pointsPerWin,
+          "un compañero al mismo escalón no la toca",
+        );
+
+        // La memoria: `countsAsRanked()` fila a fila dice lo mismo, con los cortes
+        // cacheados (los de la prueba) y sin ellos (la degradación).
+        const cutoffs = await readDivisionCutoffs();
+        assert.ok(cutoffs !== null, "los cortes de la prueba deberían leerse");
+
+        for (const [fila, esperado] of [
+          [deEquipo, false],
+          [equilibradaLeida, true],
+        ] as const) {
+          assert.equal(
+            cuentaFila(
+              { ...fila, result: "WIN", revertedAt: null },
+              ventana,
+              null,
+              { profileId: WINDOW_PROFILE_ID, cutoffs },
+            ),
+            esperado,
+            `las dos traducciones discrepan en la partida ${fila.gameId}`,
+          );
+          assert.equal(
+            cuentaFila(
+              { ...fila, result: "WIN", revertedAt: null },
+              ventana,
+              null,
+              { profileId: WINDOW_PROFILE_ID, cutoffs: null },
+            ),
+            true,
+            "sin cortes la partida cuenta, que es la degradación acordada",
+          );
+        }
+
+        // El agregado de la clasificación cuenta las mismas partidas que el `UPDATE`.
+        const despues = await db.playerScore.findUnique({
+          where: {
+            playerId_ruleSetVersion: { playerId: jugador.id, ruleSetVersion: RULESET_VERSION },
+          },
+        });
+        assert.ok(antes !== null && despues !== null, "el jugador de la ventana está en la tabla");
+        assert.equal(
+          despues.matches,
+          antes.matches + 1,
+          "solo la partida equilibrada entra a contar para la clasificación",
+        );
+        assert.equal(despues.wins, antes.wins + 1, "y la ganada es la que entra");
+      } finally {
+        await db.match.deleteMany({ where: { playerId: jugador.id, gameId: { in: ["9001020", "9001021"] } } });
+
+        if (cortesGuardados === null) {
+          await db.setting.deleteMany({ where: { key: ALERTS_DIVISION_CUTOFFS_KEY } });
+        } else {
+          await db.setting.update({
+            where: { key: ALERTS_DIVISION_CUTOFFS_KEY },
+            data: { value: cortesGuardados.value as Prisma.InputJsonValue },
+          });
+        }
+      }
     });
   } finally {
     // Se devuelve el ruleset como estaba y se recalcula, para que la
@@ -1616,6 +1798,7 @@ async function runDatabaseChecks(): Promise<void> {
   );
   const { db } = await import("@/lib/db");
   const { getObjectives, readRuleset, recomputeScores } = await import("@/lib/scoring");
+  const { readDivisionCutoffs } = await import("@/lib/alerts/settings");
 
   const now = new Date();
   const fixture = buildFixtureAt(now);
@@ -2069,13 +2252,43 @@ async function runDatabaseChecks(): Promise<void> {
       const todas = await db.playerScore.findMany({
         where: { ruleSetVersion: RULESET_VERSION },
         orderBy: { rank: "asc" },
-        select: { rank: true, total: true, wins: true },
+        select: { rank: true, total: true, wins: true, matches: true },
       });
 
-      assert.deepEqual(
-        todas.map((row) => row.rank),
-        todas.map((_, index) => index + 1),
-        "los puestos son un entero denso y sin huecos",
+      // El `rank` ya **no** es un 1..N denso: dos filas con el mismo total, tasa de
+      // victorias, victorias y partidas comparten puesto (1, 2, 2, 4) y el hueco se
+      // pierde. Lo que sí se cumple —y es lo que se comprueba— es que la tabla
+      // empieza en 1, que el puesto no retrocede y que solo avanza con la primera
+      // fila de una tupla distinta.
+      assert.equal(
+        todas.length === 0 || todas[0]?.rank === 1,
+        true,
+        "la clasificación empieza en el puesto 1",
+      );
+      assert.equal(
+        todas.every((row, index) => index === 0 || row.rank >= (todas[index - 1]?.rank ?? 0)),
+        true,
+        "los puestos no decrecen",
+      );
+      assert.equal(
+        todas.every((row, index) => {
+          const anterior = todas[index - 1];
+
+          if (anterior === undefined) {
+            return true;
+          }
+
+          // Con la misma tupla el puesto se comparte; con una distinta, la fila
+          // abre grupo y toma su posición natural.
+          const mismaTupla =
+            anterior.total === row.total &&
+            anterior.wins === row.wins &&
+            anterior.matches === row.matches;
+
+          return mismaTupla ? row.rank === anterior.rank : row.rank === index + 1;
+        }),
+        true,
+        "el puesto se comparte con la tupla idéntica y avanza con la primera fila de la siguiente",
       );
       assert.equal(
         todas.every((row, index) => {
@@ -2091,12 +2304,17 @@ async function runDatabaseChecks(): Promise<void> {
       // dos traducciones a SQL. Es la comprobación que avisa si las tres se
       // desincronizan: se recorren todas las partidas del jugador de muestra y se
       // comparan las dos cuentas. El `registeredAt` del jugador va en la llamada
-      // porque es la condición que depende de él.
+      // porque es la condición que depende de él, y los cortes cacheados van en el
+      // contexto porque son la condición de equipos: es la única de las seis que el
+      // `where` de Prisma no puede escribir, así que este contraste es el único que
+      // puede pillar una discrepancia entre el SQL y la memoria.
       const ventana = (await readRuleset()).window;
+      const cutoffs = await readDivisionCutoffs();
       const { registeredAt } = await db.player.findUniqueOrThrow({
         where: { id: player.id },
         select: { registeredAt: true },
       });
+      const equipo: TeamTierContext = { profileId: player.profileId, cutoffs };
       const filas = await db.match.findMany({
         where: { playerId: player.id },
         select: {
@@ -2105,10 +2323,11 @@ async function runDatabaseChecks(): Promise<void> {
           startedAt: true,
           finishedAt: true,
           revertedAt: true,
+          rawJson: true,
           points: true,
         },
       });
-      const enJs = filas.filter((fila) => countsAsRanked(fila, ventana, registeredAt));
+      const enJs = filas.filter((fila) => countsAsRanked(fila, ventana, registeredAt, equipo));
 
       assert.equal(
         enJs.length,
@@ -2126,7 +2345,7 @@ async function runDatabaseChecks(): Promise<void> {
         "los puntos de `Match.points` son los que suman en la clasificación",
       );
       assert.equal(
-        filas.filter((fila) => !countsAsRanked(fila, ventana, registeredAt)).every(
+        filas.filter((fila) => !countsAsRanked(fila, ventana, registeredAt, equipo)).every(
           (fila) => fila.points === 0,
         ),
         true,
@@ -2404,20 +2623,52 @@ async function runDatabaseChecks(): Promise<void> {
         assert.equal(vacioFila.points, 0, "y con 0 puntos");
         assert.equal(vacioFila.wins, 0);
         assert.equal(vacioFila.losses, 0);
+        // Con puestos compartidos, el último puesto ya no es `standings.length`:
+        // si otra fila también está a cero comparte puesto con él. Lo que sí se
+        // puede afirmar es que es el mayor de la tabla y que todos los que están a
+        // cero (0 puntos, 0 victorias, 0 derrotas) lo comparten.
+        const puestos = standings.map((row) => row.rank);
+        const ultimo = Math.max(...puestos);
+
+        assert.equal(vacioFila.rank, ultimo, "aparece en el último puesto: no ha puntuado nada");
         assert.equal(
-          vacioFila.rank,
-          standings.length,
-          "aparece en el último puesto: no ha puntuado nada",
+          fila.rank < vacioFila.rank,
+          true,
+          "el jugador que ha puntuado va por delante del que no ha jugado",
+        );
+        assert.equal(
+          standings
+            .filter((row) => row.points === 0 && row.wins === 0 && row.losses === 0)
+            .every((row) => row.rank === ultimo),
+          true,
+          "los aprobados sin ninguna partida comparten el último puesto",
         );
         assert.equal(
           standings.some((row) => row.profileId === SAMPLE_PENDING_PROFILE_ID),
           false,
           "un jugador pendiente no tiene fila",
         );
-        assert.deepEqual(
-          standings.map((row) => row.rank),
-          standings.map((_, index) => index + 1),
-          "los puestos son un entero denso y en orden",
+        // Como arriba: el `rank` es de competición, no un 1..N denso. Se comprueba
+        // que empieza en 1, que no retrocede y que solo avanza con la primera fila
+        // de una tupla distinta (aquí las partidas se reconstruyen de
+        // `wins + losses`, que es todo lo que publica `StandingRow`).
+        assert.equal(
+          standings.every((row, index) => {
+            const anterior = standings[index - 1];
+
+            if (anterior === undefined) {
+              return row.rank === 1;
+            }
+
+            const mismaTupla =
+              anterior.points === row.points &&
+              anterior.wins === row.wins &&
+              anterior.wins + anterior.losses === row.wins + row.losses;
+
+            return mismaTupla ? row.rank === anterior.rank : row.rank === index + 1;
+          }),
+          true,
+          "los puestos se comparten con la tupla idéntica y no retroceden",
         );
 
         const vivos = unwrapRead(await getLiveMatches(), "verify:partidas-en-curso");

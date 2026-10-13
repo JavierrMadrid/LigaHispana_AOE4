@@ -64,9 +64,10 @@ export type Aoe4WorldGame = {
    * Media de **rating** de la partida (`average_rating`), en la escala de la
    * ladder.
    *
-   * Es la que compara R5 con el `rating` del jugador: la media de `mmr` es otra
-   * escala (el MMR interno de la partida) y no se traduce con los cortes de
-   * división, que salen del campo `rating` de la ladder.
+   * Es distinta de la media de `mmr`: esa es otra escala (el MMR interno de la
+   * partida) y no se traduce con los cortes de división, que salen del campo
+   * `rating` de la ladder. Hoy no la lee ningún motor; se publica porque es parte
+   * del payload que guardamos tal cual en `rawJson`.
    */
   averageRating: number | null;
   /** Equipos tal cual: `teams[0]` es el primero, con un jugador por entrada. */

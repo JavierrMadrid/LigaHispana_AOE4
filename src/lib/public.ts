@@ -339,8 +339,9 @@ function earnedObjectivesPoints(breakdown: unknown): number {
  * última.
  *
  * Aparecen **todos** los jugadores aprobados: un aprobado que aún no ha jugado
- * ninguna clasificatoria sale con todo a cero y con su puesto por el desempate de
- * siempre. Un `PENDING` o un `REJECTED` no tiene fila y no aparece.
+ * ninguna clasificatoria sale con todo a cero y comparte el último puesto con los
+ * demás que tampoco hayan jugado. Un `PENDING` o un `REJECTED` no tiene fila y no
+ * aparece.
  *
  * Tres consultas planas, ninguna por fila: la de partidas en directo sirve para
  * marcar `isPlaying` sin N+1 y la del ruleset (una clave de `Setting`) trae los
@@ -366,7 +367,12 @@ async function loadStandings(): Promise<StandingRow[]> {
   const [rows, liveRows, ruleset] = await Promise.all([
     db.playerScore.findMany({
       where: { ruleSetVersion: RULESET_VERSION },
-      orderBy: { rank: "asc" },
+      // `rank` solo no basta: dos filas empatadas comparten puesto, así que dentro
+      // de un puesto el orden sería el que decidiera el plan de la consulta (y
+      // podría bailar entre lecturas, o al paginar). `profileId` ascendente es el
+      // mismo desempate de presentación que cierra `compareStandings`, así que el
+      // orden de la consulta y el del motor coinciden.
+      orderBy: [{ rank: "asc" }, { player: { profileId: "asc" } }],
       select: {
         rank: true,
         total: true,

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   DIVISIONS,
+  SUBDIVISIONS_PER_DIVISION,
   SUBDIVISION_RANK_LEVELS,
   divisionFromRankLevel,
+  divisionTier,
   subdivisionIndex,
 } from "@/lib/divisions";
 
@@ -11,9 +13,11 @@ import {
  * El catálogo de divisiones y el orden de las 18 subdivisiones.
  *
  * Son datos, no cálculo, y por eso lo que se comprueba no es que devuelvan lo
- * correcto caso a caso sino las dos invariantes de las que depende el resto: que el
- * prefijo de cada división sea el que usa AoE4World y que el orden fuerte → débil
- * sea el que hace que "tres escalones por debajo" signifique algo.
+ * correcto caso a caso sino las invariantes de las que depende el resto: que el
+ * prefijo de cada división sea el que usa AoE4World, que el orden fuerte → débil
+ * sea el que hace que "un escalón" signifique algo, y que el escalón agrupe las
+ * subdivisiones de tres en tres (la condición de equipos de `ranked-match.ts`
+ * ignora el subrango).
  */
 
 describe("DIVISIONS", () => {
@@ -96,10 +100,10 @@ describe("SUBDIVISION_RANK_LEVELS", () => {
 });
 
 describe("subdivisionIndex", () => {
-  it("el índice crece al bajar, y eso es lo que hace la cuenta de R5", () => {
-    // R5 calcula `steps = indicePartida - indiceJugador`, así que "tres escalones por
-    // debajo" son tres posiciones de diferencia: desde `gold_3` la partida cae a
-    // `silver_3`, y desde `gold_1` a `silver_1`.
+  it("el índice crece al bajar, y eso es lo que hace la comparación de escalones", () => {
+    // La condición de equipos resta índices para saber si dos ratings están en el
+    // mismo escalón, así que "un escalón por debajo" son tres posiciones de
+    // diferencia: desde `gold_3` es `silver_3`, y desde `gold_1` es `silver_1`.
     const escalones = (jugador: string, partida: string) =>
       (subdivisionIndex(partida) ?? -1) - (subdivisionIndex(jugador) ?? -1);
 
@@ -115,8 +119,9 @@ describe("subdivisionIndex", () => {
   });
 
   it("un valor que no está en la lista devuelve `null`, no `-1`", () => {
-    // `null` es "no se puede comparar", y R5 lo trata como "no evaluable" con un
-    // aviso; un `-1` se leería como el escalón más fuerte de todos.
+    // `null` es "no se puede comparar", y la condición de equipos lo trata como
+    // "no se puede demostrar la infracción" (la partida cuenta); un `-1` se leería
+    // como el escalón más fuerte de todos.
     for (const valor of [null, "", "  ", "gold_4", "oro_2"]) {
       expect(subdivisionIndex(valor), String(valor)).toBeNull();
     }
@@ -124,5 +129,30 @@ describe("subdivisionIndex", () => {
 
   it("no le importa cómo venga escrito el `rank_level`", () => {
     expect(subdivisionIndex("  GOLD_3 ")).toBe(subdivisionIndex("gold_3"));
+  });
+});
+
+describe("divisionTier", () => {
+  it("agrupa las subdivisiones de tres en tres, de conquistador a bronce", () => {
+    // Es lo que hace que dos subrangos de la misma división (`gold_3` y `gold_1`)
+    // sean **el mismo escalón**: la condición de equipos ignora el subrango.
+    expect(divisionTier(subdivisionIndex("conqueror_3") ?? -1)).toBe(0);
+    expect(divisionTier(subdivisionIndex("diamond_2") ?? -1)).toBe(1);
+    expect(divisionTier(subdivisionIndex("platinum_1") ?? -1)).toBe(2);
+    expect(divisionTier(subdivisionIndex("gold_3") ?? -1)).toBe(3);
+    expect(divisionTier(subdivisionIndex("gold_1") ?? -1)).toBe(3);
+    expect(divisionTier(subdivisionIndex("silver_2") ?? -1)).toBe(4);
+    expect(divisionTier(subdivisionIndex("bronze_1") ?? -1)).toBe(5);
+  });
+
+  it("los tres subrangos de cada división caen en el mismo escalón", () => {
+    // Se recorre el catálogo entero: los seis bloques de tres tienen que dar seis
+    // escalones distintos y consecutivos, sin depender de qué división sea.
+    const escalones = SUBDIVISION_RANK_LEVELS.map((nivel, index) =>
+      divisionTier(subdivisionIndex(nivel) ?? index),
+    );
+
+    expect(escalones).toEqual([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5]);
+    expect(SUBDIVISIONS_PER_DIVISION).toBe(3);
   });
 });

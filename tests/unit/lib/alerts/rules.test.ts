@@ -50,9 +50,10 @@ describe("etiquetas", () => {
   it("las once reglas y los cuatro tipos tienen su rótulo en español", () => {
     // El `satisfies Record<...>` del módulo obliga a decidir la etiqueta al añadir
     // una regla; aquí se comprueba que ninguna se quedó sin él ni con el mismo
-    // texto que otra. Las once reglas son las ocho de comportamiento más las tres de
-    // estado (las dos del historial de partidas y la de Discord), y los cuatro tipos
-    // son las tres rachas/acumulados más `STATE_DETECTED`.
+    // texto que otra. Las once etiquetas son las **seis** reglas de comportamiento
+    // que se calculan hoy, las **dos retiradas** (R4 y R5, que se quedan por las
+    // filas históricas) y las **tres de estado**; los cuatro tipos son las tres
+    // rachas/acumulados más `STATE_DETECTED`.
     const etiquetas = Object.values(ALERT_RULE_LABELS);
 
     expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(11);
@@ -115,27 +116,14 @@ describe("alertSummary", () => {
     ).toContain("el mismo compañero");
   });
 
-  it("R4 dice la brecha cuando la trae y el texto genérico cuando no", () => {
+  it("las dos reglas retiradas conservan su frase genérica, para las filas históricas", () => {
+    // R4 y R5 ya no se calculan, pero sus valores del enum y sus etiquetas siguen
+    // porque hay filas de `Alert` escritas con ellos. Sus frases se quedan en la
+    // forma genérica: ya no hay detalle (`eloGap`, `steps`) que las concrete.
     expect(
-      alertSummary(disparo({ rule: "TEAMMATE_ELO_GAP", count: 1, detail: { eloGap: 500 } })),
-    ).toBe("1 partida de equipo con un compañero a 500 de elo");
-    expect(alertSummary(disparo({ rule: "TEAMMATE_ELO_GAP" }))).toContain(
-      "muy por encima o por debajo",
-    );
-  });
-
-  it("R5 concuerda el número de escalones y conserva el sentido", () => {
-    expect(
-      alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: 1 } })),
-    ).toContain("1 escalón");
-    expect(
-      alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: 3 } })),
-    ).toContain("3 escalones");
-    // `steps` negativo es que la partida está por encima del jugador.
-    expect(
-      alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: -3 } })),
-    ).toContain("por encima");
-    expect(alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME" }))).toContain(
+      alertSummary(disparo({ rule: "TEAMMATE_ELO_GAP", count: 1 })),
+    ).toContain("muy por encima o por debajo");
+    expect(alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", count: 1 }))).toContain(
       "en una división muy distinta",
     );
   });
@@ -233,9 +221,9 @@ describe("alertDetails", () => {
   });
 
   it("el detalle de la partida se mezcla con el resto", () => {
-    const detalles = alertDetails(disparo({ detail: { eloGap: 500, durationSeconds: 1800 } }));
+    const detalles = alertDetails(disparo({ detail: { durationSeconds: 1800, probedCount: 3 } }));
 
-    expect(detalles).toMatchObject({ eloGap: 500, durationSeconds: 1800 });
+    expect(detalles).toMatchObject({ durationSeconds: 1800, probedCount: 3 });
   });
 
   it("una regla que no mira partidas no escribe ventana", () => {
@@ -487,7 +475,7 @@ describe("mergeAlertsRuleset", () => {
   it("una versión distinta invalida el documento entero", () => {
     const { ruleset, warnings } = mergeAlertsRuleset({
       version: ALERTS_RULESET_VERSION + 1,
-      thresholds: { teammateEloGap: 900 },
+      thresholds: { shortMatchStreak: 9 },
     });
 
     expect(ruleset).toEqual(DEFAULT_ALERTS_RULESET);
@@ -495,17 +483,17 @@ describe("mergeAlertsRuleset", () => {
     expect(warnings[0]).toContain("se ignoran los umbrales guardados");
   });
 
-  it("aplica un umbral suelto sin tocar los otros ocho", () => {
+  it("aplica un umbral suelto sin tocar los demás", () => {
     const { ruleset, warnings } = mergeAlertsRuleset({
       ...VALIDO,
-      thresholds: { teammateEloGap: 900, lowDivisionSteps: 4 },
+      thresholds: { repeatedTeammateTotal: 4, shortMatchSeconds: 240 },
     });
 
     expect(warnings).toEqual([]);
-    expect(ruleset.thresholds.teammateEloGap).toBe(900);
-    expect(ruleset.thresholds.lowDivisionSteps).toBe(4);
-    expect(ruleset.thresholds.shortMatchSeconds).toBe(
-      DEFAULT_ALERTS_RULESET.thresholds.shortMatchSeconds,
+    expect(ruleset.thresholds.repeatedTeammateTotal).toBe(4);
+    expect(ruleset.thresholds.shortMatchSeconds).toBe(240);
+    expect(ruleset.thresholds.shortMatchStreak).toBe(
+      DEFAULT_ALERTS_RULESET.thresholds.shortMatchStreak,
     );
   });
 

@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { computePlayerAlerts, type AlertMatch } from "@/lib/alerts/compute";
-import type { LadderCutoffs, LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { DEFAULT_ALERTS_RULESET } from "@/lib/alerts/rules";
-import { SUBDIVISION_RANK_LEVELS } from "@/lib/divisions";
 import type { ScoringWindow } from "@/lib/ranked-match";
 
 /**
@@ -11,9 +9,12 @@ import type { ScoringWindow } from "@/lib/ranked-match";
  *
  * Es un módulo puro —no lee la base ni sale a la red— y por eso se le puede pasar
  * cualquier secuencia y comprobar la regla entera. Lo que se cubre son los bordes
- * que el docblock del módulo declara: el umbral de cada regla, el derecho (`>=`) de
- * R4 y R5, el `null` que degrada en vez de acusar, el tramo que sigue abierto y el
- * cierre de torneo.
+ * que el docblock del módulo declara: el umbral de cada regla, el `null` que
+ * degrada en vez de acusar, el tramo que sigue abierto y el cierre de torneo.
+ *
+ * Las reglas R4 (`TEAMMATE_ELO_GAP`) y R5 (`LOW_DIVISION_TEAM_GAME`) se retiraron
+ * y **no** tienen casos aquí: su caso pasó a ser la condición de equipos de
+ * `ranked-match.ts`, y sus casos viven en `tests/unit/lib/ranked-match.test.ts`.
  */
 
 const PERFIL_JUGADOR = 9_100_001;
@@ -40,27 +41,6 @@ const JUGADOR = {
   name: "Jugador Alertas",
 };
 
-/**
- * Cortes inventados pero **monótonos y de la misma escala** que la ladder real: se
- * construyen hacia abajo desde `conqueror_3` en pasos de 100, así cada escalón vale
- * exactamente 100 de elo y las cuentas salen a mano. Lo que importa es la
- * aritmética de escalones, no el rating exacto.
- */
-function ladder(nombre: string): LadderCutoffs {
-  return {
-    ladder: nombre,
-    derivedAt: VENTANA.from,
-    totalCount: 50_000,
-    cutoffs: SUBDIVISION_RANK_LEVELS.map((rankLevel, index) => ({
-      rankLevel,
-      minRating: 3000 - index * 100,
-    })),
-    requests: 1,
-  };
-}
-
-const CORTES: LadderCutoffsTable = { rm_team: ladder("rm_team") };
-
 type Raw = { profileId: number | null; name: string; rating: number | null };
 
 /**
@@ -71,8 +51,6 @@ type Raw = { profileId: number | null; name: string; rating: number | null };
 function payload(options: {
   indice: number;
   kind: "rm_1v1" | "rm_2v2";
-  averageMmr?: number | null;
-  averageRating?: number | null;
   propio: Raw[];
   rival: Raw[];
 }): Record<string, unknown> {
@@ -96,8 +74,6 @@ function payload(options: {
     kind: options.kind,
     leaderboard: options.kind === "rm_1v1" ? "rm_solo" : "rm_team",
     ongoing: false,
-    average_mmr: options.averageMmr ?? null,
-    average_rating: options.averageRating ?? null,
     teams: [envolver(options.rival), envolver(options.propio)],
   };
 }
@@ -146,18 +122,8 @@ function secuencia() {
     },
 
     equipo(options: {
-      selfRating?: number | null;
       teammates: Array<[number | null, string, number | null]>;
-      /** Media de rating de la partida (`average_rating`), la que compara R5. */
-      averageRating?: number | null;
-      /**
-       * Media de `mmr` (`average_mmr`). El motor **no** la usa para R5; está en el
-       * builder para poder comprobar que una partida con un `mmr` disparatado no
-       * levanta la alerta.
-       */
-      averageMmr?: number | null;
     }): AlertMatch {
-      const ratingPropio = options.selfRating === undefined ? 1500 : options.selfRating;
       const partida: AlertMatch = {
         gameId: String(800_000 + indice()),
         mode: "rm_team",
@@ -168,10 +134,8 @@ function secuencia() {
         rawJson: payload({
           indice: indice(),
           kind: "rm_2v2",
-          averageRating: options.averageRating,
-          averageMmr: options.averageMmr,
           propio: [
-            { profileId: PERFIL_JUGADOR, name: JUGADOR.name, rating: ratingPropio },
+            { profileId: PERFIL_JUGADOR, name: JUGADOR.name, rating: 1500 },
             ...options.teammates.map(([profileId, name, rating]) => ({ profileId, name, rating })),
           ],
           rival: [{ profileId: RIVAL_2, name: "Rival Externo", rating: 1500 }],
@@ -218,7 +182,6 @@ function secuencia() {
 
 function evaluar(options: {
   matches: AlertMatch[];
-  cutoffs?: LadderCutoffsTable | null;
   now?: Date;
   window?: ScoringWindow;
 }) {
@@ -227,12 +190,11 @@ function evaluar(options: {
     matches: options.matches,
     ruleset: DEFAULT_ALERTS_RULESET,
     scoring: { modes: ["rm_solo", "rm_team"], window: options.window ?? VENTANA },
-    cutoffs: options.cutoffs === undefined ? CORTES : options.cutoffs,
     now: options.now ?? DURANTE,
   });
 }
 
-/** Solo las alertas de una regla, que es como se leen los ocho casos. */
+/** Solo las alertas de una regla, que es como se leen los casos. */
 function de(evaluacion: ReturnType<typeof evaluar>, regla: string) {
   return evaluacion.alerts.filter((alert) => alert.rule === regla);
 }
@@ -422,7 +384,7 @@ describe("R3 — compañero repetido", () => {
     expect(totales[0]?.threshold).toBe(DEFAULT_ALERTS_RULESET.thresholds.repeatedTeammateTotal);
   });
 
-  it("un compañero sin `profile_id` no es sujeto, pero su elo sigue contando para R4", () => {
+  it("un compañero sin `profile_id` no es sujeto: no tiene identidad con la que contar", () => {
     const s = secuencia();
     for (let i = 0; i < 3; i += 1) {
       s.equipo({ teammates: [[null, "Sin id", 2500]] });
@@ -432,283 +394,26 @@ describe("R3 — compañero repetido", () => {
     const evaluacion = evaluar({ matches: s.partidas() });
 
     expect(de(evaluacion, "REPEATED_TEAMMATE_STREAK")).toHaveLength(0);
-    expect(de(evaluacion, "TEAMMATE_ELO_GAP")).toHaveLength(1);
-  });
-});
-
-describe("R4 — brecha de elo con un compañero", () => {
-  it("el borde son 500 y el derecho es incluido: 499 no avisa y 500 sí", () => {
-    const justo = secuencia();
-    justo.equipo({ selfRating: 1500, teammates: [[COMPAÑERO, "Compañero", 2000]] });
-    justo.cierre();
-
-    const corto = secuencia();
-    corto.equipo({ selfRating: 1500, teammates: [[COMPAÑERO, "Compañero", 1999]] });
-    corto.cierre();
-
-    expect(de(evaluar({ matches: justo.partidas() }), "TEAMMATE_ELO_GAP")).toHaveLength(1);
-    expect(de(evaluar({ matches: corto.partidas() }), "TEAMMATE_ELO_GAP")).toHaveLength(0);
-  });
-
-  it("la brecha es en valor absoluto: un compañero muy por debajo también cuenta", () => {
-    const s = secuencia();
-    s.equipo({ selfRating: 2500, teammates: [[COMPAÑERO, "Compañero", 2000]] });
-    s.cierre();
-
-    const alerta = de(evaluar({ matches: s.partidas() }), "TEAMMATE_ELO_GAP")[0];
-
-    expect(alerta?.details.eloGap).toBe(500);
-    expect(alerta?.summary).toContain("500 de elo");
-  });
-
-  it("con varios compañeros cuenta la mayor brecha de la partida", () => {
-    const s = secuencia();
-    s.equipo({
-      selfRating: 1500,
-      teammates: [
-        [COMPAÑERO, "Compañero", 1550],
-        [COMPAÑERO_2, "Otro", 2100],
-      ],
-    });
-    s.cierre();
-
-    expect(de(evaluar({ matches: s.partidas() }), "TEAMMATE_ELO_GAP")[0]?.details.eloGap).toBe(600);
-  });
-
-  it("sin rating propio no hay contra qué comparar, y no es una brecha pequeña", () => {
-    const s = secuencia();
-    s.equipo({ selfRating: null, teammates: [[COMPAÑERO, "Compañero", 2500]] });
-    s.cierre();
-
-    expect(de(evaluar({ matches: s.partidas() }), "TEAMMATE_ELO_GAP")).toHaveLength(0);
-  });
-
-  it("sin rating del compañero tampoco hay diferencia que mirar", () => {
-    const s = secuencia();
-    s.equipo({ selfRating: 1500, teammates: [[COMPAÑERO, "Compañero", null]] });
-    s.cierre();
-
-    expect(de(evaluar({ matches: s.partidas() }), "TEAMMATE_ELO_GAP")).toHaveLength(0);
-  });
-
-  it("no mira las 1v1", () => {
-    const s = secuencia();
-    s.contraRival(2);
-    s.cierre();
-
-    expect(de(evaluar({ matches: s.partidas() }), "TEAMMATE_ELO_GAP")).toHaveLength(0);
-  });
-});
-
-describe("R5 — equipo en una división muy distinta", () => {
-  /**
-   * Los cortes que produce `alerts:cutoffs` contra la `rm_team` real (octubre de
-   * 2026): la escala de verdad, no la inventada por pasos de 100. Se escriben a
-   * mano para que la comprobación sea pura, y son los que hacen que los números
-   * reales de la regresión caigan donde caen en producción.
-   */
-  function ladderReal(): LadderCutoffs {
-    const minRating: Record<string, number> = {
-      conqueror_3: 1600,
-      conqueror_2: 1500,
-      conqueror_1: 1400,
-      diamond_3: 1350,
-      diamond_2: 1300,
-      diamond_1: 1200,
-      platinum_3: 1150,
-      platinum_2: 1100,
-      platinum_1: 1000,
-      gold_3: 900,
-      gold_2: 800,
-      gold_1: 700,
-      silver_3: 650,
-      silver_2: 600,
-      silver_1: 500,
-      bronze_3: 450,
-      bronze_2: 400,
-      bronze_1: 0,
-    };
-
-    return {
-      ladder: "rm_team",
-      derivedAt: VENTANA.from,
-      totalCount: 56_844,
-      cutoffs: SUBDIVISION_RANK_LEVELS.map((rankLevel) => ({
-        rankLevel,
-        minRating: minRating[rankLevel] ?? 0,
-      })),
-      requests: 1,
-    };
-  }
-
-  it("tres escalones avisan y dos no, comparando el rating del jugador con la media de rating", () => {
-    // El índice **crece al bajar**, así que el flag sale con
-    // `abs(indicePartida - indiceJugador) >= 3`: un jugador `gold_3` (2100) en una
-    // partida de media `silver_3` (1800) son tres, mientras que con `gold_1`
-    // (1900) son dos.
-    const tres = secuencia();
-    tres.equipo({ selfRating: 2100, averageRating: 1800, teammates: [[COMPAÑERO, "Compañero", 1500]] });
-    tres.cierre();
-
-    const dos = secuencia();
-    dos.equipo({ selfRating: 2100, averageRating: 1900, teammates: [[COMPAÑERO, "Compañero", 1500]] });
-    dos.cierre();
-
-    expect(de(evaluar({ matches: tres.partidas() }), "LOW_DIVISION_TEAM_GAME")).toHaveLength(1);
-    expect(de(evaluar({ matches: dos.partidas() }), "LOW_DIVISION_TEAM_GAME")).toHaveLength(0);
-  });
-
-  it("avisa en las dos direcciones: una partida muy por encima también cuenta", () => {
-    const s = secuencia();
-    s.equipo({ selfRating: 1500, averageRating: 2100, teammates: [[COMPAÑERO, "Compañero", 1500]] });
-    s.cierre();
-
-    const alerta = de(evaluar({ matches: s.partidas() }), "LOW_DIVISION_TEAM_GAME")[0];
-
-    expect(alerta?.details.steps).toBe(-6);
-    expect(alerta?.summary).toContain("por encima");
-  });
-
-  it("el detalle lleva los dos lados de la cuenta y la media de rating, no el mmr", () => {
-    const s = secuencia();
-    s.equipo({
-      selfRating: 2100,
-      averageRating: 1500,
-      averageMmr: 9999,
-      teammates: [[COMPAÑERO, "Compañero", 1500]],
-    });
-    s.cierre();
-
-    const alerta = de(evaluar({ matches: s.partidas() }), "LOW_DIVISION_TEAM_GAME")[0];
-
-    // El `average_mmr` de 9999 no aparece: la partida se tradujo con su
-    // `average_rating`, que es la escala de los cortes.
-    expect(alerta?.details).toMatchObject({
-      selfRating: 2100,
-      averageRating: 1500,
-      gameSubdivision: "bronze_3",
-      playerSubdivision: "gold_3",
-    });
-    expect(alerta?.details).not.toHaveProperty("averageMmr");
-    expect(alerta?.details.steps).toBe(6);
-  });
-
-  it("los números reales de arribas94 no son una alerta: rating con rating, no con mmr", () => {
-    // Partida 252055272: `self.rating` 727, `average_rating` 851 (rating) frente a
-    // `self.mmr` 1212 y `average_mmr` 1254. Con los cortes reales, 727 es `gold_1` y
-    // 851 `gold_2`: **un** escalón, por debajo del umbral de tres. Con la comparación
-    // vieja (727 contra el `average_mmr` de 1254, que cae en `diamond_1`) el desfase
-    // era de seis escalones: era la escala del `mmr`, no la del rating.
-    const s = secuencia();
-    s.equipo({
-      selfRating: 727,
-      averageRating: 851,
-      averageMmr: 1254,
-      teammates: [[COMPAÑERO, "Compañero", 700]],
-    });
-    s.cierre();
-
-    const evaluacion = evaluar({ matches: s.partidas(), cutoffs: { rm_team: ladderReal() } });
-
-    expect(de(evaluacion, "LOW_DIVISION_TEAM_GAME")).toHaveLength(0);
-    // La partida se ha podido leer: la ausencia de alerta es del cálculo, no de un
-    // `rawJson` roto.
-    expect(evaluacion.unreadableMatches).toBe(0);
-  });
-
-  it("la misma partida con la media de rating muy por debajo sí avisa", () => {
-    const s = secuencia();
-    s.equipo({
-      selfRating: 727,
-      averageRating: 500,
-      averageMmr: 500,
-      teammates: [[COMPAÑERO, "Compañero", 700]],
-    });
-    s.cierre();
-
-    const alerta = de(
-      evaluar({ matches: s.partidas(), cutoffs: { rm_team: ladderReal() } }),
-      "LOW_DIVISION_TEAM_GAME",
-    )[0];
-
-    // 727 es `gold_1` (índice 11) y 500 `silver_1` (índice 14): tres escalones por
-    // debajo, justo el borde del umbral.
-    expect(alerta?.details.steps).toBe(3);
-  });
-
-  it("busca los cortes por la familia (`rm_team`), no por el literal de la partida", () => {
-    // Las dos magnitudes que se comparan son rating de la familia de equipos:
-    // traducirlas con los cortes de otra daría escalones que no existen. La
-    // búsqueda va por `match.mode`, así que unos cortes solo de `rm_solo` no
-    // sirven para una partida de equipo aunque su `leaderboard` literal fuera
-    // `rm_2v2` (que es justo el caso que la familia resuelve).
-    const s = secuencia();
-    s.equipo({ selfRating: 2100, averageRating: 1500, teammates: [[COMPAÑERO, "Compañero", 1500]] });
-    s.cierre();
-
-    const soloCortes: LadderCutoffsTable = { rm_solo: ladder("rm_solo") };
-
-    expect(de(evaluar({ matches: s.partidas() }), "LOW_DIVISION_TEAM_GAME")).toHaveLength(1);
-    expect(
-      de(evaluar({ matches: s.partidas(), cutoffs: soloCortes }), "LOW_DIVISION_TEAM_GAME"),
-    ).toHaveLength(0);
-  });
-
-  it("sin la media de rating de la partida se salta sin avisar: es un hueco de datos", () => {
-    const s = secuencia();
-    s.equipo({ selfRating: 2100, averageRating: null, teammates: [[COMPAÑERO, "Compañero", 1500]] });
-    s.cierre();
-
-    const evaluacion = evaluar({ matches: s.partidas() });
-
-    expect(de(evaluacion, "LOW_DIVISION_TEAM_GAME")).toHaveLength(0);
-    expect(evaluacion.unreadableMatches).toBe(0);
-  });
-
-  it("sin el rating del jugador en la partida se salta sin avisar: es un hueco de datos", () => {
-    const s = secuencia();
-    s.equipo({ selfRating: null, averageRating: 1500, teammates: [[COMPAÑERO, "Compañero", 1500]] });
-    s.cierre();
-
-    const evaluacion = evaluar({ matches: s.partidas() });
-
-    expect(de(evaluacion, "LOW_DIVISION_TEAM_GAME")).toHaveLength(0);
-    expect(evaluacion.unreadableMatches).toBe(0);
-  });
-
-  it("sin cortes cacheados la regla se omite entera, con aviso de la evaluación", () => {
-    const s = secuencia();
-    s.equipo({ selfRating: 2100, averageRating: 1000, teammates: [[COMPAÑERO, "Compañero", 1500]] });
-    s.cierre();
-
-    const evaluacion = evaluar({ matches: s.partidas(), cutoffs: null });
-
-    expect(de(evaluacion, "LOW_DIVISION_TEAM_GAME")).toHaveLength(0);
-    // Lo dice aunque no haya ninguna partida de equipo: quien lee el resumen tiene
-    // que saber que hay una regla sin evaluar, no deducirlo de que no salió.
-    expect(evaluacion.globalWarnings.some((w) => w.includes("R5"))).toBe(true);
   });
 });
 
 describe("rachas abiertas y cierre de torneo", () => {
   it("un tramo que llega al final de la secuencia no avisa todavía", () => {
-    // R4 y R5 tienen umbral 1, así que su única partida con el flag es el último
-    // tramo de la secuencia: avisa cuando llega la siguiente clasificatoria.
+    // Un tramo que llega al final de la secuencia está **abierto**: avisa cuando
+    // llegue la siguiente clasificatoria, que es justo lo que significa "la racha
+    // se rompe".
     const s = secuencia();
-    const partida = s.equipo({
-      selfRating: 1500,
-      teammates: [[COMPAÑERO, "Compañero", 2100]],
-    });
+    s.conCompanero(3);
 
     const evaluacion = evaluar({ matches: s.partidas() });
 
     expect(evaluacion.alerts).toHaveLength(0);
     expect(evaluacion.openStreaks).toHaveLength(1);
     expect(evaluacion.openStreaks[0]).toMatchObject({
-      rule: "TEAMMATE_ELO_GAP",
-      count: 1,
-      threshold: 1,
-      lastGameId: partida.gameId,
+      rule: "REPEATED_TEAMMATE_STREAK",
+      count: 3,
+      threshold: 3,
+      lastGameId: s.partidas().at(-1)?.gameId,
     });
   });
 
@@ -716,17 +421,17 @@ describe("rachas abiertas y cierre de torneo", () => {
     // Sin este caso, una racha que acaba con la última partida del torneo no se
     // avisaría nunca.
     const s = secuencia();
-    s.equipo({ selfRating: 1500, teammates: [[COMPAÑERO, "Compañero", 2100]] });
+    s.conCompanero(3);
 
     const evaluacion = evaluar({ matches: s.partidas(), now: DESPUES });
 
-    expect(de(evaluacion, "TEAMMATE_ELO_GAP")[0]?.kind).toBe("STREAK_AT_TOURNAMENT_END");
+    expect(de(evaluacion, "REPEATED_TEAMMATE_STREAK")[0]?.kind).toBe("STREAK_AT_TOURNAMENT_END");
     expect(evaluacion.closedAtTournamentEnd).toBe(1);
   });
 
   it("con la ventana abierta por la derecha el torneo no se cierra nunca", () => {
     const s = secuencia();
-    s.equipo({ selfRating: 1500, teammates: [[COMPAÑERO, "Compañero", 2100]] });
+    s.conCompanero(3);
 
     const evaluacion = evaluar({
       matches: s.partidas(),
@@ -740,12 +445,12 @@ describe("rachas abiertas y cierre de torneo", () => {
 
   it("un tramo que se rompió antes no se vuelve a avisar por el cierre", () => {
     const s = secuencia();
-    s.equipo({ selfRating: 1500, teammates: [[COMPAÑERO, "Compañero", 2100]] });
+    s.conCompanero(3);
     s.cierre();
 
     const evaluacion = evaluar({ matches: s.partidas(), now: DESPUES });
 
-    expect(de(evaluacion, "TEAMMATE_ELO_GAP")[0]?.kind).toBe("STREAK_CLOSED");
+    expect(de(evaluacion, "REPEATED_TEAMMATE_STREAK")[0]?.kind).toBe("STREAK_CLOSED");
     expect(evaluacion.closedAtTournamentEnd).toBe(0);
   });
 });
@@ -770,9 +475,9 @@ describe("lo que degrada sin romper", () => {
     // R3 exige 3 y solo hay 2 legibles: no se acusa a nadie de una secuencia que no
     // se pudo leer entera.
     expect(de(evaluacion, "REPEATED_TEAMMATE_STREAK")).toHaveLength(0);
-    // R3, R4 y R5 releen el payload por su cuenta, así que una partida ilegible se
-    // cuenta una vez por cada regla de equipo que la habría mirado.
-    expect(evaluacion.unreadableMatches).toBe(3);
+    // R3 es la única regla que relee el payload, así que la partida ilegible se
+    // cuenta una vez.
+    expect(evaluacion.unreadableMatches).toBe(1);
     expect(evaluacion.warnings.some((w) => w.includes("rawJson ilegible"))).toBe(true);
   });
 
@@ -798,7 +503,7 @@ describe("idempotencia", () => {
     const s = secuencia();
     s.solo({ durationSeconds: 100 });
     s.solo({ durationSeconds: 100 });
-    s.equipo({ selfRating: 1500, teammates: [[COMPAÑERO, "Compañero", 2100]] });
+    s.conCompanero(3);
     s.cierre();
 
     const primera = evaluar({ matches: s.partidas() }).alerts.map((a) => a.dedupeKey);

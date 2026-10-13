@@ -14,6 +14,7 @@ import {
   type AggregatedRow,
   type ScoringWindow,
 } from "@/lib/scoring";
+import type { TeamTierContext } from "@/lib/ranked-match";
 
 /**
  * El motor de puntos, en lo que se puede comprobar sin base de datos.
@@ -322,40 +323,49 @@ describe("desempate de la clasificación", () => {
     matches,
   });
 
-  it("ordena por total y luego por victorias", () => {
-    const filas = [fila(3, 10, 2, 8), fila(1, 20, 1, 9), fila(2, 10, 5, 9)];
+  const orden = (filas: ReturnType<typeof fila>[]) =>
+    [...filas].sort(compareStandings).map((f) => f.profileId);
 
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2, 3]);
+  it("ordena por total descendente", () => {
+    expect(orden([fila(3, 10, 2, 8), fila(1, 20, 1, 9), fila(2, 5, 5, 9)])).toEqual([1, 3, 2]);
   });
 
-  it("a igual total y victorias gana el mejor porcentaje de victorias", () => {
-    // 3/4 (0.75) va delante de 3/5 (0.60), con las mismas victorias y el mismo total.
-    const filas = [fila(2, 10, 3, 5), fila(1, 10, 3, 4)];
-
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2]);
+  it("a igual total decide la tasa de victorias, y va antes que las victorias", () => {
+    // 3/4 (0,75) por delante de 4/6 (0,67): el segundo gana más partidas y aun así
+    // queda detrás. Es el cambio de orden de la regla: antes decidían las
+    // victorias y ganaba el de 4.
+    expect(orden([fila(2, 10, 4, 6), fila(1, 10, 3, 4)])).toEqual([1, 2]);
   });
 
-  it("el winrate va antes que `profileId`: gana el mejor ratio aunque tenga id mayor", () => {
-    const filas = [fila(1, 10, 3, 5), fila(9, 10, 3, 4)];
-
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([9, 1]);
+  it("a igual total y tasa deciden las victorias", () => {
+    // Las dos tasas son 0,5: 3/6 frente a 2/4.
+    expect(orden([fila(2, 10, 2, 4), fila(1, 10, 3, 6)])).toEqual([1, 2]);
   });
 
-  it("mismo total, victorias y partidas: el winrate no decide y cierra `profileId`", () => {
-    // Con los mismos números el producto cruzado da 0 y el orden lo fija
-    // `profileId`, que es único.
-    const filas = [fila(2, 10, 3, 5), fila(1, 10, 3, 5)];
-
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2]);
+  it("a igual total, tasa y victorias deciden las partidas jugadas", () => {
+    // Dos con 0 victorias: la tasa empata (0) y gana quien más partidas jugó.
+    expect(orden([fila(2, 0, 0, 0), fila(5, 0, 0, 4)])).toEqual([5, 2]);
   });
 
-  it("con `matches` 0 el winrate no rompe nada y decide `profileId`", () => {
-    // Un aprobado sin partidas tiene fila con `matches` 0, así que el comparador
-    // se defiende del 0 en vez de producir `NaN` (que ordenaría de forma no
-    // determinista).
-    const filas = [fila(5, 0, 0, 0), fila(2, 0, 0, 0)];
+  it("la tasa va antes que `profileId`: gana el mejor ratio aunque tenga id mayor", () => {
+    expect(orden([fila(1, 10, 3, 5), fila(9, 10, 3, 4)])).toEqual([9, 1]);
+  });
 
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([2, 5]);
+  it("misma tupla: el comparador cierra en `profileId`", () => {
+    // Con los mismos números el comparador no distingue —en la clasificación
+    // comparten puesto—, así que el orden de presentación lo fija `profileId`.
+    expect(orden([fila(2, 10, 3, 5), fila(1, 10, 3, 5)])).toEqual([1, 2]);
+  });
+
+  it("con `matches` 0 el comparador no produce `NaN`", () => {
+    // Un aprobado sin partidas tiene fila con `matches` 0. El producto cruzado vale
+    // 0 —no `NaN`, que ordenaría de forma no determinista—, así que la tupla
+    // empata y el orden lo cierra `profileId`.
+    const sinPartidas = fila(5, 0, 0, 0);
+    const otraSinPartidas = fila(2, 0, 0, 0);
+
+    expect(compareStandings(sinPartidas, otraSinPartidas)).toBe(3);
+    expect(orden([sinPartidas, otraSinPartidas])).toEqual([2, 5]);
   });
 });
 
@@ -416,19 +426,50 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
     expect(filas.map((f) => f.profileId).sort((x, y) => x - y)).toEqual([11, 22, 33]);
   });
 
-  it("los puestos son densos 1..N", () => {
+  it("sin empates los puestos son 1..N", () => {
     const filas = rankApprovedPlayers(
       [
         { id: "a", profileId: 1 },
         { id: "b", profileId: 2 },
         { id: "c", profileId: 3 },
       ],
-      new Map([["c", agregado({ matchPoints: 4, wins: 2, matches: 2 })]]),
+      new Map([
+        ["c", agregado({ matchPoints: 4, wins: 2, matches: 2 })],
+        ["b", agregado({ matchPoints: 2, wins: 1, matches: 3 })],
+      ]),
       new Map(),
       DEFAULT_RULESET,
     );
 
+    expect(filas.map((f) => f.playerId)).toEqual(["c", "b", "a"]);
     expect(filas.map((f) => f.rank)).toEqual([1, 2, 3]);
+  });
+
+  it("los empates comparten puesto y se saltan el hueco (1, 2, 2, 4)", () => {
+    // `b` y `c` tienen la misma tupla (mismo total, misma tasa, mismas victorias y
+    // mismas partidas), así que comparten el puesto 2 y el 3 queda vacío.
+    const filas = rankApprovedPlayers(
+      [
+        { id: "a", profileId: 1 },
+        { id: "b", profileId: 2 },
+        { id: "c", profileId: 3 },
+        { id: "d", profileId: 4 },
+      ],
+      new Map([
+        ["a", agregado({ matchPoints: 4, wins: 2, matches: 2 })],
+        ["b", agregado({ matchPoints: 2, wins: 1, matches: 2 })],
+        ["c", agregado({ matchPoints: 2, wins: 1, matches: 2 })],
+      ]),
+      new Map(),
+      DEFAULT_RULESET,
+    );
+
+    expect(filas.map((f) => [f.playerId, f.rank])).toEqual([
+      ["a", 1],
+      ["b", 2],
+      ["c", 2],
+      ["d", 4],
+    ]);
   });
 
   it("los puntos de objetivos se suman a quien los tiene", () => {
@@ -467,8 +508,8 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
   });
 
   it("el orden respeta `compareStandings`", () => {
-    // Mismo total: gana quien tiene más victorias; con las mismas, mejor winrate;
-    // y con lo mismo, `profileId` ascendente.
+    // Mismo total: gana la mejor tasa de victorias; con la misma, más victorias; y
+    // con lo mismo, más partidas. `sinPartidas` cierra la tabla con 0 puntos.
     const filas = rankApprovedPlayers(
       [
         { id: "sinPartidas", profileId: 9 },
@@ -495,29 +536,43 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
 });
 
 describe("qué cuenta como partida clasificatoria", () => {
+  /**
+   * Contexto de equipos **sin cortes**: la condición de compañeros no se puede
+   * comprobar, así que estos casos miden las otras cinco. La condición de equipos
+   * tiene sus propias comprobaciones en `ranked-match.test.ts`, que es donde vive.
+   */
+  const SIN_EQUIPOS: TeamTierContext = { profileId: 9_000_001, cutoffs: null };
+
   // El `null` es el caso de toda la fila que ya estaba en la base cuando se añadió
   // `Player.registeredAt`: cuenta desde el principio de la ventana.
   it("una partida resuelta, rankeada, dentro de la ventana y no revertida cuenta", () => {
-    expect(countsAsRanked(partida(), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida(), VENTANA, null, SIN_EQUIPOS)).toBe(true);
   });
 
   it("una partida en curso no cuenta, ni a favor ni en contra", () => {
     // Sin `finishedAt` la API todavía no ha publicado el desenlace.
-    expect(countsAsRanked(partida({ finishedAt: null }), VENTANA, null)).toBe(false);
+    expect(countsAsRanked(partida({ finishedAt: null }), VENTANA, null, SIN_EQUIPOS)).toBe(false);
     // Y sin `result` tampoco, que es el mismo hecho por el otro lado.
-    expect(countsAsRanked(partida({ result: null }), VENTANA, null)).toBe(false);
+    expect(countsAsRanked(partida({ result: null }), VENTANA, null, SIN_EQUIPOS)).toBe(false);
   });
 
   it("una partida revertida deja de contar aunque siga en la tabla", () => {
     expect(
-      countsAsRanked(partida({ revertedAt: new Date("2026-09-21T00:00:00Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ revertedAt: new Date("2026-09-21T00:00:00Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(false);
   });
 
   it("solo cuentan las familias ranked del ruleset", () => {
-    expect(countsAsRanked(partida({ mode: "rm_team" }), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida({ mode: "rm_team" }), VENTANA, null, SIN_EQUIPOS)).toBe(true);
     for (const modo of ["rm_1v1", "qm_ffa", "ew_1v1", "custom_8v8", null]) {
-      expect(countsAsRanked(partida({ mode: modo }), VENTANA, null), String(modo)).toBe(false);
+      expect(countsAsRanked(partida({ mode: modo }), VENTANA, null, SIN_EQUIPOS), String(modo)).toBe(
+        false,
+      );
     }
   });
 
@@ -525,37 +580,65 @@ describe("qué cuenta como partida clasificatoria", () => {
     // Lo que decide es cuándo se jugó, no cuándo se publicó el resultado: una
     // partida empezada el último día puede terminar después y sigue contando.
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-09-15T00:00:00.000Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-09-15T00:00:00.000Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(true);
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-10-15T00:00:00.000Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-10-15T00:00:00.000Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(false);
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-10-14T23:59:59.999Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-10-14T23:59:59.999Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(true);
   });
 
   it("con `to` a `null` la ventana está abierta por la derecha", () => {
     const abierta: ScoringWindow = { from: "2026-09-15T00:00:00.000Z", to: null };
 
-    expect(countsAsRanked(partida({ startedAt: new Date("2030-01-01T00:00:00Z") }), abierta, null)).toBe(
-      true,
-    );
+    expect(
+      countsAsRanked(
+        partida({ startedAt: new Date("2030-01-01T00:00:00Z") }),
+        abierta,
+        null,
+        SIN_EQUIPOS,
+      ),
+    ).toBe(true);
   });
 
   it("una victoria cuenta lo mismo que una derrota", () => {
     // La clasificación cuenta `wins` y `matches` por separado: perder una
     // clasificatoria no puede restar puntos, solo no sumarlos.
-    expect(countsAsRanked(partida({ result: MatchResult.LOSS }), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida({ result: MatchResult.LOSS }), VENTANA, null, SIN_EQUIPOS)).toBe(
+      true,
+    );
   });
 
   it("con `registeredAt` el corte sube y las partidas anteriores dejan de contar", () => {
     // `partida()` arranca el 20 de septiembre a las 12:00, así que con el alta de
     // esa misma medianoche deja de contar y con la del 19 sigue contando.
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.000Z"))).toBe(true);
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.001Z"))).toBe(false);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.000Z"), SIN_EQUIPOS),
+    ).toBe(true);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.001Z"), SIN_EQUIPOS),
+    ).toBe(false);
     // Un alta anterior a la ventana es lo mismo que no tener fecha: es el caso de
     // todo el que ya estaba inscrito.
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-01T00:00:00.000Z"))).toBe(true);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-01T00:00:00.000Z"), SIN_EQUIPOS),
+    ).toBe(true);
   });
 });

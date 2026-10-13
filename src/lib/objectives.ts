@@ -1,6 +1,7 @@
 import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
+import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { CIVILIZATIONS, CIVILIZATION_IDS } from "@/lib/civs";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { isRecord } from "@/lib/json";
@@ -590,7 +591,10 @@ type ObjectiveMatchRow = {
  * `rankedMatchSql()`, el mismo predicado que aplica el `UPDATE` de `Match.points`
  * y el agregado de la clasificación (`src/lib/ranked-match.ts`). Así los
  * objetivos cuentan exactamente las mismas partidas que las victorias, incluido el
- * **corte de inscripción**, el final de la ventana y la marca de revertida.
+ * **corte de inscripción**, el final de la ventana, la marca de revertida y la
+ * condición de compañeros de las partidas de equipo. Los cortes rating →
+ * subdivisión que esa última necesita los recibe **como argumento**: este módulo no
+ * lee `Setting` (los lee `scoring.ts`, una vez por pasada, igual que el ruleset).
  *
  * `map` y `durationSeconds` entran porque los necesitan `por-tierra-y-agua`,
  * `agresor` y `estratega`; antes no se leían. Los `finishedAt` viajan como
@@ -598,7 +602,7 @@ type ObjectiveMatchRow = {
  * de la sesión al cruzar los tiempos. `at time zone 'UTC'` hace falta porque
  * Prisma guarda los `DateTime` como timestamp sin zona interpretado en UTC.
  */
-function objectiveRowsQuery(ruleset: ScoringRuleset): Prisma.Sql {
+function objectiveRowsQuery(ruleset: ScoringRuleset, cutoffs: LadderCutoffsTable | null): Prisma.Sql {
   return Prisma.sql`
     select p."id" as "playerId",
            p."profileId" as "profileId",
@@ -618,7 +622,7 @@ function objectiveRowsQuery(ruleset: ScoringRuleset): Prisma.Sql {
     from "Match" m
     join "Player" p on p."id" = m."playerId"
     where p."status" = 'APPROVED'
-      and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window)}
+      and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window, cutoffs)}
     order by p."id", m."finishedAt", m."gameId"
   `;
 }
@@ -866,17 +870,20 @@ function aggregatePlayer(
  * Partidas clasificatorias → agregados por jugador, listos para los objetivos.
  *
  * Una sola consulta y ninguna por fila: 1300 partidas hoy y decenas de miles en el
- * peor caso, todo cabe en el mismo barrido.
+ * peor caso, todo cabe en el mismo barrido. Los `cutoffs` son los de la condición
+ * de equipos del predicado y los pasa quien llama (el motor de puntos los ha leído
+ * de `Setting` una sola vez por pasada).
  */
 export async function loadObjectivePlayers(
   client: ObjectiveQueryClient,
   ruleset: ScoringRuleset,
+  cutoffs: LadderCutoffsTable | null,
 ): Promise<PlayerAggregate[]> {
   if (ruleset.modes.length === 0) {
     return [];
   }
 
-  const rows = await client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset));
+  const rows = await client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset, cutoffs));
   const byPlayer = new Map<string, { meta: PlayerMeta; rows: ObjectiveMatchRow[] }>();
 
   for (const row of rows) {

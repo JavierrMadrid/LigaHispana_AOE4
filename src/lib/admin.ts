@@ -445,12 +445,13 @@ function readSort<K extends string>(
  * ## El detalle de cada columna
  *
  * - `sujeto` usa los **nulos al final en los dos sentidos**, no solo en ascendente: las
- *   reglas sin sujeto (R1, R4 y R5) son `null`, y en descendente mezclarlas con los
- *   nombres sacaría las alertas sin sujeto por delante de todo.
+ *   reglas sin sujeto (R1 y las dos retiradas) son `null`, y en descendente mezclarlas con
+ *   los nombres sacaría las alertas sin sujeto por delante de todo.
  * - `regla` ordena por el **enum**, y en Postgres un enum se ordena por el orden de sus
  *   valores en el esquema, no alfabéticamente por la etiqueta. Aquí eso sale bien: el
- *   esquema los declara en el orden R1, R2, R3, R4 y R5, así que ordenar por regla
- *   agrupa por familia de reglas, que es como se explican.
+ *   esquema los declara en el orden de las reglas de comportamiento —las retiradas entre
+ *   ellas, para agrupar las familias— y luego las de estado, así que ordenar por regla
+ *   agrupa por familia, que es como se explican.
  * - `jugador` ordena por el nombre y con la **intercalación de Postgres**, que puede no
  *   coincidir con cómo se lee el alfabeto español. No hay forma mejor sin arrastrar el
  *   nombre a la tabla de alertas o ordenarlo en memoria.

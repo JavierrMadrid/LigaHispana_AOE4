@@ -20,6 +20,7 @@ Definen la competición. No se pueden incumplir.
 | Se compite en la **ladder *ranked***: 1v1 y ranked por equipos. El *quick match*, las partidas personalizadas y el resto de modos no cuentan. | — |
 | Solo puntúa la partida **resuelta**: una en curso no cuenta. | — |
 | Solo cuentan las partidas **dentro de las fechas del torneo** y **posteriores a la inscripción** del jugador. | — |
+| **Equipos equilibrados**: una partida por equipos solo puntúa si ningún compañero está a **dos escalones o más** de división del jugador (por encima o por debajo). El escalón es la división, sin subrango. | — |
 | Los puntos son **2 por victoria** clasificatoria más los **82 objetivos** ([puntuación](./PUNTUACION.md), [objetivos](./OBJETIVOS.md)). | — |
 
 ### De participación
@@ -47,7 +48,6 @@ organización; las demás las comprueba la organización.
 | **Historial público**: mantener el historial de partidas de la cuenta en público. | Alerta de historial no público |
 | **Jugar hasta el final**: no abandonar ni perder a propósito para manipular el elo. | Alerta de partidas cortas |
 | **Sin rivales repetidos**: no repetir rival en 1v1 para acumular victorias. | Alerta de rival repetido |
-| **Equipos equilibrados**: no jugar por equipos con compañeros de elo muy superior a la propia, ni en una división muy distinta de la propia (por encima o por debajo). | Alertas de brecha de elo y de equipo en otra división |
 | **Partidas verificables**: las partidas de ladder deben llegarnos y poder verificarse. | Alerta de partidas de ladder que no llegan |
 
 **Manipular el elo está prohibido.** Las derrotas no restan, así que dejarse perder o abandonar para

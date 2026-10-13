@@ -104,9 +104,9 @@ export const ALERTS_DIVISION_CUTOFFS_KEY = "alerts.divisionCutoffs";
  * Cortes cacheados, ya validados. `null` si no hay ninguno o si lo que hay
  * guardado no sirve.
  *
- * Devolver `null` (y no un objeto vacío) es lo que permite que R5 se omita con
- * un aviso claro: "no hay cortes" y "hay cortes pero no de esta ladder" son el
- * mismo hueco para el motor, y se dicen igual.
+ * Devolver `null` (y no un objeto vacío) es lo que permite distinguir "no hay
+ * cortes" de "hay cortes y no de esta familia" y decir en el rastro del recálculo
+ * que la condición de equipos no se ha podido aplicar.
  */
 export async function readDivisionCutoffs(
   client: AlertsSettingWriter = db,

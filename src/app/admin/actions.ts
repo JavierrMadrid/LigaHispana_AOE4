@@ -9,6 +9,7 @@ import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/e
 import type { CampoEditado } from "@/lib/admin-actions";
 import { puntos, recordAdminAction } from "@/lib/admin-actions";
 import { reevaluatePlayerAlerts } from "@/lib/alerts/evaluate";
+import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { requireAdmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
@@ -1426,6 +1427,12 @@ type MatchForScoring = {
    * clasificatoria y se podría marcar para siempre.
    */
   registeredAt: Date | null;
+  /**
+   * El payload de la partida (`Match.rawJson`). Es lo que necesita la condición de
+   * equipos: sin él no se puede ver si algún compañero estaba a dos escalones, y
+   * entonces la partida cuenta (y se puede revertir).
+   */
+  rawJson: unknown;
   playerName: string;
   playerProfileId: number;
 };
@@ -1539,6 +1546,7 @@ async function setMatchReverted(
         result: true,
         startedAt: true,
         finishedAt: true,
+        rawJson: true,
         player: { select: { name: true, profileId: true, registeredAt: true } },
       },
     });
@@ -1560,6 +1568,7 @@ async function setMatchReverted(
             // `countsAsRanked()` lo toma como un dato más de la partida y no como
             // una relación.
             registeredAt: row.player.registeredAt,
+            rawJson: row.rawJson,
             playerName: row.player.name,
             playerProfileId: row.player.profileId,
           };
@@ -1590,7 +1599,7 @@ async function setMatchReverted(
    * respuesta en los dos sentidos**: solo tiene sentido tocar una partida que cuenta.
    * Al revertir, porque es lo que se le quita; al restaurar, porque es lo que vuelve.
    * Se pregunta siempre con `revertedAt: null`, que es lo que deja la decisión en las
-   * otras cuatro condiciones de la regla.
+   * otras cinco condiciones de la regla.
    *
    * Sin esta guarda, un `FormData` hecho a mano podría dejar marcada para siempre una
    * partida que nunca llegó a puntuar, y el admin vería "revertida" en el histórico de
@@ -1601,12 +1610,20 @@ async function setMatchReverted(
    * Que el criterio sea el mismo en ambos sentidos es deliberado. Con la guarda
    * invertida al restaurar, ninguna partida clasificatoria se podía devolver: se
    * exigía que no contara. El revert quedaba sin vuelta desde el panel.
+   *
+   * La guarda es la **regla entera**, condición de equipos incluida: una partida
+   * de equipo con un compañero a dos escalones no puntúa, así que no hay nada que
+   * revertir ni que devolver en ella. Los cortes se leen aquí, una vez por clic, y
+   * sin ellos la partida cuenta (como en el motor), así que la guarda no puede
+   * bloquear un revert que sí toca.
    */
   const ruleset = await readRuleset();
+  const cutoffs = await readDivisionCutoffs();
   const contariaSinMarca = countsAsRanked(
     { ...match, revertedAt: null },
     ruleset.window,
     match.registeredAt,
+    { profileId: match.playerProfileId, cutoffs },
   );
 
   if (!contariaSinMarca) {

@@ -65,14 +65,20 @@ enum AdminActionType {
 /// Qué comportamiento anómalo de un participante ha detectado el motor.
 ///
 /// Deliberadamente corto y **fijo en el código**: son las condiciones que el
-/// cliente hoaxó (partidas cortas, rival o compañero repetido, brecha de elo
-/// con el equipo y equipo en una división muy distinta de la del jugador, más las
-/// dos de la transparencia del historial). Lo que sí
+/// cliente pactó (partidas cortas, rival o compañero repetido, más las tres de
+/// estado: la transparencia del historial, las partidas de ladder que no llegan y
+/// la pertenencia al servidor de Discord). Lo que sí
 /// es configurable son los umbrales, que viven en `Setting["alerts.ruleset"]`:
 /// añadir un comportamiento nuevo exige un cambio de esquema, y añadir un umbral
 /// no. Cuando haga falta un comportamiento nuevo, se añade el valor al enum y la
 /// frase en `src/lib/alerts/rules.ts`; el `switch` de ese módulo es exhaustivo
 /// para que un valor sin frase no pueda salir a la base.
+///
+/// **Dos valores son legado**: `TEAMMATE_ELO_GAP` y `LOW_DIVISION_TEAM_GAME` se
+/// retiraron al convertir su caso en una condición de puntuación (una partida por
+/// equipos con un compañero a dos escalones o más **no cuenta**; ver
+/// `src/lib/ranked-match.ts`). Se quedan porque hay filas ya escritas con ellos y
+/// el panel las pinta: lo que no puede borrarse es su etiqueta ni su frase.
 ///
 /// Los tres últimos no miran las partidas que ya tenemos, sino **el estado del
 /// jugador fuera de AoE4World**: que el toggle "Share History" esté en "Public",
@@ -90,7 +96,9 @@ enum AlertRule {
   REPEATED_OPPONENT_TOTAL
   REPEATED_TEAMMATE_STREAK
   REPEATED_TEAMMATE_TOTAL
+  /// Legado: regla retirada. Su caso es la condición de equipos de la puntuación.
   TEAMMATE_ELO_GAP
+  /// Legado: regla retirada. Su caso es la condición de equipos de la puntuación.
   LOW_DIVISION_TEAM_GAME
   HISTORY_NOT_PUBLIC
   MISSING_LADDER_MATCHES
@@ -437,9 +445,11 @@ model PlayerScore {
   ruleSetVersion Int
   player         Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-  // Puesto con el desempate ya aplicado. Se guarda porque el desempate acaba en
-  // datos que no están en la base de datos (el rating viene de la API), así que
-  // el orden final no se puede resolver en SQL.
+  // Puesto de competición (1, 2, 2, 4): dos filas con el mismo total, tasa de
+  // victorias, victorias y partidas comparten `rank` y el hueco del puesto
+  // compartido se pierde. Se guarda porque el desempate completo no se resuelve en
+  // SQL: la tasa se compara con producto cruzado y el orden de presentación
+  // dentro de un empate cierra en `Player.profileId`.
   rank    Int
   total   Int @default(0)
   wins    Int @default(0)
@@ -463,7 +473,8 @@ model PlayerScore {
   // Player (columna más a la izquierda), que es lo que hace barato el borrado en
   // cascada al eliminar un jugador.
   @@id([playerId, ruleSetVersion])
-  // La consulta más caliente del sitio: la clasificación, sin `sort`.
+  // La consulta más caliente del sitio: la clasificación, cuyo orden por `rank`
+  // sale del índice (el desempate de un puesto compartido es `Player.profileId`).
   @@index([ruleSetVersion, rank])
 }
 
@@ -629,8 +640,8 @@ model AdminAction {
 /// eso es un `createMany({ skipDuplicates: true })` sobre un único índice único.
 /// La clave se compone en código porque en Postgres los `NULL` de un índice
 /// único **no colisionan** (dos filas con `subjectProfileId = NULL` pasarían
-/// ambas), y el sujeto es opcional: las reglas sin sujeto (partidas cortas,
-/// brecha de elo, división baja) lo tienen a `null`. Un índice único compuesto
+/// ambas), y el sujeto es opcional: las reglas sin sujeto (partidas cortas) lo
+/// tienen a `null`. Un índice único compuesto
 /// con columnas nullable no sujetaría lo que parece sujetar, así que la clave es
 /// una columna de texto no nula que se construye siempre con los mismos
 /// ingredientes y cuyo contenido es determinista.
