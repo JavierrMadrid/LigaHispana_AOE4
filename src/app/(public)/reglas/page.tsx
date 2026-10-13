@@ -72,6 +72,16 @@ export default function RulesPage() {
                 , jugadas dentro de las fechas del torneo y después de la
                 inscripción del jugador.
               </p>
+              <p>
+                En las partidas por equipos solo cuentan las que se juegan con{" "}
+                <strong className="font-semibold text-foreground">
+                  equipos equilibrados
+                </strong>
+                : si algún compañero está a dos escalones o más de división del
+                jugador, por encima o por debajo, esa partida no puntúa para él.
+                El escalón es la división (bronce, plata, oro, platino, diamante
+                o conquistador), sin subrango.
+              </p>
             </div>
           </section>
 
@@ -157,22 +167,15 @@ export default function RulesPage() {
                 <strong className="font-semibold text-foreground">
                   Jugar hasta el final.
                 </strong>{" "}
-                Está prohibido abandonar o dejarse perder a propósito de forma continuada para
-                manipular el elo: bajar de elo a proposito para después ganar puntos contra rivales por debajo de tu nivel habitual.
+                Está prohibido abandonar o dejarse perder de forma continuada para
+                manipular el elo: bajar de elo para después ganar puntos contra
+                rivales por debajo de tu nivel habitual.
               </li>
               <li>
                 <strong className="font-semibold text-foreground">
                   Sin rivales repetidos.
                 </strong>{" "}
                 No se puede forzar para jugar contra el mismo rival en 1vs1 para acumular victorias de forma intencionada.
-              </li>
-              <li>
-                <strong className="font-semibold text-foreground">
-                  Equipos equilibrados.
-                </strong>{" "}
-                En partidas por equipos no se puede jugar con compañeros de elo
-                muy superior al de uno mismo, ni en una división muy distinta de la
-                propia (por encima o por debajo).
               </li>
             </ol>
 
@@ -181,8 +184,8 @@ export default function RulesPage() {
               con un sistema de alertas: la web revisa las partidas de forma
               automática y deja constancia de los comportamientos sospechosos
               recogidos en este reglamento (manipulación del elo, rivales
-              repetidos, equipos desequilibrados, historial no público, partidas
-              que no llegan o ausencia del Discord). Las alertas son avisos para
+              repetidos, historial no público, partidas que no llegan o
+              ausencia del Discord). Las alertas son avisos para
               que la organización revise cada caso: no son sanciones automáticas y
               la decisión final es siempre de la organización.
             </p>

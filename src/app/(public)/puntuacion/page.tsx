@@ -224,9 +224,28 @@ export default async function ScoringPage() {
                 >
                   -
                 </span>
+                <span>
+                  En las partidas por equipos, ningún compañero está a dos
+                  escalones o más de división del jugador.
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className="font-display font-semibold text-accent"
+                >
+                  -
+                </span>
                 <span>El jugador está aprobado.</span>
               </li>
             </ul>
+
+            <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
+              El escalón es la división (bronce, plata, oro, platino, diamante o
+              conquistador), sin el subrango I/II/III. Así, un jugador en oro
+              cuenta con compañeros en plata, oro o platino, y no con uno en
+              bronce ni con uno en diamante.
+            </p>
 
             <div className="mt-6">
               <RankedModesTable />
