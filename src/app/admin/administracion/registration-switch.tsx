@@ -1,5 +1,5 @@
 import { PendingButton } from "@/components/pending-button";
-import { setRegistrationOpen } from "./actions";
+import { setRegistrationOpen } from "@/app/admin/actions";
 
 /**
  * Interruptor del plazo de inscripción del torneo.
@@ -7,7 +7,8 @@ import { setRegistrationOpen } from "./actions";
  * Es la cara visible de `Setting["registration.open"]`: el mismo booleano que
  * aplica el servidor en el envío público (`registerPlayer`) y en el alta de este
  * panel (`createPlayer`). Aquí no decide nada por su cuenta; solo publica el
- * estado y ofrece el cambio.
+ * estado y ofrece el cambio. Vive en la subpestaña **Inscripciones** de
+ * Administración.
  *
  * El botón **nombra el cambio, no el estado**: con el plazo abierto dice "Cerrar
  * inscripciones" y con el cerrado "Abrir inscripciones", y el campo oculto lleva
@@ -23,8 +24,8 @@ import { setRegistrationOpen } from "./actions";
  * Es un componente de servidor: el `<form>` apunta a la Server Action y el
  * estado pendiente lo aporta `PendingButton` (`useFormStatus`), sin necesidad de
  * un componente de cliente propio. Tras escribir, la acción revalida
- * `/admin/configuracion`, `/admin` y `/participar`, así que el estado que se lee
- * aquí se refresca solo.
+ * `/admin/administracion/inscripciones`, `/admin` y `/participar`, así que el
+ * estado que se lee aquí se refresca solo.
  */
 export function RegistrationSwitch({ open }: { open: boolean }) {
   return (

@@ -247,8 +247,8 @@ de admins**. Hay dos papeles, con una regla cada uno.
 
 | Papel | Quién | Qué puede |
 |---|---|---|
-| Superadministrador | El correo de `SUPERADMIN_EMAIL`, y solo ese | Todo lo de un admin, más invitar, dar de baja y reactivar admins, deshacer sus acciones y mandar el aviso de prueba del bot |
-| Admin | Una fila **activa** de la tabla `Admin` | El panel entero salvo la gestión de admins, la reversión y la configuración de la edición |
+| Superadministrador | El correo de `SUPERADMIN_EMAIL`, y solo ese | Todo lo de un admin, más la configuración de la edición y las opciones de inscripción y donaciones, invitar, dar de baja y reactivar admins, deshacer sus acciones y mandar el aviso de prueba del bot |
+| Admin | Una fila **activa** de la tabla `Admin` | El panel entero salvo la gestión de admins, la reversión, la configuración de la edición y las opciones de inscripción y donaciones |
 
 - El superadministrador **no tiene fila**: se reconoce por la variable de entorno. Sin
   `SUPERADMIN_EMAIL`, **nadie** lo es (la app arranca igual y avisa una vez en el log), y la gestión
@@ -320,14 +320,19 @@ marca dice que la acción ya no está vigente.
 ## Configurar la edición
 
 La configuración de una edición vive en `Setting` y la cambia **solo el superadministrador** desde el
-panel (`/admin/administracion`). `/admin/configuracion` (inscripción y donaciones) sigue igual para los
-admins normales; esto es otra cosa: los documentos que describen la edición, sus reglas y a quién admite.
+panel (`/admin/administracion`): los documentos que describen la edición, sus reglas y a quién admite.
+La sección se organiza en subpestañas —Administradores, Edición, Puntuación, Inscripciones,
+Donaciones y Avisos—, y la **inscripción** y las **donaciones** son opciones solo del
+superadministrador que viven en sus subpestañas (`/admin/administracion/inscripciones` y
+`/admin/administracion/donaciones`), no en ninguna pantalla que vean los admins regulares.
 
 | Clave | Qué toca | Acción |
 |---|---|---|
 | `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento) | `saveEditionConfig` |
 | `scoring.ruleset` | Ventana, familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
 | `registration.countries` | Países admitidos en la inscripción, en el orden del catálogo | `saveCountries` |
+| `registration.open` | Si la inscripción está abierta | `setRegistrationOpen` |
+| `donations.matcherino` | Campaña de donaciones de Matcherino (banner y URL) | `setMatcherinoDonations` |
 
 - **La validación es del servidor y va antes de escribir**: un nombre vacío, un importe que no es un
   entero de euros, un emblema que no es `http(s)` ni una ruta del sitio, un color que no es `#rrggbb` o

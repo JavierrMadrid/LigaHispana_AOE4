@@ -16,13 +16,14 @@ import {
 import { reevaluatePlayerAlerts } from "@/lib/alerts/evaluate";
 import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requireSuperadmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { logDatabaseFailure, uniqueViolationOn } from "@/lib/db-errors";
-import { parseMatcherinoDonations } from "@/lib/donations";
+import { parseMatcherinoDonations, type MatcherinoDonations } from "@/lib/donations";
 import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
 import {
+  campoSiCambia,
   camposQueCambian,
   DISCORD_USERNAME_TAKEN_ERROR,
   parsePlayerField,
@@ -34,6 +35,7 @@ import { rankedMatchWhere } from "@/lib/ranked-match";
 import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
 import {
+  readMatcherinoDonations,
   readRegistrationOpen,
   writeMatcherinoDonations,
   writeRegistrationOpen,
@@ -42,14 +44,17 @@ import {
 /**
  * Server Actions del panel de administración.
  *
- * Todas viven bajo `src/app/admin/**` a propósito, y todas empiezan por
- * `requireAdmin()`. Las dos cosas son la misma defensa:
+ * Todas viven bajo `src/app/admin/**` a propósito, y todas empiezan por una
+ * comprobación de permisos en el servidor: `requireAdmin()` las de gestión del panel,
+ * y `requireSuperadmin()` las dos opciones que solo puede tocar el superadministrador
+ * (el plazo de inscripción y la campaña de donaciones). Las dos cosas son la misma
+ * defensa:
  *
  * - El `matcher` del Proxy (`src/proxy.ts`) cubre `/admin/:path*`, y **excluir una
  *   ruta del `matcher` excluye también sus Server Functions**. Una acción fuera de
  *   `/admin` no se saltaría solo la comprobación optimista de la cookie: en el Proxy
- *   no se ejecutaría, así que su `requireAdmin()` ni siquiera llegaría a comprobar
- *   nada.
+ *   no se ejecutaría, así que su comprobación de permisos ni siquiera llegaría a
+ *   hacer nada.
  * - El Proxy solo mira cookies. La comprobación real es esta: una Server Action es
  *   un endpoint público y se puede llamar directamente con su id, sin pasar por
  *   ninguna página.
@@ -166,6 +171,18 @@ function frase(...partes: string[]): string {
     .map((parte) => parte.trim())
     .filter((parte) => parte !== "")
     .join(" ");
+}
+
+/**
+ * Un booleano como texto, para el `details` del rastro.
+ *
+ * `campoSiCambia` compara cadenas, y el `details` guarda primitivos: el valor de
+ * un interruptor se registra tal cual —"true" o "false"— y no como un booleano de
+ * verdad, para que la fila del historial se lea igual que la de la edición de un
+ * jugador. Es la misma conversión que `boolText()` en `administracion/actions.ts`.
+ */
+function boolText(value: boolean): string {
+  return value ? "true" : "false";
 }
 
 /**
@@ -887,9 +904,20 @@ export async function rejectPlayer(formData: FormData) {
  *
  * Es el interruptor manual del plazo: escribe `Setting["registration.open"]`, que
  * es lo que comprueban `registerPlayer` (formulario público) y `createPlayer`
- * (alta de admin). **No** se registra en `AdminAction` —igual que los cambios de
- * `scoring.ruleset`—: la fila de `Setting` ya lleva su `updatedAt` como rastro, y
- * el enum de acciones es corto a propósito.
+ * (alta de admin). Es una opción **solo del superadministrador**
+ * (`requireSuperadmin()`): el plazo decide quién puede inscribirse y no se deja al
+ * criterio de quien llame a la acción, que es un endpoint público.
+ *
+ * ## Deja rastro, y solo si cambia algo
+ *
+ * El `upsert` y la fila de `AdminAction` (`CONFIG_CHANGED`) van en la **misma
+ * transacción**: o se ve el cambio de plazo y su línea en el historial, o no se ve
+ * ninguno. El rastro lleva el campo con su valor de antes y el de después, igual
+ * que la edición de un jugador y que los demás cambios de configuración.
+ *
+ * Abrir el formulario y cerrarlo sin tocar nada no escribe ni el `upsert` ni la
+ * fila: se lee el estado actual antes de escribir y, si ya era el pedido, se sale
+ * sin dejar rastro.
  *
  * Lee el valor deseado de un campo `open` con `"true"`/`"false"`. Cualquier otra
  * cosa —incluido el campo ausente— se interpreta como `false`, que es el estado
@@ -900,22 +928,53 @@ export async function rejectPlayer(formData: FormData) {
  * se ve que no ha cambiado.
  */
 export async function setRegistrationOpen(formData: FormData): Promise<void> {
-  await requireAdmin();
+  const admin = await requireSuperadmin();
 
   const open = readField(formData, "open") === "true";
 
+  let antes: boolean;
+
   try {
-    await writeRegistrationOpen(open);
+    antes = await readRegistrationOpen();
+  } catch (error) {
+    logDatabaseFailure("admin/setRegistrationOpen/leer", error);
+
+    return;
+  }
+
+  const cambios = campoSiCambia(
+    boolText(antes),
+    boolText(open),
+    "registration.open",
+    "plazo de inscripción",
+  );
+
+  // El estado ya era este: no se escribe ni se deja rastro, que es lo mismo que
+  // hace `updatePlayer()` cuando el formulario se envía sin tocar nada.
+  if (cambios.length === 0) {
+    return;
+  }
+
+  try {
+    await db.$transaction(async (tx) => {
+      await writeRegistrationOpen(open, tx);
+
+      await recordAdminAction(tx, {
+        type: AdminActionType.CONFIG_CHANGED,
+        actorEmail: actorEmail(admin),
+        cambios,
+      });
+    });
   } catch (error) {
     logDatabaseFailure("admin/setRegistrationOpen", error);
 
     return;
   }
 
-  // El valor del interruptor se lee en tres sitios: la Configuración donde se
+  // El valor del interruptor se lee en tres sitios: la Administración donde se
   // cambia, el alta de `/admin`, que se deshabilita con el plazo cerrado, y el
   // formulario público.
-  revalidatePath("/admin/configuracion");
+  revalidatePath("/admin/administracion/inscripciones");
   revalidatePath("/admin");
   revalidatePath("/participar");
 }
@@ -943,9 +1002,9 @@ const DONATIONS_ENABLED_WITHOUT_URL_ERROR =
  * Activa o desactiva el banner de donaciones y guarda la URL de la campaña.
  *
  * Escribe `Setting["donations.matcherino"]`, que es lo que lee el layout público
- * para pintar el banner. Va **detrás de `requireAdmin()`**, como todas las de este
- * archivo: es un cambio de cara al público y no se puede dejar al criterio de quien
- * llame a la acción directamente.
+ * para pintar el banner. Va **detrás de `requireSuperadmin()`**: es un cambio de
+ * cara al público y no se deja al criterio de quien llame a la acción
+ * directamente.
  *
  * ## Un solo formulario, una foto completa
  *
@@ -963,18 +1022,30 @@ const DONATIONS_ENABLED_WITHOUT_URL_ERROR =
  * `AdminActionResult` para que el panel pueda enseñar el motivo; el `try` cubre
  * **solo** la escritura, como manda el patrón de este archivo.
  *
+ * ## Deja rastro, y solo si cambia algo
+ *
+ * El `upsert` y la fila de `AdminAction` (`CONFIG_CHANGED`) van en la **misma
+ * transacción**: o se ve el cambio de la campaña y su línea en el historial, o no
+ * se ve ninguno. El rastro lleva los dos campos —el banner y la dirección— con su
+ * valor de antes y el de después, igual que los demás cambios de configuración.
+ *
+ * Se lee la campaña actual antes de escribir y, si ya era la pedida, se sale sin
+ * escribir y sin rastro: abrir el formulario y cerrarlo sin tocar nada no puede
+ * dejar huella.
+ *
  * ## Qué revalida
  *
- * `/admin/configuracion`, donde está el formulario, y el layout de `(public)`, que es
- * quien pinta el banner: apagarlo o cambiarle la URL tiene que verse en la siguiente
- * visita sin desplegar. Las páginas públicas son `force-dynamic` y releen igualmente,
- * pero revalidar el layout es lo que invalida lo que envuelve.
+ * `/admin/administracion/donaciones`, donde está el formulario, y el layout de
+ * `(public)`, que es quien pinta el banner: apagarlo o cambiarle la URL tiene que
+ * verse en la siguiente visita sin desplegar. Las páginas públicas son
+ * `force-dynamic` y releen igualmente, pero revalidar el layout es lo que invalida
+ * lo que envuelve.
  */
 export async function setMatcherinoDonations(
   _prevState: AdminActionResult,
   formData: FormData,
 ): Promise<AdminActionResult> {
-  await requireAdmin();
+  const admin = await requireSuperadmin();
 
   const urlRaw = readField(formData, "url");
   const enabled = readField(formData, "enabled") === "true";
@@ -994,25 +1065,62 @@ export async function setMatcherinoDonations(
     return { status: "error", message: DONATIONS_ENABLED_WITHOUT_URL_ERROR };
   }
 
+  let antes: MatcherinoDonations;
+
   try {
-    await writeMatcherinoDonations(donations);
+    antes = await readMatcherinoDonations();
+  } catch (error) {
+    logDatabaseFailure("admin/setMatcherinoDonations/leer", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  const cambios = [
+    ...campoSiCambia(
+      boolText(antes.enabled),
+      boolText(donations.enabled),
+      "donations.matcherino.enabled",
+      "banner de donaciones",
+    ),
+    ...campoSiCambia(
+      antes.url,
+      donations.url,
+      "donations.matcherino.url",
+      "dirección de la campaña",
+    ),
+  ];
+
+  const message = donations.enabled
+    ? "Banner de donaciones activado."
+    : donations.url === ""
+      ? "Banner de donaciones desactivado."
+      : "Banner de donaciones desactivado. La dirección queda guardada por si la vuelves a activar.";
+
+  // La campaña ya era esta: sale como un acierto y no se escribe ni se deja rastro.
+  if (cambios.length === 0) {
+    return { status: "success", message };
+  }
+
+  try {
+    await db.$transaction(async (tx) => {
+      await writeMatcherinoDonations(donations, tx);
+
+      await recordAdminAction(tx, {
+        type: AdminActionType.CONFIG_CHANGED,
+        actorEmail: actorEmail(admin),
+        cambios,
+      });
+    });
   } catch (error) {
     logDatabaseFailure("admin/setMatcherinoDonations", error);
 
     return { status: "error", message: SAVE_FAILED_MESSAGE };
   }
 
-  revalidatePath("/admin/configuracion");
+  revalidatePath("/admin/administracion/donaciones");
   revalidatePath("/(public)", "layout");
 
-  return {
-    status: "success",
-    message: donations.enabled
-      ? "Banner de donaciones activado."
-      : donations.url === ""
-        ? "Banner de donaciones desactivado."
-        : "Banner de donaciones desactivado. La dirección queda guardada por si la vuelves a activar.",
-  };
+  return { status: "success", message };
 }
 
 /* -------------------------------------------------------------------------- */

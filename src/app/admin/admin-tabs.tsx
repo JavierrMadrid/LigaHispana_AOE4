@@ -15,7 +15,6 @@ const TABS: readonly AdminTab[] = [
   { href: "/admin/historial", label: "Historial de partidas" },
   { href: "/admin/alertas", label: "Alertas" },
   { href: "/admin/acciones", label: "Historial de acciones" },
-  { href: "/admin/configuracion", label: "Configuración" },
 ];
 
 /**

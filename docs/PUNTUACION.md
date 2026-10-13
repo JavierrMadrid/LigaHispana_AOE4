@@ -66,7 +66,7 @@ y los **objetivos activos**, de los que salen el recuento y el total que reparte
 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de resumen no se pinta y
 los párrafos caen a su forma genérica, en vez de enseñar los números de la edición anterior.
 
-En el panel (`/admin/administracion`) la ventana se escribe como **fecha y hora local de
+En el panel (`/admin/administracion/puntuacion`) la ventana se escribe como **fecha y hora local de
 Europe/Madrid** (`datetime-local`), que es la zona con la que la organización lee el torneo; el
 servidor la interpreta en Madrid y guarda el instante **ISO-8601 UTC**. El campo sigue aceptando un
 ISO con zona escrito a mano. `parseMadridLocalInstant()` / `formatMadridLocalInstant()`

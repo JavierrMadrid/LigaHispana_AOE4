@@ -133,9 +133,10 @@ El panel de administración (`/admin`) es solo para la organización, y tiene **
 - **Admin**: cualquier cuenta de la tabla `Admin` que esté **activa**. No puede tocar la lista de
   admins.
 
-Lo del superadministrador vive en la pestaña **Administración**, que solo él ve: ahí están la lista de
-admins, la configuración de la edición y las pruebas del canal de avisos. El resto del panel es igual
-para los dos papeles.
+Lo del superadministrador vive en la pestaña **Administración**, que solo él ve y que se organiza en
+subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Puntuación**,
+**Inscripciones** (el plazo y los países admitidos), **Donaciones** y **Avisos** (la prueba del canal
+de Discord). El resto del panel es igual para los dos papeles.
 
 El alta es **por invitación**: se escribe el correo en el panel y la persona recibe un enlace para
 fijar su contraseña (pasa por `/auth/confirm` y termina en `/login/establecer-contrasena`); un enlace

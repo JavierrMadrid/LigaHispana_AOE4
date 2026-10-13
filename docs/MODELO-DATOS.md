@@ -283,8 +283,8 @@ Claves vivas en producción, con quién las escribe:
 | `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |
 | `registration.countries` | Países que admite el formulario, en el orden del catálogo. | `npm run countries:seed` o el panel (**solo el superadministrador**), con `saveCountries` |
-| `registration.open` | Si la inscripción está abierta. | Panel de admin |
-| `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel de admin |
+| `registration.open` | Si la inscripción está abierta. | Panel (**solo superadministrador**), con `setRegistrationOpen`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
+| `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel (**solo superadministrador**), con `setMatcherinoDonations`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
 | `edition.config` | Configuración de la edición: nombre, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento). Versión 1 fija en código. | Panel de admin (**solo el superadministrador**) |
 | `edition.announcements` | Memoria de los avisos del torneo en Discord: cuándo se mandó el de comienzo y cuándo el de final (`startedAt`/`finishedAt`, o `null` si no se ha dado). Una marca puesta no se quita nunca, aunque la ventana se mueva. | Worker (`src/lib/edition-announcements.ts`) |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |

@@ -597,13 +597,20 @@ export async function readRegistrationOpen(): Promise<boolean> {
 }
 
 /**
- * Publica el plazo. La usa el interruptor de `/admin`.
+ * Publica el plazo. La usa el interruptor del panel.
  *
  * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
- * `Setting.updatedAt`, que es justo el rastro que deja el cambio.
+ * `Setting.updatedAt`.
+ *
+ * Acepta el cliente porque la acción la llama **dentro** de la transacción que
+ * escribe su rastro: el cambio de plazo y la fila de `AdminAction` (`CONFIG_CHANGED`)
+ * se confirman juntos, y no puede quedar un cambio sin su línea en el historial.
  */
-export async function writeRegistrationOpen(open: boolean): Promise<void> {
-  await db.setting.upsert({
+export async function writeRegistrationOpen(
+  open: boolean,
+  client: SettingWriter = db,
+): Promise<void> {
+  await client.setting.upsert({
     where: { key: REGISTRATION_OPEN_KEY },
     create: { key: REGISTRATION_OPEN_KEY, value: open },
     update: { value: open },
@@ -630,15 +637,22 @@ export async function readMatcherinoDonations(): Promise<MatcherinoDonations> {
 }
 
 /**
- * Publica la campaña de donaciones. La usa el formulario de `/admin`.
+ * Publica la campaña de donaciones. La usa el formulario del panel.
  *
  * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
- * `Setting.updatedAt`, que es justo el rastro que deja el cambio. Se escribe el
- * objeto entero (activación y URL juntos) porque el formulario del panel es una
- * foto completa de la campaña, igual que la edición de un jugador.
+ * `Setting.updatedAt`. Se escribe el objeto entero (activación y URL juntos) porque
+ * el formulario del panel es una foto completa de la campaña, igual que la edición
+ * de un jugador.
+ *
+ * Acepta el cliente porque la acción la llama **dentro** de la transacción que
+ * escribe su rastro: la campaña y la fila de `AdminAction` (`CONFIG_CHANGED`) se
+ * confirman juntas, y no puede quedar un cambio sin su línea en el historial.
  */
-export async function writeMatcherinoDonations(value: MatcherinoDonations): Promise<void> {
-  await db.setting.upsert({
+export async function writeMatcherinoDonations(
+  value: MatcherinoDonations,
+  client: SettingWriter = db,
+): Promise<void> {
+  await client.setting.upsert({
     where: { key: MATCHERINO_DONATIONS_KEY },
     create: { key: MATCHERINO_DONATIONS_KEY, value },
     update: { value },
