@@ -1,6 +1,8 @@
 import "server-only";
 
+import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { evaluateAlerts, type EvaluateAlertsResult } from "@/lib/alerts/evaluate";
+import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { checkDiscordMembership, describeDiscordChecks, type DiscordChecksResult } from "@/lib/discord/check";
 import { db } from "@/lib/db";
 import {
@@ -16,7 +18,7 @@ import {
   writeSyncRunTrace,
   type SyncRunTrace,
 } from "@/lib/settings";
-import { countsAsRanked } from "@/lib/ranked-match";
+import { countsAsRanked, type TeamTierContext } from "@/lib/ranked-match";
 import {
   recomputeScores,
   readRuleset,
@@ -127,8 +129,9 @@ export type SyncPlayerResult = {
    * (`finishedAt = null`) y esta pasada quedan resueltas cumpliéndola —da igual
    * la vía, el listado o el refetch de pendientes—. No es "filas tocadas": una
    * partida en curso que sigue en curso, una anterior al corte de inscripción o
-   * al inicio de la ventana, o de un modo que no puntúa, se guarda (o se
-   * refresca) pero **no** cuenta aquí. Es lo que suma `SyncSummary.newMatches`.
+   * al inicio de la ventana, de un modo que no puntúa o de un equipo
+   * desequilibrado se guarda (o se refresca) pero **no** cuenta aquí. Es lo que
+   * suma `SyncSummary.newMatches`.
    */
   matchesCounted: number;
   matchesUpdated: number;
@@ -156,9 +159,9 @@ export type SyncSummary = {
    * insertadas: la suma de `SyncPlayerResult.matchesCounted`. Cuenta las que se
    * insertan ya resueltas y cumplen la regla, más las que estaban en curso y han
    * quedado resueltas cumpliéndola. Una partida que se guarda pero no puntúa
-   * (en curso, fuera de la ventana o del corte de inscripción, modo que no
-   * puntúa) **no** suma aquí, aunque sí en `updatedMatches` o en el detalle del
-   * jugador. Ver `docs/OPERACION.md`.
+   * (en curso, fuera de la ventana o del corte de inscripción, de un modo que no
+   * puntúa o de un equipo desequilibrado) **no** suma aquí, aunque sí en
+   * `updatedMatches` o en el detalle del jugador. Ver `docs/OPERACION.md`.
    */
   newMatches: number;
   updatedMatches: number;
@@ -401,38 +404,47 @@ async function applyMatchUpdate(playerId: string, match: NormalizedMatch): Promi
  * worker. `NormalizedMatch` no lleva `revertedAt`: una fila que el worker acaba
  * de ver nunca está revertida —la marca la pone el panel sobre la fila guardada—,
  * así que se le pasa `null`. El filtro de familia de ladder es el de la regla
- * (las `RANKED_MODES`), el mismo que aplica el motor al puntuar.
+ * (las `RANKED_MODES`), el mismo que aplica el motor al puntuar, y `rawJson` va
+ * dentro del objeto de la partida porque es lo que necesita la condición de
+ * equipos.
  */
 function countsForTournament(
   match: NormalizedMatch,
   ruleset: Pick<ScoringRuleset, "window">,
   registeredAt: Date | null,
+  context: TeamTierContext,
 ): boolean {
-  return countsAsRanked({ ...match, revertedAt: null }, ruleset.window, registeredAt);
+  return countsAsRanked({ ...match, revertedAt: null }, ruleset.window, registeredAt, context);
 }
 
 /**
  * Cuántas de una lista de partidas **entran a contar para el torneo**.
  *
  * Es `countsForTournament()` fila a fila, y es pura: recibe las partidas
- * normalizadas, la ventana del ruleset y el `registeredAt` del jugador, y no
- * toca ni la base ni la red. Se prueba en
- * `tests/unit/lib/aoe4world/sync.test.ts`.
+ * normalizadas, la ventana del ruleset, el `registeredAt` del jugador y el
+ * contexto de equipos (`profileId` y cortes), y no toca ni la base ni la red. Se
+ * prueba en `tests/unit/lib/aoe4world/sync.test.ts`.
  *
  * Una partida cuenta solo si está **resuelta**, es de una familia rankeada,
- * empezó dentro del corte del jugador (`max(window.from, registeredAt)`) y antes
- * del fin de la ventana. Una fila en curso (`finishedAt === null`) no cuenta
- * todavía: contará en la pasada que la resuelva.
+ * empezó dentro del corte del jugador (`max(window.from, registeredAt)`), antes
+ * del fin de la ventana y —en equipos— con los compañeros a un escalón o menos.
+ * Una fila en curso (`finishedAt === null`) no cuenta todavía: contará en la
+ * pasada que la resuelva.
+ *
+ * Los cortes los lee el worker **una vez por pasada** y los pasa aquí: derivarlos
+ * es un trabajo de un solo día de 130 llamadas por familia, y sin ellos la partida
+ * cuenta (no se puede demostrar que el equipo esté desequilibrado).
  */
 export function countTournamentMatches(
   matches: readonly NormalizedMatch[],
   ruleset: Pick<ScoringRuleset, "window">,
   registeredAt: Date | null,
+  context: TeamTierContext,
 ): number {
   let counted = 0;
 
   for (const match of matches) {
-    if (countsForTournament(match, ruleset, registeredAt)) {
+    if (countsForTournament(match, ruleset, registeredAt, context)) {
       counted += 1;
     }
   }
@@ -456,6 +468,7 @@ async function persistMatches(
   matches: NormalizedMatch[],
   ruleset: Pick<ScoringRuleset, "window">,
   registeredAt: Date | null,
+  context: TeamTierContext,
 ): Promise<{ inserted: number; updated: number; counted: number }> {
   if (matches.length === 0) {
     return { inserted: 0, updated: 0, counted: 0 };
@@ -516,8 +529,8 @@ async function persistMatches(
   // regla estaba en curso (`finishedAt = null`) y ahora está resuelta, así que es
   // una transición a clasificatoria. Las que siguen en curso no cuentan.
   const counted =
-    countTournamentMatches(toCreate, ruleset, registeredAt) +
-    countTournamentMatches(toRefresh, ruleset, registeredAt);
+    countTournamentMatches(toCreate, ruleset, registeredAt, context) +
+    countTournamentMatches(toRefresh, ruleset, registeredAt, context);
 
   return { inserted, updated: toRefresh.length, counted };
 }
@@ -561,6 +574,7 @@ async function reconcileUnfinishedMatches(
   client: Aoe4WorldClient,
   signal: AbortSignal,
   ruleset: Pick<ScoringRuleset, "window">,
+  context: TeamTierContext,
 ): Promise<ReconcileResult> {
   const cutoff = reconciliationCutoff();
 
@@ -625,7 +639,7 @@ async function reconcileUnfinishedMatches(
 
     // La fila estaba en curso y ahora está resuelta: si cumple la regla, entra a
     // contar en esta pasada.
-    if (countTournamentMatches([normalized.match], ruleset, player.registeredAt) > 0) {
+    if (countTournamentMatches([normalized.match], ruleset, player.registeredAt, context) > 0) {
       result.counted += 1;
     }
   }
@@ -687,7 +701,9 @@ async function syncPlayer(
   config: SyncConfig,
   signal: AbortSignal,
   ruleset: Pick<ScoringRuleset, "window">,
+  cutoffs: LadderCutoffsTable | null,
 ): Promise<SyncPlayerResult> {
+  const teamContext: TeamTierContext = { profileId: player.profileId, cutoffs };
   const state = await readPlayerSyncState(player.profileId);
   const storedSince = state === null ? null : new Date(state.since);
   const since = storedSince !== null && !Number.isNaN(storedSince.getTime()) ? storedSince : null;
@@ -732,7 +748,7 @@ async function syncPlayer(
   }
 
   // Antes de paginar: resuelve o abandona lo que ya no puede estar vivo.
-  const reconcile = await reconcileUnfinishedMatches(player, client, signal, ruleset);
+  const reconcile = await reconcileUnfinishedMatches(player, client, signal, ruleset, teamContext);
 
   const fetched = await fetchPlayerGames(client, player.profileId, since, config, signal);
   const now = new Date();
@@ -761,6 +777,7 @@ async function syncPlayer(
     matches,
     ruleset,
     player.registeredAt,
+    teamContext,
   );
 
   // El cursor solo avanza si hemos visto alguna partida, y nunca retrocede.
@@ -857,6 +874,13 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   // importa para puntuar es el ruleset vigente en ese momento.
   const ruleset = await readRuleset();
 
+  // Los cortes de división también se leen **una vez por pasada**: son de la
+  // condición de equipos de la regla (un compañero a dos escalones o más deja la
+  // partida fuera), no salen a la red y los necesitan los dos contadores —el de
+  // las partidas nuevas y el del refetch—. Sin ellos, las partidas de equipo
+  // cuentan, que es la degradación acordada y lo que dice el rastro del recálculo.
+  const cutoffs = await readDivisionCutoffs();
+
   // Una sola llamada a la ladder para todos los aprobados, y antes del bucle:
   // así se ejecuta siempre, aunque el bucle se pase del plazo o algún jugador
   // falle. Si falla, se registra y la pasada continúa con lo que ya había.
@@ -872,7 +896,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     }
 
     try {
-      return await syncPlayer(player, client, config, signal, ruleset);
+      return await syncPlayer(player, client, config, signal, ruleset, cutoffs);
     } catch (error) {
       return emptyPlayerResult(player, { status: "failed", error: toErrorMessage(error) });
     }

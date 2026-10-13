@@ -227,6 +227,53 @@ export function parseGame(value: unknown): Aoe4WorldGame | null {
   };
 }
 
+/**
+ * El equipo de un jugador dentro de una partida: él y sus compañeros.
+ *
+ * Es la lectura de `rawJson.teams` desde el punto de vista de uno de sus
+ * jugadores, y existe porque hay **dos** consumidores que necesitan exactamente
+ * esto y ninguno puede leerlo por su cuenta sin volver a implementar el mismo
+ * lector: la condición de equipos de `src/lib/ranked-match.ts` (compara el rating
+ * de cada compañero con el del jugador) y la regla de compañero repetido de
+ * `src/lib/alerts/compute.ts` (cuenta con quién coincide).
+ *
+ * Pasa por `parseGame()` y no por una lectura propia: ese lector ya acepta las dos
+ * formas en que la API manda los equipos (anidada en el listado, plana en el
+ * detalle) y ya valida la forma de cada jugador, así que aquí no se vuelve a
+ * interpretar el payload. Devuelve `null` cuando no se puede leer o cuando el
+ * jugador no aparece en ningún equipo, que es un resultado normal: quien llama
+ * decide qué hacer con un payload que no dice nada.
+ */
+export type GameTeamView = {
+  /** El jugador buscado, con su rating en esa partida. */
+  self: Aoe4WorldGamePlayer | null;
+  /** Los que estaban en su mismo equipo, él excluido. */
+  teammates: Aoe4WorldGamePlayer[];
+};
+
+export function parseTeamView(value: unknown, profileId: number): GameTeamView | null {
+  const game = parseGame(value);
+
+  if (game === null) {
+    return null;
+  }
+
+  for (const team of game.teams) {
+    const index = team.findIndex((player) => player.profileId === profileId);
+
+    if (index === -1) {
+      continue;
+    }
+
+    return {
+      self: team[index] ?? null,
+      teammates: team.filter((_, position) => position !== index),
+    };
+  }
+
+  return null;
+}
+
 export function parseGamesPage(value: unknown): Aoe4WorldGamesPage | null {
   if (!isRecord(value)) {
     return null;

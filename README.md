@@ -58,9 +58,10 @@ partidas y alertas, gestionar el torneo y publicar la campaña de donaciones.
 - **2 puntos por victoria**, más **82 objetivos** que reparten puntos extra: **competiciones** (los
   cobra quien va primero) y **logros** (los cobra quien cumple la condición).
 - **Ventana de fechas**: solo cuentan las partidas jugadas dentro del periodo del torneo.
+- **Equipos equilibrados**: una partida por equipos solo cuenta si ningún compañero está a dos
+  escalones o más de división del jugador, por encima o por debajo.
 - **Transparencia**: la organización vigila comportamientos que podrían inflar la clasificación
-  (abandonar para bajar de elo, rivales repetidos, equipos en una división muy distinta a la suya…) y
-  avisa para revisarlos.
+  (abandonar para bajar de elo, rivales repetidos…) y avisa para revisarlos.
 - **Directos**: se detecta si un participante está transmitiendo en Twitch, YouTube o Kick.
 
 Todo el detalle está en [`docs/REGLAS.md`](docs/REGLAS.md), [`docs/PUNTUACION.md`](docs/PUNTUACION.md)

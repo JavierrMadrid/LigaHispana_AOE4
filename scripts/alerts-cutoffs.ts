@@ -5,7 +5,8 @@ import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { createAoe4WorldClient } from "@/lib/aoe4world/client";
 
 /**
- * Derivar (o refrescar) los cortes rating → subdivisión que necesita la regla R5.
+ * Derivar (o refrescar) los cortes rating → subdivisión que necesita el motor de
+ * puntuación para la condición de equipos.
  *
  *   npm run alerts:cutoffs                     # rm_team
  *   npm run alerts:cutoffs -- --ladder=rm_team # una familia concreta
@@ -13,27 +14,28 @@ import { createAoe4WorldClient } from "@/lib/aoe4world/client";
  *
  * ## Por qué es un script y no parte del sincronizador
  *
- * R5 compara **dos ratings de una misma partida de equipos** (el del jugador en
- * esa partida y la media de rating de la partida, `average_rating`), y para eso
- * hace falta saber, en la familia **de esa partida** (`rm_team`), a partir de qué
- * rating empieza cada subdivisión. La API no lo publica: `rating_min`,
- * `rating_max` y `rank_level` los ignora en silencio, así que hay que recorrer la
- * ladder con `?page=N` y quedarse con el rating más bajo de cada bloque (el final
- * del bloque, no su principio; ver `derive-cutoffs.ts`).
+ * Una partida por equipos solo puntúa si **cada compañero está a un escalón o
+ * menos** del jugador, y para comparar escalones hace falta saber, en la familia
+ * **de esa partida** (`rm_team`), a partir de qué rating empieza cada subdivisión.
+ * La API no lo publica: `rating_min`, `rating_max` y `rank_level` los ignora en
+ * silencio, así que hay que recorrer la ladder con `?page=N` y quedarse con el
+ * rating más bajo de cada bloque (el final del bloque, no su principio; ver
+ * `derive-cutoffs.ts`).
  *
  * Con búsqueda binaria son del orden de 130 llamadas por familia, y el
  * sincronizador corre cada 10 minutos: 144 × 130 peticiones al día por una tabla
  * que solo cambia cuando cambia el reparto de la temporada. Los cortes se
  * derivan una vez, se cachean en `Setting["alerts.divisionCutoffs"]` y se
- * refrescan a mano. **El motor nunca sale a la red**: sin cortes, R5 se omite con
- * un aviso y las otras siete reglas funcionan igual.
+ * refrescan a mano. **El motor nunca sale a la red**: sin cortes, la partida
+ * cuenta (no se puede demostrar que el equipo esté desequilibrado), el rastro del
+ * recálculo lo dice y el resto de reglas funciona igual.
  *
  * ## Por qué solo `rm_team`
  *
- * R5 solo mira partidas de equipo, así que la única familia que necesita cortes
- * es `rm_team`. El `rm_solo` se derivaba antes, cuando R5 comparaba con el
- * `rank_level` 1v1 del jugador; hoy no lo lee nadie y no se deriva. La caché se
- * reescribe como un retrato de esta llamada, así que una entrada vieja de
+ * Solo las partidas por equipos comparan compañeros, así que la única familia que
+ * necesita cortes es `rm_team`. El `rm_solo` se derivaba antes, cuando los cortes
+ * se usaban para algo que mirara el 1v1; hoy no lo lee nadie y no se deriva. La
+ * caché se reescribe como un retrato de esta llamada, así que una entrada vieja de
  * `rm_solo` se poda en la siguiente ejecución.
  *
  * Los cortes guardados incluyen la fecha y el número de peticiones, y son
@@ -118,7 +120,7 @@ async function main(): Promise<void> {
     console.log(
       `Guardados en Setting["alerts.divisionCutoffs"]: ${Object.keys(table).sort().join(", ")}`,
     );
-    console.log("Ahora `npm run alerts:check` ya evaluará también R5.");
+    console.log("El motor ya aplica la condición de equipos con estos cortes; recalcula con `npm run score`.");
   } catch (error) {
     console.error(`No se han podido derivar los cortes: ${toErrorMessage(error)}`);
     process.exitCode = 1;

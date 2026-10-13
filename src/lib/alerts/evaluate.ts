@@ -2,7 +2,7 @@ import "server-only";
 
 import { PlayerStatus } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
-import { countsWithinWindow, rankedMatchWhere } from "@/lib/ranked-match";
+import { countsWithinWindow, rankedMatchWhere, teammatesWithinTier } from "@/lib/ranked-match";
 import { readRuleset, type ScoringRuleset } from "@/lib/scoring";
 import { computePlayerAlerts, type AlertMatch, type AlertPlayer, type OpenStreak } from "./compute";
 import type { LadderCutoffsTable } from "./division-cutoffs";
@@ -39,8 +39,11 @@ import {
  * **No sale a la red.** Todo sale de `Match` y de su `rawJson`, con la única
  * excepción de los cortes de división, que no se derivan aquí sino que se leen de
  * `Setting` (ver `derive-cutoffs.ts`): derivarlos son del orden de 130 llamadas
- * por familia de ladder, y esto corre cada 10 minutos. Sin cortes, R5 se omite con
- * un aviso y las otras siete reglas siguen funcionando.
+ * por familia de ladder, y esto corre cada 10 minutos. Esos cortes no son para
+ * ninguna regla de alertas, sino para el **filtro**: el motor de alertas solo
+ * puede mirar las partidas que puntúan, y la condición de equipos de
+ * `ranked-match.ts` es parte de lo que decide eso. Sin cortes, las partidas de
+ * equipo cuentan (como en el motor de puntos) y la evaluación sigue.
  */
 
 export type EvaluateAlertsOptions = {
@@ -75,10 +78,12 @@ export type EvaluateAlertsResult = {
   warnings: string[];
   globalWarnings: string[];
   alertsRulesetVersion: number;
-  /** Ladders de las que hay cortes cacheados (R5 depende de esto). */
+  /**
+   * Ladders de las que hay cortes cacheados. Son los que usa el filtro de la
+   * condición de equipos, así que sin cortes de una familia sus partidas se miran
+   * como las cuenta el motor de puntos: cuentan.
+   */
   cutoffsLadders: string[];
-  /** Por qué se ha omitido R5 entera, si se ha omitido. */
-  lowDivisionWarning: string | null;
   /** `true` si esta evaluación ha sido la del cierre de torneo. */
   tournamentClose: boolean;
   durationMs: number;
@@ -162,6 +167,7 @@ async function evaluatePlayers(
   }
 
   const registeredAtPorJugador = new Map(players.map((row) => [row.id, row.registeredAt]));
+  const profileIdPorJugador = new Map(players.map((row) => [row.id, row.profileId]));
 
   // **El filtro de clasificatorias sale de `rankedMatchWhere()`**, o sea de la única
   // definición que hay: familia del ruleset de puntos, partida resuelta, dentro de
@@ -174,6 +180,12 @@ async function evaluatePlayers(
   // decide es `countsWithinWindow()` con el `registeredAt` de cada uno —la misma
   // comparación en memoria—, así que una alerta no puede acusar a nadie de una
   // partida que tampoco puntúa.
+  //
+  // **Y la condición de equipos tampoco cabe** en un `where` de Prisma (necesita
+  // `rawJson` y los cortes), así que se aplica aquí, con la **misma** función que
+  // aplica el motor de puntos (`teammatesWithinTier()`): el motor de alertas tiene
+  // que ver exactamente las partidas que puntúan, ni una más ni una menos. Sin
+  // cortes cacheados la partida cuenta, que es lo que hace también el motor.
   const rows: MatchRow[] = await db.match.findMany({
     where: {
       playerId: { in: players.map((player) => player.id) },
@@ -196,13 +208,29 @@ async function evaluatePlayers(
     orderBy: [{ startedAt: "asc" }, { gameId: "asc" }],
   });
 
-  const clasificatorias = rows.filter((row) =>
-    countsWithinWindow(
-      row.startedAt,
-      context.scoring.window,
-      registeredAtPorJugador.get(row.playerId) ?? null,
-    ),
-  );
+  const clasificatorias = rows.filter((row) => {
+    if (
+      !countsWithinWindow(
+        row.startedAt,
+        context.scoring.window,
+        registeredAtPorJugador.get(row.playerId) ?? null,
+      )
+    ) {
+      return false;
+    }
+
+    const profileId = profileIdPorJugador.get(row.playerId);
+
+    // Las filas y el mapa salen de la misma lista de jugadores, así que siempre hay
+    // entrada; sin ella la partida contaría, que es la degradación de siempre.
+    return (
+      profileId === undefined ||
+      teammatesWithinTier(row.rawJson, row.mode, {
+        profileId,
+        cutoffs: context.cutoffs,
+      })
+    );
+  });
 
   pass.matchesRead = clasificatorias.length;
 
@@ -240,7 +268,6 @@ async function evaluatePlayers(
       matches: porJugador.get(row.id) ?? [],
       ruleset: context.alertsRuleset,
       scoring: { modes: context.scoring.modes, window: context.scoring.window },
-      cutoffs: context.cutoffs,
       now: context.now,
     });
 
@@ -333,11 +360,6 @@ export async function evaluateAlerts(
     );
   }
 
-  const lowDivisionWarning =
-    cutoffs === null
-      ? "R5 omitida: no hay cortes de división cacheados (derívalos con `npm run alerts:cutoffs`)."
-      : null;
-
   // Los avisos de la evaluación entera son los mismos para todos los jugadores
   // (o no hay cortes para ninguno), así que se registran una vez: treinta líneas
   // iguales no informan de nada. Los de cada jugador sí llevan su nombre.
@@ -345,9 +367,6 @@ export async function evaluateAlerts(
     console.warn(`[alerts] ${warning}`);
   }
 
-  // `lowDivisionWarning` es la **forma legible por máquina** del mismo aviso que el
-  // núcleo puro ya ha puesto en `globalWarnings`, así que no se registra otra vez:
-  // dos líneas con la misma noticia por una regla omitida.
   return {
     scope: full ? "completa" : "jugadores",
     playersEvaluated: pass.playersEvaluated,
@@ -361,7 +380,6 @@ export async function evaluateAlerts(
     globalWarnings: pass.globalWarnings,
     alertsRulesetVersion: alertsRuleset.version,
     cutoffsLadders: cutoffs === null ? [] : Object.keys(cutoffs).sort(),
-    lowDivisionWarning,
     tournamentClose: closePending,
     durationMs: Date.now() - startedAtMs,
   };

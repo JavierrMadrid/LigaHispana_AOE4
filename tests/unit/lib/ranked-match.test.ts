@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { Prisma } from "@/generated/prisma/client";
+import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
+import { SUBDIVISION_RANK_LEVELS } from "@/lib/divisions";
 import {
   RANKED_MODES,
   classificatoryWhere,
@@ -13,8 +15,10 @@ import {
   rankedModesWhere,
   readInstant,
   scoringCutoff,
+  teammatesWithinTier,
   windowWhere,
   type ScoringWindow,
+  type TeamTierContext,
 } from "@/lib/ranked-match";
 
 /**
@@ -22,15 +26,85 @@ import {
  *
  * Este módulo tiene tres traducciones al mundo real —el `where` de Prisma, el
  * predicado SQL y `countsAsRanked()` fila a fila— y su docblock avisa de que si se
- * toca una hay que tocar las otras dos. Aquí se comprueban las tres, y por encima
- * de eso la semántica de la ventana con su corte de inscripción, que es donde están
- * los bordes que deciden si el torneo puntúa o no.
+ * toca una hay que tocar las demás. Aquí se comprueban las tres, la semántica de
+ * la ventana con su corte de inscripción, y la **condición de equipos**, que es la
+ * única que el `where` de Prisma no puede escribir y por eso solo tiene dos
+ * traducciones que la apliquen.
  */
 
 const VENTANA: ScoringWindow = {
   from: "2026-09-15T00:00:00.000Z",
   to: "2026-10-15T00:00:00.000Z",
 };
+
+/** El jugador de las fixtures de equipo: el dueño de las partidas. */
+const PERFIL = 9_000_001;
+const COMPAÑERO = 9_000_002;
+const RIVAL = 9_000_003;
+
+/**
+ * Cortes inventados pero **monótonos y de la misma escala** que la ladder real: se
+ * construyen hacia abajo desde `conqueror_3` en pasos de 100, así cada subdivisión
+ * vale exactamente 100 de elo y las cuentas salen a mano. Con 3 subdivisiones por
+ * división, un escalón son 300 de elo:
+ *
+ * | Rating | Subdivisión | Escalón |
+ * |---|---|---|
+ * | 2700 | `diamond_3` | 1 |
+ * | 2100 | `gold_3` | 3 |
+ * | 1900 | `gold_1` | 3 (mismo escalón: manda el subrango) |
+ * | 1799 | `silver_2` | 4 |
+ * | 1599 | `bronze_3` | 5 |
+ */
+const CORTES: LadderCutoffsTable = {
+  rm_team: {
+    ladder: "rm_team",
+    derivedAt: VENTANA.from,
+    totalCount: 50_000,
+    cutoffs: SUBDIVISION_RANK_LEVELS.map((rankLevel, index) => ({
+      rankLevel,
+      minRating: 3000 - index * 100,
+    })),
+    requests: 1,
+  },
+};
+
+const CON_CORTES: TeamTierContext = { profileId: PERFIL, cutoffs: CORTES };
+/** Sin cortes, la condición de equipos no se puede comprobar. */
+const SIN_CORTES: TeamTierContext = { profileId: PERFIL, cutoffs: null };
+
+/**
+ * El payload de una partida de equipo, con este jugador en el primer puesto de su
+ * equipo y los ratings que se le digan. Se escribe con la forma de la API
+ * (`{ player: {…} }`) y con lo mínimo que `parseGame()` exige.
+ */
+function payloadEquipo(propio: number | null, companeros: Array<number | null>): unknown {
+  const entrada = (profileId: number, rating: number | null) => ({
+    player: { profile_id: profileId, name: "Jugador", rating, result: "win" },
+  });
+
+  return {
+    game_id: 9_000_001,
+    started_at: "2026-09-20T12:00:00.000Z",
+    leaderboard: "rm_2v2",
+    teams: [
+      [entrada(PERFIL, propio), ...companeros.map((rating, i) => entrada(COMPAÑERO + i, rating))],
+      [entrada(RIVAL, 1500)],
+    ],
+  };
+}
+
+/** Una partida de equipo resuelta y dentro de la ventana, con su payload. */
+function partidaEquipo(rawJson: unknown) {
+  return {
+    mode: "rm_team",
+    result: "WIN" as const,
+    startedAt: new Date("2026-09-20T12:00:00.000Z"),
+    finishedAt: new Date("2026-09-20T12:30:00.000Z"),
+    revertedAt: null,
+    rawJson,
+  };
+}
 
 describe("isRankedMode", () => {
   it("reconoce las dos familias ranked y nada más", () => {
@@ -243,9 +317,9 @@ describe("el corte de inscripción", () => {
   it("un jugador inscrito antes de la ventana cuenta desde `window.from`", () => {
     const antesDelAlta = partida("2026-09-16T10:00:00.000Z");
 
-    expect(countsAsRanked(antesDelAlta, VENTANA, antesDeLaVentana)).toBe(true);
+    expect(countsAsRanked(antesDelAlta, VENTANA, antesDeLaVentana, SIN_CORTES)).toBe(true);
     // Y lo que hay antes de la ventana sigue sin contar: es el comportamiento viejo.
-    expect(countsAsRanked(partida("2026-09-14T23:59:59.999Z"), VENTANA, antesDeLaVentana)).toBe(
+    expect(countsAsRanked(partida("2026-09-14T23:59:59.999Z"), VENTANA, antesDeLaVentana, SIN_CORTES)).toBe(
       false,
     );
   });
@@ -257,12 +331,12 @@ describe("el corte de inscripción", () => {
 
     // La misma partida que con `null` cuenta, con un alta posterior no: es el
     // problema que la regla viene a resolver.
-    expect(countsAsRanked(antesDelAlta, VENTANA, null)).toBe(true);
-    expect(countsAsRanked(antesDelAlta, VENTANA, altaTardia)).toBe(false);
+    expect(countsAsRanked(antesDelAlta, VENTANA, null, SIN_CORTES)).toBe(true);
+    expect(countsAsRanked(antesDelAlta, VENTANA, altaTardia, SIN_CORTES)).toBe(false);
 
     // El corte es inclusivo, y lo de después sí cuenta.
-    expect(countsAsRanked(justoEnElAlta, VENTANA, altaTardia)).toBe(true);
-    expect(countsAsRanked(despuesDelAlta, VENTANA, altaTardia)).toBe(true);
+    expect(countsAsRanked(justoEnElAlta, VENTANA, altaTardia, SIN_CORTES)).toBe(true);
+    expect(countsAsRanked(despuesDelAlta, VENTANA, altaTardia, SIN_CORTES)).toBe(true);
   });
 
   it("`registeredAt: null` es lo mismo que inscriptionarse antes de la ventana", () => {
@@ -273,8 +347,8 @@ describe("el corte de inscripción", () => {
       "2026-10-14T23:59:59.999Z",
       "2026-10-15T00:00:00.000Z",
     ]) {
-      expect(countsAsRanked(partida(instante), VENTANA, null), instante).toBe(
-        countsAsRanked(partida(instante), VENTANA, antesDeLaVentana),
+      expect(countsAsRanked(partida(instante), VENTANA, null, SIN_CORTES), instante).toBe(
+        countsAsRanked(partida(instante), VENTANA, antesDeLaVentana, SIN_CORTES),
       );
     }
   });
@@ -294,8 +368,8 @@ describe("el corte de inscripción", () => {
     ]) {
       const conOverride = { ...partida("2026-09-21T10:00:00.000Z"), ...override };
 
-      expect(countsAsRanked(conOverride, VENTANA, null), JSON.stringify(override)).toBe(false);
-      expect(countsAsRanked(conOverride, VENTANA, altaTardia), JSON.stringify(override)).toBe(false);
+      expect(countsAsRanked(conOverride, VENTANA, null, SIN_CORTES), JSON.stringify(override)).toBe(false);
+      expect(countsAsRanked(conOverride, VENTANA, altaTardia, SIN_CORTES), JSON.stringify(override)).toBe(false);
     }
   });
 });
@@ -351,12 +425,13 @@ describe("las tres traducciones dicen lo mismo", () => {
     });
   });
 
-  it("el predicado SQL lleva las mismas cinco condiciones", () => {
+  it("el predicado SQL lleva las mismas cinco condiciones (y ninguna de equipos sin cortes)", () => {
     const sql = rankedMatchSql(
       Prisma.sql`m`,
       Prisma.sql`p`,
       [...RANKED_MODES],
       VENTANA,
+      null,
     ) as unknown as {
       sql: string;
       values: unknown[];
@@ -371,6 +446,8 @@ describe("las tres traducciones dicen lo mismo", () => {
     // traducción sirve para una consulta que abarque a todos los jugadores, que es
     // justo lo que el `where` de Prisma no puede hacer.
     expect(sql.sql).toContain('p."registeredAt" is null');
+    // Sin cortes no hay condición de equipos: la consulta es la de siempre.
+    expect(sql.sql).not.toContain("jsonb_array_elements");
     // Los límites viajan como texto UTC **sin zona** y con el cast explícito: pasar
     // el literal a `timestamptz` y de ahí a `timestamp` sí dependería de la zona de
     // la sesión, que es lo que el docblock midió en esta base de datos.
@@ -382,11 +459,48 @@ describe("las tres traducciones dicen lo mismo", () => {
     ]);
   });
 
+  it("el predicado SQL con cortes añade la condición de equipos", () => {
+    const sql = rankedMatchSql(
+      Prisma.sql`m`,
+      Prisma.sql`p`,
+      ["rm_team"],
+      VENTANA,
+      CORTES,
+    ) as unknown as {
+      sql: string;
+      values: unknown[];
+    };
+
+    // La condición va **después** de la ventana, sobre el propio `jsonb`: localiza
+    // los equipos, deja fuera al jugador por su `profile_id` y compara el escalón
+    // de cada compañero con el suyo. Todo con guardas para que un payload que no se
+    // puede leer no reviente la consulta.
+    expect(sql.sql).toContain('jsonb_typeof(m."rawJson" -> \'teams\') = \'array\'');
+    expect(sql.sql).toContain('is distinct from p."profileId"::text');
+    expect(sql.sql).toContain('jsonb_array_elements((?::jsonb -> m."mode"))');
+    // Los cortes viajan como un `jsonb` indexado por la familia de la partida, con
+    // los índices del catálogo dentro del valor: nada de umbrales escritos a mano.
+    expect(sql.values).toContainEqual(
+      JSON.stringify({
+        rm_team: CORTES.rm_team?.cutoffs.map((cutoff, index) => ({
+          index,
+          minRating: cutoff.minRating,
+        })),
+      }),
+    );
+  });
+
   it("el predicado SQL con `to: null` se queda solo con el límite inferior", () => {
-    const sql = rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ["rm_solo"], {
-      from: "2026-09-15T00:00:00.000Z",
-      to: null,
-    }) as unknown as { sql: string; values: unknown[] };
+    const sql = rankedMatchSql(
+      Prisma.sql`m`,
+      Prisma.sql`p`,
+      ["rm_solo"],
+      {
+        from: "2026-09-15T00:00:00.000Z",
+        to: null,
+      },
+      null,
+    ) as unknown as { sql: string; values: unknown[] };
 
     expect(sql.sql).not.toContain("< ?::timestamp");
     expect(sql.sql).toContain('(p."registeredAt" is null');
@@ -398,13 +512,149 @@ describe("las tres traducciones dicen lo mismo", () => {
     // como valor y no como texto: nada de lo que escriba alguien se concatena en
     // una sentencia.
     const modo = "rm_solo'; drop table \"Match\"; --";
-    const sql = rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, [modo], {
-      from: "2026-09-15T00:00:00.000Z",
-      to: null,
-    }) as unknown as { sql: string; values: unknown[] };
+    const sql = rankedMatchSql(
+      Prisma.sql`m`,
+      Prisma.sql`p`,
+      [modo],
+      {
+        from: "2026-09-15T00:00:00.000Z",
+        to: null,
+      },
+      null,
+    ) as unknown as { sql: string; values: unknown[] };
 
     expect(sql.sql).toContain('m."mode" in (?)');
     expect(sql.sql).not.toContain("drop table");
     expect(sql.values).toEqual([modo, "2026-09-15 00:00:00.000"]);
+  });
+});
+
+describe("la condición de equipos", () => {
+  /** Un 1v1 con su payload de un jugador por equipo: no tiene compañeros. */
+  const solo = {
+    game_id: 9_000_009,
+    started_at: "2026-09-20T12:00:00.000Z",
+    leaderboard: "rm_1v1",
+    teams: [[{ player: { profile_id: PERFIL, name: "Jugador", rating: 1500 } }]],
+  };
+
+  it("una partida de 1v1 no tiene compañeros, así que se cumple sola", () => {
+    expect(
+      countsAsRanked(partidaEquipo(solo), VENTANA, null, { profileId: PERFIL, cutoffs: CORTES }),
+    ).toBe(true);
+  });
+
+  it("un compañero al mismo escalón o a uno cuenta", () => {
+    // 2100 (`gold_3`) y 1900 (`gold_1`) son el mismo escalón: **el subrango se
+    // ignora**, y eso es justo lo que pide la regla.
+    expect(countsAsRanked(partidaEquipo(payloadEquipo(2100, [1900])), VENTANA, null, CON_CORTES)).toBe(
+      true,
+    );
+    // 1799 (`silver_2`) está a un escalón de 2100 (`gold_3`): sigue contando.
+    expect(countsAsRanked(partidaEquipo(payloadEquipo(2100, [1799])), VENTANA, null, CON_CORTES)).toBe(
+      true,
+    );
+  });
+
+  it("a dos escalones por debajo no cuenta", () => {
+    // 1599 es bronce (escalón 5) y 2100 oro (escalón 3).
+    expect(countsAsRanked(partidaEquipo(payloadEquipo(2100, [1599])), VENTANA, null, CON_CORTES)).toBe(
+      false,
+    );
+  });
+
+  it("a dos escalones por arriba tampoco: la regla mira las dos direcciones", () => {
+    // 2700 es diamante (escalón 1) y 2100 oro (escalón 3).
+    expect(countsAsRanked(partidaEquipo(payloadEquipo(2100, [2700])), VENTANA, null, CON_CORTES)).toBe(
+      false,
+    );
+  });
+
+  it("basta con que uno de los compañeros esté a dos escalones", () => {
+    // 2v2 con un compañero en oro (el jugador también) y otro en bronce.
+    const tres = {
+      game_id: 9_000_010,
+      started_at: "2026-09-20T12:00:00.000Z",
+      leaderboard: "rm_3v3",
+      teams: [
+        [
+          { player: { profile_id: PERFIL, name: "Jugador", rating: 2100 } },
+          { player: { profile_id: COMPAÑERO, name: "Compañero", rating: 2050 } },
+          { player: { profile_id: COMPAÑERO + 1, name: "Otro", rating: 1000 } },
+        ],
+      ],
+    };
+
+    expect(countsAsRanked(partidaEquipo(tres), VENTANA, null, CON_CORTES)).toBe(false);
+    // 1000 se recorta al último corte (`bronze_1`), que sigue estando a dos
+    // escalones de oro: el recorte no la salva.
+    expect(teammatesWithinTier(tres, "rm_team", CON_CORTES)).toBe(false);
+  });
+
+  it("los cortes se buscan por la familia de la partida", () => {
+    // Unos cortes solo de `rm_solo` no sirven para una partida de equipo, así que
+    // la partida cuenta: es lo mismo que le pasa a una familia sin cortes.
+    expect(
+      countsAsRanked(partidaEquipo(payloadEquipo(2100, [1000])), VENTANA, null, {
+        profileId: PERFIL,
+        cutoffs: { rm_solo: CORTES.rm_team! },
+      }),
+    ).toBe(true);
+  });
+
+  it("sin cortes cacheados cuenta, y es la degradación de todo el módulo", () => {
+    expect(
+      countsAsRanked(partidaEquipo(payloadEquipo(2100, [1000])), VENTANA, null, SIN_CORTES),
+    ).toBe(true);
+  });
+
+  it("sin poder leer el rating, el equipo o el jugador también cuenta", () => {
+    // Payload que no es un objeto con `teams` de verdad.
+    expect(
+      countsAsRanked(
+        partidaEquipo({ game_id: 9_000_011, started_at: "2026-09-20T12:00:00.000Z", teams: "no es una lista" }),
+        VENTANA,
+        null,
+        CON_CORTES,
+      ),
+    ).toBe(true);
+    // El jugador no aparece en ningún equipo.
+    expect(
+      countsAsRanked(
+        partidaEquipo({
+          game_id: 9_000_012,
+          started_at: "2026-09-20T12:00:00.000Z",
+          teams: [[{ player: { profile_id: RIVAL, name: "Otro", rating: 1000 } }]],
+        }),
+        VENTANA,
+        null,
+        CON_CORTES,
+      ),
+    ).toBe(true);
+    // El jugador está, pero sin rating con el que comparar.
+    expect(countsAsRanked(partidaEquipo(payloadEquipo(null, [1000])), VENTANA, null, CON_CORTES)).toBe(
+      true,
+    );
+    // El compañero está, pero sin rating: no se puede demostrar la infracción.
+    expect(countsAsRanked(partidaEquipo(payloadEquipo(2100, [null])), VENTANA, null, CON_CORTES)).toBe(
+      true,
+    );
+  });
+
+  it("el payload plano (sin envolver en `player`) se lee igual", () => {
+    // El endpoint de detalle manda las entradas planas; `parseGame()` acepta las
+    // dos formas y la condición de equipos hereda esa tolerancia.
+    const plano = {
+      game_id: 9_000_013,
+      started_at: "2026-09-20T12:00:00.000Z",
+      teams: [
+        [
+          { profile_id: PERFIL, name: "Jugador", rating: 2100 },
+          { profile_id: COMPAÑERO, name: "Compañero", rating: 1000 },
+        ],
+      ],
+    };
+
+    expect(countsAsRanked(partidaEquipo(plano), VENTANA, null, CON_CORTES)).toBe(false);
   });
 });

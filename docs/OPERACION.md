@@ -163,11 +163,11 @@ está roto?". No hay histórico de pasadas: solo la última y el marcador de la 
 
 Los contadores del rastro son del **torneo**, no de filas tocadas. `newMatches` cuenta las partidas que
 **entran a contar** para el torneo en la pasada: las que se importan ya resueltas y cumplen la regla
-única (`countsAsRanked()`), más las que estaban **en curso** (`finishedAt = null`) y han quedado
-resueltas cumpliéndola. Una partida importada fuera de la ventana o del corte de inscripción, de un modo
-que no puntúa, o que sigue en curso, **no** suma ahí aunque se haya guardado: eso lo dicen
-`updatedMatches` y el detalle por jugador. Es la diferencia entre "499 partidas nuevas" y "partidas
-nuevas que cuentan para el torneo".
+única (`countsAsRanked()`, con la condición de equipo incluida), más las que estaban **en curso**
+(`finishedAt = null`) y han quedado resueltas cumpliéndola. Una partida importada fuera de la ventana
+o del corte de inscripción, de un modo que no puntúa, de un equipo desequilibrado, o que sigue en
+curso, **no** suma ahí aunque se haya guardado: eso lo dicen `updatedMatches` y el detalle por jugador.
+Es la diferencia entre "499 partidas nuevas" y "partidas nuevas que cuentan para el torneo".
 
 La portada pinta **«Actualizado a las …»** con `getLastSyncFinishedAt()` (`src/lib/public.ts`), que
 publica el `finishedAt` de la última pasada **registrada, aunque haya salido a medias** —no
@@ -323,9 +323,9 @@ from "Player" where discordUsername is not null group by 1 having count(*) > 1;
 
 ## Alertas de comportamiento
 
-El motor vigila **11 reglas** sobre las clasificatorias: **8 de patrón** (partidas cortas, rival o
-compañero repetido, brecha de elo con un compañero y equipo en una división muy distinta de la suya) y
-**3 de estado** (historial no público, partidas de ladder que no llegan, y Discord fuera del servidor).
+El motor vigila **9 reglas** sobre las clasificatorias: **6 de patrón** (partidas cortas, rival
+repetido y compañero repetido, cada uno en racha y en total) y **3 de estado** (historial no público,
+partidas de ladder que no llegan, y Discord fuera del servidor).
 
 ```bash
 npm test                       # el motor, con secuencias sintéticas y SIN base de datos
@@ -339,25 +339,46 @@ npm run alerts:cutoffs -- --show
 - La parte pura está en `tests/unit/lib/alerts/`: `compute.test.ts` (reglas sobre secuencias),
   `rules.test.ts` (umbrales, frases y claves de dedupe) y `division-cutoffs.test.ts`.
 - **Umbrales** en `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo):
-  partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10, compañero repetido 7, brecha de elo
-  500 y 3 escalones de diferencia entre la división del jugador y la de la partida (en cualquiera de los
-  dos sentidos). `window` y `modes` **no** se duplican: se leen del ruleset de puntuación, con el mismo
-  `rankedMatchWhere()` y el corte de inscripción.
+  partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10 y compañero repetido 7. `window` y
+  `modes` **no** se duplican: se leen del ruleset de puntuación, con el mismo `rankedMatchWhere()` y
+  el corte de inscripción.
+- **Qué partidas mira**: exactamente las que puntúan. Además del filtro de `rankedMatchWhere()` aplica
+  en memoria la condición de equipo del motor de puntos, porque no cabe en un `where` de Prisma.
 - **Cuándo se evalúa**: en `syncApprovedPlayers()`, después de `recomputeScores()`, **solo los
   jugadores tocados**; y también al revertir o restaurar una partida, al cerrar el torneo
   (`Setting["alerts.tournamentClose"]` lo marca) y a mano.
 - **Informe**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) es un CSV para Excel con
   alertas disparadas y rachas abiertas, y llama a `evaluateAlerts({ full: true })` antes.
 - **Idempotente**: `createMany({ skipDuplicates: true })` sobre `dedupeKey`; repetirlo no crea nada.
-- **Cortes de división (R5)**: se cachean en `Setting["alerts.divisionCutoffs"]` y se derivan a mano
-  con `alerts:cutoffs` (~150 peticiones) porque la API ignora `rating_min`/`rank_level`. Solo se derivan
-  los de `rm_team` (la única familia que R5 consulta; el `rm_solo` que se derivaba antes ya no lo lee
-  nadie y se poda al reescribir la caché). R5 compara el rating del jugador en la partida de equipo con
-  la media de **rating** de esa partida (`average_rating`), las dos traducidas a subdivisión con los cortes
-  de la familia de la partida (`Match.mode`, `rm_team`), y avisa si distan 3 escalones o más en cualquiera
-  de los dos sentidos. El `mmr` del payload es otra escala y no se usa. Sin cortes, R5 se omite con un
-  aviso y las otras diez reglas siguen.
+- **Dos reglas retiradas**: `TEAMMATE_ELO_GAP` (brecha de elo) y `LOW_DIVISION_TEAM_GAME` (equipo en
+  una división muy distinta) **ya no se calculan**: su caso pasó a ser la condición de equipo de la
+  puntuación (una partida con un compañero a dos escalones o más no cuenta, ver
+  [`PUNTUACION.md`](./PUNTUACION.md)). Sus valores del enum, sus etiquetas y sus frases se quedan
+  porque hay filas históricas de `Alert` que el panel sigue pintando.
 - Un fallo del motor **no** mueve `lastSuccessAt`.
+
+## Cortes de división
+
+Los cortes rating → subdivisión que necesita la **condición de equipo** de la puntuación, y que el
+motor de alertas lee para filtrar con esa misma regla las partidas que evalúa. Se cachean en
+`Setting["alerts.divisionCutoffs"]` y se derivan a mano con `alerts:cutoffs` (~150 peticiones) porque
+la API ignora `rating_min`/`rank_level`: hay que recorrer la ladder y quedarse con el rating más bajo
+de cada bloque.
+
+| Qué | Cuánto |
+|---|---|
+| Familias | Solo `rm_team`, la única que compara compañeros. El `rm_solo` que se derivaba antes se poda al reescribir la caché |
+| Coste | ~130-150 peticiones por familia, con la separación mínima entre peticiones |
+| Cadencia | A mano, cuando cambie el reparto de la temporada. El motor **nunca** los deriva: el sincronizador corre cada 10 minutos |
+
+- **Sin cortes, la condición no se aplica**: las partidas de equipo cuentan (no se puede demostrar la
+  infracción), y el aviso sale en el rastro del recálculo —`Setting["scoring.lastRun"]`, campo
+  `warnings`— y en el log con el prefijo `[scoring]`. Es un hueco de configuración de todo el torneo,
+  no de una partida.
+- `npm run alerts:cutoffs -- --show` enseña lo cacheado con su fecha y su coste, para que nadie los
+  tome por un dato que se recalcula solo.
+- Unos cortes nuevos **no cambian la clasificación por sí solos**: hay que recalcular (`npm run score`,
+  o la siguiente pasada del cron), que es cuando el motor los aplica.
 
 ## Directos (YouTube y Kick)
 
@@ -551,6 +572,7 @@ npm run db:push                  # sincroniza el schema
 npm run db:security -- --check   # comprueba RLS; aplica con db:security si sale mal
 npm run countries:seed           # publica la lista de países del formulario
 npm run db:window                # publica la ventana de fechas del torneo (recomendado)
+npm run alerts:cutoffs           # deriva los cortes de división de la condición de equipo
 npm run db:cron                  # programa el reloj cada 10 minutos
 ```
 
@@ -560,6 +582,9 @@ npm run db:cron                  # programa el reloj cada 10 minutos
   formulario no tiene lista de países.
 - `db:window` publica `window` en `scoring.ruleset`. Sin ella la clasificación puntúa con las fechas
   de prueba del código y puede congelarse en silencio al llegar la fecha `to`.
+- `alerts:cutoffs` deriva los cortes de división de la condición de equipo. Sin ellos la condición no
+  se aplica (las partidas de equipo cuentan) y el rastro del recálculo lo avisa: no rompe nada, pero
+  el torneo puntuaría de más.
 - Variables del panel: las `NEXT_PUBLIC_*` y los secretos de servidor en las dos listas de build, y
   `YOUTUBE_API_KEY` y las de Discord en los dos sitios (Worker y build). Detalle en
   [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel).

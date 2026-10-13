@@ -113,3 +113,28 @@ export function subdivisionIndex(rankLevel: string | null): number | null {
 
   return found === -1 ? null : found;
 }
+
+/**
+ * Cuántas subdivisiones tiene cada división (`conqueror_3`, `conqueror_2`,
+ * `conqueror_1`).
+ *
+ * Se **deriva** de las dos listas y no se escribe a mano: si mañana el catálogo
+ * cambia de tres subrangos por división, el escalón lo sigue (`divisions.ts` es el
+ * único sitio donde vive el orden del catálogo). Con las listas de hoy son 18 / 6.
+ */
+export const SUBDIVISIONS_PER_DIVISION = SUBDIVISION_RANK_LEVELS.length / DIVISIONS.length;
+
+/**
+ * El **escalón** (la división, sin subrango) de una subdivisión del catálogo.
+ *
+ * Recibe el índice de `subdivisionIndex()` o el que devuelve
+ * `subdivisionForRating()`, y devuelve `0` para conquistador … `5` para bronce,
+ * que es el orden del catálogo fuerte → débil de `SUBDIVISION_RANK_LEVELS` (y el
+ * contrario del de `DIVISIONS`, que va de bronce a conquistador). Ignorar el
+ * subrango es justo el punto: `gold_3` y `gold_1` son el **mismo** escalón, y
+ * comparar escalones es lo que decide la condición de equipos de
+ * `src/lib/ranked-match.ts`.
+ */
+export function divisionTier(index: number): number {
+  return Math.floor(index / SUBDIVISIONS_PER_DIVISION);
+}

@@ -31,11 +31,17 @@ Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent` y `Alert` apuntan a `Player
 | `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED` |
 | `MatchResult` | `WIN`, `LOSS` |
 | `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED` |
-| `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP`, `LOW_DIVISION_TEAM_GAME`, `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD` |
+| `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD` |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
 
 Los valores nuevos de un enum se añaden **al final**: en Postgres `ALTER TYPE … ADD VALUE` solo
 añade al final, y poner uno en medio obligaría a recrear el tipo.
+
+Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con un compañero) y
+`LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
+caso pasó a ser una condición de **puntuación** (una partida por equipos con un compañero a dos
+escalones o más no cuenta; ver [`PUNTUACION.md`](./PUNTUACION.md)). Se quedan —con su etiqueta y su
+frase— porque hay filas históricas de `Alert` que el panel y el informe siguen leyendo.
 
 ## `Player`
 
@@ -93,7 +99,7 @@ puntúa lo aplica el motor, no el importador.
 | `durationSeconds` | `Int?` | |
 | `points` | `Int` (`0`) | Puntos que aporta según el ruleset: `pointsPerWin` en una victoria clasificatoria, 0 en el resto. Solo lo escribe el motor. |
 | `revertedAt` | `DateTime?` | Marca de "deja de puntuar" (reversible). `null` = puntúa. |
-| `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** |
+| `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** De aquí salen los compañeros y su rating para la condición de equipo. |
 | `createdAt` | `DateTime` | |
 
 Índices: único `(playerId, gameId)` (dedupe del worker); `(playerId, startedAt)`,
@@ -168,7 +174,7 @@ fila dice "a la 1 se detectó esto" y no se reescribe.
 | Campo | Tipo | Nota |
 |---|---|---|
 | `id` | `String` (cuid) | |
-| `rule` | `AlertRule` | Qué comportamiento. La lista es fija en código; los umbrales, no (`alerts.ruleset`). |
+| `rule` | `AlertRule` | Qué comportamiento. La lista es fija en código; los umbrales, no (`alerts.ruleset`). Dos de sus valores son legado y ya no se calculan, pero hay filas escritas con ellos. |
 | `kind` | `AlertKind` | Cómo se detectó. |
 | `playerId` | `String` | FK a `Player.id`, cascada. |
 | `subjectProfileId`, `subjectName` | `Int?`, `String?` | El rival (R2) o compañero (R3). No es FK: el sujeto suele ser de fuera de la liga. |
@@ -243,7 +249,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
-| `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder que necesita la regla R5 (hoy solo `rm_team`). | `npm run alerts:cutoffs` |
+| `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |
 | `registration.countries` | Países que admite el formulario. | `npm run countries:seed` |
 | `registration.open` | Si la inscripción está abierta. | Panel de admin |
@@ -285,9 +291,11 @@ aparece en una consulta, no se crea.**
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Motor (recálculo) | `Match where mode = any(...) and startedAt en ventana and result/finishedAt no nulos` | `(mode, startedAt)` |
 
-El filtro de qué cuenta es **uno solo**: `src/lib/ranked-match.ts` (ventana, corte de inscripción y
-marca de revertida) y lo reparte como `countsAsRanked`, `rankedMatchWhere` y `rankedMatchSql`. El
-panel usa `classificatoryWhere()`, que es lo mismo sin la marca de revertida, para poder listarlas.
+El filtro de qué cuenta es **uno solo**: `src/lib/ranked-match.ts` (ventana, corte de inscripción,
+marca de revertida y la condición de equipo de las partidas por equipos) y lo reparte como
+`countsAsRanked`, `rankedMatchWhere` y `rankedMatchSql` —la condición de equipo solo cabe en las dos
+últimas, así que quien use el `where` de Prisma la filtra después en memoria—. El panel usa
+`classificatoryWhere()`, que es lo mismo sin la marca de revertida, para poder listarlas.
 
 ## RLS y privilegios
 

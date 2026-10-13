@@ -3,19 +3,20 @@ import { isRecord } from "@/lib/json";
 
 /**
  * Cortes rating → subdivisión, en memoria. **Módulo puro**: no lee de `Setting`
- * ni sale a la red, para que el motor de alertas (`compute.ts`) pueda usarlo sin
- * arrastrar ni la base de datos ni el cliente de AoE4World.
+ * ni sale a la red, para que lo pueda usar el motor de puntuación
+ * (`ranked-match.ts`, tanto en su predicado SQL como en su comprobación en memoria)
+ * sin arrastrar ni la base de datos ni el cliente de AoE4World. El motor de
+ * alertas lo lee de la misma caché, pero solo para filtrar con esa misma regla las
+ * partidas que evalúa.
  *
  * ## Qué son y por qué hacen falta
  *
- * R5 compara **dos ratings de la misma partida de equipos**: el del jugador en
- * esa partida (`team.self.rating`) y la media de **rating** de la partida
- * (`average_rating`). Necesita saber a qué subdivisión corresponde cada uno para
- * contar los escalones que los separan. El rating es un número y la subdivisión
- * un `rank_level` (`gold_3`), así que hace falta saber, para una ladder concreta,
- * **a partir de qué rating empieza cada subdivisión**. La decisión de por qué se
- * usa el `rating` y no el `mmr` está en el docblock de `lowDivisionFlags()`
- * (`compute.ts`), que es su única fuente.
+ * Traducen un `rating` al **escalón** de la ladder en el que cae, que es lo que
+ * necesita la condición de equipos de `ranked-match.ts`: en una partida por equipos
+ * se compara el rating de **cada compañero** con el del jugador y, si alguno está a
+ * dos escalones o más, la partida no puntúa. El rating es un número y la división un
+ * `rank_level` (`gold_3`), así que hace falta saber, para una ladder concreta,
+ * **a partir de qué rating empieza cada subdivisión**.
  *
  * La API no lo publica: `rating_min`, `rating_max` y `rank_level` se ignoran en
  * silencio en `/leaderboards/:ladder` y siempre devuelven la página 1. La única
@@ -24,12 +25,12 @@ import { isRecord } from "@/lib/json";
  *
  * ## Por qué hay cortes **por familia de ladder**
  *
- * Los dos ratings que compara R5 son de la **familia** de la partida
- * (`Match.mode`: para equipos, `rm_team`), así que los cortes que sirven son los
- * de esa familia, no los de `rm_solo`. Se busca por la familia resuelta y no por
- * el literal `Match.leaderboard` porque un ranked por equipos puede publicarse
- * como `rm_2v2`, `rm_3v3` o `rm_4v4`, y entonces el literal no coincidiría con la
- * clave cacheada.
+ * Los ratings que se comparan son los de la **familia** de la partida
+ * (`Match.mode`: para equipos, `rm_team`), así que los cortes que sirven son los de
+ * esa familia, no los de `rm_solo`: las dos ladders no comparten escala. Se busca
+ * por la familia resuelta y no por el literal `Match.leaderboard` porque un ranked
+ * por equipos puede publicarse como `rm_2v2`, `rm_3v3` o `rm_4v4`, y entonces el
+ * literal no coincidiría con la clave cacheada.
  *
  * Los cortes se derivan del campo `rating` de la ladder porque es la escala que
  * el `rank_level` traduce: el `mmr` que aparece en los payloads de partido es
@@ -57,9 +58,9 @@ export type LadderCutoffs = {
    * Los 18 cortes, **de la más fuerte a la más débil**.
    *
    * Tiene que estar **completo**: si una subdivisión saliera vacía en la ladder,
-   * las de detrás correrían un escalón y la cuenta de R5 sería falsa sin que nada
-   * fallara. Por eso `derive-cutoffs.ts` se niega a cachear una derivación
-   * incompleta.
+   * las de detrás correrían un escalón y la comparación de escalones de la
+   * condición de equipos sería falsa sin que nada fallara. Por eso
+   * `derive-cutoffs.ts` se niega a cachear una derivación incompleta.
    */
   cutoffs: LadderCutoff[];
   /** Peticiones a la API que costó derivarla, para poder comparar coste y resultado. */
@@ -225,10 +226,10 @@ export function subdivisionForRating(
  * Deja en la tabla **solo** las familias de ladder indicadas.
  *
  * La caché es un retrato de lo que el motor puede leer, no un histórico: cuando
- * una familia deja de derivarse —el `rm_solo`, que R5 ya no consulta— su entrada
- * queda obsoleta y no tiene por qué sobrevivir a la siguiente reescritura de
- * `Setting["alerts.divisionCutoffs"]`. Es pura para poder comprobar la poda sin
- * red ni base de datos.
+ * una familia deja de derivarse —el `rm_solo`, que no lo necesita ninguna partida
+ * de equipo— su entrada queda obsoleta y no tiene por qué sobrevivir a la
+ * siguiente reescritura de `Setting["alerts.divisionCutoffs"]`. Es pura para poder
+ * comprobar la poda sin red ni base de datos.
  */
 export function pruneCutoffsTable(
   table: LadderCutoffsTable,
@@ -281,7 +282,8 @@ function readCutoff(value: unknown): LadderCutoff | null {
  * (esa ladder) y el resto sigue sirviendo.
  *
  * Una ladder se **descarta entera** si le falta alguna subdivisión, porque con un
- * catálogo incompleto la cuenta de escalones de R5 saldría falseada sin aviso.
+ * catálogo incompleto la comparación de escalones de la condición de equipos
+ * saldría falseada sin aviso.
  * La lista de cuts viene ordenada de la más fuerte a la más débil y eso también
  * se comprueba: el orden es lo que hace que `subdivisionForRating` pueda parar en
  * el primer corte alcanzado.

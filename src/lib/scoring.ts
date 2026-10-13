@@ -2,6 +2,7 @@ import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
 import { MatchResult, PlayerStatus } from "@/generated/prisma/enums";
+import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { isRecord } from "@/lib/json";
@@ -40,8 +41,11 @@ import { readMapPool, writeScoringLastRun } from "@/lib/settings";
  * `objectives.ts` se importen mutuamente. De ahí viene `rankedMatchSql()`, el
  * predicado que usan **las tres** consultas de abajo —el `UPDATE` de
  * `Match.points`, el agregado y la carga de objetivos—, así que el modo, el
- * resultado, el corte de inscripción, el final de la ventana y la marca de
- * revertida se filtran igual en todas partes.
+ * resultado, el corte de inscripción, el final de la ventana, la marca de
+ * revertida y la **condición de equipos** se filtran igual en todas partes. Esa
+ * última necesita los cortes rating → subdivisión, que este módulo lee **una vez
+ * por recálculo** (`readDivisionCutoffs()`) y les pasa a las tres: son
+ * configuración, no datos del torneo, así que se leen fuera de la transacción.
  *
  * Cosas que no cambian entre versiones de las reglas y ya estaban resueltas:
  *
@@ -429,7 +433,8 @@ export async function loadObjectiveView(): Promise<ObjectiveView> {
   }
 
   const [ruleset, mapPool] = await Promise.all([readRuleset(), readMapPool()]);
-  const players = await loadObjectivePlayers(db, ruleset);
+  const cutoffs = await readDivisionCutoffs();
+  const players = await loadObjectivePlayers(db, ruleset, cutoffs);
   const { options } = computeObjectives(players, ruleset, mapPool);
 
   return buildObjectiveView(ruleset, mapPool, options);
@@ -494,6 +499,14 @@ async function writeObjectivesSnapshot(view: ObjectiveView, client: RulesetClien
 
 export type RecomputeScoresResult = {
   ruleSetVersion: number;
+  /**
+   * Lo que el recálculo ha tenido que dejar dicho: hoy, solo que no hay cortes de
+   * división cacheados, con lo que la condición de compañeros de las partidas de
+   * equipo no se ha podido aplicar (esas partidas cuentan). Es la misma forma que
+   * los avisos de `mergeRuleset()` —frases en español dentro del rastro—, y se
+   * registran en el log con el prefijo `[scoring]`.
+   */
+  warnings: string[];
   /**
    * Filas de `Match` cuyo `points` ha cambiado en esta pasada. Da igual que la fila
    * haya ganado o perdido puntos: cuenta las que había que escribir. Es 0 en una
@@ -727,9 +740,18 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
 
   // El ruleset se lee fuera de la transacción: es configuración, no datos de la
   // clasificación, y su publicación no debe quedarse esperando al resto. El pool de
-  // mapas, igual.
+  // mapas y los cortes de división, igual: los cortes son de la condición de
+  // equipos de la regla y se piden una sola vez por pasada, no dentro del bucle de
+  // sentencias.
   const ruleset = await ensureRuleset();
   const mapPool = await readMapPool();
+  const cutoffs = await readDivisionCutoffs();
+  const warnings =
+    cutoffs === null
+      ? [
+          "sin cortes de división cacheados: las partidas de equipo no se comprueban contra el escalón de sus compañeros y cuentan (derívalos con `npm run alerts:cutoffs`)",
+        ]
+      : [];
 
   const result = await db.$transaction(
     async (tx) => {
@@ -758,10 +780,11 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       // El predicado del `case` es el de `rankedMatchSql()`, o sea **el mismo** que
       // usa el agregado y la carga de objetivos: familia del ruleset, partida
       // resuelta, `startedAt` después del corte del jugador y antes de `window.to`,
-      // y no revertida. Una partida anterior a la inscripción del jugador, o fuera
-      // de la ventana, o revertida, acaba con `points = 0` sin más que por no pasar
-      // el filtro, y por eso deshacer un revert devuelve los puntos sin tener que
-      // tocar esta fila a mano.
+      // no revertida y con los compañeros del equipo a un escalón o menos. Una
+      // partida anterior a la inscripción del jugador, o fuera de la ventana, o
+      // revertida, o con un compañero a dos escalones o más, acaba con `points = 0`
+      // sin más que por no pasar el filtro, y por eso deshacer un revert devuelve
+      // los puntos sin tener que tocar esta fila a mano.
       //
       // El `join` con `Player` no es decorativo: el corte de inscripción sale de
       // `p."registeredAt"`. Es un `join` interior sobre la clave foránea, que no
@@ -771,6 +794,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         Prisma.sql`p`,
         ruleset.modes,
         ruleset.window,
+        cutoffs,
       );
 
       const updated = await tx.$executeRaw`
@@ -791,7 +815,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         where m.id = d.id and m.points is distinct from d.puntos
       `;
 
-      const objectivePlayers = await loadObjectivePlayers(tx, ruleset);
+      const objectivePlayers = await loadObjectivePlayers(tx, ruleset, cutoffs);
       const objectives = computeObjectives(objectivePlayers, ruleset, mapPool);
 
       // La racha actual del torneo sale del mismo agregado que los objetivos: los
@@ -849,7 +873,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         from "Match" m
         join "Player" p on p."id" = m."playerId"
         where p."status" = ${PlayerStatus.APPROVED}::"PlayerStatus"
-          and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window)}
+          and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window, cutoffs)}
         group by m."playerId", m."mode", m."result"
       `;
 
@@ -935,6 +959,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
 
       const recomputed: RecomputeScoresResult = {
         ruleSetVersion: RULESET_VERSION,
+        warnings,
         matchesUpdated: updated,
         playersRanked: ranked.length,
         playersUnranked: Math.max(previousCount - ranked.length, 0),
@@ -955,6 +980,13 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
     // Prisma (5 s) se quedaría corto en cuanto la base crezca.
     { timeout: 60_000, maxWait: 15_000 },
   );
+
+  // Los avisos van al log con el prefijo del motor, igual que los de `mergeRuleset`
+  // (`reportWarnings`): el rastro ya los lleva, pero un hueco de configuración que
+  // afecta a toda la puntuación tiene que verse sin ir a buscar la fila de `Setting`.
+  for (const warning of result.warnings) {
+    console.warn(`[scoring] ${warning}`);
+  }
 
   return result;
 }

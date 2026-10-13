@@ -34,11 +34,21 @@ import { isRecord } from "@/lib/json";
  *
  * ## El sujeto de una regla
  *
- * Tres reglas hablan de **alguien**: R2 del rival (`opponentProfileId`) y R3 del
+ * Dos reglas hablan de **alguien**: R2 del rival (`opponentProfileId`) y R3 del
  * compañero (`profileId` de `rawJson.teams`). Las demás hablan del jugador, y su
  * sujeto es `null`. El sujeto se identifica por `profileId` y no por nombre,
  * porque el nombre cambia y el `profileId` no; y puede ser de alguien que no está
  * en la liga, que es lo normal en un torneo individual.
+ *
+ * ## Las dos reglas retiradas
+ *
+ * `TEAMMATE_ELO_GAP` (R4) y `LOW_DIVISION_TEAM_GAME` (R5) **ya no se calculan**:
+ * su caso exacto (un equipo desequilibrado) dejó de ser un aviso y pasó a ser una
+ * condición de puntuación —una partida por equipos con un compañero a dos escalones
+ * o más **no cuenta**; ver `src/lib/ranked-match.ts`—. Lo que se queda es su
+ * **etiqueta y su frase**, porque hay filas históricas del enum que el panel y el
+ * informe siguen pintando: el valor del enum y `ALERT_RULE_LABELS` y
+ * `alertSummary()` no se pueden borrar sin dejar esas filas sin texto.
  */
 
 export { SUBDIVISION_RANK_LEVELS, type SubdivisionRankLevel } from "@/lib/divisions";
@@ -61,7 +71,13 @@ export const ALERTS_RULESET_VERSION = 1;
 /** Texto de producto: lo fija el código y describe qué se está vigilando. */
 export const ALERTS_RULE_LABEL = "Alertas de comportamiento sobre partidas clasificatorias";
 
-/** Reglas que miran una racha de partidas consecutivas. */
+/**
+ * Reglas que miran una racha de partidas consecutivas.
+ *
+ * Los dos últimos valores son **legado**: el motor ya no los calcula (ver el
+ * docblock del módulo) y se quedan solo porque hay filas de `Alert` escritas con
+ * ellos que el panel y el informe siguen leyendo.
+ */
 export type StreakAlertRule =
   | "SHORT_MATCH_STREAK"
   | "REPEATED_OPPONENT_STREAK"
@@ -113,6 +129,10 @@ export type AlertKindName =
  * entrar sin decidir aquí su etiqueta, igual que el `switch` de `alertSummary()`
  * obliga a decidir su frase. La diferencia entre las dos es que la etiqueta **no**
  * lleva el nombre del jugador ni ningún número: describe la regla, no el hallazgo.
+ *
+ * Las dos entradas marcadas como legado son las de las reglas retiradas: se quedan
+ * porque hay filas históricas de `Alert` con esos valores y el panel las pinta con
+ * esta etiqueta.
  */
 export const ALERT_RULE_LABELS = {
   SHORT_MATCH_STREAK: "Partidas cortas seguidas",
@@ -121,7 +141,9 @@ export const ALERT_RULE_LABELS = {
   REPEATED_OPPONENT_TOTAL: "Rival repetido, en total",
   REPEATED_TEAMMATE_STREAK: "Compañero repetido, en rachas",
   REPEATED_TEAMMATE_TOTAL: "Compañero repetido, en total",
+  // Legado: regla retirada, solo para filas históricas.
   TEAMMATE_ELO_GAP: "Brecha de elo con un compañero",
+  // Legado: regla retirada, solo para filas históricas.
   LOW_DIVISION_TEAM_GAME: "Equipo en una división muy distinta",
   HISTORY_NOT_PUBLIC: "Historial de partidas no público",
   MISSING_LADDER_MATCHES: "Partidas de ladder que no nos llegan",
@@ -158,10 +180,6 @@ export type AlertsThresholds = {
   repeatedTeammateStreak: number;
   /** R3: partidas con el mismo compañero en total, un único aviso al llegar. */
   repeatedTeammateTotal: number;
-  /** R4: diferencia de elo con un compañero, en valor absoluto, para avisar. */
-  teammateEloGap: number;
-  /** R5: diferencia de escalones (en valor absoluto) entre la división del jugador y la de la partida de equipo. */
-  lowDivisionSteps: number;
 };
 
 export type AlertsRuleset = {
@@ -174,9 +192,9 @@ export type AlertsRuleset = {
  * Los valores con los que se publica el ruleset la primera vez.
  *
  * Son los que acordaron cliente y organización: 3 minutos, rachas de 2 y 3,
- * acumulados cada 5 y cada 10, 7 partidas con el mismo compañero, 500 de elo y
- * 3 escalones de división. Se cambian en `Setting["alerts.ruleset"]` sin
- * desplegar, igual que los puntos por victoria del motor de puntuación.
+ * acumulados cada 5 y cada 10 y 7 partidas con el mismo compañero. Se cambian en
+ * `Setting["alerts.ruleset"]` sin desplegar, igual que los puntos por victoria del
+ * motor de puntuación.
  */
 export const DEFAULT_ALERTS_RULESET: AlertsRuleset = {
   version: ALERTS_RULESET_VERSION,
@@ -189,8 +207,6 @@ export const DEFAULT_ALERTS_RULESET: AlertsRuleset = {
     repeatedOpponentTotalStep: 10,
     repeatedTeammateStreak: 3,
     repeatedTeammateTotal: 7,
-    teammateEloGap: 500,
-    lowDivisionSteps: 3,
   },
 };
 
@@ -214,8 +230,6 @@ const THRESHOLD_KEYS = [
   "repeatedOpponentTotalStep",
   "repeatedTeammateStreak",
   "repeatedTeammateTotal",
-  "teammateEloGap",
-  "lowDivisionSteps",
 ] as const satisfies readonly (keyof AlertsThresholds)[];
 
 export type AlertsRulesetMergeResult = {
@@ -320,25 +334,6 @@ export type DiscordNotInGuildResolvedBy = "discordUserId" | "username";
 export type AlertAnchorDetail = {
   /** Duración en segundos, si la partida la trae. */
   durationSeconds?: number;
-  /** Mayor brecha de elo con un compañero en esa partida (R4). */
-  eloGap?: number;
-  /**
-   * Diferencia de escalones entre la subdivisión de la partida y la del jugador
-   * en esa misma partida de equipo (R5). Positivo si la partida está por debajo,
-   * negativo si está por encima; el aviso sale con el valor absoluto.
-   */
-  steps?: number;
-  /**
-   * Media de **rating** de la partida de equipo (R5). Es la escala de la ladder,
-   * la misma que `selfRating`; **no** es el `mmr` de la partida.
-   */
-  averageRating?: number;
-  /** Rating del jugador en esa partida de equipo (R5). */
-  selfRating?: number;
-  /** Subdivisión a la que corresponde la media de rating de la partida, ya resuelta (R5). */
-  gameSubdivision?: string;
-  /** Subdivisión del jugador en esa partida de equipo, ya resuelta (R5). */
-  playerSubdivision?: string;
 
   /* Reglas de estado: la evidencia con la que se comprobó. */
 
@@ -409,7 +404,7 @@ export type AlertTriggerInput = {
   threshold: number;
   anchorGameId: string | null;
   anchorStartedAt: Date | null;
-  /** Familia de ladder de la partida (`Match.mode`), de la que salen los cortes de R5. */
+  /** Familia de ladder de la partida ancla (`Match.mode`), cuando la tiene. */
   anchorLadder?: string | null;
   /**
    * Ventana del torneo, **solo para las reglas que miran partidas**.
@@ -512,10 +507,6 @@ export function partidas(count: number): string {
   return count === 1 ? "1 partida" : `${count} partidas`;
 }
 
-function conY(n: number): string {
-  return n === 1 ? "1 escalón" : `${n} escalones`;
-}
-
 /**
  * La frase de una alerta, en la forma en que se pinta.
  *
@@ -541,27 +532,13 @@ export function alertSummary(input: AlertTriggerInput): string {
       }${cierre}`;
     case "REPEATED_TEAMMATE_TOTAL":
       return `${partidas(input.count)} de equipo con ${input.subject.name ?? "el mismo compañero"} en total`;
-    case "TEAMMATE_ELO_GAP": {
-      const gap = input.detail?.eloGap;
-
-      return gap === undefined
-        ? `${partidas(input.count)} de equipo con un compañero muy por encima o por debajo${cierre}`
-        : `${partidas(input.count)} de equipo con un compañero a ${gap} de elo${cierre}`;
-    }
-    case "LOW_DIVISION_TEAM_GAME": {
-      const steps = input.detail?.steps;
-
-      if (steps === undefined) {
-        return `${partidas(input.count)} de equipos en una división muy distinta a la suya${cierre}`;
-      }
-
-      // `steps` positivo es que la partida está por debajo del jugador y negativo
-      // que está por encima; la frase conserva ese sentido, que es lo que el
-      // número quiere decir.
-      const sentido = steps < 0 ? "por encima" : "por debajo";
-
-      return `${partidas(input.count)} de equipos ${conY(Math.abs(steps))} ${sentido} de su división${cierre}`;
-    }
+    // Las dos frases siguientes son de reglas retiradas (ver el docblock del
+    // módulo). Se quedan por las filas históricas, y sin el detalle que las
+    // acompañaba —`eloGap` y `steps`, que ya no existen— dicen su forma genérica.
+    case "TEAMMATE_ELO_GAP":
+      return `${partidas(input.count)} de equipo con un compañero muy por encima o por debajo${cierre}`;
+    case "LOW_DIVISION_TEAM_GAME":
+      return `${partidas(input.count)} de equipos en una división muy distinta a la suya${cierre}`;
     // Las dos de estado van al final y sin `cierre`: no son un tramo que se cierre,
     // son algo que se ha comprobado. Las frases dicen **qué se ha comprobado**, nunca
     // por qué: el equipo de Alerts no sabe si el jugador cambió el ajuste, si se le

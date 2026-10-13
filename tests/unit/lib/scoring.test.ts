@@ -14,6 +14,7 @@ import {
   type AggregatedRow,
   type ScoringWindow,
 } from "@/lib/scoring";
+import type { TeamTierContext } from "@/lib/ranked-match";
 
 /**
  * El motor de puntos, en lo que se puede comprobar sin base de datos.
@@ -535,29 +536,43 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
 });
 
 describe("qué cuenta como partida clasificatoria", () => {
+  /**
+   * Contexto de equipos **sin cortes**: la condición de compañeros no se puede
+   * comprobar, así que estos casos miden las otras cinco. La condición de equipos
+   * tiene sus propias comprobaciones en `ranked-match.test.ts`, que es donde vive.
+   */
+  const SIN_EQUIPOS: TeamTierContext = { profileId: 9_000_001, cutoffs: null };
+
   // El `null` es el caso de toda la fila que ya estaba en la base cuando se añadió
   // `Player.registeredAt`: cuenta desde el principio de la ventana.
   it("una partida resuelta, rankeada, dentro de la ventana y no revertida cuenta", () => {
-    expect(countsAsRanked(partida(), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida(), VENTANA, null, SIN_EQUIPOS)).toBe(true);
   });
 
   it("una partida en curso no cuenta, ni a favor ni en contra", () => {
     // Sin `finishedAt` la API todavía no ha publicado el desenlace.
-    expect(countsAsRanked(partida({ finishedAt: null }), VENTANA, null)).toBe(false);
+    expect(countsAsRanked(partida({ finishedAt: null }), VENTANA, null, SIN_EQUIPOS)).toBe(false);
     // Y sin `result` tampoco, que es el mismo hecho por el otro lado.
-    expect(countsAsRanked(partida({ result: null }), VENTANA, null)).toBe(false);
+    expect(countsAsRanked(partida({ result: null }), VENTANA, null, SIN_EQUIPOS)).toBe(false);
   });
 
   it("una partida revertida deja de contar aunque siga en la tabla", () => {
     expect(
-      countsAsRanked(partida({ revertedAt: new Date("2026-09-21T00:00:00Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ revertedAt: new Date("2026-09-21T00:00:00Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(false);
   });
 
   it("solo cuentan las familias ranked del ruleset", () => {
-    expect(countsAsRanked(partida({ mode: "rm_team" }), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida({ mode: "rm_team" }), VENTANA, null, SIN_EQUIPOS)).toBe(true);
     for (const modo of ["rm_1v1", "qm_ffa", "ew_1v1", "custom_8v8", null]) {
-      expect(countsAsRanked(partida({ mode: modo }), VENTANA, null), String(modo)).toBe(false);
+      expect(countsAsRanked(partida({ mode: modo }), VENTANA, null, SIN_EQUIPOS), String(modo)).toBe(
+        false,
+      );
     }
   });
 
@@ -565,37 +580,65 @@ describe("qué cuenta como partida clasificatoria", () => {
     // Lo que decide es cuándo se jugó, no cuándo se publicó el resultado: una
     // partida empezada el último día puede terminar después y sigue contando.
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-09-15T00:00:00.000Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-09-15T00:00:00.000Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(true);
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-10-15T00:00:00.000Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-10-15T00:00:00.000Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(false);
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-10-14T23:59:59.999Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-10-14T23:59:59.999Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(true);
   });
 
   it("con `to` a `null` la ventana está abierta por la derecha", () => {
     const abierta: ScoringWindow = { from: "2026-09-15T00:00:00.000Z", to: null };
 
-    expect(countsAsRanked(partida({ startedAt: new Date("2030-01-01T00:00:00Z") }), abierta, null)).toBe(
-      true,
-    );
+    expect(
+      countsAsRanked(
+        partida({ startedAt: new Date("2030-01-01T00:00:00Z") }),
+        abierta,
+        null,
+        SIN_EQUIPOS,
+      ),
+    ).toBe(true);
   });
 
   it("una victoria cuenta lo mismo que una derrota", () => {
     // La clasificación cuenta `wins` y `matches` por separado: perder una
     // clasificatoria no puede restar puntos, solo no sumarlos.
-    expect(countsAsRanked(partida({ result: MatchResult.LOSS }), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida({ result: MatchResult.LOSS }), VENTANA, null, SIN_EQUIPOS)).toBe(
+      true,
+    );
   });
 
   it("con `registeredAt` el corte sube y las partidas anteriores dejan de contar", () => {
     // `partida()` arranca el 20 de septiembre a las 12:00, así que con el alta de
     // esa misma medianoche deja de contar y con la del 19 sigue contando.
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.000Z"))).toBe(true);
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.001Z"))).toBe(false);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.000Z"), SIN_EQUIPOS),
+    ).toBe(true);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.001Z"), SIN_EQUIPOS),
+    ).toBe(false);
     // Un alta anterior a la ventana es lo mismo que no tener fecha: es el caso de
     // todo el que ya estaba inscrito.
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-01T00:00:00.000Z"))).toBe(true);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-01T00:00:00.000Z"), SIN_EQUIPOS),
+    ).toBe(true);
   });
 });
