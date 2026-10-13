@@ -49,9 +49,11 @@ import { readMapPool, writeScoringLastRun } from "@/lib/settings";
  *   se publiquen reglas nuevas se recalcula al lado de las anteriores.
  * - Los puntos por partida se materializan en `Match.points`, así que se pueden
  *   auditar sin volver a agregarlos.
- * - El desempate es `total desc, wins desc, winrate desc, profileId asc`, que
- *   termina en un valor único (`profileId` es único), de modo que el puesto es un
- *   entero denso y estable.
+ * - El desempate es `total desc`, tasa de victorias desc, `wins desc`, `matches
+ *   desc` y, dentro de un empate, `profileId asc` solo para ordenar la
+ *   presentación. Quien comparte la tupla de criterios **comparte puesto**
+ *   (ranking de competición: 1, 2, 2, 4), así que el puesto ya no es un entero
+ *   denso.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -547,7 +549,10 @@ export type RankedStanding = {
   matches: number;
   byMode: Record<string, ScoreBreakdownMode>;
   objectives: { points: number; earned: string[] };
-  /** Puesto 1-based, denso sobre todos los aprobados. */
+  /**
+   * Puesto 1-based de competición sobre todos los aprobados: dos filas con la
+   * misma tupla de criterios lo comparten y el siguiente hueco se salta.
+   */
   rank: number;
 };
 
@@ -581,28 +586,56 @@ type AggregatedMatchRow = {
 const SCORING_LOCK_NAME = "ligahispana.recomputeScores";
 
 /**
+ * Los números que deciden el puesto. Si dos filas los comparten, comparten puesto.
+ */
+type StandingCriteria = {
+  total: number;
+  wins: number;
+  matches: number;
+};
+
+/**
+ * La cadena de criterios, todos descendentes: **total**, **tasa de victorias**
+ * (victorias entre partidas jugadas), **partidas ganadas** y **partidas jugadas**.
+ *
+ * Es la que decide el puesto, sin el desempate de presentación: cuando devuelve 0,
+ * las dos filas empatan y comparten puesto (ver `rankApprovedPlayers`). La tasa se
+ * compara con **producto cruzado** (`b.wins * a.matches` frente a
+ * `a.wins * b.matches`) y no con `wins / matches`: la división en coma flotante
+ * puede ordenar mal por el redondeo binario, y aquí el orden tiene que ser exacto.
+ * Con `matches` 0 (que no se da en una fila publicada, pero por si acaso) el
+ * producto es 0 —sin `NaN`—, así que la tasa empata y deciden las victorias, las
+ * partidas y, al final, `profileId`.
+ *
+ * Lo que importa de la cadena es que devuelve 0 **exactamente** cuando las dos filas
+ * tienen la misma tupla de total, victorias y partidas: con las victorias ya
+ * iguales, el cruce solo empata si las partidas coinciden, y con 0 victorias
+ * (producto 0 en los dos lados) cierra el criterio de partidas. Por eso un 0 aquí
+ * es lo que hace que dos filas compartan puesto.
+ */
+function compareCriteria(a: StandingCriteria, b: StandingCriteria): number {
+  return (
+    b.total - a.total ||
+    b.wins * a.matches - a.wins * b.matches ||
+    b.wins - a.wins ||
+    b.matches - a.matches
+  );
+}
+
+/**
  * Orden de la clasificación. Función pura y exportada para poder comprobarla sin
  * base de datos.
  *
- * `total` y `wins` descendentes; entre dos filas con el mismo total y las mismas
- * victorias decide el **porcentaje de victorias**, y cierra `profileId`
- * ascendente, que es único. El winrate se compara con **producto cruzado**
- * (`b.wins * a.matches` frente a `a.wins * b.matches`) y no con `wins / matches`:
- * la división en coma flotante puede ordenar mal por el redondeo binario, y aquí
- * el orden tiene que ser exacto. Con `matches` 0 (que no se da en una fila
- * publicada, pero por si acaso) el producto es 0 y el desempate cae a
- * `profileId`.
+ * Aplica `compareCriteria` y cierra con `profileId` ascendente, que es único.
+ * Ese último escalón es **solo** el desempate de presentación: quien tenga la
+ * misma tupla de criterios comparte puesto, y `profileId` lo único que hace es que
+ * las filas de un puesto compartido salgan en un orden estable y determinista.
  */
 export function compareStandings(
-  a: { total: number; wins: number; matches: number; profileId: number },
-  b: { total: number; wins: number; matches: number; profileId: number },
+  a: StandingCriteria & { profileId: number },
+  b: StandingCriteria & { profileId: number },
 ): number {
-  return (
-    b.total - a.total ||
-    b.wins - a.wins ||
-    b.wins * a.matches - a.wins * b.matches ||
-    a.profileId - b.profileId
-  );
+  return compareCriteria(a, b) || a.profileId - b.profileId;
 }
 
 /**
@@ -625,9 +658,14 @@ export function compareStandings(
  *   los aprobados, no sobre los agregados, así que no puede colarse alguien que
  *   dejó de estar aprobado entre el agregado y esta llamada.
  *
- * El `rank` es denso 1..N y sale de `compareStandings`, sin cambios: los que no
- * tienen partidas van con 0 puntos y 0 victorias, así que quedan detrás de
- * cualquiera que haya puntuado, y entre ellos desempata `profileId`.
+ * El `rank` es de competición y sale de `compareStandings`: la fila que abre un
+ * grupo nuevo toma su posición natural (`index + 1`) y las que empatan con ella
+ * **comparten puesto**, de modo que el hueco del puesto compartido se pierde
+ * (1, 2, 2, 4). El grupo lo define la tupla de criterios
+ * (`compareCriteria`), no el `profileId`, que solo ordena las filas dentro del
+ * puesto. Los que no tienen partidas van con 0 puntos, 0 victorias y 0 partidas,
+ * así que quedan detrás de cualquiera que haya jugado alguna y comparten entre
+ * ellos el último puesto.
  */
 export function rankApprovedPlayers(
   players: readonly { id: string; profileId: number }[],
@@ -635,7 +673,7 @@ export function rankApprovedPlayers(
   objectives: ReadonlyMap<string, ObjectiveAward>,
   ruleset: ScoringRuleset,
 ): RankedStanding[] {
-  return players
+  const ordenadas = players
     .map((player) => {
       const aggregate = totals.get(player.id) ?? {
         matchPoints: 0,
@@ -656,8 +694,19 @@ export function rankApprovedPlayers(
         objectives: { points: objectivePoints, earned: award?.earned ?? [] },
       };
     })
-    .sort(compareStandings)
-    .map((row, index) => ({ ...row, rank: index + 1 }));
+    .sort(compareStandings);
+
+  let rank = 0;
+
+  return ordenadas.map((row, index) => {
+    const anterior = ordenadas[index - 1];
+
+    if (anterior === undefined || compareCriteria(anterior, row) !== 0) {
+      rank = index + 1;
+    }
+
+    return { ...row, rank };
+  });
 }
 
 /**
@@ -852,9 +901,10 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         select: { id: true, profileId: true },
       });
 
-      // El orden y el `rank` los pone la parte pura (ver su docblock): total,
-      // victorias, winrate y `profileId`. Este último es único, así que el orden es
-      // total y el puesto un entero denso sobre todos los aprobados.
+      // El orden y el `rank` los pone la parte pura (ver su docblock): total, tasa
+      // de victorias, victorias y partidas, con `profileId` solo para el orden de
+      // presentación dentro del puesto. Los que empatan en la tupla comparten
+      // puesto, así que la numeración puede repetirse y saltarse huecos.
       const ranked = rankApprovedPlayers(players, totals, objectives.pointsByPlayer, ruleset);
 
       const previousCount = await tx.playerScore.count({

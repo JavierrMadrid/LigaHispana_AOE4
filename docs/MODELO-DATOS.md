@@ -111,15 +111,16 @@ la web; `Match` no se lee para pintar la clasificación.
 |---|---|---|
 | `playerId` | `String` | FK a `Player.id`, cascada. |
 | `ruleSetVersion` | `Int` | Con qué versión de reglas se calculó. Permite convivir dos versiones sin pisarse. |
-| `rank` | `Int` | Puesto con el desempate ya aplicado. **Se guarda** porque el orden no se resuelve en SQL. |
+| `rank` | `Int` | Puesto de competición con el desempate ya aplicado: dos filas empatadas en total, tasa de victorias, victorias y partidas **comparten** puesto (1, 2, 2, 4). **Se guarda** porque el orden no se resuelve en SQL. |
 | `total` | `Int` | `sum(byMode.points) + objectives.points`. |
 | `wins`, `matches` | `Int` | Victorias y partidas clasificatorias. |
 | `streak` | `Int?` | Racha **actual del torneo**: positiva = victorias clasificatorias seguidas, negativa = derrotas seguidas. `null` sin ninguna clasificatoria contada (la web pinta "-"; no es `0`). No es la racha de la ladder: esa vive en `Player.streak`. |
 | `breakdown` | `Json` | Desglose (ver formato abajo). |
 | `computedAt` | `DateTime` | |
 
-Índices: pk `(playerId, ruleSetVersion)` e `(ruleSetVersion, rank)`, que sostiene la clasificación
-sin `sort`. Todo jugador **aprobado** tiene fila, aunque todavía no haya jugado ninguna clasificatoria:
+Índices: pk `(playerId, ruleSetVersion)` e `(ruleSetVersion, rank)`, que sostiene el orden de la
+clasificación; dentro de un puesto compartido el desempate es `Player.profileId` ascendente. Todo jugador
+**aprobado** tiene fila, aunque todavía no haya jugado ninguna clasificatoria:
 sale con `total`, `wins` y `matches` a 0, el `breakdown` con ceros (las familias del ruleset, con 0,
 y `objectives` a 0 y vacío) y `streak` a `null`. Un jugador **no aprobado** (`PENDING`/`REJECTED`) no
 tiene fila y no aparece.
@@ -265,7 +266,7 @@ aparece en una consulta, no se crea.**
 | `Match` | `(playerId, finishedAt)` | Partidas en curso y orden de hitos. |
 | `Match` | `(mode, startedAt)` | Clasificatorias dentro de la ventana (igualdad + rango). |
 | `PlayerScore` | pk `(playerId, ruleSetVersion)` | Ficha del jugador; de paso indexa la FK para el `Cascade`. |
-| `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, sin `sort`. |
+| `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, ordenada por `rank` y, dentro del puesto compartido, por `Player.profileId`. |
 | `ObjectiveEvent` | `(objectiveId, playerId)` (único), `achievedAt`, `playerId` | Reconciliación, feed del historial, filtro por jugador y cascada. |
 | `Alert` | `dedupeKey` (único), `createdAt`, `(playerId, rule)` | Idempotencia, listado, detalle por jugador. |
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
@@ -275,7 +276,7 @@ aparece en una consulta, no se crea.**
 
 | Dónde | Consulta | Índice |
 |---|---|---|
-| `/` (clasificación) | `PlayerScore where ruleSetVersion = V order by rank` + `Player` por id | `(ruleSetVersion, rank)` |
+| `/` (clasificación) | `PlayerScore where ruleSetVersion = V order by rank, Player.profileId` + `Player` por id | `(ruleSetVersion, rank)` |
 | `/partidas` | `Match where finishedAt is null` y `Player.status = APPROVED`, por `startedAt` | `(playerId, finishedAt)`; sin índice parcial (no se ha necesitado) |
 | `/objetivos` | `Match` clasificatorias de todos los aprobados, en la ventana | `(mode, startedAt)` |
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |

@@ -437,9 +437,11 @@ model PlayerScore {
   ruleSetVersion Int
   player         Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-  // Puesto con el desempate ya aplicado. Se guarda porque el desempate acaba en
-  // datos que no están en la base de datos (el rating viene de la API), así que
-  // el orden final no se puede resolver en SQL.
+  // Puesto de competición (1, 2, 2, 4): dos filas con el mismo total, tasa de
+  // victorias, victorias y partidas comparten `rank` y el hueco del puesto
+  // compartido se pierde. Se guarda porque el desempate completo no se resuelve en
+  // SQL: la tasa se compara con producto cruzado y el orden de presentación
+  // dentro de un empate cierra en `Player.profileId`.
   rank    Int
   total   Int @default(0)
   wins    Int @default(0)
@@ -463,7 +465,8 @@ model PlayerScore {
   // Player (columna más a la izquierda), que es lo que hace barato el borrado en
   // cascada al eliminar un jugador.
   @@id([playerId, ruleSetVersion])
-  // La consulta más caliente del sitio: la clasificación, sin `sort`.
+  // La consulta más caliente del sitio: la clasificación, cuyo orden por `rank`
+  // sale del índice (el desempate de un puesto compartido es `Player.profileId`).
   @@index([ruleSetVersion, rank])
 }
 

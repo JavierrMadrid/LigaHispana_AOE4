@@ -53,15 +53,25 @@ entrar. `registeredAt` es la fecha del envío del alta (no la de la aprobación)
 
 ## Desempates de la clasificación
 
-Total descendente, luego victorias descendentes, luego **porcentaje de victorias** (victorias entre
-partidas jugadas) descendente, y por último `profileId` ascendente. El winrate se compara con producto
-cruzado, sin coma flotante, para que el orden sea exacto. Como `profileId` es único, el orden es total y
-el puesto un entero denso. (El desempate **dentro de un objetivo** es otro:
+La clasificación se ordena por esta cadena, el primero por delante del siguiente:
+
+| Criterio | Sentido |
+|---|---|
+| **Total** de puntos | Descendente |
+| **Tasa de victorias** (victorias entre partidas jugadas) | Descendente |
+| **Partidas ganadas** | Descendente |
+| **Partidas jugadas** | Descendente |
+
+La tasa se compara con producto cruzado, sin coma flotante, para que el orden sea exacto. Si dos
+personas coinciden en los cuatro, **comparten puesto**: ranking de competición (1, 2, 2, 4, con el hueco
+del puesto compartido). `profileId` ascendente solo fija el orden de presentación dentro del puesto
+compartido, no decide el puesto. Si hay premios, el puesto compartido se reparte a partes iguales entre
+quienes lo comparten. (El desempate **dentro de un objetivo** es otro:
 ver [`OBJETIVOS.md`](./OBJETIVOS.md).)
 
 Aparecen **todos los jugadores aprobados**: quien todavía no haya cerrado ninguna clasificatoria figura
-con 0 puntos y 0 partidas, así que queda detrás de cualquiera que haya puntuado (y entre ellos desempata
-`profileId`). Un jugador no aprobado no figura.
+con 0 puntos y 0 partidas, así que queda detrás de cualquiera que haya jugado alguna (y, entre ellos,
+comparten el último puesto). Un jugador no aprobado no figura.
 
 ## El ruleset
 

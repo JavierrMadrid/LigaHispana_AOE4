@@ -2069,13 +2069,43 @@ async function runDatabaseChecks(): Promise<void> {
       const todas = await db.playerScore.findMany({
         where: { ruleSetVersion: RULESET_VERSION },
         orderBy: { rank: "asc" },
-        select: { rank: true, total: true, wins: true },
+        select: { rank: true, total: true, wins: true, matches: true },
       });
 
-      assert.deepEqual(
-        todas.map((row) => row.rank),
-        todas.map((_, index) => index + 1),
-        "los puestos son un entero denso y sin huecos",
+      // El `rank` ya **no** es un 1..N denso: dos filas con el mismo total, tasa de
+      // victorias, victorias y partidas comparten puesto (1, 2, 2, 4) y el hueco se
+      // pierde. Lo que sí se cumple —y es lo que se comprueba— es que la tabla
+      // empieza en 1, que el puesto no retrocede y que solo avanza con la primera
+      // fila de una tupla distinta.
+      assert.equal(
+        todas.length === 0 || todas[0]?.rank === 1,
+        true,
+        "la clasificación empieza en el puesto 1",
+      );
+      assert.equal(
+        todas.every((row, index) => index === 0 || row.rank >= (todas[index - 1]?.rank ?? 0)),
+        true,
+        "los puestos no decrecen",
+      );
+      assert.equal(
+        todas.every((row, index) => {
+          const anterior = todas[index - 1];
+
+          if (anterior === undefined) {
+            return true;
+          }
+
+          // Con la misma tupla el puesto se comparte; con una distinta, la fila
+          // abre grupo y toma su posición natural.
+          const mismaTupla =
+            anterior.total === row.total &&
+            anterior.wins === row.wins &&
+            anterior.matches === row.matches;
+
+          return mismaTupla ? row.rank === anterior.rank : row.rank === index + 1;
+        }),
+        true,
+        "el puesto se comparte con la tupla idéntica y avanza con la primera fila de la siguiente",
       );
       assert.equal(
         todas.every((row, index) => {
@@ -2404,20 +2434,52 @@ async function runDatabaseChecks(): Promise<void> {
         assert.equal(vacioFila.points, 0, "y con 0 puntos");
         assert.equal(vacioFila.wins, 0);
         assert.equal(vacioFila.losses, 0);
+        // Con puestos compartidos, el último puesto ya no es `standings.length`:
+        // si otra fila también está a cero comparte puesto con él. Lo que sí se
+        // puede afirmar es que es el mayor de la tabla y que todos los que están a
+        // cero (0 puntos, 0 victorias, 0 derrotas) lo comparten.
+        const puestos = standings.map((row) => row.rank);
+        const ultimo = Math.max(...puestos);
+
+        assert.equal(vacioFila.rank, ultimo, "aparece en el último puesto: no ha puntuado nada");
         assert.equal(
-          vacioFila.rank,
-          standings.length,
-          "aparece en el último puesto: no ha puntuado nada",
+          fila.rank < vacioFila.rank,
+          true,
+          "el jugador que ha puntuado va por delante del que no ha jugado",
+        );
+        assert.equal(
+          standings
+            .filter((row) => row.points === 0 && row.wins === 0 && row.losses === 0)
+            .every((row) => row.rank === ultimo),
+          true,
+          "los aprobados sin ninguna partida comparten el último puesto",
         );
         assert.equal(
           standings.some((row) => row.profileId === SAMPLE_PENDING_PROFILE_ID),
           false,
           "un jugador pendiente no tiene fila",
         );
-        assert.deepEqual(
-          standings.map((row) => row.rank),
-          standings.map((_, index) => index + 1),
-          "los puestos son un entero denso y en orden",
+        // Como arriba: el `rank` es de competición, no un 1..N denso. Se comprueba
+        // que empieza en 1, que no retrocede y que solo avanza con la primera fila
+        // de una tupla distinta (aquí las partidas se reconstruyen de
+        // `wins + losses`, que es todo lo que publica `StandingRow`).
+        assert.equal(
+          standings.every((row, index) => {
+            const anterior = standings[index - 1];
+
+            if (anterior === undefined) {
+              return row.rank === 1;
+            }
+
+            const mismaTupla =
+              anterior.points === row.points &&
+              anterior.wins === row.wins &&
+              anterior.wins + anterior.losses === row.wins + row.losses;
+
+            return mismaTupla ? row.rank === anterior.rank : row.rank === index + 1;
+          }),
+          true,
+          "los puestos se comparten con la tupla idéntica y no retroceden",
         );
 
         const vivos = unwrapRead(await getLiveMatches(), "verify:partidas-en-curso");
