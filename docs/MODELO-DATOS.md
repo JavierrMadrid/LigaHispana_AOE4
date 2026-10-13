@@ -18,6 +18,7 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `ObjectiveEvent` | Un objetivo cobrado por un jugador y cuándo. | único `(objectiveId, playerId)` |
 | `Alert` | Un comportamiento anómalo detectado (append-only). | `id`; único `dedupeKey` |
 | `AdminAction` | Una acción del panel (append-only). | `id` |
+| `Admin` | Una cuenta con acceso al panel de administración. | `id`; `email` único |
 | `RateLimitCounter` | Un contador de frecuencia por IP hasheada. | `key` |
 | `Setting` | Configuración y memoria de los procesos. | `key` |
 
@@ -30,8 +31,8 @@ Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent` y `Alert` apuntan a `Player
 |---|---|
 | `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED` |
 | `MatchResult` | `WIN`, `LOSS` |
-| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED` |
-| `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD` |
+| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
+| `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión) |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
 
 Los valores nuevos de un enum se añaden **al final**: en Postgres `ALTER TYPE … ADD VALUE` solo
@@ -197,7 +198,12 @@ porque un estado no tiene remate y si no insertaría una fila nueva cada 12 hora
 Una acción del panel, para poder pintar su historial. **Append-only**: quién hizo qué y sobre qué
 fila. `summary` va ya redactado en español. Registra lo que cambia datos que se ven desde fuera:
 altas, bajas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
-jugador en la clasificación y rechazar lo deja fuera) y los revert/restore de puntos de una partida.
+jugador en la clasificación y rechazar lo deja fuera), los revert/restore de puntos de una partida,
+la gestión de admins, los cambios de configuración de la edición y la **reversión** de una acción
+anterior (`ACTION_REVERTED`). La única escritura sobre una fila ya existente es la marca de revertida
+(`revertedAt`/`revertedByEmail`): el rastro de lo hecho sobrevive a que se deshaga, y lo único que
+dice la marca es que ya no está vigente. Qué tipos se pueden deshacer y qué hace cada uno está en
+[`OPERACION.md`](./OPERACION.md#deshacer-una-acción).
 
 | Campo | Tipo | Nota |
 |---|---|---|
@@ -205,11 +211,36 @@ jugador en la clasificación y rechazar lo deja fuera) y los revert/restore de p
 | `type` | `AdminActionType` | |
 | `actorEmail` | `String` | Correo del usuario de Supabase Auth. |
 | `summary` | `String` | Frase ya redactada. |
-| `targetId` | `String?` | `Player.id` o `Match.id` según el `type`. Texto y no FK a propósito. |
+| `targetId` | `String?` | `Player.id`, `Match.id` o `Admin.id` según el `type`. Texto y no FK a propósito. |
 | `details` | `Json?` | Datos de la acción (no se usan para pintar). |
+| `revertedAt` | `DateTime?` | `null` = la acción sigue vigente. Marca de revertida, reversible. La escribe la reversión, que además añade una fila `ACTION_REVERTED`. |
+| `revertedByEmail` | `String?` | Quién la revirtió (no es el `actorEmail`, que es quien la hizo). |
 | `createdAt` | `DateTime` | |
 
 Índices: `(createdAt)` (paginación, lo más reciente primero) y `(type, createdAt)` (filtro por tipo).
+
+## `Admin`
+
+Las cuentas con acceso al panel. Hasta esta tabla, **cualquier** usuario de Supabase Auth era admin
+(los registros públicos están desactivados, así que solo había cuentas de la organización), y eso
+hacía imposible dar de baja a nadie. Con ella, la comprobación de acceso (`requireAdmin()` en
+`src/lib/auth.ts`) deja pasar al correo del superadministrador o a una fila **activa**.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `email` | `String` **único** | Canónico: en minúsculas y sin espacios. Es lo que se compara al entrar. |
+| `authUserId` | `String?` **único** | `auth.users.id`. `null` = aún sin vincular. Los `null` no colisionan. |
+| `active` | `Boolean` (`true`) | `false` = de baja: pierde el acceso sin borrar la fila. |
+| `deactivatedAt` | `DateTime?` | Cuándo se dio de baja. `null` mientras está activa. |
+| `addedByEmail` | `String?` | Correo de quien le dio de alta (también en `AdminAction`). |
+| `createdAt`, `updatedAt` | `DateTime` | |
+
+Índices: `id` (pk), `email` (único) y `authUserId` (único). La **baja es `active = false`**, no un
+borrado: la organización quiere desactivar sin perder la relación con lo que hizo la persona, y el
+rastro de quién hizo qué vive en `AdminAction`, que no depende de esta tabla. **No hay columna de
+rol**: el superadministrador es único y sale de la variable `SUPERADMIN_EMAIL` (ver
+[`OPERACION.md`](./OPERACION.md)), así que la tabla solo dice quién es admin normal.
 
 ## `RateLimitCounter`
 
@@ -242,7 +273,7 @@ Claves vivas en producción, con quién las escribe:
 
 | Clave | Qué es | La escribe |
 |---|---|---|
-| `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana y objetivos). | `ensureRuleset()` en `src/lib/scoring.ts` |
+| `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana, objetivos y objetivos desactivados). Un documento de la versión anterior se migra al leerlo. | `ensureRuleset()` en `src/lib/scoring.ts`; el panel, con `saveScoringRuleset` |
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
@@ -251,9 +282,11 @@ Claves vivas en producción, con quién las escribe:
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
 | `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |
-| `registration.countries` | Países que admite el formulario. | `npm run countries:seed` |
+| `registration.countries` | Países que admite el formulario, en el orden del catálogo. | `npm run countries:seed` o el panel (**solo el superadministrador**), con `saveCountries` |
 | `registration.open` | Si la inscripción está abierta. | Panel de admin |
 | `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel de admin |
+| `edition.config` | Configuración de la edición: nombre, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento). Versión 1 fija en código. | Panel de admin (**solo el superadministrador**) |
+| `edition.announcements` | Memoria de los avisos del torneo en Discord: cuándo se mandó el de comienzo y cuándo el de final (`startedAt`/`finishedAt`, o `null` si no se ha dado). Una marca puesta no se quita nunca, aunque la ventana se mueva. | Worker (`src/lib/edition-announcements.ts`) |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube y su playlist de subidas, ya resueltos (30 días). | Worker |
 | `aoe4world.sync.player.<profileId>` | Cursor de sincronización por jugador. | Worker; la baja de `/admin` lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede un cursor viejo. |
@@ -276,6 +309,7 @@ aparece en una consulta, no se crea.**
 | `ObjectiveEvent` | `(objectiveId, playerId)` (único), `achievedAt`, `playerId` | Reconciliación, feed del historial, filtro por jugador y cascada. |
 | `Alert` | `dedupeKey` (único), `createdAt`, `(playerId, rule)` | Idempotencia, listado, detalle por jugador. |
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
+| `Admin` | `email` (único), `authUserId` (único) | Acceso al panel por correo y vínculo con Auth. |
 | `RateLimitCounter` | `key` (pk) | El `INSERT ... ON CONFLICT`. |
 
 ## Consultas calientes
@@ -289,6 +323,7 @@ aparece en una consulta, no se crea.**
 | `/admin/historial` | `Match` clasificatorias **y revertidas** + `ObjectiveEvent` | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt` |
 | `/admin/alertas` | `Alert [por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
+| Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
 | Motor (recálculo) | `Match where mode = any(...) and startedAt en ventana and result/finishedAt no nulos` | `(mode, startedAt)` |
 
 El filtro de qué cuenta es **uno solo**: `src/lib/ranked-match.ts` (ventana, corte de inscripción,
@@ -299,7 +334,7 @@ marca de revertida y la condición de equipo de las partidas por equipos) y lo r
 
 ## RLS y privilegios
 
-Postura **cerrada**, aplicada a las ocho tablas de `public`:
+Postura **cerrada**, aplicada a las nueve tablas de `public`:
 
 | Paso | Qué |
 |---|---|
@@ -308,7 +343,7 @@ Postura **cerrada**, aplicada a las ocho tablas de `public`:
 | 3 | **Ningún `grant`** a `anon` ni a `authenticated`. |
 | 4 | Comprobar con `npm run db:security -- --check`. |
 
-Estado real: RLS activa y 0 políticas en las ocho tablas, y sin permisos para `anon` ni
+Estado real: RLS activa y 0 políticas en las nueve tablas, y sin permisos para `anon` ni
 `authenticated`. `service_role` conserva sus permisos y su `BYPASSRLS`: es un rol de infraestructura
 de Supabase, no un cliente del torneo. Consecuencia en la Data API: **`401 permission denied`** (el
 permiso de tabla se comprueba antes que RLS). No se "arregla" concediendo `SELECT`; si algún día
@@ -319,7 +354,7 @@ hace falta servir una tabla, sería con una vista `security_invoker = true` y un
 - Antes de activar RLS, el script comprueba que el rol de `DATABASE_URL` tenga `BYPASSRLS`; si no,
   se niega a aplicar nada (la web dejaría de ver datos en silencio).
 - La lista de tablas del script es **explícita**: al añadir una tabla hay que añadirla ahí, porque
-  una tabla nueva nace con los permisos por defecto de Supabase.
+  una tabla nueva nace con los permisos por defecto de Supabase. `Admin` ya está en esa lista.
 
 ## Cambios de esquema
 
