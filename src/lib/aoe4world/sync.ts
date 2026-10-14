@@ -4,6 +4,8 @@ import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { evaluateAlerts, type EvaluateAlertsResult } from "@/lib/alerts/evaluate";
 import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { checkDiscordMembership, describeDiscordChecks, type DiscordChecksResult } from "@/lib/discord/check";
+import { describeParticipantRoleSync } from "@/lib/discord/participant-role";
+import { syncParticipantRole } from "@/lib/discord/role-sync";
 import { db } from "@/lib/db";
 import { announceEditionWindow } from "@/lib/edition-announcements";
 import {
@@ -31,6 +33,7 @@ import {
   refreshStreamLiveStatus,
   type StreamRefreshResult,
 } from "@/lib/streams/refresh";
+import { announceDailyStandings } from "@/lib/standings-report";
 import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
 import { Aoe4WorldError, Aoe4WorldNotFoundError } from "./http";
@@ -266,10 +269,11 @@ export type SyncSummary = {
    */
   streamsError: string | null;
   /**
-   * Lo que hay que saber del aviso del comienzo y el final del torneo en Discord
-   * (`src/lib/edition-announcements.ts`): un envío que ha fallado, o la falta de
+   * Lo que hay que saber de los **mensajes del bot al canal de avisos**: los hitos de la
+   * edición (`src/lib/edition-announcements.ts`) y el informe diario de clasificación
+   * (`src/lib/standings-report.ts`). Un envío que ha fallado, o la falta de
    * `DISCORD_BOT_TOKEN` o `DISCORD_ANNOUNCE_CHANNEL_ID`. `null` cuando no tocaba ningún
-   * aviso o los que tocaban salieron.
+   * mensaje o los que tocaban salieron.
    *
    * **No** mueve `lastSuccessAt` del rastro, por el mismo motivo que `discordError`: no
    * poder avisar del torneo no ha parado ni una partida.
@@ -1082,6 +1086,35 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido comprobar la pertenencia a Discord: ${discordError}`);
   }
 
+  // El **rol de participante** (issue 56) va justo después, en el mismo tratamiento
+  // tolerante y con el mismo destino en el rastro: es el adorno del torneo que acompaña
+  // a la pertenencia, y comparte su resolución de cuentas (el roster resuelve los
+  // `@usuario`). Sin `DISCORD_PARTICIPANT_ROLE_ID` el paso no existe y solo deja el
+  // motivo; un 403 o un timeout no tumban la pasada y se reintentan en la siguiente.
+  // El motivo se acumula en `discordError` —es el sitio donde ya se dejan los de
+  // Discord— y **no** mueve `lastSuccessAt`.
+  try {
+    const role = await syncParticipantRole({ signal });
+    const roleError = describeParticipantRoleSync(role);
+
+    if (roleError !== null) {
+      discordError = discordError === null ? roleError : `${discordError} ${roleError}`;
+      console.warn(`[sync] ${roleError}`);
+    }
+
+    if (role.added > 0 || role.removed > 0) {
+      console.info(
+        `[sync] Rol de participante en Discord: ${role.added} puesto(s), ${role.removed} quitado(s).`,
+      );
+    }
+  } catch (error) {
+    const roleError = toErrorMessage(error);
+    discordError = discordError === null ? roleError : `${discordError} ${roleError}`;
+    console.error(
+      `[sync] No se ha podido sincronizar el rol de participante en Discord: ${roleError}`,
+    );
+  }
+
   // El estado de directo de YouTube y Kick va **el último de los tres que salen a la
   // red**, con el mismo tratamiento que las alertas: tolerante a fallos, con el motivo
   // en el rastro, y sin que un fallo suyo pueda parar la pasada. Y por el mismo motivo
@@ -1115,11 +1148,13 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido comprobar el estado de directo: ${streamsError}`);
   }
 
-  // Los avisos del comienzo y el final del torneo van **los últimos**, con el mismo
-  // tratamiento tolerante que los tres pasos anteriores: no dependen de nada de lo de
-  // antes y un fallo suyo no para la pasada ni mueve `lastSuccessAt`. El paso sale antes
-  // de leer el nombre de la edición cuando no toca ningún aviso, así que en las pasadas
-  // normales es una comparación de fechas.
+  // Los avisos al canal de Discord —los hitos de la edición y el informe diario de
+  // clasificación— van **los últimos**, con el mismo tratamiento tolerante que los tres
+  // pasos anteriores: no dependen de nada de lo de antes y un fallo suyo no para la pasada
+  // ni mueve `lastSuccessAt`. Los dos comparten `announceError`, que es el rastro de los
+  // mensajes al canal. `announceEditionWindow()` sale antes de leer el nombre de la
+  // edición cuando no toca ningún aviso, así que en las pasadas normales es una
+  // comparación de fechas; el informe diario, fuera de su hora, también.
   let announceError: string | null = null;
 
   try {
@@ -1137,6 +1172,25 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   } catch (error) {
     announceError = toErrorMessage(error);
     console.error(`[sync] No se han podido enviar los avisos del torneo: ${announceError}`);
+  }
+
+  try {
+    const report = await announceDailyStandings();
+
+    if (report.error !== null) {
+      announceError = announceError === null ? report.error : `${announceError} ${report.error}`;
+      console.warn(`[sync] ${report.error}`);
+    }
+
+    if (report.sent > 0) {
+      console.info(`[sync] Informe diario de clasificación enviado a Discord: ${report.sent} mensaje(s).`);
+    }
+  } catch (error) {
+    const reportError = toErrorMessage(error);
+    announceError = announceError === null ? reportError : `${announceError} ${reportError}`;
+    console.error(
+      `[sync] No se ha podido enviar el informe diario de clasificación: ${reportError}`,
+    );
   }
 
   const finishedAtMs = Date.now();

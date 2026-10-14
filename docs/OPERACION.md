@@ -237,8 +237,12 @@ El resultado se deja **siempre en `PENDING`**: aprobar o rechazar es de la organ
 se reescribe es un envío de un perfil `REJECTED`: actualiza esa misma fila y la devuelve a `PENDING`.
 Un perfil `APPROVED` o `PENDING` bloquea el envío.
 
-La inscripción está **cerrada por defecto**: el estado vive en `Setting["registration.open"]` y lo
-abre o cierra la organización desde el panel.
+La inscripción está **cerrada por defecto**: el estado vive en `Setting`. El interruptor
+`registration.open` la abre o cierra, y `registration.closesAt` es una **fecha de cierre**: si está
+puesta, a esa hora las inscripciones se cierran **solas**. El estado efectivo es la conjunción
+—abiertas ⇔ interruptor encendido **y** (sin fecha o `now < closesAt`)—, así que el interruptor sigue
+pudiendo cerrar antes, y para **reabrir** después de la fecha el superadministrador quita o mueve la
+fecha. Sin fecha configurada todo funciona como antes.
 
 ## Administración del panel
 
@@ -331,7 +335,8 @@ superadministrador que viven en sus subpestañas (`/admin/administracion/inscrip
 | `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento) | `saveEditionConfig` |
 | `scoring.ruleset` | Ventana, familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
 | `registration.countries` | Países admitidos en la inscripción, en el orden del catálogo | `saveCountries` |
-| `registration.open` | Si la inscripción está abierta | `setRegistrationOpen` |
+| `registration.open` | El interruptor: si la inscripción está abierta | `setRegistrationOpen` |
+| `registration.closesAt` | La fecha de cierre: pasada, cierra sola la inscripción (ISO-8601 UTC, o quitada) | `setRegistrationClosesAt` |
 | `donations.matcherino` | Campaña de donaciones de Matcherino (banner y URL) | `setMatcherinoDonations` |
 
 - **La validación es del servidor y va antes de escribir**: un nombre vacío, un importe que no es un
@@ -343,6 +348,14 @@ superadministrador que viven en sus subpestañas (`/admin/administracion/inscrip
   `datetime-local`; el servidor lo interpreta en `Europe/Madrid` y guarda el instante ISO-8601 UTC que
   lee el motor (`parseMadridLocalInstant()` en `src/lib/ranked-match.ts`). Un instante ISO con zona
   escrito a mano también vale. Ver [`PUNTUACION.md`](./PUNTUACION.md#la-ventana).
+- **La fecha de cierre de inscripciones se escribe como la ventana, y la interpreta el servidor.** El
+  campo `closesAt` de `setRegistrationClosesAt` acepta las dos formas de un formulario: un
+  `datetime-local` (**sin zona**), que el servidor interpreta en `Europe/Madrid` con
+  `parseMadridLocalInstant()` —la misma función que la ventana—, o un instante ISO-8601 **con zona**.
+  En los dos casos se guarda en ISO-8601 UTC. Vacío **quita** la fecha, que es como se reabre después
+  del cierre. La subpestaña la prefila en hora de Madrid y enseña el **estado efectivo** del plazo
+  —abierto, cerrado por el interruptor o cerrado por la fecha— con el motivo al lado, para que con la
+  fecha ya pasada no se lea "abiertas" porque el interruptor siga encendido.
 - **Todo queda en `/admin/acciones`** como `CONFIG_CHANGED`, con qué campos cambiaron y sus dos valores,
   en la misma transacción que el cambio.
 - **Los países admitidos** solo pueden ser los del catálogo del código (`DEFAULT_COUNTRIES`): la lista no
@@ -382,7 +395,9 @@ credenciales el paso no existe** (no falla): el formulario no pinta el botón y 
 | `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord | No (valores por defecto) |
 | `DISCORD_CHECK_MAX_PER_RUN` | Tope de cuentas comprobadas por pasada (10) | No |
 | `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas de la lista de miembros por refresco (20) y horas de caché (12) | No |
-| `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa del **comienzo y el final del torneo** | Sí, para avisar |
+| `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa de los **hitos de la edición** (comienzo, final, recordatorios y cierre de inscripciones) y manda el **informe diario de clasificación** | Sí, para avisar |
+| `DISCORD_PARTICIPANT_ROLE_ID` | Rol que el bot pone a los **participantes aprobados** y quita a quien deja de estarlo | Sí, para el rol |
+| `DISCORD_ROLE_MAX_PER_RUN` | Tope de operaciones con el rol por pasada (10) | No |
 
 Van en el panel del Worker **y además** en *Build variables and secrets* del trigger
 ([los dos sitios](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel)). Los secretos, como secretos.
@@ -394,14 +409,18 @@ Van en el panel del Worker **y además** en *Build variables and secrets* del tr
 2. **OAuth2 → Redirects**: `https://laligahispana.es/api/discord/oauth/callback` (y el del
    `workers.dev` del Preview si se prueba ahí).
 3. **Crear el bot** y copiar su token.
-4. **Invitar el bot al servidor** con el permiso `CREATE_INSTANT_INVITE`. Sin él, el `PUT …/members`
+4. **Invitar el bot al servidor** con los permisos `CREATE_INSTANT_INVITE` (meter a quien se inscribe) y
+   `MANAGE_ROLES` (poner y quitar el rol de participante), y **colocar su rol por encima** del rol de
+   participante (Configuración del servidor → Roles). Sin `CREATE_INSTANT_INVITE`, el `PUT …/members`
    responde 403 y **la inscripción no se bloquea**: se acepta con `joined: false` y se enseña el
-   `DISCORD_INVITE_URL`.
+   `DISCORD_INVITE_URL`. Sin `MANAGE_ROLES` o con el rol por debajo, el paso del rol responde 403 y el
+   rastro lo dice ([ver abajo](#rol-de-participante-en-discord)).
 5. **Activar el intent privilegiado `GUILD_MEMBERS`** (Bot → Privileged Gateway Intents → SERVER
    MEMBERS INTENT). Es manual y no se puede pedir por API; es lo que permite leer la **lista de
    miembros** del servidor, que comprueba a todos de una vez y **enlaza la cuenta de las altas de
    admin** por su `@usuario`. Sin él, el sistema funciona por el camino corto (ver abajo).
-6. Copiar el **id del servidor** a `DISCORD_GUILD_ID`.
+6. Copiar el **id del servidor** a `DISCORD_GUILD_ID` y el **id del rol de participante** a
+   `DISCORD_PARTICIPANT_ROLE_ID`.
 
 Los scopes `identify` y `guilds.join` no se configuran en el portal: los pone el código al construir
 la URL de autorización.
@@ -620,28 +639,119 @@ de los directos.
 - El resumen de `discordError` dice cuántas ausencias del roster se confirmaron por cuenta.
 - Dónde mirar: `discordError` (`[sync] Discord: …`). **No** mueve `lastSuccessAt`.
 
+## Rol de participante en Discord
+
+El bot pone el **rol de participante** (`DISCORD_PARTICIPANT_ROLE_ID`) a los participantes aprobados con
+cuenta de Discord y se lo quita a quien deja de estarlo (rechazado o eliminado). La fuente de verdad de
+**quiénes son** es `Player.status`; el rol no sustituye a nada, acompaña. Lo hace el worker en su pasada
+(`syncParticipantRole()`), justo después de la comprobación de pertenencia y con su **misma resolución de
+cuentas**: `discordUserId`, o el `@usuario` resuelto por la lista de miembros.
+
+| Qué | Cuánto |
+|---|---|
+| Poner el rol | `PUT /guilds/{id}/members/{user}/roles/{role}`, uno por cuenta nueva |
+| Quitar el rol | `DELETE` de la misma ruta |
+| Memoria | `Setting["discord.participantRole"]` (ids con el rol puesto por el bot) |
+| Operaciones por pasada | **10** (`DISCORD_ROLE_MAX_PER_RUN`); el resto, a la siguiente |
+
+- **Sin `DISCORD_PARTICIPANT_ROLE_ID` (o sin token o sin servidor) el paso no existe y no es un fallo**:
+  no lee ni una fila y deja el motivo en `discordError`.
+- **La memoria es la del que puso el rol**: sirve para saber a quién quitárselo, porque una fila
+  **borrada** ya no tiene `discordUserId`. Si alguien se quita o se pone el rol a mano desde Discord, el
+  worker no lo corrige.
+- **No se toca a quien consta fuera del servidor** (`discordInGuild = false`): no se le puede poner un rol
+  y, al caerse de la lista, se le vuelve a poner cuando regrese.
+- **Un `403` o un timeout no tumban la pasada**: se resumen en `discordError` y se reintentan. Un `403`
+  suele ser que al bot le falta `MANAGE_ROLES` o su rol no está por encima del de participante.
+- Dónde mirar: `discordError` (`[sync] Rol de participante: …`). **No** mueve `lastSuccessAt`.
+
 ## Avisos del torneo en Discord
 
-El bot avisa del **comienzo y el final** del torneo en un canal. Lo hace el worker en su pasada
-(`announceEditionWindow()`): mira la ventana del ruleset (`Setting["scoring.ruleset"].window`) y manda
-un mensaje al cruzar cada extremo.
+El bot manda mensajes a un canal (`DISCORD_ANNOUNCE_CHANNEL_ID`). Son de tres clases: los **hitos de la
+edición** (esta sección), el **informe diario de clasificación** y los **avisos de las acciones de
+administración** (las dos subsecciones de abajo). Los hitos los manda el worker en su pasada
+(`announceEditionWindow()`): mira la ventana del ruleset (`Setting["scoring.ruleset"].window`) y la fecha
+de cierre de inscripciones (`Setting["registration.closesAt"]`).
+
+| Hito | Cuándo |
+|---|---|
+| Comienzo / final | al cruzar `window.from` / `window.to` |
+| Recordatorios 7/3/1 días | antes del inicio, antes del final y antes del cierre de inscripciones |
+| Inscripciones cerradas | cuando el plazo pasa a cerrado (por la fecha o por el interruptor), si antes estuvo abierto |
 
 | Qué | Dónde |
 |---|---|
 | Canal | `DISCORD_ANNOUNCE_CHANNEL_ID` (y el token del bot) |
-| Memoria | `Setting["edition.announcements"]` (`startedAt` / `finishedAt`) |
-| Texto | `announcementText()`: nombre de la edición y periodo publicados |
+| Memoria | `Setting["edition.announcements"]` (`startedAt`/`finishedAt`, el mapa `sent` y `registrationWasOpen`) |
+| Texto | `announcementText()`: nombre de la edición, periodo y fecha de cierre publicados |
 | Dónde mirar | `announceError` en `Setting["sync.lastRun"]` (`[sync] …`) |
 
-- **Una sola vez por aviso, y nunca se repite**: la marca de un aviso dado no se quita, aunque la
-  ventana se mueva. Con la ventana **abierta** (`to: null`) el aviso de final no existe.
+- **Un hito, un mensaje, y nunca se repite**: la marca de un aviso dado no se quita, aunque la ventana
+  se mueva. Con la ventana **abierta** (`to: null`) el aviso de final no existe.
+- **Nada de ráfagas**: un recordatorio solo sale dentro de **su tramo** (el de 7 días, entre «faltan 7»
+  y «faltan 3»; el de 1, entre «falta 1» y el cierre). Configurar el sistema a mitad de edición no
+  dispara los hitos cuyo momento ya pasó: solo sale el del tramo en el que estamos y los siguientes
+  cuando lleguen.
+- **El cierre de inscripciones no se anuncia si el plazo nunca abrió**: la memoria guarda que estuvo
+  abierto (`registrationWasOpen`) y solo avisa del paso a cerrado cuando eso fue verdad.
 - **Sin `DISCORD_BOT_TOKEN` o sin canal no se envía, y el aviso queda pendiente** (no se anota), así que
   configurar el canal más tarde sigue dando el aviso que faltaba. El motivo va en `announceError`, que
   **no** mueve `lastSuccessAt`.
-- Sin nada que anunciar, la pasada solo lee la ventana y la memoria: es una comparación de fechas, sin
-  leer el nombre de la edición ni crear ningún cliente HTTP.
+- Sin nada que anunciar, la pasada solo lee la ventana, la fecha, la memoria y el estado del plazo: es
+  una comparación de fechas, sin leer el nombre de la edición ni crear ningún cliente HTTP.
 - **Aviso de prueba**: el superadministrador puede mandar el texto real con el prefijo `(Prueba)` desde
   el panel (`sendTestAnnouncement`). No toca la memoria.
+
+### Informe diario de clasificación
+
+Además de los hitos, el bot publica **una vez al día** la clasificación entera y un enlace a la web. Lo
+hace el worker en su pasada (`announceDailyStandings()`, en `src/lib/standings-report.ts`): en la
+**primera pasada a partir de las 21:00 de Madrid** manda el informe del día.
+
+| Qué | Dónde |
+|---|---|
+| Canal | `DISCORD_ANNOUNCE_CHANNEL_ID` (y el token del bot) |
+| Fuente | `getStandings()` (`src/lib/public.ts`), la misma que ve la web |
+| Enlace | `readPublicOrigin()` (`src/lib/site-url.ts`), el mismo dominio que el layout; apunta a la portada (`/`), que es donde está la clasificación. Sin dominio, sin enlace |
+| Memoria | `Setting["discord.standingsReport"]` (`lastDay`, `pendingDay`, `sentChunks`) |
+| Dónde mirar | `announceError` en `Setting["sync.lastRun"]` (`[sync] …`) |
+
+- **Una vez por día de Madrid, y nada de ráfagas**: si la pasada de las 21:00 no ocurre (caída,
+  despliegue), el informe de ese día **no se manda atrasado**; se salta y se informa del siguiente cuando
+  llegue su hora.
+- **La clasificación puede no caber en un mensaje**: se parte en varios de **2000 caracteres** como
+  máximo, **por líneas** (sin cortar ninguna por la mitad). Si un trozo falla, la pasada siguiente retoma
+  desde donde se quedó **sin repetir** lo ya enviado, y el día queda cerrado cuando sale el último.
+- **Sin filas clasificadas no hay informe** (ni un mensaje diciendo que no hay nada), y no es un fallo.
+- **Sin `DISCORD_BOT_TOKEN` o sin canal no se envía nada** y tampoco es un fallo: el aviso lo da el paso
+  de los hitos. El motivo de un fallo va en `announceError`, que **no** mueve `lastSuccessAt`.
+
+### Avisos de las acciones de administración
+
+Cuando la organización quita algo del torneo, el bot lo cuenta: un **privado** a la persona afectada y un
+**mensaje global** al canal de avisos. Lo hace la propia Server Action, después de la transacción
+(`dispatchAdminNotice()`, `src/lib/admin-notice-send.ts`).
+
+| Acción | Cuándo avisa |
+|---|---|
+| **Baja de participante** (`deletePlayer`, `PLAYER_REMOVED`) | siempre |
+| **Invalidar los puntos de una partida** (`revertMatchPoints`, `MATCH_POINTS_REVERTED`) | solo al invalidar; restaurar puntos no avisa |
+
+No avisan **restaurar** puntos, **deshacer** una acción ni aprobar o rechazar: no quitan nada ni son
+noticia.
+
+| Qué | Cómo |
+|---|---|
+| Privado (DM) | `POST /users/@me/channels` + publicar. Necesita `discordUserId`; si solo hay `@usuario`, se resuelve contra el roster cacheado |
+| Global | Al canal de avisos, por `postChannelMessage()`. Corto, sin decir quién lo hizo (eso está en el historial del panel) |
+| Texto de la baja | «Retirado del torneo» solo si estaba `APPROVED`; si era una solicitud (`PENDING`/`REJECTED`), «solicitud descartada» |
+
+- **No bloquea la acción y no puede hacerla fallar**: el aviso se aplaza con `ctx.waitUntil()` (o se deja
+  correr fuera del Worker), va después de la transacción —si el cambio falla no hay nada que avisar— y un
+  fallo de Discord queda en el log con el prefijo `[admin-notice]` **sin** cambiar lo que ve el
+  administrador ni el historial.
+- **Sin cuenta resoluble no hay privado**, y sin canal no hay global; los dos son **independientes** y
+  ninguno es un fallo. Sin `DISCORD_BOT_TOKEN` no se avisa de nada (solo queda el log).
 
 ## Simulaciones
 

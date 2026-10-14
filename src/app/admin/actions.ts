@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
 import { puntos, recordAdminAction } from "@/lib/admin-actions";
+import { dispatchAdminNotice } from "@/lib/admin-notice-send";
 import {
   countsWithoutRevertMark,
   deletePlayerCascade,
@@ -21,6 +22,7 @@ import { readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { logDatabaseFailure, uniqueViolationOn } from "@/lib/db-errors";
 import { parseMatcherinoDonations, type MatcherinoDonations } from "@/lib/donations";
+import { formatAbsoluteTime } from "@/lib/format";
 import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
 import {
   campoSiCambia,
@@ -31,13 +33,14 @@ import {
   type CamposEditables,
 } from "@/lib/player-fields";
 import { parseProfileId } from "@/lib/player-input";
-import { rankedMatchWhere } from "@/lib/ranked-match";
-import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
+import { rankedMatchWhere, parseMadridLocalInstant } from "@/lib/ranked-match";
+import { registrationClosedMessage } from "@/lib/registration-open";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
 import {
   readMatcherinoDonations,
-  readRegistrationOpen,
+  readRegistrationState,
   writeMatcherinoDonations,
+  writeRegistrationClosesAt,
   writeRegistrationOpen,
 } from "@/lib/settings";
 
@@ -160,6 +163,17 @@ const REGISTRATION_UNAVAILABLE_MESSAGE =
   "No se ha podido leer el estado de las inscripciones. Inténtalo de nuevo en unos minutos.";
 
 /**
+ * La fecha de cierre de inscripciones que se ha escrito no vale.
+ *
+ * Se aceptan las dos formas que puede mandar el panel: una fecha y hora de
+ * `datetime-local` (**sin zona**), que el servidor interpreta en `Europe/Madrid` como
+ * la ventana del ruleset, y un instante ISO-8601 **con zona**. Y se dice cómo quitar la
+ * fecha, que es un caso de uso de verdad (reabrir después del cierre).
+ */
+const REGISTRATION_CLOSES_AT_INVALID_MESSAGE =
+  "La fecha de cierre no es válida. Se acepta una fecha y hora (se interpreta en hora de Madrid) o un instante ISO-8601 con zona horaria, por ejemplo 2026-10-01T00:00:00Z. Para quitar la fecha, deja el campo vacío.";
+
+/**
  * La validación de los campos de un jugador —el criterio y los mensajes— vive en
  * `src/lib/player-fields.ts`: la comparten el alta, la edición y la reversión de una
  * edición, y tenerla aquí la habría duplicado en cuanto apareciera la tercera.
@@ -278,25 +292,26 @@ export async function createPlayer(
   const admin = await requireAdmin();
 
   // El cierre de inscripciones bloquea también el alta de admin, no solo el
-  // formulario público: es el mismo interruptor (`Setting["registration.open"]`) y
-  // se comprueba en servidor aunque la acción se llame a mano. Va lo primero,
-  // antes de validar nada, porque con el plazo cerrado no se va a escribir: no
-  // tiene sentido pagar validaciones ni lecturas para un alta descartada.
+  // formulario público: es el mismo estado (`Setting["registration.open"]` y la fecha
+  // `Setting["registration.closesAt"]`) y se comprueba en servidor aunque la acción se
+  // llame a mano. Va lo primero, antes de validar nada, porque con el plazo cerrado no
+  // se va a escribir: no tiene sentido pagar validaciones ni lecturas para un alta
+  // descartada.
   //
   // Aprobar y rechazar solicitudes **no** pasan por aquí y siguen funcionando
-  // siempre: el interruptor cierra el alta, no la gestión de lo ya recibido.
-  let registrationOpen: boolean;
+  // siempre: el cierre cierra el alta, no la gestión de lo ya recibido.
+  let registration;
 
   try {
-    registrationOpen = await readRegistrationOpen();
+    registration = await readRegistrationState();
   } catch (error) {
     logDatabaseFailure("admin/createPlayer/plazo", error);
 
     return { error: REGISTRATION_UNAVAILABLE_MESSAGE, message: null };
   }
 
-  if (!registrationOpen) {
-    return { error: REGISTRATION_CLOSED_MESSAGE, message: null };
+  if (!registration.open) {
+    return { error: registrationClosedMessage(registration), message: null };
   }
 
   // `readField` en todos, como en la edición: `formData.get` también puede
@@ -932,18 +947,21 @@ export async function setRegistrationOpen(formData: FormData): Promise<void> {
 
   const open = readField(formData, "open") === "true";
 
-  let antes: boolean;
+  let antes: Awaited<ReturnType<typeof readRegistrationState>>;
 
   try {
-    antes = await readRegistrationOpen();
+    antes = await readRegistrationState();
   } catch (error) {
     logDatabaseFailure("admin/setRegistrationOpen/leer", error);
 
     return;
   }
 
+  // Se compara el **interruptor**, no el estado efectivo: con la fecha de cierre ya
+  // pasada el plazo está cerrado aunque el interruptor siga encendido, y comparar el
+  // efectivo haría creer que hay un cambio cuando no lo hay.
   const cambios = campoSiCambia(
-    boolText(antes),
+    boolText(antes.switchOpen),
     boolText(open),
     "registration.open",
     "plazo de inscripción",
@@ -977,6 +995,112 @@ export async function setRegistrationOpen(formData: FormData): Promise<void> {
   revalidatePath("/admin/administracion/inscripciones");
   revalidatePath("/admin");
   revalidatePath("/participar");
+}
+
+/**
+ * Fija la fecha de cierre de las inscripciones, o la quita.
+ *
+ * Escribe (o borra) `Setting["registration.closesAt"]`, que es lo que comparten
+ * `registerPlayer` y `createPlayer` a través de `readRegistrationState()`. Pasada esa
+ * fecha, el plazo se cierra solo; el interruptor manual (`setRegistrationOpen`) sigue
+ * pudiendo cerrar antes, y para **reabrir** después de la fecha el superadministrador
+ * quita o mueve la fecha. Va **detrás de `requireSuperadmin()`**, como el interruptor:
+ * decide quién puede inscribirse y no se deja al criterio de quien llame a la acción.
+ *
+ * ## Qué espera y qué devuelve
+ *
+ * Lee un campo `closesAt` del `FormData` y acepta las **dos formas** que puede mandar un
+ * formulario, con la misma función que usa la ventana del ruleset
+ * (`parseMadridLocalInstant()`):
+ *
+ * - una fecha y hora de `<input type="datetime-local">` (`YYYY-MM-DDTHH:mm`, con
+ *   segundos opcionales) **sin zona**, que el **servidor** interpreta en
+ *   `Europe/Madrid`; y
+ * - un instante ISO-8601 **con zona** (`2026-10-01T00:00:00Z` o con desplazamiento),
+ *   que se normaliza tal cual.
+ *
+ * En los dos casos se guarda en `Setting["registration.closesAt"]` como ISO-8601 UTC.
+ * Vacío quita la fecha. Un campo vacío y una fecha mal escrita no son lo mismo: vacío es
+ * una intención válida y mal escrita es un error que hay que corregir, así que se
+ * distinguen y la segunda devuelve un `AdminActionResult` de error.
+ *
+ * ## Deja rastro, y solo si cambia algo
+ *
+ * El `upsert` (o el `deleteMany`) y la fila de `AdminAction` (`CONFIG_CHANGED`) van en
+ * la **misma transacción**: o se ve la fecha nueva y su línea en el historial, o no se
+ * ve ninguna. Se lee la fecha actual —normalizada— antes de escribir y, si ya era la
+ * pedida, se sale sin escribir y sin rastro: abrir el formulario y cerrarlo sin tocar
+ * nada no puede dejar huella.
+ *
+ * ## Qué revalida
+ *
+ * Las mismas tres rutas que el interruptor, porque la fecha cambia el mismo estado:
+ * la Administración donde se configura, el alta de `/admin` y el formulario público.
+ */
+export async function setRegistrationClosesAt(
+  _prevState: AdminActionResult,
+  formData: FormData,
+): Promise<AdminActionResult> {
+  const admin = await requireSuperadmin();
+
+  const raw = readField(formData, "closesAt");
+  const closesAt = raw === "" ? null : parseMadridLocalInstant(raw);
+
+  if (raw !== "" && closesAt === null) {
+    return { status: "error", message: REGISTRATION_CLOSES_AT_INVALID_MESSAGE };
+  }
+
+  let antes: Awaited<ReturnType<typeof readRegistrationState>>;
+
+  try {
+    antes = await readRegistrationState();
+  } catch (error) {
+    logDatabaseFailure("admin/setRegistrationClosesAt/leer", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  const cambios = campoSiCambia(
+    antes.closesAt,
+    closesAt,
+    "registration.closesAt",
+    "fecha de cierre de inscripciones",
+  );
+
+  // La fecha ya era esta: no se escribe, no se deja rastro y no se dice nada. La
+  // línea de estado vacía es la misma respuesta que da el interruptor cuando el valor
+  // ya era el pedido; decir "quitada" con el campo vacío sería contar algo que no ha
+  // pasado.
+  if (cambios.length === 0) {
+    return { status: "success", message: null };
+  }
+
+  const message =
+    closesAt === null
+      ? "Fecha de cierre de las inscripciones quitada."
+      : `Cierre de las inscripciones fijado para el ${formatAbsoluteTime(new Date(closesAt))}.`;
+
+  try {
+    await db.$transaction(async (tx) => {
+      await writeRegistrationClosesAt(closesAt, tx);
+
+      await recordAdminAction(tx, {
+        type: AdminActionType.CONFIG_CHANGED,
+        actorEmail: actorEmail(admin),
+        cambios,
+      });
+    });
+  } catch (error) {
+    logDatabaseFailure("admin/setRegistrationClosesAt", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  revalidatePath("/admin/administracion/inscripciones");
+  revalidatePath("/admin");
+  revalidatePath("/participar");
+
+  return { status: "success", message };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1182,6 +1306,10 @@ export async function deletePlayer(
     name: string;
     profileId: number;
     matchCount: number;
+    /** Columnas capturadas antes del borrado: la fila desaparece en la transacción. */
+    status: PlayerStatus;
+    discordUserId: string | null;
+    discordUsername: string | null;
   } | null;
 
   try {
@@ -1192,6 +1320,9 @@ export async function deletePlayer(
         name: true,
         profileId: true,
         registeredAt: true,
+        status: true,
+        discordUserId: true,
+        discordUsername: true,
       },
     });
 
@@ -1211,6 +1342,9 @@ export async function deletePlayer(
         name: row.name,
         profileId: row.profileId,
         matchCount,
+        status: row.status,
+        discordUserId: row.discordUserId,
+        discordUsername: row.discordUsername,
       };
     }
   } catch (error) {
@@ -1250,6 +1384,20 @@ export async function deletePlayer(
   }
 
   revalidatePath("/admin");
+
+  // El aviso va **después** de la transacción —si hubiera fallado no habría nada que
+  // avisar—, no bloquea ni puede cambiar lo que ve el administrador (ver
+  // `dispatchAdminNotice()`), y las columnas de Discord se capturaron antes del borrado.
+  dispatchAdminNotice({
+    kind: "player-removed",
+    player: {
+      name: player.name,
+      status: player.status,
+      discordUserId: player.discordUserId,
+      discordUsername: player.discordUsername,
+    },
+    matchCount: player.matchCount,
+  });
 
   const partidas =
     player.matchCount === 0
@@ -1345,7 +1493,12 @@ async function setMatchReverted(
     return { status: "error", message: "No se ha podido saber qué partida hay que cambiar." };
   }
 
-  let encontrada: MatchForScoring | null;
+  let encontrada:
+    | (MatchForScoring & {
+        /** Columnas de Discord del jugador, capturadas para el aviso de la acción. */
+        playerDiscord: { discordUserId: string | null; discordUsername: string | null };
+      })
+    | null;
 
   try {
     const row = await db.match.findUnique({
@@ -1361,7 +1514,15 @@ async function setMatchReverted(
         startedAt: true,
         finishedAt: true,
         rawJson: true,
-        player: { select: { name: true, profileId: true, registeredAt: true } },
+        player: {
+          select: {
+            name: true,
+            profileId: true,
+            registeredAt: true,
+            discordUserId: true,
+            discordUsername: true,
+          },
+        },
       },
     });
 
@@ -1385,6 +1546,10 @@ async function setMatchReverted(
             rawJson: row.rawJson,
             playerName: row.player.name,
             playerProfileId: row.player.profileId,
+            playerDiscord: {
+              discordUserId: row.player.discordUserId,
+              discordUsername: row.player.discordUsername,
+            },
           };
   } catch (error) {
     logDatabaseFailure(scope, error);
@@ -1497,6 +1662,22 @@ async function setMatchReverted(
   await reevaluatePlayerAlerts(match.playerId);
 
   revalidatePath("/admin");
+
+  // Solo la **invalidación** avisa: restaurar los puntos devuelve lo que se quitó y no es
+  // noticia. Va después del recálculo (si hubiera fallado, se habría deshecho el cambio)
+  // y sin bloquear, como el resto de avisos de administración.
+  if (revert) {
+    dispatchAdminNotice({
+      kind: "match-points-reverted",
+      player: {
+        name: match.playerName,
+        discordUserId: match.playerDiscord.discordUserId,
+        discordUsername: match.playerDiscord.discordUsername,
+      },
+      gameId: match.gameId,
+      points: puntosDeLaPartida,
+    });
+  }
 
   return {
     status: "success",

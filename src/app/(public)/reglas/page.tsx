@@ -120,7 +120,7 @@ export default async function RulesPage() {
               <li>
                 Las inscripciones se deben hacer{" "}
                 <strong className="font-semibold text-foreground">
-                  hasta 1 día antes del inicio del torneo
+                  hasta la fecha de cierre que publica la organización
                 </strong>
                 .
               </li>

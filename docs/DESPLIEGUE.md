@@ -130,10 +130,10 @@ Son **dos listas distintas y no intercambiables**:
 | `SUPABASE_SERVICE_ROLE_KEY` | Sí (secreto) | Sí (por si un módulo de servidor la lee al importar) |
 
 - `NEXT_PUBLIC_SITE_URL = https://laligahispana.es`. Si cambia el dominio, se cambia en las dos listas.
-- `DISCORD_ANNOUNCE_CHANNEL_ID` es un **id de canal, no un secreto**: va en la lista del Worker como
-  variable de **texto** (y por tanto solo sobrevive a un despliegue con `keep_vars`, ver abajo). Los
-  demás `DISCORD_*` son secretos. El resto de la configuración del bot está en
-  [`OPERACION.md`](./OPERACION.md#discord).
+- `DISCORD_ANNOUNCE_CHANNEL_ID` y `DISCORD_PARTICIPANT_ROLE_ID` son **ids, no secretos**: van en la
+  lista del Worker como variables de **texto** (y por tanto solo sobreviven a un despliegue con
+  `keep_vars`, ver abajo). Los demás `DISCORD_*` son secretos. El resto de la configuración del bot
+  está en [`OPERACION.md`](./OPERACION.md#discord).
 - Sin la variable de Hyperdrive en build, el `next build` termina bien y el `npx wrangler deploy` muere con
   un mensaje engañoso que habla de *developing locally*; mientras tanto, producción se queda en la versión anterior.
 

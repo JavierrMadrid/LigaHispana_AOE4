@@ -15,7 +15,14 @@ import {
   parseMatcherinoDonations,
   type MatcherinoDonations,
 } from "@/lib/donations";
-import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration-open";
+import {
+  parseRegistrationClosesAt,
+  parseRegistrationOpen,
+  resolveRegistrationState,
+  REGISTRATION_CLOSES_AT_KEY,
+  REGISTRATION_OPEN_KEY,
+  type RegistrationState,
+} from "@/lib/registration-open";
 
 /**
  * Lectura y escritura de la tabla `Setting`.
@@ -35,6 +42,10 @@ import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration
  *
  * Clave que introduce el cierre manual de inscripciones:
  * - `registration.open`: booleano; si falta o no es legible, el plazo está cerrado.
+ *
+ * Clave que introduce la fecha de cierre de inscripciones (issue 56):
+ * - `registration.closesAt`: instante ISO-8601 UTC, o ausente para no tener fecha.
+ *   El plazo se cierra solo cuando pasa; el interruptor sigue pudiendo cerrar antes.
  *
  * Clave que introduce el banner de donaciones:
  * - `donations.matcherino`: campaña de Matcherino (si está activa y su URL); apagada
@@ -369,16 +380,17 @@ export type SyncRunTrace = {
    */
   discordError: string | null;
   /**
-   * Por qué no se pudo avisar del comienzo o el final del torneo en el canal de avisos,
-   * o qué hubo que avisar aunque no fuera un fallo.
+   * Por qué no se pudo mandar un mensaje del bot al canal de avisos, o qué hubo que
+   * avisar aunque no fuera un fallo. Cubre los **hitos de la edición** y el **informe
+   * diario de clasificación**.
    *
    * Va en el rastro pero **no** cuenta para `lastSuccessAt`, por el mismo motivo que
-   * `discordError`: no haber podido avisar del torneo **no ha parado ni una partida**.
+   * `discordError`: no haber podido avisar al canal **no ha parado ni una partida**.
    * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que sin
    * `DISCORD_BOT_TOKEN` o sin `DISCORD_ANNOUNCE_CHANNEL_ID` los avisos están apagados
    * (y que el aviso queda pendiente, no perdido).
    *
-   * Ver `src/lib/edition-announcements.ts`.
+   * Ver `src/lib/edition-announcements.ts` y `src/lib/standings-report.ts`.
    */
   announceError: string | null;
   /**
@@ -581,23 +593,57 @@ export function isSyncTraceStale(trace: SyncRunTrace | null, now: Date = new Dat
 /* -------------------------------------------------------------------------- */
 
 /**
- * ¿Están abiertas las inscripciones ahora mismo?
+ * El estado efectivo del plazo de inscripción ahora mismo.
  *
- * Lee `Setting["registration.open"]` y aplica el parser puro de
- * `src/lib/registration-open.ts`, que cae al valor por defecto (cerrada) cuando
- * la clave no existe o el valor no es un booleano. Un **fallo de la base sí se
- * propaga**, como en `readCountries()`: "no hay nada publicado" tiene su valor
- * por defecto y "no se ha podido leer" no, y quien comprueba un envío tiene que
- * poder distinguir la segunda para no validar contra un estado inventado.
+ * Lee las **dos** claves de una sola consulta (`findMany` por `key in`) y deja
+ * que `resolveRegistrationState()` decida: abiertas ⇔ interruptor encendido **y**
+ * (sin fecha o `now < closesAt`). Es el único sitio donde se combinan, para que
+ * la acción pública, el alta de admin, el formulario y el bot no tengan cada uno
+ * su idea de "abierta o cerrada".
+ *
+ * Se usa `findMany` y no dos `findUnique` para no pagar dos viajes a la base por
+ * un dato que se lee en cada envío; con la tabla `Setting` (unas pocas filas) el
+ * `in` sobre la pk sale igual de barato.
+ *
+ * Un **fallo de la base sí se propaga**, como en `readCountries()`: "no hay nada
+ * publicado" tiene su valor por defecto y "no se ha podido leer" no, y quien
+ * comprueba un envío tiene que poder distinguir la segunda para no validar contra
+ * un estado inventado.
  */
-export async function readRegistrationOpen(): Promise<boolean> {
-  const setting = await db.setting.findUnique({ where: { key: REGISTRATION_OPEN_KEY } });
+export async function readRegistrationState(): Promise<RegistrationState> {
+  const settings = await db.setting.findMany({
+    where: { key: { in: [REGISTRATION_OPEN_KEY, REGISTRATION_CLOSES_AT_KEY] } },
+    select: { key: true, value: true },
+  });
 
-  return parseRegistrationOpen(setting?.value);
+  const byKey = new Map(settings.map((setting) => [setting.key, setting.value]));
+
+  return resolveRegistrationState({
+    open: parseRegistrationOpen(byKey.get(REGISTRATION_OPEN_KEY)),
+    closesAt: parseRegistrationClosesAt(byKey.get(REGISTRATION_CLOSES_AT_KEY)),
+    now: new Date(),
+  });
 }
 
 /**
- * Publica el plazo. La usa el interruptor del panel.
+ * ¿Se puede inscribir ahora mismo?
+ *
+ * Es el estado efectivo, no el interruptor: con la fecha de cierre pasada
+ * devuelve `false` aunque el interruptor siga encendido. Lo llaman los sitios que
+ * solo necesitan el sí o el no —el formulario público, el alta de admin y las
+ * páginas que pintan el aviso—; quien tenga que decir **por qué** está cerrado
+ * (para elegir el texto al rechazar) usa `readRegistrationState()`.
+ *
+ * Aplica el parser puro de `src/lib/registration-open.ts`, que cae al valor por
+ * defecto (cerrada) cuando la clave no existe o el valor no es un booleano. Un
+ * **fallo de la base sí se propaga**, como en `readRegistrationState()`.
+ */
+export async function readRegistrationOpen(): Promise<boolean> {
+  return (await readRegistrationState()).open;
+}
+
+/**
+ * Publica el interruptor manual del plazo. La usa el interruptor del panel.
  *
  * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
  * `Setting.updatedAt`.
@@ -614,6 +660,36 @@ export async function writeRegistrationOpen(
     where: { key: REGISTRATION_OPEN_KEY },
     create: { key: REGISTRATION_OPEN_KEY, value: open },
     update: { value: open },
+  });
+}
+
+/**
+ * Publica la **fecha de cierre** de las inscripciones, o la quita.
+ *
+ * `closesAt` es un instante ISO-8601 UTC ya normalizado por
+ * `normalizeRegistrationClosesAt()`, o `null` para dejar el plazo sin fecha.
+ *
+ * **Quitar la fecha borra la fila**, no la deja a `null`: una clave ausente y una
+ * clave con un valor que no se entiende son lo mismo para el parser, y borrar es
+ * lo que hace idempotente "quitar la fecha" sobre una fila que quizá no existía.
+ *
+ * Acepta el cliente porque la acción la llama **dentro** de la transacción de su
+ * rastro, igual que `writeRegistrationOpen()`.
+ */
+export async function writeRegistrationClosesAt(
+  closesAt: string | null,
+  client: SettingWriter = db,
+): Promise<void> {
+  if (closesAt === null) {
+    await client.setting.deleteMany({ where: { key: REGISTRATION_CLOSES_AT_KEY } });
+
+    return;
+  }
+
+  await client.setting.upsert({
+    where: { key: REGISTRATION_CLOSES_AT_KEY },
+    create: { key: REGISTRATION_CLOSES_AT_KEY, value: closesAt },
+    update: { value: closesAt },
   });
 }
 
