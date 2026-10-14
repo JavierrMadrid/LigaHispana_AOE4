@@ -6,6 +6,7 @@ import { accentTheme } from "@/components/edition-theme";
 import { ParticipateCta } from "@/components/participate-cta";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav, SiteTabBar } from "@/components/site-nav";
+import { SponsorBanner } from "@/components/sponsor-banner";
 import { getEditionConfig, getMatcherinoDonations } from "@/lib/public";
 
 export default async function PublicLayout({
@@ -65,7 +66,7 @@ export default async function PublicLayout({
             el contenido, mientras la navegación sigue centrada respecto a la página.
             La rejilla de tres columnas (`1fr auto 1fr`) es la que sostiene ese
             centrado: las dos laterales reparten el mismo ancho, así que ni el ancho
-            de la marca ni el de las dos acciones de la derecha desplazan la nav.
+            de la marca ni el de la celda de la derecha desplazan la nav.
             Esa fila necesita el ancho completo del contenedor (1376 px), de ahí que
             se active en `xl` y no en `lg`: por debajo, marca y acciones comparten la
             primera fila y la navegación baja a la segunda, a ancho completo, sin que
@@ -79,7 +80,13 @@ export default async function PublicLayout({
             forma: el oro se queda para la inscripción y el acceso se pinta con un
             filete neutro (el porqué, en su componente). El contenedor las centra
             con `items-center` y las separa con el `gap-2` de entre controles; en
-            `xl` la celda se estira para que el centrado sea el de la fila. */}
+            `xl` la celda se estira para que el centrado sea el de la fila, y desde
+            `md` le reserva el ancho al estandarte del patrocinador (`md:pr-24`),
+            que cuelga por fuera para no tapar ningún control.
+            De la cabecera cuelga, además, el estandarte del patrocinador: entra
+            desde el borde superior de la ventana (por eso se le ve cortado arriba),
+            remata por debajo de la barra y va anclado y fuera de la rejilla, así
+            que no ocupa columna ni mueve la navegación. */}
         <div className="mx-auto grid w-full max-w-[86rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:gap-x-4 sm:px-6 sm:py-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-6 xl:gap-y-0">
           <Link
             href="/"
@@ -125,7 +132,7 @@ export default async function PublicLayout({
             </span>
           </Link>
 
-          <div className="col-start-2 row-start-1 flex items-center gap-2 justify-self-end xl:col-start-3 xl:self-stretch">
+          <div className="col-start-2 row-start-1 flex items-center gap-2 justify-self-end md:pr-24 xl:col-start-3 xl:self-stretch">
             <ParticipateCta />
             <AdminAccess />
           </div>
@@ -140,11 +147,19 @@ export default async function PublicLayout({
             <SiteNav />
           </div>
         </div>
+
+        {/* La pieza que cuelga de la cabecera, después de la rejilla y fuera de
+            ella: no ocupa columna ni desplaza nada. Se esconde en móvil, donde no
+            hay sitio para ella. */}
+        <SponsorBanner />
       </header>
 
+      {/* El aire de arriba es más corto que el de abajo a propósito: el primer
+          bloque público (la banda de la portada) tiene que quedar pegado a la
+          cabecera, y el pie ya respira con su propio relleno. */}
       <main
         id="contenido"
-        className="mx-auto w-full max-w-[80rem] flex-1 px-4 py-10 sm:px-6 sm:py-14"
+        className="mx-auto w-full max-w-[80rem] flex-1 px-4 pb-10 pt-6 sm:px-6 sm:pb-14 sm:pt-8"
       >
         {children}
       </main>
