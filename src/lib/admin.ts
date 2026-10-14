@@ -1471,6 +1471,17 @@ export type AdminActionRow = {
    */
   details: Record<string, string | number | boolean> | null;
   createdAt: Date;
+  /**
+   * Cuándo se deshizo la acción, o `null` si sigue vigente.
+   *
+   * Es la marca de la fila **original**, no la de la reversión: la interfaz la usa para
+   * decir "deshecha" y para no ofrecer el botón de deshacer dos veces. Quién la deshizo
+   * va aparte porque el `actorEmail` de la fila es quien hizo la acción, no quien la
+   * revirtió.
+   */
+  revertedAt: Date | null;
+  /** Correo de quien la deshizo, o `null` si sigue vigente. */
+  revertedByEmail: string | null;
 };
 
 /**
@@ -1512,6 +1523,11 @@ export type AdminActionsQuery = AdminPageQuery & AdminSortQuery;
  * Se lee tal cual, `summary` incluido, para que la interfaz no tenga que montar la
  * frase ni hacer un `join` por `targetId` para pintar algo que ya está escrito: el
  * formato lo decide `admin-actions.ts` y esta lectura solo lo publica.
+ *
+ * Publica también la **marca de revertida** (`revertedAt` / `revertedByEmail`), que es
+ * lo que la pestaña necesita para decir que una acción ya no está vigente y para no
+ * ofrecer el botón de deshacer dos veces. No publica la fila `ACTION_REVERTED` como algo
+ * aparte: es una línea más del historial, y su `summary` ya dice qué se deshizo.
  *
  * Paginada en servidor por el mismo motivo que el historial de partidas, y con
  * `id` de desempate del orden por la misma razón: dos acciones del mismo milisegundo
@@ -1555,6 +1571,8 @@ export async function getAdminActions(
             targetId: true,
             details: true,
             createdAt: true,
+            revertedAt: true,
+            revertedByEmail: true,
           },
         }),
         db.adminAction.count({ where }),
@@ -1570,6 +1588,8 @@ export async function getAdminActions(
           targetId: row.targetId,
           details: readDetails(row.details),
           createdAt: row.createdAt,
+          revertedAt: row.revertedAt,
+          revertedByEmail: row.revertedByEmail,
         })),
       };
     }, page, pageSize, sort);
@@ -1670,7 +1690,7 @@ const ALERT_SELECT = {
  * |---|---|---|
  * | `from` / `to` | `Alert.createdAt` | fecha `YYYY-MM-DD` o instante con zona, con los mismos bordes que el historial |
  * | `playerId` | `Alert.playerId` | un `Player.id` con forma de `cuid` |
- * | `regla` | `Alert.rule` | uno de los diez `AlertRule` |
+ * | `regla` | `Alert.rule` | uno de los once `AlertRule` |
  * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
  *
  * Los cuatro se combinan (es una conjunción), y los tres que son una lista usan

@@ -240,6 +240,129 @@ Un perfil `APPROVED` o `PENDING` bloquea el envío.
 La inscripción está **cerrada por defecto**: el estado vive en `Setting["registration.open"]` y lo
 abre o cierra la organización desde el panel.
 
+## Administración del panel
+
+El panel (`/admin`) ya no lo abre cualquier usuario de Supabase Auth: hace falta estar en la **lista
+de admins**. Hay dos papeles, con una regla cada uno.
+
+| Papel | Quién | Qué puede |
+|---|---|---|
+| Superadministrador | El correo de `SUPERADMIN_EMAIL`, y solo ese | Todo lo de un admin, más la configuración de la edición y las opciones de inscripción y donaciones, invitar, dar de baja y reactivar admins, deshacer sus acciones y mandar el aviso de prueba del bot |
+| Admin | Una fila **activa** de la tabla `Admin` | El panel entero salvo la gestión de admins, la reversión, la configuración de la edición y las opciones de inscripción y donaciones |
+
+- El superadministrador **no tiene fila**: se reconoce por la variable de entorno. Sin
+  `SUPERADMIN_EMAIL`, **nadie** lo es (la app arranca igual y avisa una vez en el log), y la gestión
+  de admins queda inaccesible hasta que se defina.
+- Un usuario autenticado **sin acceso** no va a `/login` —el Proxy lo devolvería a `/admin`—: va a
+  `/sin-acceso`, que explica la situación y ofrece cerrar sesión.
+- La comprobación se hace en **cada petición** leyendo la fila (`requireAdmin()` en
+  `src/lib/auth.ts`), así que una baja surte efecto en la siguiente navegación, sin esperar a que
+  caduque ningún token.
+
+### Variables
+
+| Variable | Para qué | ¿Obligatoria? |
+|---|---|---|
+| `SUPERADMIN_EMAIL` | Correo del superadministrador único. Se compara en minúsculas y sin espacios | Sí, para gestionar admins |
+| `SUPABASE_SERVICE_ROLE_KEY` | Clave de servicio de Supabase Auth: invitar por correo, buscar cuentas y banear/desbanear | Sí, para invitar |
+
+Las dos van en el panel del Worker **y además** en *Build variables and secrets* ([los dos
+sitios](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel)); la segunda, como secreto, y **nunca** en
+el cliente ni en un log. Sin `SUPABASE_SERVICE_ROLE_KEY`, invitar responde "no configurado", pero dar
+de baja y reactivar siguen funcionando (el ban de Auth se salta con un aviso en el mensaje).
+
+### Alta por invitación
+
+1. El superadministrador escribe el correo en el panel.
+2. Si la cuenta **no existe** en Supabase Auth, se crea con `inviteUserByEmail`: la persona recibe un
+   correo, el enlace pasa por `/auth/confirm`, fija su contraseña en `/login/establecer-contrasena` y
+   entra.
+3. Si la cuenta **ya existe** (los admins anteriores), no se manda correo: se vincula su
+   `authUserId` y se le da acceso; entra con su contraseña de siempre.
+
+Dar de baja es `active = false` (no se borra la fila) y corta la sesión viva en Auth (best-effort);
+reactivar lo deshace. Todo queda registrado en `/admin/acciones`.
+
+### Transición
+
+La tabla `Admin` **arranca vacía**: al desplegar esto solo entra el superadministrador, y él invita
+al resto. Los admins actuales pierden el acceso hasta que los añada —por el camino 3, sin correo—.
+
+### Deshacer una acción
+
+El superadministrador puede **deshacer** desde `/admin/acciones` lo que hicieron los admins regulares.
+La reversión es **compensatoria**, no un borrado: se deshace el cambio, se marca la acción original
+(`AdminAction.revertedAt` / `revertedByEmail`) y se escribe una fila nueva `ACTION_REVERTED` con el
+resumen de la original. Las tres cosas van en la **misma transacción**; el recálculo de la clasificación
+va después y, si falla, se avisa (la siguiente pasada lo pone al día). El rastro nunca se borra: la
+marca dice que la acción ya no está vigente.
+
+| Tipo | Qué hace deshacerlo | ¿Se puede rehacer? |
+|---|---|---|
+| `PLAYER_APPROVED` / `PLAYER_REJECTED` | Devuelve al jugador el estado que tenía antes | Sí, aprobando o rechazando otra vez |
+| `PLAYER_EDITED` | Devuelve a cada campo el valor anterior, validado otra vez | Sí, editando otra vez |
+| `MATCH_POINTS_REVERTED` / `MATCH_POINTS_RESTORED` | Quita o vuelve a poner la marca de la partida | Sí, con el revert/restore del historial |
+| `PLAYER_CREATED` | **Borra al jugador** y todo lo suyo, con su cursor de sincronización | **No**: es irreversible |
+
+- **Solo los tipos revertibles** (`isRevertibleActionType()`, `src/lib/admin-revert.ts`) y **una acción
+  ya revertida no se revierte dos veces**. `PLAYER_REMOVED` no está: el dato ya no existe. Tampoco
+  `ADMIN_*` (la baja de un admin se deshace reactivándolo), `ACTION_REVERTED` ni `CONFIG_CHANGED` (la
+  configuración se cambia publicando otra).
+- **Si algo ha cambiado después, se dice y no se escribe nada.** Deshacer una aprobación cuando el
+  jugador ya está en otro estado —o una edición cuyos valores ya volvieron— pisaría ese cambio
+  posterior: el panel lo explica en vez de deshacer "todo lo que vino detrás".
+- **Al deshacer una edición se valida otra vez el valor anterior**, con los mismos parsers del
+  formulario. Un `@usuario` que entonces estaba libre y hoy es de otra fila da un error claro y no
+  escribe nada: la reversión es todo o nada.
+- **Deshacer un alta es la excepción irreversible**: borra al jugador, sus partidas y su cursor de
+  sincronización, con el mismo tratamiento que la baja del panel. La interfaz pide confirmación.
+
+## Configurar la edición
+
+La configuración de una edición vive en `Setting` y la cambia **solo el superadministrador** desde el
+panel (`/admin/administracion`): los documentos que describen la edición, sus reglas y a quién admite.
+La sección se organiza en subpestañas —Administradores, Edición, Puntuación, Inscripciones,
+Donaciones y Avisos—, y la **inscripción** y las **donaciones** son opciones solo del
+superadministrador que viven en sus subpestañas (`/admin/administracion/inscripciones` y
+`/admin/administracion/donaciones`), no en ninguna pantalla que vean los admins regulares.
+
+| Clave | Qué toca | Acción |
+|---|---|---|
+| `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento) | `saveEditionConfig` |
+| `scoring.ruleset` | Ventana, familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
+| `registration.countries` | Países admitidos en la inscripción, en el orden del catálogo | `saveCountries` |
+| `registration.open` | Si la inscripción está abierta | `setRegistrationOpen` |
+| `donations.matcherino` | Campaña de donaciones de Matcherino (banner y URL) | `setMatcherinoDonations` |
+
+- **La validación es del servidor y va antes de escribir**: un nombre vacío, un importe que no es un
+  entero de euros, un emblema que no es `http(s)` ni una ruta del sitio, un color que no es `#rrggbb` o
+  una ventana mal formada se rechazan con su mensaje y no se escribe nada. Las dos funciones de
+  escritura vuelven a validar por su cuenta: un documento que el sistema descartaría al leerlo no se
+  publica.
+- **La ventana del torneo se escribe en hora local de Madrid.** El campo del panel es un
+  `datetime-local`; el servidor lo interpreta en `Europe/Madrid` y guarda el instante ISO-8601 UTC que
+  lee el motor (`parseMadridLocalInstant()` en `src/lib/ranked-match.ts`). Un instante ISO con zona
+  escrito a mano también vale. Ver [`PUNTUACION.md`](./PUNTUACION.md#la-ventana).
+- **Todo queda en `/admin/acciones`** como `CONFIG_CHANGED`, con qué campos cambiaron y sus dos valores,
+  en la misma transacción que el cambio.
+- **Los países admitidos** solo pueden ser los del catálogo del código (`DEFAULT_COUNTRIES`): la lista no
+  se amplía más allá sin tocar código, porque los ISO de AoE4World que resuelven el país de un perfil
+  viven en `countries.ts`. La selección se guarda en el **orden del catálogo**, no en el del formulario.
+- **Un cambio de reglas que mueva puntos recalcula la clasificación al guardar.** Si el recálculo falla,
+  las reglas **sí** están guardadas y el mensaje lo dice: la clasificación se pone al día en la
+  siguiente pasada del sincronizador.
+- **La retransmisión obligatoria** enciende la alerta `NO_STREAM_CHANNEL` (ver
+  [Alertas de comportamiento](#alertas-de-comportamiento)). Apagarla **no** borra las alertas ya
+  escritas: `Alert` es *append-only*.
+- **Los objetivos desactivados** (`scoring.ruleset.disabledObjectives`) dejan de computarse, de
+  publicarse y de dar puntos, y sus eventos se borran (ver
+  [`OBJETIVOS.md`](./OBJETIVOS.md#desactivar-un-objetivo)).
+- **El premio base** (`amount` a `null` = sin premio anunciado) y la marca son contenido de la web: los
+  pinta la interfaz, y el color de acento se aplica como variable CSS del layout, que no se reescribe
+  desde aquí.
+- **Todo tiene documento por defecto**: sin `edition.config` la edición usa el nombre del sitio, sin
+  premio y sin retransmisión obligatoria, así que la web funciona sin que nadie configure nada.
+
 ## Discord
 
 La inscripción **exige** conectar Discord cuando el OAuth está configurado. No hay campo de texto: un
@@ -259,6 +382,7 @@ credenciales el paso no existe** (no falla): el formulario no pinta el botón y 
 | `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord | No (valores por defecto) |
 | `DISCORD_CHECK_MAX_PER_RUN` | Tope de cuentas comprobadas por pasada (10) | No |
 | `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas de la lista de miembros por refresco (20) y horas de caché (12) | No |
+| `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa del **comienzo y el final del torneo** | Sí, para avisar |
 
 Van en el panel del Worker **y además** en *Build variables and secrets* del trigger
 ([los dos sitios](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel)). Los secretos, como secretos.
@@ -323,9 +447,10 @@ from "Player" where discordUsername is not null group by 1 having count(*) > 1;
 
 ## Alertas de comportamiento
 
-El motor vigila **9 reglas** sobre las clasificatorias: **6 de patrón** (partidas cortas, rival
-repetido y compañero repetido, cada uno en racha y en total) y **3 de estado** (historial no público,
-partidas de ladder que no llegan, y Discord fuera del servidor).
+El motor vigila **10 reglas**: **6 de patrón** sobre las clasificatorias (partidas cortas, rival
+repetido y compañero repetido, cada uno en racha y en total), **3 de estado** (historial no público,
+partidas de ladder que no llegan, y Discord fuera del servidor) y **1 condicional** (participante sin
+canal de directo, solo si la edición exige retransmisión).
 
 ```bash
 npm test                       # el motor, con secuencias sintéticas y SIN base de datos
@@ -347,6 +472,13 @@ npm run alerts:cutoffs -- --show
 - **Cuándo se evalúa**: en `syncApprovedPlayers()`, después de `recomputeScores()`, **solo los
   jugadores tocados**; y también al revertir o restaurar una partida, al cerrar el torneo
   (`Setting["alerts.tournamentClose"]` lo marca) y a mano.
+- **`NO_STREAM_CHANNEL`** es la única **condicional**: se evalúa solo si
+  `Setting["edition.config"].streamingRequired` está activo, y avisa de los participantes aprobados
+  **sin ningún canal** (`twitchChannel`, `youtubeChannel`, `kickChannel` y `twitchUrl` vacíos). No mira
+  partidas, así que va sin ancla ni ventana —como la de Discord—, y su clave es de estado: reevaluarla
+  cada pasada no inserta nada. Apagar el interruptor no borra las alertas ya escritas. Al **encenderlo**,
+  los avisos aparecen en la siguiente evaluación que cubra a cada jugador: una pasada sin partidas
+  nuevas evalúa a todos los aprobados, y el informe de alertas fuerza una completa.
 - **Informe**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) es un CSV para Excel con
   alertas disparadas y rachas abiertas, y llama a `evaluateAlerts({ full: true })` antes.
 - **Idempotente**: `createMany({ skipDuplicates: true })` sobre `dedupeKey`; repetirlo no crea nada.
@@ -488,6 +620,29 @@ de los directos.
 - El resumen de `discordError` dice cuántas ausencias del roster se confirmaron por cuenta.
 - Dónde mirar: `discordError` (`[sync] Discord: …`). **No** mueve `lastSuccessAt`.
 
+## Avisos del torneo en Discord
+
+El bot avisa del **comienzo y el final** del torneo en un canal. Lo hace el worker en su pasada
+(`announceEditionWindow()`): mira la ventana del ruleset (`Setting["scoring.ruleset"].window`) y manda
+un mensaje al cruzar cada extremo.
+
+| Qué | Dónde |
+|---|---|
+| Canal | `DISCORD_ANNOUNCE_CHANNEL_ID` (y el token del bot) |
+| Memoria | `Setting["edition.announcements"]` (`startedAt` / `finishedAt`) |
+| Texto | `announcementText()`: nombre de la edición y periodo publicados |
+| Dónde mirar | `announceError` en `Setting["sync.lastRun"]` (`[sync] …`) |
+
+- **Una sola vez por aviso, y nunca se repite**: la marca de un aviso dado no se quita, aunque la
+  ventana se mueva. Con la ventana **abierta** (`to: null`) el aviso de final no existe.
+- **Sin `DISCORD_BOT_TOKEN` o sin canal no se envía, y el aviso queda pendiente** (no se anota), así que
+  configurar el canal más tarde sigue dando el aviso que faltaba. El motivo va en `announceError`, que
+  **no** mueve `lastSuccessAt`.
+- Sin nada que anunciar, la pasada solo lee la ventana y la memoria: es una comparación de fechas, sin
+  leer el nombre de la edición ni crear ningún cliente HTTP.
+- **Aviso de prueba**: el superadministrador puede mandar el texto real con el prefijo `(Prueba)` desde
+  el panel (`sendTestAnnouncement`). No toca la memoria.
+
 ## Simulaciones
 
 ### Con fixtures (mock de AoE4World)
@@ -588,3 +743,16 @@ npm run db:cron                  # programa el reloj cada 10 minutos
 - Variables del panel: las `NEXT_PUBLIC_*` y los secretos de servidor en las dos listas de build, y
   `YOUTUBE_API_KEY` y las de Discord en los dos sitios (Worker y build). Detalle en
   [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel).
+- `SUPERADMIN_EMAIL` y `SUPABASE_SERVICE_ROLE_KEY`: sin la primera nadie administra a los admins, y
+  sin la segunda no se puede invitar a ninguno. Ver
+  [Administración del panel](#administración-del-panel).
+- **Configuración de la edición**: no hay que sembrar nada. `edition.config` no existe hasta que el
+  superadministrador guarda por primera vez, y hasta entonces la web usa el documento por defecto.
+- **La versión 4 del ruleset** (`RULESET_VERSION`) deja la clasificación sin recalcular hasta la
+  primera pasada: el `db:push` añade el valor `NO_STREAM_CHANNEL` al enum de `AlertRule`, la
+  migración del documento la hace `ensureRuleset()` al leer, y la pasada del sincronizador (o
+  `npm run score`) vuelve a escribir `PlayerScore`. La web **no** se queda vacía mientras tanto:
+  publica la última clasificación calculada —la de la versión anterior más alta con filas— y quien
+  pinte recibe `pendingRuleSetVersion` para avisar de que la tabla es de otra versión: la home lo dice
+  en una nota sobre la tabla, sin prometer ningún recálculo automático. Si se despliega
+  en medio de un torneo, conviene lanzar el recálculo a mano en cuanto termine el despliegue.

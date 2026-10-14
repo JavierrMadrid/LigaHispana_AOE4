@@ -21,7 +21,7 @@ Definen la competición. No se pueden incumplir.
 | Solo puntúa la partida **resuelta**: una en curso no cuenta. | — |
 | Solo cuentan las partidas **dentro de las fechas del torneo** y **posteriores a la inscripción** del jugador. | — |
 | **Equipos equilibrados**: una partida por equipos solo puntúa si ningún compañero está a **dos escalones o más** de división del jugador (por encima o por debajo). El escalón es la división, sin subrango. | — |
-| Los puntos son **2 por victoria** clasificatoria más los **82 objetivos** ([puntuación](./PUNTUACION.md), [objetivos](./OBJETIVOS.md)). | — |
+| Los puntos son **los del ruleset activo**: los puntos por victoria (hoy **2**) más los **objetivos activos** ([puntuación](./PUNTUACION.md), [objetivos](./OBJETIVOS.md)). | — |
 
 ### De participación
 
@@ -44,7 +44,7 @@ organización; las demás las comprueba la organización.
 | **Cuenta real y personal**: no se admiten cuentas *smurf* (alternativas o de segunda cuenta). | Organización |
 | **Partidas de posicionamiento**: hay que haber completado las **5 partidas de posicionamiento** de ranked 1v1 de la temporada actual. | Organización |
 | **Presencia en Discord**: permanecer en el servidor del torneo durante todo el torneo. | Alerta de Discord fuera del servidor |
-| **Retransmisión en directo**: emitir las partidas del torneo (Twitch, YouTube o Kick). | Organización |
+| **Retransmisión en directo**: emitir las partidas del torneo (Twitch, YouTube o Kick). | Organización; alerta de participante sin canal **cuando la edición la exige** |
 | **Historial público**: mantener el historial de partidas de la cuenta en público. | Alerta de historial no público |
 | **Jugar hasta el final**: no abandonar ni perder a propósito para manipular el elo. | Alerta de partidas cortas |
 | **Sin rivales repetidos**: no repetir rival en 1v1 para acumular victorias. | Alerta de rival repetido |
@@ -60,6 +60,16 @@ configurables sin desplegar. El motor vigila además el **compañero repetido** 
 ese aviso no corresponde a una regla del torneo. El detalle operativo está en
 [`docs/OPERACION.md`](./OPERACION.md#alertas-de-comportamiento).
 
+La **retransmisión** es la única norma **condicional**: la edición decide si es obligatoria, con un
+interruptor de la configuración (`Setting["edition.config"]`). Cuando lo es, el motor avisa de los
+participantes aprobados que no han declarado ningún canal; cuando no, la norma se queda sin alerta y la
+controla la organización, que es el estado por defecto. La página `/reglas` lista la norma **solo**
+cuando la edición la exige: apagada, la norma no existe y no se anuncia.
+
+La página `/reglas` lee la configuración de la edición en cada petición (es dinámica), así que el premio
+base y la línea de donaciones aparecen sin desplegar. Con la base caída no se pinta ninguno de los dos:
+"no hay premio" y "no se ha podido leer" son cosas distintas.
+
 **Dónde se cambian.** El historial de partidas se abre en el propio juego, en el retrato del jugador (en
 inglés, *Share History*). El servidor de Discord se enlaza desde la propia inscripción, con un botón que
 conecta la cuenta; no hay que añadir a nadie a mano.
@@ -73,4 +83,5 @@ Facultades internas para gestionar el torneo.
 | **Aprobar, rechazar y editar** participantes. | Panel |
 | **Revertir o restaurar** una partida: deja de contar sin borrarla, de forma reversible. | Panel |
 | **Versionar el reglamento**: un cambio de estructura sube la versión y recalcula la clasificación. | Panel |
+| Publicar el **premio base** de la edición y la **campaña de donaciones** de la comunidad, que se suma a él. | Panel (configuración de la edición) |
 | Dejar **registro** de cada acción en el panel. | Panel |

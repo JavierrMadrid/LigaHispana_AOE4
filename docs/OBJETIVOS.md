@@ -2,7 +2,9 @@
 
 Los **82 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
 funcional: qué mide cada uno, cuántos puntos da y **quién lo cobra**. La puntuación base está en
-[`docs/PUNTUACION.md`](./PUNTUACION.md); aquí solo están los objetivos.
+[`docs/PUNTUACION.md`](./PUNTUACION.md); aquí solo están los objetivos. El catálogo es el del código,
+pero el ruleset puede **desactivar** objetivos de una edición a otra (ver
+[Desactivar un objetivo](#desactivar-un-objetivo)).
 
 ## Competición y logro
 
@@ -79,6 +81,26 @@ mayor a menor porcentaje de consecución.
 Los 23 `masterizando-<civ>` no forman familia —no tienen cabeza que los agrupe—, pero en `/objetivos`
 se leen igual: bajo el titular «Masterizando», un riel con el mismo filtro de banderas y la misma
 navegación, con cada tarjeta abriendo la clasificación de esa civilización.
+
+## Desactivar un objetivo
+
+El ruleset (`Setting["scoring.ruleset"].disabledObjectives`) puede apagar objetivos del catálogo, uno a
+uno y por su `id`. Un objetivo apagado:
+
+- **no se computa**: `computeObjectives()` se salta su definición antes de calcular candidatos;
+- **no se publica**: no aparece en `/objetivos`, ni en la ficha de un participante, ni en el snapshot
+  (`Setting["scoring.objectives"]`, que se reescribe porque cambia su huella);
+- **no reparte puntos**: nadie lo cobra, así que el total de la clasificación sale de los **activos**;
+- **pierde sus eventos**: `ObjectiveEvent` es un espejo de lo que se cobra hoy, así que la
+  reconciliación borra las filas del objetivo apagado.
+
+Apagar la **cabeza** de una familia (`polifacetico`, `jugon`) no apaga a sus hijos: la familia es una
+agrupación de la interfaz, no una dependencia, y cada objetivo se apaga por su id. Un id que no exista
+en el catálogo o repetido se avisa y se ignora.
+
+La etiqueta de la regla se recalcula con los objetivos activos, así que la web no anuncia objetivos que
+ya no existen. Lo cambia el superadministrador desde el panel; el detalle, en
+[`OPERACION.md`](./OPERACION.md#configurar-la-edición).
 
 ## Pool de mapas
 

@@ -267,7 +267,7 @@ async function runMockTournament(): Promise<void> {
 
   // `unwrapRead` para que un corte de la base no se confunda con un torneo
   // simulado que no ha sincronizado a nadie.
-  const standings = unwrapRead(await getStandings(), "mock:tournament").filter((row) =>
+  const standings = unwrapRead(await getStandings(), "mock:tournament").rows.filter((row) =>
     MOCK_PROFILE_IDS.includes(row.profileId),
   );
 

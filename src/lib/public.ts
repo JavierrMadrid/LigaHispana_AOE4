@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
 import { type MatcherinoDonations } from "@/lib/donations";
+import { readEditionConfig, type EditionConfig } from "@/lib/edition";
 import { aoe4WorldProfileUrl, describeMode, describeTeamSize } from "@/lib/format";
 import { isRecord } from "@/lib/json";
 import {
@@ -59,6 +60,7 @@ export {
 export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
 export type { MatcherinoDonations } from "@/lib/donations";
+export type { EditionConfig } from "@/lib/edition";
 
 /**
  * El resultado de una lectura de las pantallas públicas: o los datos, o la
@@ -103,7 +105,7 @@ export type { PublicRead };
  *
  * ```ts
  * const { status, data } = await getStandings();
- * // status === "ok"       -> data es StandingRow[]
+ * // status === "ok"       -> data es Standings (data.rows son las filas)
  * // status === "degraded" -> data es null; hay que decirlo, no pintar un vacío
  * ```
  *
@@ -255,11 +257,20 @@ export type StandingRow = {
  * configuración guardada en `Setting`, que se puede retocar sin desplegar. El
  * orden de inserción es el de presentación del catálogo, y de ahí se apoya
  * `earnedObjectives` para publicar en ese mismo orden.
+ *
+ * Los objetivos **desactivados** no entran: el motor tampoco los reparte, así que
+ * publicarlos aquí sería enseñar en la ficha de un participante un objetivo que ya
+ * no existe (y una fila de `PlayerScore` de antes de desactivarlo podría nombrarlo).
  */
 function objectiveLookup(ruleset: ScoringRuleset): Map<string, StandingObjective> {
   const lookup = new Map<string, StandingObjective>();
+  const desactivados = new Set(ruleset.disabledObjectives);
 
   for (const definition of OBJECTIVE_DEFINITIONS) {
+    if (desactivados.has(definition.id)) {
+      continue;
+    }
+
     lookup.set(definition.id, {
       id: definition.id,
       label: definition.label,
@@ -335,13 +346,86 @@ function earnedObjectivesPoints(breakdown: unknown): number {
 }
 
 /**
+ * De qué versión de reglas salen las filas que publica `getStandings()`.
+ *
+ * `ruleSetVersion` es la versión con la que se calcularon las filas publicadas: la
+ * activa, o la anterior más alta cuando la activa todavía no tiene filas. Si no
+ * hay filas que publicar, es la activa (la versión que se consultó).
+ * `pendingRuleSetVersion` es la activa sin recalcular **solo** en ese segundo caso
+ * —la UI lo usa para avisar de que la tabla es de la versión anterior—, y `null`
+ * cuando las filas son de la activa.
+ */
+export type StandingsVersion = {
+  ruleSetVersion: number;
+  pendingRuleSetVersion: number | null;
+};
+
+/**
+ * La clasificación publicada: las filas y de qué versión de reglas son.
+ *
+ * `rows` vacío no significa "no hay versión anterior": significa que no hay filas
+ * que publicar ni en la versión activa ni en ninguna anterior. La UI distingue
+ * "vacío" de "otra versión" por `pendingRuleSetVersion`.
+ */
+export type Standings = StandingsVersion & {
+  rows: StandingRow[];
+};
+
+/**
+ * Decide de qué versión se publican las filas: la activa, o la anterior más alta
+ * cuando la activa aún no se ha recalculado.
+ *
+ * Es la parte pura de `getStandings()` y por eso vive aparte, para poder comprobar
+ * los tres casos sin base de datos. No consulta nada: quien llama ya sabe cuántas
+ * filas tiene la versión activa y cuál es la anterior con filas.
+ *
+ * `previousRuleSetVersion` se **ignora** si la versión activa tiene filas: la
+ * clasificación nunca mezcla versiones ni prefiere una anterior cuando la activa
+ * está calculada.
+ */
+export function resolveStandingsVersion(
+  activeRuleSetVersion: number,
+  activeRowCount: number,
+  previousRuleSetVersion: number | null,
+): StandingsVersion {
+  if (activeRowCount > 0) {
+    return { ruleSetVersion: activeRuleSetVersion, pendingRuleSetVersion: null };
+  }
+
+  if (previousRuleSetVersion !== null) {
+    return {
+      ruleSetVersion: previousRuleSetVersion,
+      pendingRuleSetVersion: activeRuleSetVersion,
+    };
+  }
+
+  return { ruleSetVersion: activeRuleSetVersion, pendingRuleSetVersion: null };
+}
+
+/**
  * Clasificación de la versión de reglas activa, de la primera posición a la
- * última.
+ * última, con respaldo a la **anterior más alta** que tenga filas.
  *
  * Aparecen **todos** los jugadores aprobados: un aprobado que aún no ha jugado
  * ninguna clasificatoria sale con todo a cero y comparte el último puesto con los
  * demás que tampoco hayan jugado. Un `PENDING` o un `REJECTED` no tiene fila y no
  * aparece.
+ *
+ * ## Por qué hay respaldo
+ *
+ * `PlayerScore` está particionada por `ruleSetVersion` y cada recálculo escribe
+ * **solo** la versión activa (`RULESET_VERSION`). Cuando se sube la versión y
+ * todavía no ha corrido el motor —un despliegue a medias, una *preview* contra una
+ * base donde solo ha calculado la versión anterior— consultar la activa devolvería
+ * cero filas y la web diría "0 participantes", que no es verdad: hay una
+ * clasificación calculada, solo que con las reglas de antes.
+ *
+ * Con la versión activa **vacía** se publican entonces las filas de la versión
+ * anterior más alta que tenga alguna (`pendingRuleSetVersion` pasa a ser la
+ * activa, para que quien pinte pueda avisar de que la tabla es de otra versión).
+ * Si tampoco hay anterior, la lista sale vacía y sin aviso: el estado vacío de la
+ * pantalla ya lo explica. La clasificación **nunca** mezcla versiones: o todas las
+ * filas de la activa, o todas las de una única anterior.
  *
  * Tres consultas planas, ninguna por fila: la de partidas en directo sirve para
  * marcar `isPlaying` sin N+1 y la del ruleset (una clave de `Setting`) trae los
@@ -349,63 +433,102 @@ function earnedObjectivesPoints(breakdown: unknown): number {
  * lectura del ruleset da la lista de familias con la que se filtran las partidas
  * en directo, así que no hay una segunda definición de qué es una partida del
  * torneo: quien retoca `modes` sin desplegar mueve las dos pantallas a la vez.
+ * La consulta de respaldo —un `max(ruleSetVersion)` y, si lo hay, la misma
+ * consulta de filas— solo se lanza cuando la activa devuelve cero filas, así que
+ * el caso normal sigue costando exactamente lo de antes.
  *
  * Con la base de datos caída devuelve `{ status: "degraded", data: null }` en vez
  * de propagar el error: la portada del torneo tiene que seguir contestando.
  */
-export async function getStandings(): Promise<PublicRead<StandingRow[]>> {
+export async function getStandings(): Promise<PublicRead<Standings>> {
   return readFromDatabase("public/getStandings", loadStandings);
 }
 
-async function loadStandings(): Promise<StandingRow[]> {
+/**
+ * Las columnas de `PlayerScore` que publica la clasificación.
+ *
+ * Se declara fuera de la consulta para no repetir la lista de campos entre la
+ * lectura de la versión activa y la de respaldo, que son la misma consulta con
+ * distinto `ruleSetVersion`.
+ */
+const STANDING_SELECT = {
+  rank: true,
+  total: true,
+  wins: true,
+  // No sale en `StandingRow`, pero hace falta aquí para calcular `losses`.
+  matches: true,
+  // La racha del torneo, que es la que pinta la columna "Racha".
+  streak: true,
+  // Solo se lee la sección `objectives` de este JSON (`earned` y `points`).
+  // Prisma no permite pedir una parte de una columna `Json`, así que entra
+  // entero: son un puñado de ids por fila, no un documento grande.
+  breakdown: true,
+  player: {
+    select: {
+      id: true,
+      profileId: true,
+      name: true,
+      aoe4WorldName: true,
+      country: true,
+      twitchChannel: true,
+      twitchUrl: true,
+      twitchIsLive: true,
+      youtubeChannel: true,
+      youtubeIsLive: true,
+      kickChannel: true,
+      kickIsLive: true,
+      elo: true,
+      rankLevel: true,
+      avatarUrl: true,
+    },
+  },
+} satisfies Prisma.PlayerScoreSelect;
+
+type StandingSource = Prisma.PlayerScoreGetPayload<{ select: typeof STANDING_SELECT }>;
+
+/**
+ * Las filas de `PlayerScore` de una versión, en el orden de presentación.
+ *
+ * `rank` solo no basta: dos filas empatadas comparten puesto, así que dentro de
+ * un puesto el orden sería el que decidiera el plan de la consulta (y podría
+ * bailar entre lecturas, o al paginar). `profileId` ascendente es el mismo
+ * desempate de presentación que cierra `compareStandings`, así que el orden de la
+ * consulta y el del motor coinciden.
+ */
+async function readStandingRows(ruleSetVersion: number): Promise<StandingSource[]> {
+  return db.playerScore.findMany({
+    where: { ruleSetVersion },
+    orderBy: [{ rank: "asc" }, { player: { profileId: "asc" } }],
+    select: STANDING_SELECT,
+  });
+}
+
+/**
+ * La versión de reglas anterior más alta **que tenga filas**, o `null` si no hay
+ * ninguna.
+ *
+ * Se pregunta por el máximo de la columna y no se traen filas para decidir: lo
+ * único que hace falta es el número, y el índice `(ruleSetVersion, rank)` resuelve
+ * el máximo sin recorrer la tabla.
+ */
+async function previousRuleSetVersion(): Promise<number | null> {
+  const highest = await db.playerScore.aggregate({
+    where: { ruleSetVersion: { lt: RULESET_VERSION } },
+    _max: { ruleSetVersion: true },
+  });
+
+  return highest._max.ruleSetVersion;
+}
+
+async function loadStandings(): Promise<Standings> {
   // La consulta de partidas en curso necesita la lista de familias del ruleset,
   // así que espera a esa lectura; las dos consultas grandes (clasificación y
   // partidas) siguen yendo en paralelo entre sí, que es lo que evita un viaje
   // extra a la base de datos.
   const rulesetPromise = readRuleset();
 
-  const [rows, liveRows, ruleset] = await Promise.all([
-    db.playerScore.findMany({
-      where: { ruleSetVersion: RULESET_VERSION },
-      // `rank` solo no basta: dos filas empatadas comparten puesto, así que dentro
-      // de un puesto el orden sería el que decidiera el plan de la consulta (y
-      // podría bailar entre lecturas, o al paginar). `profileId` ascendente es el
-      // mismo desempate de presentación que cierra `compareStandings`, así que el
-      // orden de la consulta y el del motor coinciden.
-      orderBy: [{ rank: "asc" }, { player: { profileId: "asc" } }],
-      select: {
-        rank: true,
-        total: true,
-        wins: true,
-        // No sale en `StandingRow`, pero hace falta aquí para calcular `losses`.
-        matches: true,
-        // La racha del torneo, que es la que pinta la columna "Racha".
-        streak: true,
-        // Solo se lee la sección `objectives` de este JSON (`earned` y `points`).
-        // Prisma no permite pedir una parte de una columna `Json`, así que entra
-        // entero: son un puñado de ids por fila, no un documento grande.
-        breakdown: true,
-        player: {
-          select: {
-            id: true,
-            profileId: true,
-            name: true,
-            aoe4WorldName: true,
-            country: true,
-            twitchChannel: true,
-            twitchUrl: true,
-            twitchIsLive: true,
-            youtubeChannel: true,
-            youtubeIsLive: true,
-            kickChannel: true,
-            kickIsLive: true,
-            elo: true,
-            rankLevel: true,
-            avatarUrl: true,
-          },
-        },
-      },
-    }),
+  const [activeRows, liveRows, ruleset] = await Promise.all([
+    readStandingRows(RULESET_VERSION),
     // Mismo criterio que `getLiveMatches`: una partida sin resolver de una
     // familia que puntúa y de un jugador aprobado. Un cruce 2v2 deja dos filas
     // con el mismo `gameId`, pero a efectos de "está jugando" basta con el
@@ -425,7 +548,38 @@ async function loadStandings(): Promise<StandingRow[]> {
     rulesetPromise,
   ]);
 
-  const playing = new Set(liveRows.map((row) => row.playerId));
+  // La versión de respaldo solo se busca cuando la activa no tiene filas; con
+  // filas, `resolveStandingsVersion` la ignora y aquí ni se ha llegado a mirar.
+  const version = resolveStandingsVersion(
+    RULESET_VERSION,
+    activeRows.length,
+    activeRows.length > 0 ? null : await previousRuleSetVersion(),
+  );
+
+  const rows =
+    version.ruleSetVersion === RULESET_VERSION
+      ? activeRows
+      : await readStandingRows(version.ruleSetVersion);
+
+  return {
+    ...version,
+    rows: presentStandings(rows, ruleset, new Set(liveRows.map((row) => row.playerId))),
+  };
+}
+
+/**
+ * Convierte las filas de `PlayerScore` en las de la clasificación pública.
+ *
+ * `ruleset` es el **activo** aunque las filas sean de una versión anterior: es del
+ * que salen los puntos de cada objetivo y la lista de objetivos desactivados, y lo
+ * que se quiere enseñar de una fila antigua es qué objetivos posee, con los
+ * nombres y glifos del catálogo de ahora.
+ */
+function presentStandings(
+  rows: readonly StandingSource[],
+  ruleset: ScoringRuleset,
+  playing: ReadonlySet<string>,
+): StandingRow[] {
   const lookup = objectiveLookup(ruleset);
 
   return rows.map((row) => {
@@ -1216,3 +1370,20 @@ export const getMatcherinoDonations = cache(
     return readFromDatabase("public/getMatcherinoDonations", () => readMatcherinoDonations());
   },
 );
+
+/**
+ * La configuración de la edición: nombre, premio base, retransmisión y marca.
+ *
+ * Es una lectura ligera de `Setting["edition.config"]`, como
+ * `getTournamentWindow()`: no arrastra el cálculo de nada. Con la base caída
+ * devuelve `{ status: "degraded", data: null }` y quien pinte decide qué hacer —
+ * el nombre de la edición o un premio no pueden inventarse—; lo que **no** hace es
+ * publicar la configuración por defecto, porque "no hay nada configurado" y "no lo
+ * hemos podido leer" son cosas distintas.
+ *
+ * Va envuelta en `cache()` de React: la lee el layout público (la marca) y la
+ * portada (el premio), y así una misma petición no repite la consulta.
+ */
+export const getEditionConfig = cache(async (): Promise<PublicRead<EditionConfig>> => {
+  return readFromDatabase("public/getEditionConfig", () => readEditionConfig());
+});

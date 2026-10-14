@@ -337,6 +337,186 @@ export function parseWindow(value: unknown, fallback: ScoringWindow): ParsedWind
 }
 
 /* -------------------------------------------------------------------------- */
+/* Ventana escrita a mano en el panel                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * La zona con la que la organización lee el torneo.
+ *
+ * Es la misma que usan `objectives.ts` (el día natural de una partida) y
+ * `alerts/report.ts` (las fechas del informe), y la única que aparece en el panel.
+ */
+const MADRID_TIME_ZONE = "Europe/Madrid";
+
+/**
+ * Un valor de un `<input type="datetime-local">`: `YYYY-MM-DDTHH:mm`, con segundos
+ * opcionales. **Sin zona**, que es justo lo que manda el control del navegador.
+ */
+const LOCAL_INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/** Las partes del calendario de Madrid que se leen de un instante. */
+type MadridPart = "year" | "month" | "day" | "hour" | "minute" | "second";
+
+/**
+ * El instante, descompuesto en el reloj de pared de Madrid.
+ *
+ * `hourCycle: "h23"` evita el `24` de medianoche que algunos entornos dan con
+ * `hour12: false`; `en-CA` numera con dos dígitos en todos los campos.
+ */
+const MADRID_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: MADRID_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/** Las partes de Madrid de un instante, ya como números. */
+function madridParts(utcMs: number): Record<MadridPart, number> {
+  const parts = MADRID_PARTS.formatToParts(new Date(utcMs));
+  const part = (type: MadridPart): number =>
+    Number(parts.find((entry) => entry.type === type)?.value);
+
+  return {
+    year: part("year"),
+    month: part("month"),
+    day: part("day"),
+    hour: part("hour"),
+    minute: part("minute"),
+    second: part("second"),
+  };
+}
+
+/**
+ * El desfase de Madrid respecto a UTC en un instante dado, en milisegundos.
+ *
+ * El proyecto no arrastra ninguna dependencia de zonas horarias, así que el
+ * desfase sale de `Intl`: se formatea el instante en el calendario de Madrid, se
+ * reconstruye ese reloj de pared como si fuera UTC y la diferencia es el desfase.
+ * Cambia dos veces al año, en los cambios de hora, y por eso se calcula **por
+ * instante** en vez de una sola vez.
+ */
+function madridOffsetMs(utcMs: number): number {
+  const { year, month, day, hour, minute, second } = madridParts(utcMs);
+
+  return Date.UTC(year, month - 1, day, hour, minute, second) - utcMs;
+}
+
+/**
+ * Un reloj de pared de Madrid, en milisegundos "ingenuos" (como si fuera UTC), a
+ * instante UTC.
+ *
+ * El desfase de Madrid depende del instante, así que se resuelve en dos pasadas:
+ * la primera con el desfase del propio reloj de pared, y la segunda con el del
+ * instante que sale de la primera. La segunda pasada es la que acierta en los dos
+ * cambios de hora, donde el desfase de partida no es el definitivo.
+ *
+ * **Criterio en las horas del cambio de hora**, que es lo único que esta función
+ * tiene que decidir por su cuenta:
+ *
+ * - **Ambiguas** (el domingo de octubre, la franja de 02:00 a 03:00 ocurre dos
+ *   veces): se toma la **segunda**, la del horario de invierno. La primera pasada
+ *   ya cae ahí.
+ * - **Inexistentes** (el domingo de marzo, la franja de 02:00 a 03:00 no ocurre):
+ *   se toma el instante **justo después del salto**, una hora más tarde de lo
+ *   escrito. La segunda pasada es la que lo desplaza.
+ *
+ * Los dos casos son deterministas y están probados. Un `datetime-local` que caiga
+ * en el hueco no se puede rechazar sin inventarse una regla, y esta es la que
+ * menos sorprende al mirar el reloj de Madrid.
+ */
+function madridLocalToUtc(naiveMs: number): number {
+  const firstOffset = madridOffsetMs(naiveMs);
+  const firstGuess = naiveMs - firstOffset;
+  const secondOffset = madridOffsetMs(firstGuess);
+
+  return secondOffset === firstOffset ? firstGuess : naiveMs - secondOffset;
+}
+
+/**
+ * Un instante escrito a mano para la ventana, normalizado a ISO-8601 UTC.
+ *
+ * Es la puerta de entrada del panel, y acepta las dos formas que puede haber en
+ * un formulario:
+ *
+ * - Un instante ISO-8601 **con zona** (lo que hoy guarda `Setting`): se valida con
+ *   `readInstant()` y se normaliza, sin reinterpretar nada.
+ * - Un `datetime-local` (`YYYY-MM-DDTHH:mm`, con segundos opcionales), que es lo
+ *   que manda un `<input type="datetime-local">` y **no lleva zona**: se interpreta
+ *   en `Europe/Madrid`, la zona con la que la organización lee el torneo (ver
+ *   `madridLocalToUtc()` para las horas del cambio de hora).
+ *
+ * Devuelve `null` si el texto no es ninguna de las dos cosas o no es una fecha real
+ * (mes 13, 31 de febrero, hora 25): el llamante decide qué mensaje enseñar. El
+ * resultado es siempre ISO-8601 UTC, así que sigue siendo válido para
+ * `parseWindow()` y para `Setting`.
+ */
+export function parseMadridLocalInstant(value: string): string | null {
+  const instant = readInstant(value);
+
+  if (instant !== null) {
+    return instant.toISOString();
+  }
+
+  const match = LOCAL_INSTANT_PATTERN.exec(value);
+
+  if (match === null) {
+    return null;
+  }
+
+  const [, year, month, day, hour, minute, second] = match;
+  const naive = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    second === undefined ? 0 : Number(second),
+  );
+  const check = new Date(naive);
+
+  // Un componente fuera de rango (mes 13, 31 de febrero, hora 25) hace que
+  // `Date.UTC` ruede al siguiente campo: si algo rodó, no era una fecha.
+  if (
+    check.getUTCFullYear() !== Number(year) ||
+    check.getUTCMonth() !== Number(month) - 1 ||
+    check.getUTCDate() !== Number(day) ||
+    check.getUTCHours() !== Number(hour) ||
+    check.getUTCMinutes() !== Number(minute)
+  ) {
+    return null;
+  }
+
+  return new Date(madridLocalToUtc(naive)).toISOString();
+}
+
+/**
+ * El inverso de `parseMadridLocalInstant()`: un instante, al `datetime-local` de
+ * Madrid.
+ *
+ * Es lo que prefila el campo del panel, y por eso devuelve `YYYY-MM-DDTHH:mm`
+ * **sin zona** y **sin segundos**: el valor exacto que espera un
+ * `<input type="datetime-local">`. Solo acepta un instante ISO-8601 con zona (lo
+ * que hay guardado); cualquier otra cosa devuelve `null` para que el campo se
+ * pinte vacío en vez de con un texto inventado.
+ */
+export function formatMadridLocalInstant(iso: string): string | null {
+  const instant = readInstant(iso);
+
+  if (instant === null) {
+    return null;
+  }
+
+  const { year, month, day, hour, minute } = madridParts(instant.getTime());
+  const two = (value: number): string => String(value).padStart(2, "0");
+
+  return `${year}-${two(month)}-${two(day)}T${two(hour)}:${two(minute)}`;
+}
+
+/* -------------------------------------------------------------------------- */
 /* La condición de equipos                                                     */
 /* -------------------------------------------------------------------------- */
 

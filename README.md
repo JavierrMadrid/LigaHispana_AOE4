@@ -37,26 +37,34 @@ mismo y quién está en directo.
 
 | Página | Qué se ve |
 |---|---|
-| **Clasificación** (`/`) | La tabla del torneo: puesto, puntos, victorias, división, quién está en directo y cuánto queda de torneo. |
+| **Clasificación** (`/`) | La tabla del torneo: puesto, puntos, victorias, división, quién está en directo y cuánto queda de torneo. Cuando el ruleset activo todavía no se ha recalculado, se muestra la última clasificación calculada y una nota sobre la tabla lo dice. |
 | **Partidas** (`/partidas`) | Las partidas que están jugando los participantes en este momento. |
-| **Objetivos** (`/objetivos`) | Los 82 objetivos (29 competiciones y 53 logros), con sus puntos y quién los cobra. Los de civilización se agrupan por familia (la cabeza y sus subobjetivos, con un filtro de banderas para saltar a cada uno y un riel que se recorre con la rueda, el gesto táctil o dos botones de flecha); las 23 competiciones `Masterizando <civ>` —que no tienen cabeza— van en su propio carrusel, «Masterizando», con el mismo filtro de banderas y riel. La tarjeta de la cabeza explica cómo puntúa el conjunto y cada tarjeta abre una ventana volteable: de primeras se ve la clasificación, con el avance de cada participante (`12/23` civilizaciones, `2/3` victorias o el valor de su métrica en una competición), un check en quien lo ha completado y el recuento de completadores sobre el total («3 de 12 lo han completado»); al girarla, aparece el resumen de la propia tarjeta, recompuesto en una columna centrada alrededor del emblema del objetivo, que se enseña en grande en un medallón: el arte de la civilización cuando el objetivo es de civilización y el glifo propio de la casa en el resto. Las tarjetas encienden un halo dorado al pasar el ratón y dejan una estela dorada que sigue al cursor por dentro. |
-| **Objetivos de un participante** (`/objetivos/<id>`) | El avance de un jugador en los 82 objetivos. Los individuales se leen en tres bloques —Al alcance (ordenado de más a menos cerca de cobrarlo), En posesión y Sin disputar— y dentro de "Al alcance", tras sus tarjetas, los de civilización se agrupan en los carruseles de Líder y Acólito, con el mismo riel y filtro de banderas que `/objetivos` pero con el avance del jugador y ordenados de mayor a menor porcentaje de consecución. |
-| **Puntuación** (`/puntuacion`) | Cuánto vale cada victoria, qué cuenta como partida clasificatoria, los objetivos especiales y los desempates. |
-| **Reglas** (`/reglas`) | Las normas del torneo: formato, participación, normas de obligado cumplimiento y organización. |
+| **Objetivos** (`/objetivos`) | Los objetivos activos (hoy 82: 29 competiciones y 53 logros), con sus puntos y quién los cobra. Los de civilización se agrupan por familia (la cabeza y sus subobjetivos, con un filtro de banderas para saltar a cada uno y un riel que se recorre con la rueda, el gesto táctil o dos botones de flecha); las 23 competiciones `Masterizando <civ>` —que no tienen cabeza— van en su propio carrusel, «Masterizando», con el mismo filtro de banderas y riel. La tarjeta de la cabeza explica cómo puntúa el conjunto y cada tarjeta abre una ventana volteable: de primeras se ve la clasificación, con el avance de cada participante (`12/23` civilizaciones, `2/3` victorias o el valor de su métrica en una competición), un check en quien lo ha completado y el recuento de completadores sobre el total («3 de 12 lo han completado»); al girarla, aparece el resumen de la propia tarjeta, recompuesto en una columna centrada alrededor del emblema del objetivo, que se enseña en grande en un medallón: el arte de la civilización cuando el objetivo es de civilización y el glifo propio de la casa en el resto. Las tarjetas encienden un halo dorado al pasar el ratón y dejan una estela dorada que sigue al cursor por dentro. |
+| **Objetivos de un participante** (`/objetivos/<id>`) | El avance de un jugador en los objetivos activos. Los individuales se leen en tres bloques —Al alcance (ordenado de más a menos cerca de cobrarlo), En posesión y Sin disputar— y dentro de "Al alcance", tras sus tarjetas, los de civilización se agrupan en los carruseles de Líder y Acólito, con el mismo riel y filtro de banderas que `/objetivos` pero con el avance del jugador y ordenados de mayor a menor porcentaje de consecución. |
+| **Puntuación** (`/puntuacion`) | Cuánto vale cada victoria, qué cuenta como partida clasificatoria, los objetivos especiales y los desempates. Las cifras (puntos por victoria, objetivos activos y su total, premio base) salen del ruleset y de la edición activos. |
+| **Reglas** (`/reglas`) | Las normas del torneo: formato, participación, normas de obligado cumplimiento y organización. La retransmisión en directo se lista solo cuando la edición la exige, y la sección de organización anuncia el premio base y las donaciones cuando están publicados. |
 | **Participar** (`/participar`) | La inscripción pública al torneo. |
 
 Además, cuando la organización tiene publicada una campaña, todas las páginas públicas muestran arriba
 un **banner de donaciones** con el enlace a Matcherino.
 
 La organización tiene además un **panel de administración** para aprobar participantes, revisar
-partidas y alertas, gestionar el torneo y publicar la campaña de donaciones.
+partidas y alertas, gestionar el torneo y publicar la campaña de donaciones. El **superadministrador**
+configura además la **edición**: su nombre y su premio base, la marca (emblema y color de acento) que se
+aplica a la web pública, si la retransmisión es obligatoria y las reglas de puntuación (ventana,
+familias, puntos y objetivos desactivados), todo sin desplegar. También puede **deshacer** lo que
+hicieron los admins regulares.
+
+Un **bot de Discord** avisa del comienzo y el final del torneo en el canal de avisos, una sola vez por
+aviso, con el nombre de la edición y sus fechas.
 
 ## Cómo se compite
 
 - **Individual, en la ladder *ranked*** del juego: 1v1 y ranked por equipos. El resto de modos no
   puntúa.
-- **2 puntos por victoria**, más **82 objetivos** que reparten puntos extra: **competiciones** (los
-  cobra quien va primero) y **logros** (los cobra quien cumple la condición).
+- **Los puntos del ruleset activo**: por defecto **2 por victoria**, más los **objetivos activos** (hoy
+  82) que reparten puntos extra: **competiciones** (los cobra quien va primero) y **logros** (los cobra
+  quien cumple la condición).
 - **Ventana de fechas**: solo cuentan las partidas jugadas dentro del periodo del torneo.
 - **Equipos equilibrados**: una partida por equipos solo cuenta si ningún compañero está a dos
   escalones o más de división del jugador, por encima o por debajo.
@@ -113,6 +121,29 @@ Supabase Cron ──► Worker (Cloudflare) ──► API de AoE4World
 - El **motor de puntuación** lee las partidas guardadas, aplica el ruleset activo y escribe la
   clasificación. Se recalcula solo.
 - Las **reglas y los puntos** son configurables sin desplegar (viven en la tabla `Setting`).
+
+### Acceso al panel
+
+El panel de administración (`/admin`) es solo para la organización, y tiene **dos papeles**:
+
+- **Superadministrador**: la cuenta cuyo correo está en `SUPERADMIN_EMAIL`. Es única y puede, además
+  de todo lo de un admin, invitar a otros admins, darlos de baja y reactivarlos, **deshacer** lo que
+  hicieron los admins regulares desde el historial de `/admin/acciones` y mandar un aviso de prueba al
+  canal de Discord del torneo.
+- **Admin**: cualquier cuenta de la tabla `Admin` que esté **activa**. No puede tocar la lista de
+  admins.
+
+Lo del superadministrador vive en la pestaña **Administración**, que solo él ve y que se organiza en
+subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Puntuación**,
+**Inscripciones** (el plazo y los países admitidos), **Donaciones** y **Avisos** (la prueba del canal
+de Discord). El resto del panel es igual para los dos papeles.
+
+El alta es **por invitación**: se escribe el correo en el panel y la persona recibe un enlace para
+fijar su contraseña (pasa por `/auth/confirm` y termina en `/login/establecer-contrasena`); un enlace
+caducado o ya usado lleva a `/login?error=enlace`, que lo explica. Dar de baja **desactiva** la
+cuenta —no la borra—, así que se puede reactivar. Quien entra con una cuenta sin acceso ve
+`/sin-acceso`. El detalle operativo está en
+[`docs/OPERACION.md`](docs/OPERACION.md#administración-del-panel).
 
 ### Puesta en marcha
 

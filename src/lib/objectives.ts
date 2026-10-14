@@ -1286,6 +1286,11 @@ function targetFor(
  * en una competición solo el poseedor recibe sus puntos; en un logro, cada
  * beneficiario los suyos (`imparable` los reparte por día, con tope). Un objetivo
  * sin nadie que lo cumpla no reparte nada.
+ *
+ * Los objetivos **desactivados** (`ruleset.disabledObjectives`) se saltan antes de
+ * calcular nada: no entran en `options` (así no se publican ni entran en el
+ * snapshot), no reparten puntos y no aparecen en `awarded`, que es lo que hace que
+ * `reconcileObjectiveEvents()` borre sus eventos.
  */
 export function computeObjectives(
   players: readonly PlayerAggregate[],
@@ -1295,6 +1300,7 @@ export function computeObjectives(
   const options: ObjectiveOption[] = [];
   const pointsByPlayer = new Map<string, ObjectiveAward>();
   const awarded: ObjectiveAwarded[] = [];
+  const desactivados = new Set(ruleset.disabledObjectives);
   let holders = 0;
 
   const addAward = (playerId: string, id: string, points: number): void => {
@@ -1306,6 +1312,12 @@ export function computeObjectives(
   };
 
   for (const definition of OBJECTIVE_DEFINITIONS) {
+    // Un objetivo desactivado no existe para el motor, y por eso se salta antes de
+    // calcular sus candidatos: tampoco es un ranking que se publique.
+    if (desactivados.has(definition.id)) {
+      continue;
+    }
+
     const sorted = candidatesFor(definition, players, mapPool).sort(compareCandidates);
     const points = ruleset.objectives[definition.id] ?? definition.points;
 

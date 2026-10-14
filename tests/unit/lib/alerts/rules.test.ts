@@ -11,6 +11,7 @@ import {
   alertDetails,
   alertSummary,
   buildTriggeredAlert,
+  hasStreamChannel,
   mergeAlertsRuleset,
   partidas,
   type AlertTriggerInput,
@@ -47,16 +48,17 @@ function disparo(overrides: Partial<AlertTriggerInput> = {}): AlertTriggerInput 
 }
 
 describe("etiquetas", () => {
-  it("las once reglas y los cuatro tipos tienen su rótulo en español", () => {
+  it("las doce reglas y los cuatro tipos tienen su rótulo en español", () => {
     // El `satisfies Record<...>` del módulo obliga a decidir la etiqueta al añadir
     // una regla; aquí se comprueba que ninguna se quedó sin él ni con el mismo
-    // texto que otra. Las once etiquetas son las **seis** reglas de comportamiento
+    // texto que otra. Las doce etiquetas son las **seis** reglas de comportamiento
     // que se calculan hoy, las **dos retiradas** (R4 y R5, que se quedan por las
-    // filas históricas) y las **tres de estado**; los cuatro tipos son las tres
-    // rachas/acumulados más `STATE_DETECTED`.
+    // filas históricas) y las **cuatro de estado** (historial, ladder, Discord y
+    // canal de directo); los cuatro tipos son las tres rachas/acumulados más
+    // `STATE_DETECTED`.
     const etiquetas = Object.values(ALERT_RULE_LABELS);
 
-    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(11);
+    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(12);
     expect(Object.keys(ALERT_KIND_LABELS)).toHaveLength(4);
     expect(new Set(etiquetas).size).toBe(etiquetas.length);
     for (const etiqueta of [...etiquetas, ...Object.values(ALERT_KIND_LABELS)]) {
@@ -170,7 +172,11 @@ describe("alertSummary", () => {
   });
 
   it("las frases de estado no llevan el nombre del jugador ni la causa", () => {
-    for (const rule of ["HISTORY_NOT_PUBLIC", "MISSING_LADDER_MATCHES"] as const) {
+    for (const rule of [
+      "HISTORY_NOT_PUBLIC",
+      "MISSING_LADDER_MATCHES",
+      "NO_STREAM_CHANNEL",
+    ] as const) {
       const frase = alertSummary(
         disparo({
           rule,
@@ -309,6 +315,82 @@ describe("DISCORD_NOT_IN_GUILD: una regla, dos casos", () => {
     // para encontrar a esa persona en Discord.
     expect(conCuenta.details.discordUsername).toBe("pepito");
     expect(conNombre.details.discordUsername).toBe("pepito");
+  });
+});
+
+describe("NO_STREAM_CHANNEL: la regla condicional de la edición", () => {
+  /** El disparo tal y como lo escribe `evaluateAlerts()`: sin ancla y sin ventana. */
+  function disparoSinCanal(overrides: Partial<AlertTriggerInput> = {}): AlertTriggerInput {
+    return disparo({
+      rule: "NO_STREAM_CHANNEL",
+      kind: "STATE_DETECTED",
+      subject: SELF_SUBJECT,
+      count: 0,
+      threshold: 1,
+      anchorGameId: null,
+      anchorStartedAt: null,
+      window: undefined,
+      ...overrides,
+    });
+  }
+
+  it("dice lo que se ha comprobado, sin causa y sin nombre", () => {
+    expect(alertSummary(disparoSinCanal())).toBe("Su ficha no tiene ningún canal de directo");
+  });
+
+  it("no escribe ni partida ancla ni ventana: no mira partidas", () => {
+    // Es una columna de `Player`, no una partida: escribir la ventana del torneo
+    // afirmaría un alcance que la comprobación no tiene.
+    const detalles = alertDetails(disparoSinCanal());
+
+    expect(detalles).not.toHaveProperty("anchorGameId");
+    expect(detalles).not.toHaveProperty("anchorStartedAt");
+    expect(detalles).not.toHaveProperty("windowFrom");
+    expect(detalles).not.toHaveProperty("windowTo");
+    // "Cero canales de los uno que se pide": la misma forma que la regla del historial.
+    expect(detalles).toMatchObject({ count: 0, threshold: 1 });
+  });
+
+  it("su clave es de estado: da igual cuántas veces se reevalúe", () => {
+    // La propiedad de la que depende que no llene la tabla: el motor la evalúa en
+    // **cada** pasada mientras la edición exija retransmisión.
+    const primera = buildTriggeredAlert(disparoSinCanal()).dedupeKey;
+    const segunda = buildTriggeredAlert(disparoSinCanal({ count: 99, threshold: 99 })).dedupeKey;
+
+    expect(segunda).toBe(primera);
+    expect(primera).toContain("NO_STREAM_CHANNEL|STATE_DETECTED");
+  });
+
+  it("no se confunde con la del historial del mismo jugador", () => {
+    const historial = buildTriggeredAlert(
+      disparo({ rule: "HISTORY_NOT_PUBLIC", kind: "STATE_DETECTED", anchorGameId: null }),
+    );
+
+    expect(buildTriggeredAlert(disparoSinCanal()).dedupeKey).not.toBe(historial.dedupeKey);
+  });
+});
+
+describe("hasStreamChannel", () => {
+  const sinCanales = {
+    twitchChannel: null,
+    youtubeChannel: null,
+    kickChannel: null,
+    twitchUrl: null,
+  };
+
+  it("sin ningún canal no hay canal", () => {
+    expect(hasStreamChannel(sinCanales)).toBe(false);
+  });
+
+  it("un vacío o un espacio no es un canal", () => {
+    expect(hasStreamChannel({ ...sinCanales, kickChannel: "" })).toBe(false);
+    expect(hasStreamChannel({ ...sinCanales, twitchChannel: "   " })).toBe(false);
+  });
+
+  it("cualquiera de los cuatro vale, incluido el de la ladder", () => {
+    for (const campo of ["twitchChannel", "youtubeChannel", "kickChannel", "twitchUrl"] as const) {
+      expect(hasStreamChannel({ ...sinCanales, [campo]: "canal" }), campo).toBe(true);
+    }
   });
 });
 

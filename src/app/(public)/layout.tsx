@@ -2,10 +2,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { AdminAccess } from "@/components/admin-access";
 import { DonationBanner } from "@/components/donation-banner";
+import { accentTheme } from "@/components/edition-theme";
 import { ParticipateCta } from "@/components/participate-cta";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav, SiteTabBar } from "@/components/site-nav";
-import { getMatcherinoDonations } from "@/lib/public";
+import { getEditionConfig, getMatcherinoDonations } from "@/lib/public";
 
 export default async function PublicLayout({
   children,
@@ -14,17 +15,33 @@ export default async function PublicLayout({
   children: React.ReactNode;
   modal: React.ReactNode;
 }) {
-  // Lectura ligera de `Setting`, envuelta en `cache()` por si otra pieza de la
-  // misma petición la necesita. Con la base caída llega `"degraded"`: el banner no
-  // se pinta, porque un aviso de base caída en todas las páginas públicas sería
-  // ruido y "no hay campaña publicada" deja la misma página.
-  const donationsRead = await getMatcherinoDonations();
+  // Dos lecturas ligeras de `Setting`, las dos envueltas en `cache()` por si otra
+  // pieza de la misma petición las necesita. Con la base caída llega `"degraded"`:
+  // el banner de donaciones no se pinta, porque un aviso de base caída en todas las
+  // páginas públicas sería ruido y "no hay campaña publicada" deja la misma página;
+  // y la marca de la edición no se aplica, así que el sitio se queda con su nombre,
+  // su emblema y su oro en vez de inventarse los de la edición.
+  const [donationsRead, editionRead] = await Promise.all([
+    getMatcherinoDonations(),
+    getEditionConfig(),
+  ]);
+
+  const edition = editionRead.status === "ok" ? editionRead.data : null;
+  const editionName = edition?.name ?? null;
+  const editionEmblem = edition?.branding.emblemUrl ?? null;
+  // El color de la edición se aplica como variables CSS en el subárbol público
+  // (cabecera, contenido, pie y ventana modal, que cuelga de aquí). El panel de
+  // administración vive fuera de este layout y no se retinta.
+  const accentStyle = accentTheme(edition?.branding.accentColor ?? null);
 
   return (
     // El relleno inferior deja libre la franja que ocupa `SiteTabBar` en móvil:
     // la barra es fija y, sin él, taparía el último tramo del pie. Desde `sm` la
     // barra no existe y el relleno sobra.
-    <div className="flex min-h-full flex-col pb-[calc(3.5rem+env(safe-area-inset-bottom))] sm:pb-0">
+    <div
+      style={accentStyle}
+      className="flex min-h-full flex-col pb-[calc(3.5rem+env(safe-area-inset-bottom))] sm:pb-0"
+    >
       <a
         href="#contenido"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-30 focus:bg-accent focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-accent-ink"
@@ -73,21 +90,38 @@ export default async function PublicLayout({
                 en un solo color heredado para que sea una unidad clicable, sin
                 que una parte parezca una etiqueta aparte. `width`/`height` van
                 al tamaño pintado: de ahí salen los candidatos 1x y 2x del
-                `srcset`, y así el doble tampoco se amplía. */}
-            <Image
-              src="/imagenes/marca/emblema-256.png"
-              alt=""
-              width={48}
-              height={48}
-              priority
-              className="size-10 shrink-0 sm:size-12"
-            />
+                `srcset`, y así el doble tampoco se amplía.
+                Con emblema de la edición se pinta ese; si no, el de la casa. Va
+                `unoptimized` porque la URL la escribe la organización y puede ser
+                externa: optimizarla exigiría declarar su host en
+                `images.remotePatterns` (`next.config.ts`), y el emblema es un
+                fichero pequeño que no gana nada con el optimizador. */}
+            {editionEmblem !== null ? (
+              <Image
+                src={editionEmblem}
+                alt=""
+                width={48}
+                height={48}
+                priority
+                unoptimized
+                className="size-10 shrink-0 sm:size-12"
+              />
+            ) : (
+              <Image
+                src="/imagenes/marca/emblema-256.png"
+                alt=""
+                width={48}
+                height={48}
+                priority
+                className="size-10 shrink-0 sm:size-12"
+              />
+            )}
             {/* Con tres bloques en la misma fila, en un móvil muy estrecho los
                 laterales se reparten el ancho que sobra: el wordmark cede con
                 puntos suspensivos antes que empujar la navegación fuera de su
                 columna. */}
             <span className="min-w-0 truncate font-display text-sm font-semibold sm:text-base">
-              Liga Hispana AoE IV
+              {editionName ?? "Liga Hispana AoE IV"}
             </span>
           </Link>
 
@@ -115,7 +149,7 @@ export default async function PublicLayout({
         {children}
       </main>
 
-      <SiteFooter />
+      <SiteFooter name={editionName} emblemUrl={editionEmblem} />
 
       {/* La navegación de móvil vive fuera de la cabecera: es una capa fija al
           pie de la ventana, así que no entra en el flujo ni desplaza el

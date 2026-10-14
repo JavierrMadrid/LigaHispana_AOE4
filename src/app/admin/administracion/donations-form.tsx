@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import type { MatcherinoDonations } from "@/lib/public";
-import { setMatcherinoDonations, type AdminActionResult } from "./actions";
+import { setMatcherinoDonations, type AdminActionResult } from "@/app/admin/actions";
 
 const initialState: AdminActionResult = { status: "idle", message: null };
 
@@ -12,7 +12,8 @@ const initialState: AdminActionResult = { status: "idle", message: null };
  * Es la cara visible de `Setting["donations.matcherino"]`: el mismo par
  * (activación + URL) que lee el layout público para pintar el banner. Aquí no
  * decide nada; solo publica el estado y ofrece el cambio, como `RegistrationSwitch`
- * con el plazo de inscripción.
+ * con el plazo de inscripción. Vive en la subpestaña **Donaciones** de
+ * Administración.
  *
  * ## El formulario es una foto completa
  *

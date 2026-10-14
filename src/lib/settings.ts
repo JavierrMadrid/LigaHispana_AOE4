@@ -369,6 +369,19 @@ export type SyncRunTrace = {
    */
   discordError: string | null;
   /**
+   * Por qué no se pudo avisar del comienzo o el final del torneo en el canal de avisos,
+   * o qué hubo que avisar aunque no fuera un fallo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, por el mismo motivo que
+   * `discordError`: no haber podido avisar del torneo **no ha parado ni una partida**.
+   * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que sin
+   * `DISCORD_BOT_TOKEN` o sin `DISCORD_ANNOUNCE_CHANNEL_ID` los avisos están apagados
+   * (y que el aviso queda pendiente, no perdido).
+   *
+   * Ver `src/lib/edition-announcements.ts`.
+   */
+  announceError: string | null;
+  /**
    * Por qué no se pudo comprobar el estado de directo de YouTube o de Kick, si no se
    * pudo.
    *
@@ -478,6 +491,7 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     alertsError: readText(value["alertsError"]),
     historyError: readText(value["historyError"]),
     discordError: readText(value["discordError"]),
+    announceError: readText(value["announceError"]),
     streamsError: readText(value["streamsError"]),
     mapPoolError: readText(value["mapPoolError"]),
     failures: readFailures(value["failures"]),
@@ -524,7 +538,10 @@ export async function writeSyncRunTrace(
   // torneo entero con la comprobación apagada se publicaría como sincronizador roto.
   // Y con `mapPoolError`: no poder refrescar el pool solo deja el objetivo con el
   // último valor bueno, y el formato del homepage puede cambiar cualquier día sin
-  // que eso sea un fallo del sincronizador.
+  // que eso sea un fallo del sincronizador. Y con `announceError`: no poder avisar del
+  // comienzo o el final del torneo en Discord tampoco ha parado nada, y la falta de
+  // `DISCORD_ANNOUNCE_CHANNEL_ID` es tan permanente como la de `DISCORD_BOT_TOKEN`, así
+  // que si contara, una edición entera sin canal se publicaría como sincronizador roto.
 
   const value = {
     ...trace,
@@ -580,13 +597,20 @@ export async function readRegistrationOpen(): Promise<boolean> {
 }
 
 /**
- * Publica el plazo. La usa el interruptor de `/admin`.
+ * Publica el plazo. La usa el interruptor del panel.
  *
  * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
- * `Setting.updatedAt`, que es justo el rastro que deja el cambio.
+ * `Setting.updatedAt`.
+ *
+ * Acepta el cliente porque la acción la llama **dentro** de la transacción que
+ * escribe su rastro: el cambio de plazo y la fila de `AdminAction` (`CONFIG_CHANGED`)
+ * se confirman juntos, y no puede quedar un cambio sin su línea en el historial.
  */
-export async function writeRegistrationOpen(open: boolean): Promise<void> {
-  await db.setting.upsert({
+export async function writeRegistrationOpen(
+  open: boolean,
+  client: SettingWriter = db,
+): Promise<void> {
+  await client.setting.upsert({
     where: { key: REGISTRATION_OPEN_KEY },
     create: { key: REGISTRATION_OPEN_KEY, value: open },
     update: { value: open },
@@ -613,15 +637,22 @@ export async function readMatcherinoDonations(): Promise<MatcherinoDonations> {
 }
 
 /**
- * Publica la campaña de donaciones. La usa el formulario de `/admin`.
+ * Publica la campaña de donaciones. La usa el formulario del panel.
  *
  * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
- * `Setting.updatedAt`, que es justo el rastro que deja el cambio. Se escribe el
- * objeto entero (activación y URL juntos) porque el formulario del panel es una
- * foto completa de la campaña, igual que la edición de un jugador.
+ * `Setting.updatedAt`. Se escribe el objeto entero (activación y URL juntos) porque
+ * el formulario del panel es una foto completa de la campaña, igual que la edición
+ * de un jugador.
+ *
+ * Acepta el cliente porque la acción la llama **dentro** de la transacción que
+ * escribe su rastro: la campaña y la fila de `AdminAction` (`CONFIG_CHANGED`) se
+ * confirman juntas, y no puede quedar un cambio sin su línea en el historial.
  */
-export async function writeMatcherinoDonations(value: MatcherinoDonations): Promise<void> {
-  await db.setting.upsert({
+export async function writeMatcherinoDonations(
+  value: MatcherinoDonations,
+  client: SettingWriter = db,
+): Promise<void> {
+  await client.setting.upsert({
     where: { key: MATCHERINO_DONATIONS_KEY },
     create: { key: MATCHERINO_DONATIONS_KEY, value },
     update: { value },

@@ -61,6 +61,19 @@ ventana queda abierta y permite fijar el fin más tarde sin tocar código. Vive 
 cambia sin desplegar. La página `/puntuacion` muestra el periodo con las fechas reales; si la lectura
 de la base falla, cae al texto genérico y no inventa fechas.
 
+La página `/puntuacion` lee además el **ruleset activo** para las demás cifras: los puntos por victoria
+y los **objetivos activos**, de los que salen el recuento y el total que reparten (hoy 82 y 4.679
+puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de resumen no se pinta y
+los párrafos caen a su forma genérica, en vez de enseñar los números de la edición anterior.
+
+En el panel (`/admin/administracion/puntuacion`) la ventana se escribe como **fecha y hora local de
+Europe/Madrid** (`datetime-local`), que es la zona con la que la organización lee el torneo; el
+servidor la interpreta en Madrid y guarda el instante **ISO-8601 UTC**. El campo sigue aceptando un
+ISO con zona escrito a mano. `parseMadridLocalInstant()` / `formatMadridLocalInstant()`
+(`src/lib/ranked-match.ts`) hacen la conversión: en las horas del cambio de hora, la ambigua de
+octubre se resuelve con la segunda ocurrencia (invierno) y la inexistente de marzo, con el instante
+justo después del salto.
+
 ### El corte de inscripción
 
 `corte(jugador) = max(window.from, Player.registeredAt)`. La ventana es global, pero el corte es de
@@ -95,7 +108,9 @@ La tasa se compara con producto cruzado, sin coma flotante, para que el orden se
 personas coinciden en los cuatro, **comparten puesto**: ranking de competición (1, 2, 2, 4, con el hueco
 del puesto compartido). `profileId` ascendente solo fija el orden de presentación dentro del puesto
 compartido, no decide el puesto. Si hay premios, el puesto compartido se reparte a partes iguales entre
-quienes lo comparten. (El desempate **dentro de un objetivo** es otro:
+quienes lo comparten. El **premio base** de la edición se anuncia en esta sección de `/puntuacion`
+(importe y nota de `Setting["edition.config"]`); la campaña de donaciones, cuando está publicada, se
+suma a él (ver [`REGLAS.md`](./REGLAS.md)). (El desempate **dentro de un objetivo** es otro:
 ver [`OBJETIVOS.md`](./OBJETIVOS.md).)
 
 Aparecen **todos los jugadores aprobados**: quien todavía no haya cerrado ninguna clasificatoria figura
@@ -108,32 +123,52 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "label": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
   "modes": ["rm_solo", "rm_team"],
   "window": { "from": "2026-09-15T00:00:00.000Z", "to": "2026-10-15T00:00:00.000Z" },
   "pointsPerWin": 2,
   "countRandomizedCivs": false,
-  "objectives": { "loco-por-ganar": 50, "bienhadado": 200, "rey-1v1": 240 }
+  "objectives": { "loco-por-ganar": 50, "bienhadado": 200, "rey-1v1": 240 },
+  "disabledObjectives": []
 }
 ```
 
-- **La versión la fija el código** (`RULESET_VERSION` en `src/lib/scoring.ts`): cambiar un número no
-  exige despliegue, cambiar la estructura sí. Si el documento guardado no coincide en versión, el motor
-  avisa y usa los valores por defecto **sin pisar lo guardado**.
+- **La versión la fija el código** (`RULESET_VERSION` en `src/lib/scoring.ts`, hoy **4**): cambiar un
+  número no exige despliegue, cambiar la estructura sí.
+- **Un documento de la versión anterior se migra**, no se descarta. La v3 no tenía
+  `disabledObjectives`, así que se lee entera y el campo que falta queda vacío (catálogo completo
+  activo); `ensureRuleset()` publica una vez el documento migrado para que la migración no se repita en
+  cada lectura. Una versión **desconocida o futura** sí se descarta con aviso: el motor avisa y usa los
+  valores por defecto **sin pisar lo guardado**.
+- **`disabledObjectives`** es la lista de objetivos **apagados** (ids del catálogo). Uno apagado no se
+  computa, no se publica en `/objetivos`, no reparte puntos y sus eventos de `ObjectiveEvent` se borran
+  en la siguiente reconciliación. Un id que no exista o repetido se avisa y se ignora, sin tumbar el
+  resto del documento. Ver [`OBJETIVOS.md`](./OBJETIVOS.md).
 - **`window` no se reescribe al guardar.** Si falta, se usa la del documento por defecto; si es
   inservible, se descarta con aviso. `from` tiene que ser un instante con zona, `to` puede ser `null`,
-  y `to <= from` se rechaza entero.
-- **La etiqueta (`label`) también la fija el código**: es texto de producto, no configuración.
+  y `to <= from` se rechaza entero. El panel convierte antes la fecha y hora local de Madrid a UTC
+  (ver [La ventana](#la-ventana)), así que lo guardado siempre cumple esto.
+- **La etiqueta (`label`) la calcula el código** (`ruleLabel()`), no el documento: sale de
+  `pointsPerWin` y de los objetivos **activos** ("2 puntos por victoria clasificatoria más 81 objetivos:
+  28 competiciones y 53 logros" con un objetivo apagado). El `label` guardado se ignora y
+  `ensureRuleset` corrige la copia de la tabla.
 - Cada recálculo escribe `PlayerScore` solo en la versión activa; las versiones anteriores se quedan
   como histórico. El rastro de la última pasada va en `Setting["scoring.lastRun"]`.
+
+**Quién lo cambia.** El ruleset lo publica el **superadministrador** desde el panel de administración
+(`saveScoringRuleset`): valida antes de escribir y deja el rastro en `AdminAction` (`CONFIG_CHANGED`).
+Un cambio que mueva puntos —ventana, familias, puntos por victoria, civ aleatoria, puntos de objetivos
+u objetivos desactivados— recalcula la clasificación al guardar; si el recálculo falla, las reglas
+quedan guardadas y el aviso lo dice (la clasificación se pone al día en la siguiente pasada). El
+detalle operativo está en [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
 
 Forma del desglose (`PlayerScore.breakdown`): las dos familias siempre presentes, con ceros si no
 aplican.
 
 ```json
 {
-  "ruleSetVersion": 3,
+  "ruleSetVersion": 4,
   "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
