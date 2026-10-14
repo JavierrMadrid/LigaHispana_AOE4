@@ -316,7 +316,7 @@ aparece en una consulta, no se crea.**
 
 | Dónde | Consulta | Índice |
 |---|---|---|
-| `/` (clasificación) | `PlayerScore where ruleSetVersion = V order by rank, Player.profileId` + `Player` por id | `(ruleSetVersion, rank)` |
+| `/` (clasificación) | `PlayerScore where ruleSetVersion = V order by rank, Player.profileId` + `Player` por id; si sale vacía, `max(ruleSetVersion) < V` y la misma consulta con esa versión (respaldo, ver `docs/OPERACION.md`) | `(ruleSetVersion, rank)` |
 | `/partidas` | `Match where finishedAt is null` y `Player.status = APPROVED`, por `startedAt` | `(playerId, finishedAt)`; sin índice parcial (no se ha necesitado) |
 | `/objetivos` | `Match` clasificatorias de todos los aprobados, en la ventana | `(mode, startedAt)` |
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |

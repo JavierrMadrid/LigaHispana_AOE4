@@ -299,7 +299,7 @@ async function runSimulation(argv: string[]): Promise<void> {
 
   // Comprobación de lo que ve la web: si la base no ha podido leer, esto tiene que
   // abortar en vez de "verificar" contra una clasificación vacía.
-  const standings = unwrapRead(standingsRead, "simulate:tournament");
+  const standings = unwrapRead(standingsRead, "simulate:tournament").rows;
   const liveMatches = unwrapRead(liveMatchesRead, "simulate:tournament");
 
   const simulated = standings.filter((row) => profileIds.includes(row.profileId));

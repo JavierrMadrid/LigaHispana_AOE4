@@ -43,7 +43,12 @@ export default async function StandingsPage() {
   // la lectura falla se sustituye la página entera por el aviso, incluida la
   // banda de recuento, que si no diría un cero falso.
   const degraded = standings.status === "degraded" || liveMatches.status === "degraded";
-  const rows = standings.data ?? [];
+  const rows = standings.data?.rows ?? [];
+  // Versión activa de las reglas pendiente de recalcular. Solo deja de ser `null`
+  // cuando las filas publicadas son de la versión anterior más alta: es el único
+  // caso con aviso. El `?? null` convierte en "sin aviso" un `data` ausente, que no
+  // es lo mismo que una versión pendiente.
+  const pendingRuleSetVersion = standings.data?.pendingRuleSetVersion ?? null;
   // `getLiveMatches()` ya agrupa por partida: cuenta partidas, no filas, así que
   // el tamaño de la lista es directamente el número de partidas en juego.
   const liveGames = liveMatches.data?.length ?? 0;
@@ -124,11 +129,64 @@ export default async function StandingsPage() {
             </div>
           </div>
 
-          <section aria-label="Clasificación">
+          <section aria-label="Clasificación" className="flex flex-col gap-4">
+            {/* Nota de estado, no aviso de error: la tabla no está rota, está
+                calculada con la versión anterior de las reglas porque la activa
+                todavía no tiene filas. Va pegada a la tabla, que es lo que
+                matiza, y en el mismo tono neutro que el resto del cromo
+                (`border-line` + `surface`, texto en `muted`): el oro se queda en
+                el enlace. No se promete una actualización automática —en una
+                preview el recálculo no llega— ni se dice cuándo ocurrirá: solo
+                de dónde salen las cifras. Es contenido estático pintado en
+                servidor, así que no lleva `role="status"` ni `role="alert"`: no
+                hay ningún cambio en vivo que anunciar. */}
+            {pendingRuleSetVersion !== null ? (
+              <div className="flex items-start gap-3 rounded-lg border border-line bg-surface px-4 py-3">
+                <InfoIcon className="mt-0.5 size-4 shrink-0 text-muted" />
+                <p className="max-w-[68ch] text-sm leading-relaxed text-muted">
+                  La clasificación está calculada con una versión anterior de las
+                  reglas. Las vigentes todavía no se han aplicado a la tabla, así
+                  que se muestra la última calculada.{" "}
+                  <Link
+                    href="/puntuacion"
+                    className="text-accent underline underline-offset-4 hover:text-accent-strong"
+                  >
+                    Ver cómo se puntúa
+                  </Link>
+                </p>
+              </div>
+            ) : null}
+
             <StandingsTable rows={rows} />
           </section>
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Signo de "información": círculo con la barra y el punto de la "i".
+ *
+ * Marca la nota de versión de reglas como estado y no como error —el mismo trazo
+ * de 1.5 y la misma caja de 24 que los glifos de `site-nav.tsx` y
+ * `donation-banner.tsx`—. Es decorativo: el texto de al lado ya lo dice todo.
+ */
+function InfoIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11.25v5" />
+      <path d="M12 7.75h.01" />
+    </svg>
   );
 }

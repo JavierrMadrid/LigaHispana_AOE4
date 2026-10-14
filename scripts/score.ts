@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   // `unwrapRead` y no el dato pelado: una herramienta de terminal tiene que
   // abortar si la base de datos no responde, no imprimir una clasificación vacía
   // como si el torneo no tuviera jugadores.
-  const standings = unwrapRead(await getStandings(), "score");
+  const standings = unwrapRead(await getStandings(), "score").rows;
 
   if (standings.length === 0) {
     console.log("Todavía no hay jugadores aprobados con partidas clasificatorias resueltas.");

@@ -28,7 +28,7 @@ export default async function ObjectivesPage() {
   const objectives = read.status === "ok" ? read.data : null;
   const standings =
     standingsRead.status === "ok" && standingsRead.data !== null
-      ? standingsRead.data.map((row) => ({
+      ? standingsRead.data.rows.map((row) => ({
           profileId: row.profileId,
           name: row.name,
           avatarUrl: row.avatarUrl,

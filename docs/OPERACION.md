@@ -748,8 +748,11 @@ npm run db:cron                  # programa el reloj cada 10 minutos
   [Administración del panel](#administración-del-panel).
 - **Configuración de la edición**: no hay que sembrar nada. `edition.config` no existe hasta que el
   superadministrador guarda por primera vez, y hasta entonces la web usa el documento por defecto.
-- **La versión 4 del ruleset** (`RULESET_VERSION`) hace que la clasificación se publique vacía hasta el
-  primer recálculo: el `db:push` añade el valor `NO_STREAM_CHANNEL` al enum de `AlertRule`, la
+- **La versión 4 del ruleset** (`RULESET_VERSION`) deja la clasificación sin recalcular hasta la
+  primera pasada: el `db:push` añade el valor `NO_STREAM_CHANNEL` al enum de `AlertRule`, la
   migración del documento la hace `ensureRuleset()` al leer, y la pasada del sincronizador (o
-  `npm run score`) vuelve a escribir `PlayerScore`. Si se despliega en medio de un torneo, conviene
-  lanzar el recálculo a mano en cuanto termine el despliegue.
+  `npm run score`) vuelve a escribir `PlayerScore`. La web **no** se queda vacía mientras tanto:
+  publica la última clasificación calculada —la de la versión anterior más alta con filas— y quien
+  pinte recibe `pendingRuleSetVersion` para avisar de que la tabla es de otra versión: la home lo dice
+  en una nota sobre la tabla, sin prometer ningún recálculo automático. Si se despliega
+  en medio de un torneo, conviene lanzar el recálculo a mano en cuanto termine el despliegue.

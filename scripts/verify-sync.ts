@@ -2607,7 +2607,7 @@ async function runDatabaseChecks(): Promise<void> {
         // regla nueva: todo aprobado tiene fila, aunque no haya jugado.
         await recomputeScores();
 
-        const standings = unwrapRead(await getStandings(), "verify:clasificacion");
+        const standings = unwrapRead(await getStandings(), "verify:clasificacion").rows;
         const fila = standings.find((row) => row.profileId === SAMPLE_PROFILE_ID);
 
         assert.ok(fila !== undefined, "el jugador de muestra sale en la clasificación");
