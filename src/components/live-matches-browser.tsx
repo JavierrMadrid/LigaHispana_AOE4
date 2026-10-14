@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { DivisionId, LiveMatch } from "@/lib/public";
 import { LiveMatchCard } from "@/components/live-match-card";
 import { LiveMatchesFilters } from "@/components/live-matches-filters";
+import { participantIsLive } from "@/components/live-channels";
 
 /**
  * Orden de lectura de los tipos conocidos. Lo que no esté aquí (un modo nuevo de
@@ -17,10 +18,12 @@ const FORMAT_ORDER: readonly string[] = ["1vs1", "2vs2", "3vs3", "4vs4", "Por eq
  * Partidas en juego con filtros de cliente.
  *
  * El servidor le pasa las partidas ya agrupadas y con la alineación resuelta, y
- * aquí solo se decide cuáles se ven: tipo de partida y división se combinan con
- * AND. Un filtro de división no busca partidas "de esa división", sino partidas
- * en las que juega al menos un participante de la liga de esa división, que es
- * lo que la división de un jugador significa aquí.
+ * aquí solo se decide cuáles se ven: tipo de partida, división y directo se
+ * combinan con AND. Un filtro de división no busca partidas "de esa división",
+ * sino partidas en las que juega al menos un participante de la liga de esa
+ * división, que es lo que la división de un jugador significa aquí. El de directo
+ * busca lo que el lector quiere ver: partidas en las que **alguien** está
+ * retransmitiendo, sea del torneo o no.
  *
  * El estado vive en este componente, así que el auto-refresco de la página
  * (`LiveRefresh`) trae partidas nuevas sin perder los filtros puestos.
@@ -28,6 +31,7 @@ const FORMAT_ORDER: readonly string[] = ["1vs1", "2vs2", "3vs3", "4vs4", "Por eq
 export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
   const [format, setFormat] = useState<string | null>(null);
   const [division, setDivision] = useState<DivisionId | null>(null);
+  const [liveOnly, setLiveOnly] = useState(false);
 
   const formats = useMemo(() => {
     const present = new Set(matches.map((match) => match.format));
@@ -53,17 +57,42 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
           return false;
         }
 
+        if (liveOnly && !match.participants.some(participantIsLive)) {
+          return false;
+        }
+
         return true;
       }),
-    [matches, format, division],
+    [matches, format, division, liveOnly],
   );
 
-  const hasFilters = format !== null || division !== null;
+  const hasFilters = format !== null || division !== null || liveOnly;
 
   function clearFilters() {
     setFormat(null);
     setDivision(null);
+    setLiveOnly(false);
   }
+
+  // El recuento nombra el directo cuando es el filtro puesto: es el único que
+  // cambia entre dos lecturas de la misma página, así que es el que hay que oír.
+  const countMessage = liveOnly
+    ? filtered.length === 1
+      ? "1 partida con alguien en directo"
+      : `${filtered.length} partidas con alguien en directo`
+    : filtered.length === 1
+      ? "1 partida coincide con los filtros"
+      : `${filtered.length} partidas coinciden con los filtros`;
+
+  // El aviso de "no hay nada" tiene que ser cierto en los dos casos que puede
+  // darse: con el filtro de directo solo, lo que falta decir es que nadie de la
+  // partida está emitiendo; con varios filtros, que el lector sepa cuáles quitar.
+  const onlyLive = liveOnly && format === null && division === null;
+  const activeFilters = [
+    format === null ? null : "el tipo de partida",
+    division === null ? null : "la división",
+    liveOnly ? "el filtro de directos" : null,
+  ].filter((item): item is string => item !== null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -73,6 +102,8 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
         onFormatChange={setFormat}
         division={division}
         onDivisionChange={setDivision}
+        liveOnly={liveOnly}
+        onLiveOnlyChange={setLiveOnly}
       />
 
       {hasFilters ? (
@@ -80,9 +111,7 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
           {/* Con resultados, el recuento se lee; sin resultados, el aviso grande
               de abajo ya lo dice y esto queda solo para lectores de pantalla. */}
           <p role="status" className={filtered.length === 0 ? "sr-only" : "text-xs text-muted"}>
-            {filtered.length === 1
-              ? "1 partida coincide con los filtros"
-              : `${filtered.length} partidas coinciden con los filtros`}
+            {countMessage}
           </p>
           {filtered.length > 0 ? (
             <button
@@ -99,10 +128,14 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
       {filtered.length === 0 ? (
         <div className="rounded-lg border border-line bg-surface px-6 py-12 text-center">
           <p className="font-display text-lg font-semibold text-foreground">
-            Ninguna partida coincide con los filtros
+            {onlyLive
+              ? "Ninguna partida en juego tiene a alguien en directo"
+              : "Ninguna partida coincide con los filtros"}
           </p>
           <p className="mt-2 text-sm text-muted">
-            Prueba a quitar la división o el tipo de partida.
+            {onlyLive
+              ? "El filtro solo deja pasar las partidas con algún participante retransmitiendo ahora mismo, y un canal sin comprobar no cuenta como directo. Quítalo para volver a ver todas las partidas en juego."
+              : `Prueba a quitar ${joinWithOr(activeFilters)}.`}
           </p>
           <button
             type="button"
@@ -121,4 +154,13 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
       )}
     </div>
   );
+}
+
+/** Enumera con la conjunción del español: "A", "A o B", "A, B o C". */
+function joinWithOr(items: readonly string[]): string {
+  if (items.length <= 1) {
+    return items[0] ?? "";
+  }
+
+  return `${items.slice(0, -1).join(", ")} o ${items[items.length - 1]}`;
 }
