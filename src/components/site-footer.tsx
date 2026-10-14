@@ -1,5 +1,5 @@
 import Image from "next/image";
-import Link from "next/link";
+import { SPONSOR_NAME, SponsorLogo } from "@/components/sponsor";
 
 type SiteFooterProps = {
   /**
@@ -53,45 +53,24 @@ export function SiteFooter({ name, emblemUrl }: SiteFooterProps) {
           </p>
         </div>
 
-        {/* Cada enlace lleva su propia fila (`flex-col`) en lugar de un `gap` del
-            grupo, y `py-3` para que el área de pulsación llegue a los 44 px del
-            mínimo táctil: con solo el interlineado, un `text-sm` mide 18 px. */}
-        <nav aria-label="Enlaces del pie" className="shrink-0">
-          <ul className="-my-3 flex flex-col text-sm">
-            <li>
-              <Link
-                href="/objetivos"
-                className="block py-3 text-muted transition-colors hover:text-accent"
-              >
-                Objetivos especiales
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/puntuacion"
-                className="block py-3 text-muted transition-colors hover:text-accent"
-              >
-                Cómo se puntúa
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/reglas"
-                className="block py-3 text-muted transition-colors hover:text-accent"
-              >
-                Reglas del torneo
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/login"
-                className="block py-3 text-muted transition-colors hover:text-foreground"
-              >
-                Acceso de la organización
-              </Link>
-            </li>
-          </ul>
-        </nav>
+        {/* Agradecimiento al patrocinador, donde antes colgaba el índice de
+            enlaces del pie. Se queda a la derecha para conservar el reparto del
+            pie en dos bloques desde `md` —la liga a la izquierda, quien la
+            sostiene a la derecha— y se lee como una insignia: el escudo preside
+            y el nombre lo firma debajo. Sin filete ni relleno: un agradecimiento
+            se lee, no se pulsa.
+            El `-mb-6` del escudo cancela el margen transparente que el PNG trae
+            de fábrica por abajo, para que el nombre quede pegado a la insignia y
+            no flote a media distancia. */}
+        <div className="flex flex-col items-center gap-1 md:shrink-0">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">
+            Patrocinadores:
+          </p>
+          <SponsorLogo size={128} className="-mb-6" />
+          <p className="font-display text-base font-semibold text-foreground">
+            {SPONSOR_NAME}
+          </p>
+        </div>
       </div>
 
       {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`. */}
