@@ -132,6 +132,23 @@ export const DISCORD_ROSTER_MAX_PAGES = 20;
  */
 export const DISCORD_ROSTER_TTL_HOURS = 12;
 
+/**
+ * Tope de operaciones con el rol de participante por pasada.
+ *
+ * Es el mismo motivo que `DISCORD_CHECK_MAX_PER_RUN`: al configurar el rol **todo** el
+ * torneo entra a la vez, y con treinta participantes eso son treinta `PUT` seguidos en
+ * una sola pasada. Con el cron de cinco minutos, un tope de diez los escalona en tres
+ * pasadas (un cuarto de hora) y a partir de ahí el ritmo normal es cero o una operación
+ * por pasada —la memoria de `Setting["discord.participantRole"]` hace que no se repita
+ * trabajo—. Y acota el presupuesto de CPU del Worker del plan Free, que es lo que manda
+ * en este despliegue.
+ *
+ * Las **quitas** se hacen antes que las puestas dentro del mismo tope (ver
+ * `planParticipantRoleSync()`): dejar con el rol de participante a quien ya no lo es es
+ * el error que no puede quedarse a medias.
+ */
+export const DISCORD_ROLE_MAX_PER_RUN = 10;
+
 export type DiscordConfig = {
   /** Token del bot (`Authorization: Bot …`). `null` = sin bot, no se puede comprobar nada. */
   botToken: string | null;
@@ -146,6 +163,15 @@ export type DiscordConfig = {
    * nada nuevo, y lo que se apaga se ve en el rastro en vez de romper una pasada.
    */
   announceChannelId: string | null;
+  /**
+   * Id del rol de **participante** que el bot pone y quita en el servidor (issue 56).
+   *
+   * `null` = sin rol configurado, y entonces el paso no existe: no se lee ni una fila
+   * de `Player` ni se crea ningún cliente HTTP, y el motivo queda en `discordError` sin
+   * mover `lastSuccessAt`. Es el mismo criterio degradante que `announceChannelId`: el
+   * proyecto funciona sin configurar nada nuevo, y lo que se apaga se ve en el rastro.
+   */
+  participantRoleId: string | null;
   /** Client ID de la aplicación OAuth2. */
   clientId: string | null;
   /** Client secret de la aplicación OAuth2. Nunca sale del servidor. */
@@ -184,6 +210,15 @@ export type DiscordConfig = {
    * está en `DISCORD_CHECK_MAX_PER_RUN` y se ajusta por entorno sin desplegar.
    */
   maxChecksPerRun: number;
+  /**
+   * Tope de operaciones con el rol de participante por pasada.
+   *
+   * Es el presupuesto duro de `planParticipantRoleSync()` y está aquí por lo mismo que
+   * `maxChecksPerRun`: el plan Free de Cloudflare paga igual por la petición que se hace
+   * que por la que no. El valor por defecto está en `DISCORD_ROLE_MAX_PER_RUN` y se
+   * ajusta por entorno sin desplegar.
+   */
+  roleMaxPerRun: number;
   /**
    * Tope de páginas de `GET /guilds/{id}/members` por refresco del roster.
    *
@@ -264,6 +299,7 @@ export function getDiscordConfig(): DiscordConfig {
     botToken: readString("DISCORD_BOT_TOKEN"),
     guildId: readString("DISCORD_GUILD_ID"),
     announceChannelId: readString("DISCORD_ANNOUNCE_CHANNEL_ID"),
+    participantRoleId: readString("DISCORD_PARTICIPANT_ROLE_ID"),
     clientId: readString("DISCORD_CLIENT_ID"),
     clientSecret: readString("DISCORD_CLIENT_SECRET"),
     redirectUri: readString("DISCORD_REDIRECT_URI"),
@@ -276,6 +312,7 @@ export function getDiscordConfig(): DiscordConfig {
       "DISCORD_CHECK_MAX_PER_RUN",
       DISCORD_CHECK_MAX_PER_RUN,
     ),
+    roleMaxPerRun: readPositiveInt("DISCORD_ROLE_MAX_PER_RUN", DISCORD_ROLE_MAX_PER_RUN),
     rosterMaxPages: readPositiveInt("DISCORD_ROSTER_MAX_PAGES", DISCORD_ROSTER_MAX_PAGES),
     rosterTtlHours: readPositiveInt("DISCORD_ROSTER_TTL_HOURS", DISCORD_ROSTER_TTL_HOURS),
   };
@@ -342,6 +379,28 @@ export function isDiscordAnnounceConfigured(
   config: DiscordConfig = getDiscordConfig(),
 ): config is DiscordConfig & { botToken: string; announceChannelId: string } {
   return config.botToken !== null && config.announceChannelId !== null;
+}
+
+/**
+ * ¿Se puede sincronizar el **rol de participante** en el servidor?
+ *
+ * Hacen falta el token del bot, el id del servidor y el id del rol: sin los tres no hay
+ * contra qué hablar ni qué poner. Es un **guard de tipo** como
+ * `isDiscordCheckConfigured()` y por el mismo motivo: con `true` queda estrecho que los
+ * tres valores son cadenas, y quien llama los necesita para la ruta y la cabecera sin
+ * repetir la condición.
+ *
+ * **Que sea `true` no significa que el bot pueda tocar el rol.** Poner o quitar un rol
+ * exige el permiso `MANAGE_ROLES` y que el rol del bot esté **por encima** del rol que
+ * toca; sin eso Discord contesta `403`, que el paso resume en el rastro y no tumba la
+ * pasada (ver `role-sync.ts`).
+ */
+export function isDiscordRoleConfigured(
+  config: DiscordConfig = getDiscordConfig(),
+): config is DiscordConfig & { botToken: string; guildId: string; participantRoleId: string } {
+  return (
+    config.botToken !== null && config.guildId !== null && config.participantRoleId !== null
+  );
 }
 
 /**

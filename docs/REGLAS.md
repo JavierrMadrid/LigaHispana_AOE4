@@ -31,7 +31,7 @@ Lo que hace falta para inscribirse.
 |---|---|
 | El alta se hace por **`profileId`** de AoE4World, con **correo** obligatorio. | Alta |
 | Toda solicitud queda **pendiente de aprobación**: la organización la aprueba o la rechaza. | Organización |
-| Las inscripciones se hacen **hasta 1 día antes del inicio del torneo**. | Organización |
+| Las inscripciones se hacen **hasta la fecha de cierre que publica la organización**. | Organización |
 
 ### Normas
 

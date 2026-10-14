@@ -8,7 +8,6 @@ import { TwitchIcon } from "@/components/twitch-icon";
 import { YoutubeIcon } from "@/components/youtube-icon";
 import type { DiscordStep } from "@/lib/discord/contract";
 import { CONTACT_EMAIL_MAX_LENGTH } from "@/lib/player-input";
-import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
 import { registerPlayer, type RegistrationFormState } from "./actions";
 import { TurnstileWidget, resetTurnstileWidget } from "./turnstile-widget";
 
@@ -50,9 +49,12 @@ const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "
  * que el icono no carga significado accesible.
  *
  * Con el plazo cerrado (`registrationOpen` en `false`) el botón se desactiva y el
- * motivo se lee a su lado, enlazado con `aria-describedby`. El servidor lo
- * rechaza igualmente: esto es la cara visible del mismo interruptor
- * (`Setting["registration.open"]`), no la defensa.
+ * motivo se lee a su lado, enlazado con `aria-describedby`. El texto llega en
+ * `closedMessage`, que lo elige la página según **por qué** está cerrado —la fecha
+ * pasada o el interruptor—; aquí no se decide, porque el motivo lo conoce
+ * `readRegistrationState()` en el servidor. El servidor lo rechaza igualmente: esto
+ * es la cara visible del mismo plazo (`Setting["registration.open"]` y
+ * `Setting["registration.closesAt"]`), no la defensa.
  *
  * ## El paso de Discord (F12)
  *
@@ -76,11 +78,14 @@ const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "
 export function RegistrationForm({
   countries,
   registrationOpen,
+  closedMessage,
   discord,
 }: {
   countries: string[];
   /** Si el plazo está cerrado, el envío se desactiva y se explica por qué. */
   registrationOpen: boolean;
+  /** El texto del plazo cerrado, elegido según el motivo (`registrationClosedMessage`). */
+  closedMessage: string;
   discord: DiscordStep;
 }) {
   const [state, formAction, pending] = useActionState(registerPlayer, initialState);
@@ -322,13 +327,14 @@ export function RegistrationForm({
           </button>
           {isClosed ? (
             // Aviso, no error: se queda en `muted` para no competir con el rojo
-            // que este formulario reserva a los fallos. El texto es el compartido
-            // con el servidor, para que la cara visible y el rechazo digan lo mismo.
+            // que este formulario reserva a los fallos. El texto lo elige la
+            // página entre los compartidos con el servidor, para que la cara
+            // visible y el rechazo digan lo mismo.
             <p
               id="registration-closed-note"
               className="max-w-[42ch] text-sm leading-relaxed text-muted"
             >
-              {REGISTRATION_CLOSED_MESSAGE}
+              {closedMessage}
             </p>
           ) : null}
         </div>

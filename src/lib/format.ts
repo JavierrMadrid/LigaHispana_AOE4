@@ -67,6 +67,19 @@ const windowDayYear = new Intl.DateTimeFormat("es-ES", {
 });
 
 /**
+ * Un día en UTC, para las fechas de configuración que son instantes.
+ *
+ * Es el mismo formateo que el de la ventana del torneo (`windowDayYear`) y por el
+ * mismo motivo: un instante configurado por la organización —la fecha de cierre de
+ * las inscripciones, por ejemplo— no puede pintarse en la zona del proceso que lo
+ * lee, o el día cambiaría según dónde corra el Worker. Lo usan los avisos del bot
+ * para decir la fecha de cierre, que es un instante y no una fecha de calendario.
+ */
+export function formatUtcDay(date: Date): string {
+  return windowDayYear.format(date);
+}
+
+/**
  * El periodo del torneo en una frase, para `/puntuacion`.
  *
  * `to` es opcional en el ruleset (`null` = ventana abierta), y de ahí las dos
