@@ -93,6 +93,22 @@ entrar. `registeredAt` es la fecha del envío del alta (no la de la aprobación)
 - **Sin ponderación por formato**: una victoria en 2v2 vale lo mismo que en 1v1. El ruleset admite un
   `pointsByMode` si algún día hiciera falta.
 
+## Permanentes y temporales
+
+La clasificación publica el total partido en dos columnas, y las dos suman **siempre** el total
+(`PlayerScore.total`):
+
+| Columna | Qué la compone |
+|---|---|
+| **Permanentes** | Las victorias clasificatorias más los **logros** ya conseguidos (`kind: "achievement"`), que se cobran al cumplirlos y no se pierden. |
+| **Temporales** | Las **competiciones** (`kind: "competition"`), que se deciden al cierre y pueden cambiar de dueño. |
+
+El motor guarda el total de objetivos y los ids cobrados, no el precio de cada uno, así que el reparto
+se reconstruye al leer la clasificación: las competiciones a precio del catálogo —su precio es fijo— y
+los logros por diferencia. De ahí sale exacto `imparable`, que reparte 1 punto por día con tope y cuyo
+precio de catálogo es solo el tope. La diferencia entre competición y logro está en
+[`OBJETIVOS.md`](./OBJETIVOS.md).
+
 ## Desempates de la clasificación
 
 La clasificación se ordena por esta cadena, el primero por delante del siguiente:

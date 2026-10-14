@@ -134,19 +134,26 @@ export type { PublicRead };
 /**
  * Un objetivo especial que un participante posee ahora mismo, ya resuelto.
  *
- * `label`, `group` y `metric` vienen del catálogo de `objectives.ts`; `points` es
- * el del **ruleset activo** por encima del valor por defecto, que es lo que el
- * jugador se llevó de verdad si alguien ha retocado `Setting` sin desplegar.
+ * `label`, `group`, `kind`, `description` y `metric` vienen del catálogo de
+ * `objectives.ts`; `points` es el del **ruleset activo** por encima del valor por
+ * defecto, que es lo que el jugador se llevó de verdad si alguien ha retocado
+ * `Setting` sin desplegar.
  *
  * `id`, `group` y `metric` son exactamente los tres campos que necesita
  * `ObjectiveIcon` para elegir su glifo, así que un objetivo de la clasificación
- * se puede pintar con el mismo icono que su tarjeta en `/objetivos`.
+ * se puede pintar con el mismo icono que su tarjeta en `/objetivos`. `kind` es lo
+ * que decide a qué columna del desglose van sus puntos: los logros al de puntos
+ * permanentes y las competiciones al de temporales (ver `StandingRow`).
  */
 export type StandingObjective = {
   /** Id estable del objetivo (`loco-por-ganar`, `rey-1v1`, `lider-…`). */
   id: string;
   label: string;
   group: ObjectiveGroup;
+  /** Forma de cobrarlo, tal cual está en el catálogo. */
+  kind: ObjectiveKind;
+  /** La regla en una frase, tal cual está en el catálogo. */
+  description: string;
   /** Métrica que lo decide: de aquí sale el glifo de los grupos sin asset. */
   metric: ObjectiveMetric;
   /** Puntos que aporta poseerlo con las reglas vigentes. */
@@ -182,20 +189,41 @@ export type StandingRow = {
   country: string | null;
   /**
    * Puntos del torneo (`PlayerScore.total`), no de la ladder. Es la suma exacta
-   * de las dos columnas siguientes.
+   * de las tres columnas siguientes.
    */
   points: number;
   /**
    * Parte de `points` que aportan las victorias clasificatorias, sin objetivos.
    *
    * No se calcula multiplicando `wins` por `ruleset.pointsPerWin` sino por resta
-   * contra el total (ver `earnedObjectivesPoints`), de modo que
-   * `pointsByWins + pointsByObjectives` cuadra con `points` en todas las filas
-   * aunque el desglose guardado falte o venga de otra versión de las reglas.
+   * contra el total (ver `splitStandingPoints`), de modo que
+   * `pointsByWins + pointsByAchievements + pointsByCompetitions` cuadra con
+   * `points` en todas las filas aunque el desglose guardado falte o venga de otra
+   * versión de las reglas.
    */
   pointsByWins: number;
-  /** Parte de `points` que aportan los objetivos poseídos (`objectives.points`). */
-  pointsByObjectives: number;
+  /**
+   * Parte de `points` que aportan los objetivos **permanentes**: los logros
+   * (`kind: "achievement"`), que se cobran al cumplirlos y no se pierden.
+   *
+   * Es el **resto** de los puntos de objetivos de la fila tras restar las
+   * competiciones, y no la suma de los precios del catálogo: `imparable` reparte 1
+   * punto por día con tope, así que su precio inflaría esta columna por encima de
+   * lo que el jugador cobró de verdad (ver `splitStandingPoints`). Aquí caen
+   * también los ids del desglose que ya no están en el catálogo, que no se pueden
+   * atribuir a ninguna competición.
+   */
+  pointsByAchievements: number;
+  /**
+   * Parte de `points` que aportan los objetivos **temporales**: las competiciones
+   * (`kind: "competition"`), que se deciden al cierre y pueden cambiar de dueño.
+   *
+   * Salen de sumar el precio de catálogo de las competiciones que el jugador posee,
+   * recortado al total de objetivos de la fila. Es lo único del reparto que se
+   * calcula en positivo, porque el motor cobra exactamente ese precio; los logros
+   * van por resta.
+   */
+  pointsByCompetitions: number;
   wins: number;
   /** Derrotas (`PlayerScore.matches - wins`). */
   losses: number;
@@ -275,6 +303,8 @@ function objectiveLookup(ruleset: ScoringRuleset): Map<string, StandingObjective
       id: definition.id,
       label: definition.label,
       group: definition.group,
+      kind: definition.kind,
+      description: definition.description,
       metric: definition.metric,
       points: ruleset.objectives[definition.id] ?? definition.points,
     });
@@ -296,6 +326,24 @@ function objectivesSection(breakdown: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * Los ids del `earned` legibles y sin repetir, o `null` si el desglose no los trae
+ * como lista.
+ *
+ * El `null` no es una lista vacía: distingue "esta fila no dice qué cobró" de
+ * "dice que no cobró nada", y el reparto de puntos necesita distinguirlos (ver
+ * `splitStandingPoints`).
+ */
+function earnedIds(breakdown: unknown): Set<string> | null {
+  const section = objectivesSection(breakdown);
+
+  if (section === null || !Array.isArray(section.earned)) {
+    return null;
+  }
+
+  return new Set(section.earned.filter((id): id is string => typeof id === "string"));
+}
+
+/**
  * Los objetivos poseídos por una fila de la clasificación.
  *
  * `breakdown` es JSON y lo escribe el motor de `scoring.ts`: se valida en lugar
@@ -308,15 +356,12 @@ function earnedObjectives(
   breakdown: unknown,
   lookup: ReadonlyMap<string, StandingObjective>,
 ): StandingObjective[] {
-  const section = objectivesSection(breakdown);
+  const owned = earnedIds(breakdown);
 
-  if (section === null || !Array.isArray(section.earned)) {
+  if (owned === null) {
     return [];
   }
 
-  const owned = new Set(
-    section.earned.filter((id): id is string => typeof id === "string"),
-  );
   const objectives: StandingObjective[] = [];
 
   for (const [id, definition] of lookup) {
@@ -332,17 +377,106 @@ function earnedObjectives(
  * Los puntos que aportan los objetivos poseídos, tal como los guardó el motor.
  *
  * Se leen de `breakdown.objectives.points` y no sumando los `points` de
- * `objectives`, a propósito: la fila publica el reparto de `points` en dos
+ * `objectives`, a propósito: la fila publica el reparto de `points` en tres
  * columnas y la suma tiene que cuadrar **siempre**. Con esta lectura, un
  * desglose ausente o mal formado vale 0, el total entero pasa a `pointsByWins` y
  * la identidad se conserva; sumando los objetivos publicados, en cambio, un
- * desglose antiguo o recortado dejaría las dos columnas sin sumar el total.
+ * desglose antiguo o recortado dejaría las columnas sin sumar el total.
+ *
+ * Es la referencia del reparto de `splitStandingPoints`: lo que guardó el motor
+ * manda sobre lo que valgan hoy los precios del catálogo.
  */
 function earnedObjectivesPoints(breakdown: unknown): number {
   const section = objectivesSection(breakdown);
   const points = section === null ? undefined : section.points;
 
   return typeof points === "number" && Number.isFinite(points) ? points : 0;
+}
+
+/** El reparto de `StandingRow.points` en sus tres columnas. */
+export type StandingPoints = {
+  pointsByWins: number;
+  pointsByAchievements: number;
+  pointsByCompetitions: number;
+};
+
+/**
+ * Reparte `total` en las tres columnas de la clasificación.
+ *
+ * `pointsByWins` son los puntos de victorias clasificatorias; los de objetivos se
+ * parten por su **forma de cobro**: los logros (`kind: "achievement"`) se cobran
+ * al cumplirlos y no se pierden, y las competiciones (`kind: "competition"`) se
+ * deciden al cierre y pueden cambiar de dueño. Es la parte pura de
+ * `presentStandings()` y por eso vive aparte, para poder comprobar el reparto sin
+ * base de datos.
+ *
+ * ## Por qué las competiciones se calculan y los logros son el resto
+ *
+ * El desglose guarda el **total** de puntos de objetivos y los ids que se
+ * cobraron, pero no cuánto se cobró por cada uno, así que uno de los dos tipos hay
+ * que reconstruirlo y el otro sale por resta. El que se puede reconstruir es la
+ * competición: su precio es fijo en el catálogo (`objectiveLookup` le aplica el
+ * ruleset activo) y el motor cobra exactamente ese precio. El de un logro no
+ * siempre es fijo: `imparable` reparte 1 punto por día con tope y el catálogo solo
+ * publica el tope, de modo que sumar precios de logros se quedaría con puntos que
+ * aquella fila no cobró. Los logros son, por tanto, el **resto** del total de
+ * objetivos, que sí es exacto.
+ *
+ * El reparto, en orden:
+ *
+ * 1. Las competiciones que el jugador posee, a precio de catálogo.
+ * 2. Recortadas al total de objetivos de la fila: con una fila de una versión
+ *    anterior del ruleset los precios de entonces no son los de ahora y la suma
+ *    puede pasarse del total.
+ * 3. Los logros, el resto hasta ese total.
+ * 4. Las victorias, por resta contra el total de la fila.
+ *
+ * Los ids del `earned` que ya no están en el catálogo (un objetivo desactivado,
+ * una fila vieja) no se pueden atribuir a ninguna competición, así que caen del
+ * lado de los logros, junto con lo que `imparable` cobró de verdad. Y si el
+ * `earned` no es una lista legible no hay nada que atribuir —un logro tiene que
+ * aparecer en la lista para contar—, así que los puntos de objetivos van enteros a
+ * las competiciones.
+ *
+ * `pointsByWins + pointsByAchievements + pointsByCompetitions` es siempre `total`,
+ * incluso con el desglose ausente, mal formado o de otra versión (entonces los
+ * objetivos aportan 0 y todo el total cuenta como victorias).
+ */
+export function splitStandingPoints(
+  total: number,
+  breakdown: unknown,
+  lookup: ReadonlyMap<string, StandingObjective>,
+): StandingPoints {
+  const objectivesPoints = earnedObjectivesPoints(breakdown);
+  const owned = earnedIds(breakdown);
+
+  if (owned === null) {
+    return {
+      pointsByWins: total - objectivesPoints,
+      pointsByAchievements: 0,
+      pointsByCompetitions: objectivesPoints,
+    };
+  }
+
+  let competitionsPoints = 0;
+
+  for (const id of owned) {
+    const objective = lookup.get(id);
+
+    if (objective !== undefined && objective.kind === "competition") {
+      competitionsPoints += objective.points;
+    }
+  }
+
+  // El recorte nunca sube la columna por encima del total de objetivos, que es el
+  // que cuadra con el total de la fila.
+  competitionsPoints = Math.max(0, Math.min(competitionsPoints, objectivesPoints));
+
+  return {
+    pointsByWins: total - objectivesPoints,
+    pointsByAchievements: objectivesPoints - competitionsPoints,
+    pointsByCompetitions: competitionsPoints,
+  };
 }
 
 /**
@@ -650,12 +784,16 @@ function presentStandings(
   const lookup = objectiveLookup(ruleset);
 
   return rows.map((row) => {
-    // El total se parte en dos columnas. Los puntos de objetivos se leen del
-    // desglose y los de victorias salen por resta, nunca al revés: así
-    // `pointsByWins + pointsByObjectives` es siempre `points`, incluso si el
-    // desglose no cuadra (entonces los objetivos aportan 0 y todo el total
-    // cuenta como victorias).
-    const pointsByObjectives = earnedObjectivesPoints(row.breakdown);
+    // El total se parte en tres columnas: los puntos de objetivos se leen del
+    // desglose y se reparten por tipo, y los de victorias salen por resta, nunca
+    // al revés. Así `pointsByWins + pointsByAchievements + pointsByCompetitions`
+    // es siempre `points`, incluso si el desglose no cuadra (entonces los
+    // objetivos aportan 0 y todo el total cuenta como victorias).
+    const { pointsByWins, pointsByAchievements, pointsByCompetitions } = splitStandingPoints(
+      row.total,
+      row.breakdown,
+      lookup,
+    );
 
     return {
       rank: row.rank,
@@ -664,8 +802,9 @@ function presentStandings(
       aoe4WorldName: row.player.aoe4WorldName,
       country: row.player.country,
       points: row.total,
-      pointsByWins: row.total - pointsByObjectives,
-      pointsByObjectives,
+      pointsByWins,
+      pointsByAchievements,
+      pointsByCompetitions,
       wins: row.wins,
       losses: row.matches - row.wins,
       elo: row.player.elo,

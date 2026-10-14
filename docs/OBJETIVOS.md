@@ -19,6 +19,9 @@ Se resuelven sobre las mismas partidas que puntúan, así que el corte de inscri
 también les aplica: un alta a mitad de torneo no puede ganar un objetivo con partidas anteriores. El
 catálogo está en código (`src/lib/objectives.ts`) y la web lo lee con `getObjectives()`.
 
+En la clasificación, los puntos de un logro se publican como **permanentes** y los de una competición
+como **temporales** (puede cambiar de dueño hasta el cierre): ver [`PUNTUACION.md`](./PUNTUACION.md).
+
 ## Grupos
 
 | Grupo | Competiciones | Logros | Objetivos |
