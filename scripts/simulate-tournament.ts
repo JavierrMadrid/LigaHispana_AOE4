@@ -313,7 +313,8 @@ async function runSimulation(argv: string[]): Promise<void> {
   for (const row of simulated) {
     console.log(
       `  ${row.rank}. ${row.name} — ${row.points} puntos (${row.pointsByWins} por victorias, ` +
-        `${row.pointsByObjectives} por objetivos) | ${row.wins}V/${row.losses}D | elo ${row.elo ?? "s/l"} | ` +
+        `${row.pointsByAchievements} por logros, ${row.pointsByCompetitions} por competiciones) | ` +
+        `${row.wins}V/${row.losses}D | elo ${row.elo ?? "s/l"} | ` +
         `${row.division ?? "sin división"} (${row.rankLevel ?? "-"}) | ` +
         `objetivos: ${row.objectives.length === 0 ? "ninguno" : row.objectives.map((objective) => objective.id).join(", ")}`,
     );

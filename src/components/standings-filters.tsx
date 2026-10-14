@@ -81,13 +81,21 @@ export function StatusFilterPills({
   );
 }
 
-/** Selección única de división: "Todas" más los seis emblemas. */
+/**
+ * Selección múltiple de división: "Todas" más los seis emblemas.
+ *
+ * Cada emblema se enciende y se apaga por su cuenta, así que se pueden pedir
+ * varias divisiones a la vez y una fila entra si la suya está entre las
+ * marcadas. Sin ninguna marcada no hay filtro de división —entran todas,
+ * incluidas las que no tienen división resuelta— y "Todas" es el atajo que
+ * limpia la selección.
+ */
 export function DivisionFilterButtons({
-  division,
-  onDivisionChange,
+  divisions,
+  onDivisionsChange,
 }: {
-  division: DivisionId | null;
-  onDivisionChange: (value: DivisionId | null) => void;
+  divisions: readonly DivisionId[];
+  onDivisionsChange: (value: DivisionId[]) => void;
 }) {
   return (
     <div
@@ -97,10 +105,10 @@ export function DivisionFilterButtons({
     >
       <button
         type="button"
-        aria-pressed={division === null}
-        onClick={() => onDivisionChange(null)}
+        aria-pressed={divisions.length === 0}
+        onClick={() => onDivisionsChange([])}
         className={`h-10 rounded-md px-3 text-xs font-semibold active:translate-y-px transition-colors ${
-          division === null
+          divisions.length === 0
             ? "bg-accent text-accent-ink"
             : "bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
         }`}
@@ -109,7 +117,7 @@ export function DivisionFilterButtons({
       </button>
 
       {DIVISION_UI.map((item) => {
-        const active = division === item.id;
+        const active = divisions.includes(item.id);
 
         return (
           <button
@@ -118,7 +126,13 @@ export function DivisionFilterButtons({
             aria-pressed={active}
             aria-label={`Filtrar por división ${item.label}`}
             title={item.label}
-            onClick={() => onDivisionChange(active ? null : item.id)}
+            onClick={() =>
+              onDivisionsChange(
+                active
+                  ? divisions.filter((division) => division !== item.id)
+                  : [...divisions, item.id],
+              )
+            }
             className={`flex size-10 items-center justify-center rounded-md border active:translate-y-px transition-colors ${
               active
                 ? item.activeClass
@@ -149,8 +163,8 @@ export function StandingsFilters({
   onPlayingOnlyChange,
   liveOnly,
   onLiveOnlyChange,
-  division,
-  onDivisionChange,
+  divisions,
+  onDivisionsChange,
 }: {
   query: string;
   onQueryChange: (value: string) => void;
@@ -158,8 +172,8 @@ export function StandingsFilters({
   onPlayingOnlyChange: (value: boolean) => void;
   liveOnly: boolean;
   onLiveOnlyChange: (value: boolean) => void;
-  division: DivisionId | null;
-  onDivisionChange: (value: DivisionId | null) => void;
+  divisions: readonly DivisionId[];
+  onDivisionsChange: (value: DivisionId[]) => void;
 }) {
   return (
     <div className="hidden flex-col gap-3 lg:flex lg:flex-row lg:items-center lg:justify-between">
@@ -178,7 +192,7 @@ export function StandingsFilters({
         />
       </div>
 
-      <DivisionFilterButtons division={division} onDivisionChange={onDivisionChange} />
+      <DivisionFilterButtons divisions={divisions} onDivisionsChange={onDivisionsChange} />
     </div>
   );
 }
