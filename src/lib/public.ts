@@ -568,6 +568,73 @@ async function loadStandings(): Promise<Standings> {
 }
 
 /**
+ * Los campos de directo de un `Player` tal y como los devuelve la consulta.
+ *
+ * Es la parte común del `select` de la clasificación (`STANDING_SELECT`) y del
+ * padrón de aprobados de `/partidas`: las dos pantallas resuelven el canal
+ * **canónico** con las mismas funciones y la misma regla de respaldo, así que la
+ * forma de entrada se declara una sola vez y `resolvePlayerStreams()` la convierte
+ * en lo que publican los dos tipos.
+ */
+export type PlayerStreamSource = {
+  /** Lo que escribió el admin en el panel; puede ser el nombre suelto o una URL. */
+  twitchChannel: string | null;
+  /** El `twitchUrl` que publica AoE4World en el perfil. Respaldo, no alternativa. */
+  twitchUrl: string | null;
+  twitchIsLive: boolean;
+  youtubeChannel: string | null;
+  youtubeIsLive: boolean;
+  kickChannel: string | null;
+  kickIsLive: boolean;
+};
+
+/**
+ * Canal canónico y estado de directo de un jugador, por plataforma.
+ *
+ * Es la forma que comparten la clasificación (`StandingRow`) y las partidas en
+ * juego (`LiveMatchParticipant`): los seis campos que la interfaz ya sabe pintar
+ * con `ChannelLinks` y con los que arma el enlace del visor multi-stream.
+ */
+export type PlayerStreams = {
+  twitchChannel: string | null;
+  twitchIsLive: boolean;
+  youtubeChannel: string | null;
+  youtubeIsLive: boolean;
+  kickChannel: string | null;
+  kickIsLive: boolean;
+};
+
+/**
+ * Resuelve los canales de directo de un jugador **igual** en toda la web.
+ *
+ * El canal del panel es el primero; si no hay (o no es válido), se toma el que
+ * AoE4World publica en el perfil. `normalizeTwitchChannel` acepta tanto el nombre
+ * suelto como la URL completa. YouTube y Kick no tienen respaldo: AoE4World no
+ * publica ninguno de los dos, así que el canal es solo el que escribió la persona
+ * o el admin, y la normalización es la red de seguridad para lo que ya está
+ * guardado (por ejemplo una fila anterior al parser).
+ *
+ * Vive en un único sitio, y es `export` igual que `resolveStandingsVersion`, por
+ * dos motivos: una misma persona no puede salir con canal en la clasificación y
+ * sin él en `/partidas`, y la parte pura —de dónde sale cada canal— se puede
+ * comprobar sin base de datos.
+ */
+export function resolvePlayerStreams(player: PlayerStreamSource): PlayerStreams {
+  const registered =
+    player.twitchChannel === null ? null : normalizeTwitchChannel(player.twitchChannel);
+  const fromProfile = player.twitchUrl === null ? null : normalizeTwitchChannel(player.twitchUrl);
+
+  return {
+    twitchChannel: registered ?? fromProfile,
+    twitchIsLive: player.twitchIsLive,
+    youtubeChannel: normalizeYoutubeChannel(player.youtubeChannel),
+    youtubeIsLive: player.youtubeIsLive,
+    kickChannel: normalizeKickChannel(player.kickChannel),
+    kickIsLive: player.kickIsLive,
+  };
+}
+
+/**
  * Convierte las filas de `PlayerScore` en las de la clasificación pública.
  *
  * `ruleset` es el **activo** aunque las filas sean de una versión anterior: es del
@@ -583,21 +650,6 @@ function presentStandings(
   const lookup = objectiveLookup(ruleset);
 
   return rows.map((row) => {
-    // El canal del panel es el primero; si no hay (o no es válido), se toma el
-    // que AoE4World publica en el perfil. `normalizeTwitchChannel` acepta tanto
-    // el nombre suelto como la URL completa.
-    const registered =
-      row.player.twitchChannel === null ? null : normalizeTwitchChannel(row.player.twitchChannel);
-    const fromProfile =
-      row.player.twitchUrl === null ? null : normalizeTwitchChannel(row.player.twitchUrl);
-
-    // YouTube y Kick no tienen respaldo: AoE4World no publica ninguno de los dos, así
-    // que el canal es solo el que escribió la persona o el admin, y la
-    // normalización es la red de seguridad para lo que ya está guardado (por ejemplo
-    // una fila que se guardara antes de que existiera el parser).
-    const youtubeChannel = normalizeYoutubeChannel(row.player.youtubeChannel);
-    const kickChannel = normalizeKickChannel(row.player.kickChannel);
-
     // El total se parte en dos columnas. Los puntos de objetivos se leen del
     // desglose y los de victorias salen por resta, nunca al revés: así
     // `pointsByWins + pointsByObjectives` es siempre `points`, incluso si el
@@ -620,12 +672,7 @@ function presentStandings(
       division: divisionFromRankLevel(row.player.rankLevel),
       rankLevel: row.player.rankLevel,
       streak: row.streak,
-      twitchChannel: registered ?? fromProfile,
-      twitchIsLive: row.player.twitchIsLive,
-      youtubeChannel,
-      youtubeIsLive: row.player.youtubeIsLive,
-      kickChannel,
-      kickIsLive: row.player.kickIsLive,
+      ...resolvePlayerStreams(row.player),
       isPlaying: playing.has(row.player.id),
       avatarUrl: row.player.avatarUrl,
       profileUrl: aoe4WorldProfileUrl(row.player.profileId),
@@ -881,6 +928,23 @@ export type LiveMatchParticipant = {
   /** Solo de la liga: dentro de `teams` la API no publica avatar. */
   avatarUrl: string | null;
   /**
+   * Canales de directo del participante, con el canal canónico y si está
+   * emitiendo ahora mismo, resueltos con `resolvePlayerStreams` —los mismos seis
+   * campos que publica la clasificación—.
+   *
+   * Un rival que no es de la liga no tiene fila de `Player` y por tanto ningún
+   * canal: los seis salen `null`/`false`. La interfaz pinta el icono enlazando a
+   * la retransmisión con `twitchChannelUrl`/`youtubeChannelUrl`/`kickChannelUrl`,
+   * decide si enseña solo los que están en directo y arma el enlace del visor
+   * multi-stream con esos canales.
+   */
+  twitchChannel: string | null;
+  twitchIsLive: boolean;
+  youtubeChannel: string | null;
+  youtubeIsLive: boolean;
+  kickChannel: string | null;
+  kickIsLive: boolean;
+  /**
    * Equipo, contando desde 1 en el orden en que la API mandó los equipos. Es
    * `null` **solo** en el degradado sin `rawJson`: las columnas no guardan de
    * qué equipo era cada jugador, y suponerlo sería pintar un dato falso.
@@ -915,11 +979,34 @@ export type LiveMatch = {
   leaguePlayerCount: number;
 };
 
-/** Un jugador aprobado indexado por `profileId`: quién es y de qué división es. */
-type LeaguePlayerMeta = {
+/**
+ * Un jugador aprobado indexado por `profileId`: quién es, de qué división es y
+ * cuáles son sus canales de directo.
+ *
+ * Los campos de canal se resuelven una vez, al construir el mapa, con
+ * `resolvePlayerStreams`: así `toParticipant` no normaliza nada por jugador y el
+ * canal de un participante sale igual aquí que en la clasificación.
+ */
+type LeaguePlayerMeta = PlayerStreams & {
   name: string;
   rankLevel: string | null;
   avatarUrl: string | null;
+};
+
+/**
+ * Los canales de quien **no** es de la liga: ninguno.
+ *
+ * Un rival no tiene fila de `Player`, así que no hay nada que resolver. Se declara
+ * una sola vez para no repetir seis `null`/`false` en cada sitio donde un lado de
+ * la partida se convierte en participante.
+ */
+const NO_STREAMS: PlayerStreams = {
+  twitchChannel: null,
+  twitchIsLive: false,
+  youtubeChannel: null,
+  youtubeIsLive: false,
+  kickChannel: null,
+  kickIsLive: false,
 };
 
 /** Un lado de la partida leído de `rawJson.teams` o reconstruido con las columnas. */
@@ -1056,6 +1143,10 @@ function toParticipant(
 ): LiveMatchParticipant {
   const leaguePlayer = side.profileId === null ? undefined : league.get(side.profileId);
 
+  // Quien no es de la liga no tiene canales, así que cae en `NO_STREAMS`, que lee
+  // exactamente como una fila de `Player` sin ninguno.
+  const streams = leaguePlayer ?? NO_STREAMS;
+
   return {
     profileId: side.profileId,
     name: leaguePlayer?.name ?? side.name,
@@ -1065,6 +1156,12 @@ function toParticipant(
     division: leaguePlayer === undefined ? null : divisionFromRankLevel(leaguePlayer.rankLevel),
     profileUrl: side.profileId === null ? null : aoe4WorldProfileUrl(side.profileId),
     avatarUrl: leaguePlayer?.avatarUrl ?? null,
+    twitchChannel: streams.twitchChannel,
+    twitchIsLive: streams.twitchIsLive,
+    youtubeChannel: streams.youtubeChannel,
+    youtubeIsLive: streams.youtubeIsLive,
+    kickChannel: streams.kickChannel,
+    kickIsLive: streams.kickIsLive,
     team: side.team,
   };
 }
@@ -1152,8 +1249,9 @@ function matchFormat(
  * nombres y no dos tarjetas ni un nombre repetido.
  *
  * Dos consultas planas y ninguna por fila: las partidas en curso y el padrón de
- * jugadores aprobados, que es lo que permite marcar `isLeaguePlayer` y resolver
- * la división sin preguntar a la base de datos por cada nombre.
+ * jugadores aprobados, que es lo que permite marcar `isLeaguePlayer`, resolver la
+ * división y publicar los canales de directo sin preguntar a la base de datos por
+ * cada nombre.
  *
  * Se filtra por la **familia de ladder**, con la lista que vive en el ruleset
  * (`rankedModesWhere()`, la misma que usa el motor) y no por la regla entera: una
@@ -1199,14 +1297,35 @@ async function loadLiveMatches(): Promise<LiveMatch[]> {
     ),
     db.player.findMany({
       where: { status: PlayerStatus.APPROVED },
-      select: { profileId: true, name: true, rankLevel: true, avatarUrl: true },
+      select: {
+        profileId: true,
+        name: true,
+        rankLevel: true,
+        avatarUrl: true,
+        // Los canales de directo, para que la tarjeta pueda pintar el icono del
+        // que está emitiendo y armar el enlace del visor multi-stream. Son las
+        // mismas columnas que lee la clasificación, resueltas con la misma
+        // función, para que un canal no salga aquí y no allí.
+        twitchChannel: true,
+        twitchUrl: true,
+        twitchIsLive: true,
+        youtubeChannel: true,
+        youtubeIsLive: true,
+        kickChannel: true,
+        kickIsLive: true,
+      },
     }),
   ]);
 
   const league = new Map<number, LeaguePlayerMeta>(
     leagueRows.map((row) => [
       row.profileId,
-      { name: row.name, rankLevel: row.rankLevel, avatarUrl: row.avatarUrl },
+      {
+        name: row.name,
+        rankLevel: row.rankLevel,
+        avatarUrl: row.avatarUrl,
+        ...resolvePlayerStreams(row),
+      },
     ]),
   );
 

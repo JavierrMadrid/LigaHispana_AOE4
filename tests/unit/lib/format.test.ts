@@ -10,9 +10,11 @@ import {
   formatRelativeTime,
   formatTournamentWindow,
   kickChannelUrl,
+  multistreamViewerUrl,
   teamSizesFromRawJson,
   twitchChannelUrl,
   youtubeChannelUrl,
+  type StreamChannel,
 } from "@/lib/format";
 
 /**
@@ -74,6 +76,72 @@ describe("los enlaces", () => {
     expect(twitchChannelUrl("beastwizard")).toBe("https://twitch.tv/beastwizard");
     expect(youtubeChannelUrl("beastwizard")).toBe("https://www.youtube.com/@beastwizard");
     expect(kickChannelUrl("beastwizard")).toBe("https://www.kick.com/beastwizard");
+  });
+});
+
+describe("multistreamViewerUrl", () => {
+  const twitch = (channel: string): StreamChannel => ({ platform: "twitch", channel });
+  const kick = (channel: string): StreamChannel => ({ platform: "kick", channel });
+  const youtube = (channel: string): StreamChannel => ({ platform: "youtube", channel });
+
+  it("compone la URL con el prefijo de cada plataforma", () => {
+    // El formato es el que documenta la herramienta: `t:` para Twitch, `k:` para Kick.
+    expect(multistreamViewerUrl([twitch("alfa"), kick("beta")])).toBe(
+      "https://streamscharts.com/tools/multistream-viewer/t:alfa,k:beta",
+    );
+  });
+
+  it("respeta el orden de la lista, que es el de los participantes", () => {
+    // Determinista: dos lecturas de la misma partida no pueden dar enlaces distintos.
+    expect(multistreamViewerUrl([kick("uno"), twitch("dos"), twitch("tres")])).toBe(
+      "https://streamscharts.com/tools/multistream-viewer/k:uno,t:dos,t:tres",
+    );
+  });
+
+  it("quita los repetidos aunque estén separados", () => {
+    // Dos participantes apuntando al mismo canal no son dos canales que meter.
+    expect(multistreamViewerUrl([twitch("alfa"), kick("beta"), twitch("alfa")])).toBe(
+      "https://streamscharts.com/tools/multistream-viewer/t:alfa,k:beta",
+    );
+  });
+
+  it("un mismo nombre en dos plataformas son dos canales distintos", () => {
+    // El token lleva el prefijo, así que `t:x` y `k:x` no se pisan.
+    expect(multistreamViewerUrl([twitch("alfa"), kick("alfa")])).toBe(
+      "https://streamscharts.com/tools/multistream-viewer/t:alfa,k:alfa",
+    );
+  });
+
+  it("ignora YouTube: su prefijo no está verificado y queda fuera del visor", () => {
+    // Aunque vengan dos canales de YouTube, no hay ninguno que meter.
+    expect(multistreamViewerUrl([youtube("alfa"), youtube("beta")])).toBeNull();
+  });
+
+  it("YouTube no cuenta para llegar a dos, pero no estorba a Twitch ni a Kick", () => {
+    expect(multistreamViewerUrl([twitch("alfa"), youtube("beta")])).toBeNull();
+    expect(multistreamViewerUrl([twitch("alfa"), youtube("beta"), kick("gamma")])).toBe(
+      "https://streamscharts.com/tools/multistream-viewer/t:alfa,k:gamma",
+    );
+  });
+
+  it("con menos de dos canales no hay visor", () => {
+    // Un "multi-stream" de uno no es nada: es el enlace de un canal.
+    expect(multistreamViewerUrl([])).toBeNull();
+    expect(multistreamViewerUrl([twitch("alfa")])).toBeNull();
+    expect(multistreamViewerUrl([kick("beta")])).toBeNull();
+  });
+
+  it("un canal en blanco no cuenta como canal", () => {
+    // Un `t:` suelto sería un visor roto que parece un visor con canal.
+    expect(multistreamViewerUrl([twitch(""), kick("beta")])).toBeNull();
+    expect(multistreamViewerUrl([twitch("   "), twitch("alfa"), kick("beta")])).toBe(
+      "https://streamscharts.com/tools/multistream-viewer/t:alfa,k:beta",
+    );
+  });
+
+  it("los repetidos se cuentan después de descartar, no antes", () => {
+    // Un blanco repetido no puede colar como el segundo canal que sube el total.
+    expect(multistreamViewerUrl([twitch(""), twitch(""), kick("beta")])).toBeNull();
   });
 });
 
