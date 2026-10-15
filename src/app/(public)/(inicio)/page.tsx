@@ -14,7 +14,7 @@ import {
 } from "@/lib/public";
 
 export const metadata: Metadata = {
-  title: "Clasificación general",
+  title: "Clasificación",
   description:
     "Posiciones de la Liga Hispana de Age of Empires IV ordenadas por puntos: 2 por cada victoria clasificatoria más los puntos de los objetivos especiales.",
 };
@@ -55,7 +55,7 @@ export default async function StandingsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHead title="Clasificación general" />
+      <PageHead title="Clasificación" />
 
       {degraded ? (
         <EmptyState
