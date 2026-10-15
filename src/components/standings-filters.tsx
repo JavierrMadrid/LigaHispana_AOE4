@@ -14,6 +14,10 @@ import { LeagueIcon, leagueFilterRank } from "@/components/league-icon";
  * los botones de división viven aquí como piezas sueltas: cada forma decide qué
  * enseña y dónde, pero el comportamiento no se duplica. La píldora en sí, que es
  * la misma en las dos pantallas que filtran, la trae `filter-pill.tsx`.
+ *
+ * Los botones de división cruzan de pantalla: los monta también la barra de
+ * partidas en juego (`live-matches-filters`), porque el eje es el mismo y el
+ * control también.
  */
 
 /** Buscador por nombre de display, nombre oficial o canal. */
