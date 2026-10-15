@@ -284,6 +284,32 @@ de baja y reactivar siguen funcionando (el ban de Auth se salta con un aviso en 
 3. Si la cuenta **ya existe** (los admins anteriores), no se manda correo: se vincula su
    `authUserId` y se le da acceso; entra con su contraseña de siempre.
 
+- **El destino del correo lo decide el proyecto de Supabase**, no la app. Hacen falta **dos** cosas en
+  Authentication, y sin ellas el enlace no llega a `/auth/confirm`:
+  - **URL Configuration**: *Site URL* = el dominio actual, y `https://laligahispana.es/**` en
+    *Redirect URLs* ([paso del cambio de dominio](./DESPLIEGUE.md#pasos-del-cambio-de-dominio)).
+  - **Email Templates**: las plantillas de *invite* y *recovery* enlazan a la ruta de la app, no a
+    `{{ .ConfirmationURL }}`:
+    `<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite">Aceptar la invitación</a>`
+    (en la de recuperación, `type=recovery`). El `{{ .ConfirmationURL }}` de serie verifica en
+    `supabase.co` y deja la sesión en el fragmento, que la web no consume: la cuenta se crea pero
+    nadie fija la contraseña.
+  - Las plantillas exigen **SMTP propio**: desde el 3 de junio de 2026, los proyectos Free nuevos con
+    el correo de Supabase no dejan editarlas, y ese servicio además solo entrega a direcciones que
+    sean miembro del equipo de la organización (2 correos/hora, sin garantía). Configurar Resend (u
+    otro SMTP) en Authentication → SMTP Settings desbloquea las plantillas y el envío a cualquier
+    dirección, que es lo que necesitan las invitaciones de admin. El remitente tiene que colgar del
+    dominio verificado en el proveedor (DNS: DKIM `resend._domainkey.<dominio>` y MX/SPF de `send.<dominio>`)
+    y el host va **sin esquema** (`smtp.resend.com`, no `http://smtp.resend.com`): con el esquema el
+    envío falla con un 500 genérico en `/auth/v1/recover` y sin rastro en el proveedor.
+- Si el enlace aterrizó en un host viejo o la cuenta se creó sin que nadie fijara contraseña, a esa
+  persona hay que mandarle un correo de **recuperación** desde Authentication → Users: pasa por el
+  mismo `/auth/confirm`.
+- **Configuración actual del correo**: SMTP propio por Resend (`smtp.resend.com:465`, usuario
+  `resend`), remitente `no-reply@laligahispana.es` (dominio verificado `laligahispana.es`), *Site
+  URL* `https://laligahispana.es` y las plantillas de *invite* y *recovery* enlazando a
+  `/auth/confirm`.
+
 Dar de baja es `active = false` (no se borra la fila) y corta la sesión viva en Auth (best-effort);
 reactivar lo deshace. Todo queda registrado en `/admin/acciones`.
 

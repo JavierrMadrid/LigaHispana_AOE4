@@ -29,6 +29,7 @@ está en [`docs/OPERACION.md`](./OPERACION.md).
 | Hyperdrive (Cloudflare) | Pool de conexiones a Postgres delante de Supabase. |
 | Custom Domain (Cloudflare) | `laligahispana.es` apuntando al Worker. |
 | Supabase Postgres | Base de datos. |
+| Supabase Auth | Cuentas del panel. El **Site URL** y las **plantillas de correo** (Authentication → URL Configuration / Email Templates) deciden a dónde llevan los correos de invitación y recuperación. |
 | Supabase Cron (`pg_cron` + `pg_net`) | Reloj del torneo: `POST /api/sync` cada 10 minutos. |
 
 ## Canales de despliegue
@@ -194,9 +195,14 @@ protección quedan cero.
 
 1. `NEXT_PUBLIC_SITE_URL = https://laligahispana.es` en **las dos** configuraciones de build.
 2. `SITE_URL=https://laligahispana.es npm run db:cron` (mueve el reloj al dominio).
-3. `routes` en `wrangler.jsonc`: opcional, **no** se hizo.
+3. Supabase → Authentication: **URL Configuration** (*Site URL* al dominio nuevo y
+   `https://laligahispana.es/**` en *Redirect URLs*, más el de los Previews si se usan) y las
+   **plantillas de correo** de invitación y recuperación
+   ([`OPERACION.md`](./OPERACION.md#alta-por-invitación)). Sin esto, los correos siguen llevando al
+   dominio viejo o a un flujo que no llega a fijar contraseña.
+4. `routes` en `wrangler.jsonc`: opcional, **no** se hizo.
 
-El orden importa: primero la build variable (solo afecta a los metadatos) y después el reloj (si falla, sí se nota).
+El orden importa: primero la build variable (solo afecta a los metadatos) y después el reloj (si falla, sí se nota). El paso de Supabase no se nota hasta el siguiente correo de Auth.
 
 ## Despliegue manual
 
@@ -239,3 +245,7 @@ npm run db:cron                  # reloj cada 10 minutos (Supabase Cron)
 | El dominio nuevo no carga para algunos visitantes | Caché DNS antigua; se resuelve sola. |
 | Una variable del panel desaparece tras un despliegue | Era una variable de **texto** y el despliegue no llevaba `keep_vars`: el archivo es la fuente de verdad y las borra. Ya está activo en `wrangler.jsonc` (y los secretos nunca se borran). |
 | El panel de admin no refleja una aprobación o edición reciente (y el historial de acciones repite la misma acción) | La caché de consultas de Hyperdrive servía `SELECT` anteriores a la escritura. La configuración va **sin caché** (`caching.disabled`) a propósito. |
+| El correo de invitación de un admin lleva a un dominio viejo (p. ej. un `workers.dev` que ya no existe) | El **Site URL** del proyecto de Supabase sigue en el dominio anterior: `inviteUserByEmail` va sin `redirectTo` a propósito y el destino lo pone el proyecto (Authentication → URL Configuration). Aplicar el [paso del cambio de dominio](#pasos-del-cambio-de-dominio); a quien ya recibió el enlace roto, mandarle un correo de recuperación desde Authentication → Users. |
+| La invitación crea la cuenta en Auth, pero nadie llega a fijar contraseña (el enlace acaba en la portada) | La plantilla del correo usa `{{ .ConfirmationURL }}`: la verificación ocurre en `supabase.co` y deja la sesión en el fragmento, que la web no consume; `/auth/confirm` nunca se ejecuta. Las plantillas de *invite* y *recovery* tienen que enlazar a `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=…` ([detalle](./OPERACION.md#alta-por-invitación)). Hacen falta plantillas editables, o sea **SMTP propio**. |
+| El editor de plantillas de Auth está bloqueado («Set up custom SMTP to edit the source») y los correos solo llegan a los miembros del equipo | Proyecto Free nuevo con el correo por defecto de Supabase: desde el 3 de junio de 2026 sus plantillas no se pueden editar y solo entrega a direcciones del equipo de la organización (2 correos/hora, sin garantía). Las invitaciones de admin necesitan un SMTP propio (Resend y similares) en Authentication → SMTP Settings. |
+| Los correos de Auth fallan (500 en `/auth/v1/recover`) y el proveedor no registra el intento | En Authentication → SMTP Settings: el host va **sin esquema** (`smtp.resend.com`, no `http://smtp.resend.com`) y el remitente cuelga del dominio verificado en el proveedor. Ver [`OPERACION.md`](./OPERACION.md#alta-por-invitación). |
