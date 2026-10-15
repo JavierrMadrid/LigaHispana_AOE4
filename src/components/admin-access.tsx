@@ -48,7 +48,7 @@ export function AdminAccess() {
     <Link
       href="/login"
       aria-label="Admin"
-      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md border border-line px-3.5 py-2.5 text-sm font-medium text-muted transition-colors hover:border-line-strong hover:bg-surface hover:text-foreground sm:px-4"
+      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md border border-line px-3.5 py-2.5 text-sm font-medium text-muted transition-colors hover:border-line-strong hover:bg-surface hover:text-foreground"
     >
       <span className="hidden min-[400px]:inline">Admin</span>
       {/* En el móvil más estrecho el texto cede su sitio al glifo, que es lo

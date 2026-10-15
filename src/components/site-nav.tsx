@@ -41,6 +41,15 @@ function isActive(href: string, pathname: string): boolean {
  * piden unos 720 px y a 768 entrarían con seis de sobra, y un umbral que depende
  * de seis píxeles no es un umbral. A partir de `lg` la fila cabe entera con los
  * títulos completos y no hay desplazamiento.
+ *
+ * La lista va centrada. Cuando comparte fila con la marca y las acciones (`2xl`)
+ * el centrado lo da la rejilla de la cabecera, que reparte el mismo ancho a los
+ * dos laterales, y aquí el `mx-auto` no tiene nada que repartir. Cuando la nav
+ * tiene su propia fila, a ancho completo, es el `mx-auto` quien la centra. En los
+ * dos casos se centra con ancho por contenido y no con `justify-center`: si la
+ * fila llegara a no caber, `justify-center` dejaría lo desbordado por la izquierda
+ * fuera del alcance del desplazamiento horizontal, mientras que con el ancho por
+ * contenido la lista se apoya en el principio y el desplazamiento llega a todo.
  */
 export function SiteNav() {
   const pathname = usePathname();
@@ -52,7 +61,7 @@ export function SiteNav() {
       aria-label="Principal"
       className="-mx-1.5 overflow-x-auto overscroll-x-contain py-1"
     >
-      <ul className="flex items-center gap-1.5 px-1.5">
+      <ul className="mx-auto flex w-fit items-center gap-1.5 px-1.5">
         {items.map((item) => {
           const active = isActive(item.href, pathname);
 
