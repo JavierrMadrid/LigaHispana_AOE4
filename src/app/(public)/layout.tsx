@@ -63,16 +63,17 @@ export default async function PublicLayout({
       <header className="thread-bottom relative sticky top-0 z-20 border-b border-line bg-background/95 backdrop-blur">
         {/* La cabecera es más ancha que `main` (`max-w-[80rem]`) a propósito: así el
             emblema y las acciones sobresalen de la columna donde empieza y acaba
-            el contenido, mientras la navegación sigue centrada respecto a la página.
-            La rejilla de tres columnas (`1fr auto 1fr`) es la que sostiene ese
-            centrado: las dos laterales reparten el mismo ancho, así que ni el ancho
-            de la marca ni el de la celda de la derecha desplazan la nav.
-            Esa fila necesita el ancho completo del contenedor (1376 px), de ahí que
-            se active en `xl` y no en `lg`: por debajo, marca y acciones comparten la
-            primera fila y la navegación baja a la segunda, a ancho completo, sin que
-            el wordmark se recorte. En móvil (`< sm`) esa segunda fila desaparece: los
-            cinco destinos bajan a `SiteTabBar`, la barra fija del pie, y la cabecera
-            se queda en una sola fila compacta.
+            el contenido.
+            La navegación no comparte fila con la marca a ninguna anchura: con los
+            cinco títulos completos pide 698 px, la marca 291 y las acciones 340
+            —más los huecos de la rejilla—, 1377 en total, y el contenedor da 1328
+            en su ancho máximo (`86rem` menos el relleno). Con los nombres cortos
+            cabía a partir del contenedor completo, que es lo que la unía en `xl`;
+            con los completos no cabe en ninguna anchura, así que marca y acciones
+            ocupan la primera fila y la navegación baja siempre a la segunda, a
+            ancho completo, sin que el wordmark tenga que ceder. En móvil (`< sm`)
+            esa segunda fila desaparece: los cinco destinos bajan a `SiteTabBar`, la
+            barra fija del pie, y la cabecera se queda en una sola fila compacta.
             En la celda de la derecha viven las dos acciones de la barra —la
             inscripción y el acceso de la organización—. Son cromo: cada una tiene
             su alto propio, su radio de control y ningún protagónico, para no
@@ -87,7 +88,7 @@ export default async function PublicLayout({
             desde el borde superior de la ventana (por eso se le ve cortado arriba),
             remata por debajo de la barra y va anclado y fuera de la rejilla, así
             que no ocupa columna ni mueve la navegación. */}
-        <div className="mx-auto grid w-full max-w-[86rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:gap-x-4 sm:px-6 sm:py-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-x-6 xl:gap-y-0">
+        <div className="mx-auto grid w-full max-w-[86rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:gap-x-4 sm:px-6 sm:py-3">
           <Link
             href="/"
             className="col-start-1 row-start-1 inline-flex min-w-0 items-center gap-2 transition-colors hover:text-accent sm:gap-3"
@@ -132,7 +133,7 @@ export default async function PublicLayout({
             </span>
           </Link>
 
-          <div className="col-start-2 row-start-1 flex items-center gap-2 justify-self-end md:pr-24 xl:col-start-3 xl:self-stretch">
+          <div className="col-start-2 row-start-1 flex items-center gap-2 justify-self-end md:pr-24">
             <ParticipateCta />
             <AdminAccess />
           </div>
@@ -143,7 +144,7 @@ export default async function PublicLayout({
               Por debajo de `sm` no se pinta: los cinco destinos no caben sin
               desplazamiento horizontal y ahí navega `SiteTabBar`. La fila queda
               vacía y la rejilla se cierra en una sola altura. */}
-          <div className="col-span-2 row-start-2 hidden min-w-0 w-full sm:block xl:col-span-1 xl:col-start-2 xl:row-start-1 xl:w-auto">
+          <div className="col-span-2 row-start-2 hidden min-w-0 w-full sm:block">
             <SiteNav />
           </div>
         </div>

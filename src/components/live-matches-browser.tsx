@@ -18,19 +18,19 @@ const FORMAT_ORDER: readonly string[] = ["1vs1", "2vs2", "3vs3", "4vs4", "Por eq
  * Partidas en juego con filtros de cliente.
  *
  * El servidor le pasa las partidas ya agrupadas y con la alineación resuelta, y
- * aquí solo se decide cuáles se ven: tipo de partida, división y directo se
- * combinan con AND. Un filtro de división no busca partidas "de esa división",
- * sino partidas en las que juega al menos un participante de la liga de esa
- * división, que es lo que la división de un jugador significa aquí. El de directo
- * busca lo que el lector quiere ver: partidas en las que **alguien** está
- * retransmitiendo, sea del torneo o no.
+ * aquí solo se decide cuáles se ven: tipo de partida, divisiones y directo se
+ * combinan con AND. El filtro de división no busca partidas "de esa división",
+ * sino partidas en las que juega al menos un participante de la liga de alguna
+ * de las divisiones marcadas, que es lo que la división de un jugador significa
+ * aquí. El de directo busca lo que el lector quiere ver: partidas en las que
+ * **alguien** está retransmitiendo, sea del torneo o no.
  *
  * El estado vive en este componente, así que el auto-refresco de la página
  * (`LiveRefresh`) trae partidas nuevas sin perder los filtros puestos.
  */
 export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
   const [format, setFormat] = useState<string | null>(null);
-  const [division, setDivision] = useState<DivisionId | null>(null);
+  const [divisions, setDivisions] = useState<DivisionId[]>([]);
   const [liveOnly, setLiveOnly] = useState(false);
 
   const formats = useMemo(() => {
@@ -51,8 +51,11 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
         }
 
         if (
-          division !== null &&
-          !match.participants.some((participant) => participant.division === division)
+          divisions.length > 0 &&
+          !match.participants.some(
+            (participant) =>
+              participant.division !== null && divisions.includes(participant.division),
+          )
         ) {
           return false;
         }
@@ -63,14 +66,14 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
 
         return true;
       }),
-    [matches, format, division, liveOnly],
+    [matches, format, divisions, liveOnly],
   );
 
-  const hasFilters = format !== null || division !== null || liveOnly;
+  const hasFilters = format !== null || divisions.length > 0 || liveOnly;
 
   function clearFilters() {
     setFormat(null);
-    setDivision(null);
+    setDivisions([]);
     setLiveOnly(false);
   }
 
@@ -87,10 +90,14 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
   // El aviso de "no hay nada" tiene que ser cierto en los dos casos que puede
   // darse: con el filtro de directo solo, lo que falta decir es que nadie de la
   // partida está emitiendo; con varios filtros, que el lector sepa cuáles quitar.
-  const onlyLive = liveOnly && format === null && division === null;
+  const onlyLive = liveOnly && format === null && divisions.length === 0;
+  // El eje se nombra en singular cuando hay una división marcada y en plural
+  // cuando hay varias: el filtro es el mismo, pero "quitar la división" sonaría
+  // a que solo se puede desmarcar una.
+  const divisionFilterLabel = divisions.length > 1 ? "las divisiones" : "la división";
   const activeFilters = [
     format === null ? null : "el tipo de partida",
-    division === null ? null : "la división",
+    divisions.length === 0 ? null : divisionFilterLabel,
     liveOnly ? "el filtro de directos" : null,
   ].filter((item): item is string => item !== null);
 
@@ -100,8 +107,8 @@ export function LiveMatchesBrowser({ matches }: { matches: LiveMatch[] }) {
         formats={formats}
         format={format}
         onFormatChange={setFormat}
-        division={division}
-        onDivisionChange={setDivision}
+        divisions={divisions}
+        onDivisionsChange={setDivisions}
         liveOnly={liveOnly}
         onLiveOnlyChange={setLiveOnly}
       />

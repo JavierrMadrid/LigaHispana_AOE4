@@ -7,15 +7,17 @@ import type { ReactNode } from "react";
 /**
  * Los cinco destinos del sitio público, en el orden en que se leen.
  *
- * `label` es el nombre completo y `tabLabel` el que cabe en la barra inferior de
- * móvil, donde no hay sitio para "Partidas en juego" ni para "Puntuación". El
- * destino es el mismo, así que el `href` y el orden son la única fuente de verdad
- * para las dos formas.
+ * `label` es el nombre completo y coincide con el título de la página —lo que la
+ * navegación anuncia es lo que el `h1` de destino dice—; `tabLabel` es la forma
+ * corta, la que se lee allí donde los títulos no caben: la barra inferior de
+ * móvil y, en la cabecera, las anchuras por debajo de `lg`. El destino es el
+ * mismo, así que el `href` y el orden son la única fuente de verdad para las dos
+ * formas.
  */
 const items = [
-  { href: "/", label: "Clasificación", tabLabel: "Clasificación", icon: PodiumIcon },
+  { href: "/", label: "Clasificación general", tabLabel: "Clasificación", icon: PodiumIcon },
   { href: "/partidas", label: "Partidas en juego", tabLabel: "Partidas", icon: SwordsIcon },
-  { href: "/objetivos", label: "Objetivos", tabLabel: "Objetivos", icon: TargetIcon },
+  { href: "/objetivos", label: "Objetivos especiales", tabLabel: "Objetivos", icon: TargetIcon },
   { href: "/puntuacion", label: "Puntuación", tabLabel: "Puntos", icon: MedalIcon },
   { href: "/reglas", label: "Reglas", tabLabel: "Reglas", icon: BookIcon },
 ] as const;
@@ -34,8 +36,11 @@ function isActive(href: string, pathname: string): boolean {
  *
  * Por debajo de `sm` esta versión no se pinta: cinco destinos no caben a lo
  * ancho de un móvil, y en lugar de dejar "Reglas" fuera de vista tras un
- * desplazamiento sin señal, la navegación baja a `SiteTabBar`. A partir de `sm`
- * la fila cabe entera y no hay desplazamiento.
+ * desplazamiento sin señal, la navegación baja a `SiteTabBar`. De `sm` a `lg` la
+ * fila lleva los nombres cortos —los mismos de esa barra—: los títulos completos
+ * piden unos 720 px y a 768 entrarían con seis de sobra, y un umbral que depende
+ * de seis píxeles no es un umbral. A partir de `lg` la fila cabe entera con los
+ * títulos completos y no hay desplazamiento.
  */
 export function SiteNav() {
   const pathname = usePathname();
@@ -62,7 +67,11 @@ export function SiteNav() {
                     : "text-muted hover:bg-surface hover:text-foreground"
                 }`}
               >
-                {item.label}
+                {/* Dos nombres para el mismo destino: el corto donde los títulos
+                    completos no caben y el completo a partir de `lg`. Solo uno
+                    está en el DOM accesible: el otro va con `display: none`. */}
+                <span className="lg:hidden">{item.tabLabel}</span>
+                <span className="hidden lg:inline">{item.label}</span>
                 {active ? (
                   <span
                     aria-hidden="true"
