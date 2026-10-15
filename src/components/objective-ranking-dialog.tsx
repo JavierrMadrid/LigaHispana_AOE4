@@ -2,7 +2,12 @@
 
 import { useState, type ReactNode } from "react";
 import type { ObjectiveContender, ObjectiveOption } from "@/lib/public";
-import { contenderValue } from "@/lib/objective-format";
+import {
+  contenderValue,
+  hasNoCap,
+  prizeLabel,
+  standingsCountLabel,
+} from "@/lib/objective-format";
 import {
   ContenderName,
   emptyMessage,
@@ -59,6 +64,8 @@ export function ObjectiveRankingDialog({
       front={front}
       back={
         <div className="flex h-full flex-col">
+          {/* `pt-14`/`sm:pt-16` le dejan sitio a la X de la cara, que vive en la
+              esquina superior derecha de la tarjeta, por encima del relleno. */}
           <header className="border-b border-line p-6 pt-14 sm:p-8 sm:pt-16">
             <div className="flex items-start gap-4">
               <span className="flex size-12 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
@@ -76,7 +83,7 @@ export function ObjectiveRankingDialog({
 
             <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
               <HolderSummary option={option} />
-              <PrizePlate points={option.points} />
+              <PrizePlate option={option} />
             </div>
           </header>
 
@@ -86,13 +93,13 @@ export function ObjectiveRankingDialog({
                 Clasificación
               </h3>
               <span className="text-xs tabular-nums text-muted">
-                {total === 1 ? "1 contendiente" : `${total} contendientes`}
+                {standingsCountLabel(option, total)}
               </span>
             </div>
 
             {total === 0 ? (
               <p className="border-t border-line px-6 py-8 text-center text-sm text-muted sm:px-8">
-                Todavía no hay contendientes en este objetivo.
+                {emptyMessage(option)}
               </p>
             ) : (
               <ol className="divide-y divide-line border-t border-line">
@@ -135,18 +142,28 @@ export function ObjectiveRankingDialog({
 /** El poseedor actual en grande, el recuento de un logro, o por qué está libre. */
 function HolderSummary({ option }: { option: ObjectiveOption }) {
   if (option.kind === "achievement") {
+    // Un logro sin tope no se "consigue": se cobra con cada victoria, así que lo
+    // que se cuenta es cuánta gente ya cobra. El distintivo de la derecha dice la
+    // regla en dos palabras.
+    const noCap = hasNoCap(option);
+    const count = option.beneficiaries.length;
+
     return (
       <div className="flex items-center gap-3 rounded-md border border-accent/25 bg-accent/5 p-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-foreground">
-            {option.beneficiaries.length === 1
-              ? "1 jugador lo ha conseguido"
-              : `${option.beneficiaries.length} jugadores lo han conseguido`}
+            {noCap
+              ? count === 1
+                ? "1 jugador ya cobra"
+                : `${count} jugadores ya cobran`
+              : count === 1
+                ? "1 jugador lo ha conseguido"
+                : `${count} jugadores lo han conseguido`}
           </p>
           <p className="mt-0.5 text-xs leading-relaxed text-muted">{option.description}</p>
         </div>
         <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
-          Logro
+          {noCap ? "Sin tope" : "Logro"}
         </span>
       </div>
     );
@@ -193,7 +210,8 @@ function RankingRow({
   highlightProfileId: number | null;
 }) {
   // En una competición el distintivo es del poseedor; en un logro, de quien ya lo
-  // ha completado (`eligible`).
+  // ha completado (`eligible`). Un logro sin tope no tiene distintivo: todos los
+  // que salen en la lista ya suman, así que marcarlos no dice nada.
   const achieved =
     option.kind === "achievement"
       ? contender.eligible
@@ -220,7 +238,7 @@ function RankingRow({
         ) : null}
       </span>
 
-      {achieved ? (
+      {achieved && !hasNoCap(option) ? (
         <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
           {option.kind === "achievement" ? "Conseguido" : "Poseedor"}
         </span>
@@ -234,14 +252,14 @@ function RankingRow({
 }
 
 /** La misma placa de premio de la tarjeta, en tamaño grande. */
-function PrizePlate({ points }: { points: number }) {
+function PrizePlate({ option }: { option: ObjectiveOption }) {
   return (
     <span className="justify-self-start rounded-md border border-accent/30 bg-accent/5 px-4 py-2 text-right sm:justify-self-end">
       <span className="block font-display text-2xl font-semibold leading-none tabular-nums text-accent">
-        +{points}
+        +{option.points}
       </span>
-      <span className="mt-1 block text-xs font-medium uppercase tracking-wide text-muted">
-        puntos
+      <span className="mt-1 block text-xs font-medium uppercase leading-tight tracking-wide text-muted">
+        {prizeLabel(option)}
       </span>
     </span>
   );

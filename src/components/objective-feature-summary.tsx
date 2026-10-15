@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ObjectiveOption } from "@/lib/public";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { MapPool, ObjectiveStatus } from "@/components/objective-card";
+import { prizeLabel } from "@/lib/objective-format";
 
 /**
  * Cara frontal de la tarjeta grande volteable: el resumen de un objetivo en una
@@ -21,8 +22,11 @@ import { MapPool, ObjectiveStatus } from "@/components/objective-card";
  * para la ficha de un jugador), y `ObjectiveDialogCard` decide cuándo se enseña.
  */
 
-/** Lo mínimo para elegir el emblema de un objetivo. */
-export type FeatureTarget = Pick<ObjectiveOption, "id" | "group" | "metric">;
+/** Lo mínimo para elegir el emblema de un objetivo y leer su premio. */
+export type FeatureTarget = Pick<
+  ObjectiveOption,
+  "id" | "group" | "metric" | "kind" | "target" | "points"
+>;
 
 type ObjectiveFeatureFrameProps = {
   target: FeatureTarget;
@@ -52,9 +56,9 @@ type ObjectiveFeatureFrameProps = {
  * (derecha) de la acción, que cierra centrada. En móvil llena la pantalla y
  * desplaza sin recortar.
  *
- * El relleno reserva el aire del botón de cerrar del `Modal` arriba a la derecha
- * y deja respirar la tarjeta por los cuatro lados, sin que nada toque el borde
- * redondeado.
+ * El relleno reserva el aire de la X de cerrar, que va dentro de la propia cara
+ * (arriba a la derecha) y deja respirar la tarjeta por los cuatro lados, sin que
+ * nada toque el borde redondeado.
  */
 export function ObjectiveFeatureFrame({
   target,
@@ -98,7 +102,7 @@ export function ObjectiveFeatureFrame({
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-4">
         <div className="min-w-0 sm:flex-1">{progress}</div>
-        <FeaturePoints points={points} tone={pointsTone} />
+        <FeaturePoints target={target} points={points} tone={pointsTone} />
       </div>
 
       <footer className="flex shrink-0 items-center justify-center border-t border-line pt-4">
@@ -178,10 +182,20 @@ export function ObjectiveFeatureSummary({
 
 /**
  * Los puntos del objetivo, en línea sobre el filete: la cifra con el peso de la
- * casa —oro, o neutra si el objetivo aún no se cobra— y la palabra «puntos» en
- * pequeño. Van en una sola línea, sin caja, a la derecha del estado.
+ * casa —oro, o neutra si el objetivo aún no se cobra— y su unidad en pequeño. Van
+ * en una sola línea, sin caja, a la derecha del estado. En un objetivo sin tope la
+ * cifra es por unidad y la unidad lo dice (`puntos por victoria`), para que no se lea
+ * como un premio que el objetivo reparte una vez.
  */
-function FeaturePoints({ points, tone }: { points: number; tone: "accent" | "neutral" }) {
+function FeaturePoints({
+  target,
+  points,
+  tone,
+}: {
+  target: FeatureTarget;
+  points: number;
+  tone: "accent" | "neutral";
+}) {
   const accent = tone === "accent";
 
   return (
@@ -193,7 +207,7 @@ function FeaturePoints({ points, tone }: { points: number; tone: "accent" | "neu
       >
         +{points}
       </span>
-      <span className="text-xs font-medium text-muted">puntos</span>
+      <span className="text-xs font-medium text-muted">{prizeLabel(target)}</span>
     </span>
   );
 }
