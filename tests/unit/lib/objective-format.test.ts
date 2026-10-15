@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   completionSummary,
+  contenderShare,
   contenderValue,
   formatMapPool,
+  hasNoCap,
   objectiveCloseness,
+  objectiveStandingsView,
+  objectiveTitle,
   orderByObjectiveProgress,
   orderByObjectiveRanking,
+  prizeLabel,
+  standingsCountLabel,
 } from "@/lib/objective-format";
 import type {
   ObjectiveBeneficiary,
@@ -104,6 +110,7 @@ function beneficiary(profileId: number): ObjectiveBeneficiary {
     avatarUrl: null,
     profileUrl: null,
     points: 10,
+    count: 1,
   };
 }
 
@@ -115,7 +122,7 @@ describe("completionSummary: cuántos han completado un logro", () => {
     };
   }
 
-  it("un logro se lee sobre el total de participantes", () => {
+  it("un logro se lee sobre el total de contendientes", () => {
     expect(completionSummary(withBeneficiaries(3), 12)).toBe("3 de 12 lo han completado");
   });
 
@@ -134,6 +141,67 @@ describe("completionSummary: cuántos han completado un logro", () => {
     expect(completionSummary({ ...competition, holder: contender(50) }, 12)).toBe(
       "Poseedor marcado",
     );
+  });
+
+  it("un logro sin tope no habla de completadores: dice la regla", () => {
+    const noCap = withBeneficiaries(12, "achievement");
+    noCap.target = null;
+
+    expect(completionSummary(noCap, 12)).toBe("Sin tope: cada victoria suma");
+  });
+});
+
+describe("hasNoCap: el logro que no se completa", () => {
+  it("un logro sin umbral no tiene tope", () => {
+    expect(hasNoCap(option("victorias", "achievement", null))).toBe(true);
+  });
+
+  it("un logro con umbral sí lo tiene", () => {
+    expect(hasNoCap(option("dias", "achievement", 14))).toBe(false);
+  });
+
+  it("una competición no es un logro sin tope, aunque no tenga umbral", () => {
+    expect(hasNoCap(option("partidas", "competition", null))).toBe(false);
+  });
+});
+
+describe("standingsCountLabel: el recuento de la cabecera", () => {
+  it("un objetivo normal cuenta contendientes", () => {
+    expect(standingsCountLabel(option("dias", "achievement", 14), 13)).toBe("13 contendientes");
+    expect(standingsCountLabel(option("racha", "competition", null), 1)).toBe("1 contendiente");
+  });
+
+  it("un logro sin tope cuenta a quien ya cobra, no a aspirantes", () => {
+    const noCap = option("victorias", "achievement", null);
+
+    expect(standingsCountLabel(noCap, 9)).toBe("9 jugadores");
+    expect(standingsCountLabel(noCap, 1)).toBe("1 jugador");
+  });
+});
+
+describe("prizeLabel: el pie de la placa de premio", () => {
+  it("un premio cerrado se lee en puntos", () => {
+    expect(prizeLabel(option("dias", "achievement", 14))).toBe("puntos");
+    expect(prizeLabel(option("racha", "competition", null))).toBe("puntos");
+  });
+
+  it("un objetivo sin tope paga por unidad y lo dice", () => {
+    expect(prizeLabel(option("victorias", "achievement", null))).toBe("puntos por victoria");
+  });
+
+  it("la unidad sale de la métrica, no del id", () => {
+    expect(prizeLabel(option("dias", "achievement", null))).toBe("puntos por día");
+  });
+});
+
+describe("objectiveTitle: el rótulo con sus repeticiones", () => {
+  it("sin repeticiones es la etiqueta a secas", () => {
+    expect(objectiveTitle({ label: "Imparable", count: 1 })).toBe("Imparable");
+  });
+
+  it("con repeticiones, el multiplicador va delante", () => {
+    expect(objectiveTitle({ label: "Imparable", count: 2 })).toBe("2×Imparable");
+    expect(objectiveTitle({ label: "Victorias", count: 24 })).toBe("24×Victorias");
   });
 });
 
@@ -354,5 +422,103 @@ describe("orderByObjectiveRanking", () => {
     expect(ids(orderByObjectiveRanking(players, [ranked(2), ranked(2), ranked(1)]))).toEqual([
       2, 1,
     ]);
+  });
+});
+
+describe("objectiveStandingsView", () => {
+  function ranked(profileId: number, value: number): ObjectiveContender {
+    return {
+      profileId,
+      name: `Jugador ${profileId}`,
+      avatarUrl: null,
+      profileUrl: null,
+      value,
+      matches: value,
+      eligible: false,
+      detail: null,
+    };
+  }
+
+  function participant(profileId: number) {
+    return {
+      profileId,
+      name: `Jugador ${profileId}`,
+      avatarUrl: null,
+      profileUrl: `https://aoe4world.com/players/${profileId}`,
+    };
+  }
+
+  const ids = (placements: { participant: { profileId: number } }[]) =>
+    placements.map((placement) => placement.participant.profileId);
+
+  it("deja fuera a quien no disputa el objetivo y cuenta solo a los contendientes", () => {
+    const players = [1, 2, 3, 4].map(participant);
+    const view = objectiveStandingsView(players, [ranked(3, 9), ranked(1, 4)]);
+
+    expect(ids(view.rows)).toEqual([3, 1]);
+    expect(view.contenders).toBe(2);
+  });
+
+  it("mantiene la fila del jugador resaltado aunque no dispute, sin contarla", () => {
+    const players = [1, 2, 3].map(participant);
+    const view = objectiveStandingsView(players, [ranked(2, 5)], 3);
+
+    expect(ids(view.rows)).toEqual([2, 3]);
+    expect(view.contenders).toBe(1);
+    expect(view.rows[1].contender).toBeNull();
+    expect(view.rows[1].position).toBeNull();
+  });
+
+  it("no repite la fila del resaltado cuando sí disputa", () => {
+    const players = [1, 2].map(participant);
+    const view = objectiveStandingsView(players, [ranked(2, 5), ranked(1, 1)], 2);
+
+    expect(ids(view.rows)).toEqual([2, 1]);
+    expect(view.contenders).toBe(2);
+  });
+
+  it("sin ranking no hay filas ni contendientes", () => {
+    const view = objectiveStandingsView([1, 2].map(participant), []);
+
+    expect(view.rows).toEqual([]);
+    expect(view.contenders).toBe(0);
+  });
+
+  it("no cuenta a quien el ranking traiga pero la clasificación no tenga", () => {
+    const view = objectiveStandingsView([participant(1)], [ranked(9, 8), ranked(1, 2)]);
+
+    expect(ids(view.rows)).toEqual([1]);
+    expect(view.contenders).toBe(1);
+  });
+
+  it("respeta los puestos del ranking al recortar la lista", () => {
+    const players = [1, 2, 3, 4].map(participant);
+    const view = objectiveStandingsView(players, [ranked(4, 7), ranked(2, 3)]);
+
+    expect(view.rows.map((row) => row.position)).toEqual([1, 2]);
+  });
+});
+
+describe("contenderShare: la parte del líder que vale una fila", () => {
+  it("el líder llega al final", () => {
+    expect(contenderShare(50, 50)).toBe(1);
+  });
+
+  it("el resto se mide contra el líder", () => {
+    expect(contenderShare(25, 50)).toBe(0.5);
+    expect(contenderShare(1, 5)).toBe(0.2);
+  });
+
+  it("un valor por encima del líder se satura", () => {
+    expect(contenderShare(60, 50)).toBe(1);
+  });
+
+  it("un líder sin valor no da escala", () => {
+    expect(contenderShare(10, 0)).toBe(0);
+    expect(contenderShare(10, -3)).toBe(0);
+  });
+
+  it("sin valor no hay barra", () => {
+    expect(contenderShare(0, 50)).toBe(0);
   });
 });

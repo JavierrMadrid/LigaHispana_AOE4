@@ -33,6 +33,43 @@ function metricUnit(metric: ObjectiveMetric, count: number): string {
 }
 
 /**
+ * Un objetivo **sin tope**: un logro que no se completa nunca porque se repite con
+ * cada unidad de su métrica. Hoy solo lo es `victorias`.
+ *
+ * Se reconoce por su forma ya resuelta —`kind: "achievement"` con `target: null`—,
+ * que es el mismo criterio que el motor aplica en `hasFixedPrize()`
+ * (`src/lib/objectives.ts`) leído al revés. Importa para no mentir en ningún sitio:
+ * no tiene umbral que enseñar, no se «consigue», no tiene barra de avance que pintar
+ * y su cifra de puntos es **por unidad**, no un premio cerrado.
+ *
+ * Es puro y estructural: vale igual para una `ObjectiveOption` que para una
+ * `ParticipantObjective`.
+ */
+export function hasNoCap(objective: {
+  kind: ObjectiveKind;
+  target: ObjectiveTarget | null;
+}): boolean {
+  return objective.kind === "achievement" && objective.target === null;
+}
+
+/**
+ * El pie de la placa de premio de un objetivo: `puntos`, o `puntos por victoria`
+ * en uno sin tope.
+ *
+ * La placa de un objetivo normal enseña un premio cerrado —lo que reparte, se cobre
+ * entero o no— y con decir `puntos` se entiende. En `victorias` no hay premio: cada
+ * victoria paga, así que la cifra de la placa es **por unidad** y el pie tiene que
+ * decirlo, o la placa estaría afirmando que el objetivo reparte eso en total.
+ */
+export function prizeLabel(objective: {
+  kind: ObjectiveKind;
+  target: ObjectiveTarget | null;
+  metric: ObjectiveMetric;
+}): string {
+  return hasNoCap(objective) ? `puntos por ${metricUnit(objective.metric, 1)}` : "puntos";
+}
+
+/**
  * El valor de un contendiente, listo para pintar.
  *
  * En un **logro** es el avance sobre el umbral (`value/target`, p. ej. `12/23
@@ -46,6 +83,9 @@ function metricUnit(metric: ObjectiveMetric, count: number): string {
  * umbral no añade nada al objetivo (el motor ya lo da por cobrado, con el tope
  * de puntos aplicado), así que pintar el exceso solo confunde sobre cuánto
  * falta. El valor real del ranking no se toca: la saturación es de formato.
+ *
+ * Un logro **sin tope** (`victorias`) no tiene umbral: se lee por su valor a
+ * secas, como una competición (`24 victorias`), que es lo que da la posición.
  */
 export function contenderValue(option: ObjectiveOption, contender: ObjectiveContender): string {
   if (option.kind === "achievement" && option.target !== null) {
@@ -63,13 +103,21 @@ export function contenderValue(option: ObjectiveOption, contender: ObjectiveCont
  * objetivo.
  *
  * En un **logro** son sus beneficiarios (`option.beneficiaries`), que se leen
- * **sobre el total de participantes** del torneo: "3 de 12 lo han completado".
- * En una **competición** solo hay un poseedor, así que un recuento no aplica y
- * se dice si está marcado o no. Es puro: solo depende del objetivo y del total.
+ * **sobre el total de contendientes** del objetivo —los que están en su ranking,
+ * que es justo lo que lista la cara de la clasificación—: "3 de 12 lo han
+ * completado". En una **competición** solo hay un poseedor, así que un recuento no
+ * aplica y se dice si está marcado o no. Y en un logro **sin tope** no hay
+ * completadores que contar (todos los que suman lo están cobrando), así que se dice
+ * la regla: "Sin tope: cada victoria suma". Es puro: solo depende del objetivo y
+ * del número de contendientes.
  */
-export function completionSummary(option: ObjectiveOption, total: number): string {
+export function completionSummary(option: ObjectiveOption, contenders: number): string {
   if (option.kind === "competition") {
     return option.holder === null ? "Sin poseedor todavía" : "Poseedor marcado";
+  }
+
+  if (hasNoCap(option)) {
+    return `Sin tope: cada ${metricUnit(option.metric, 1)} suma`;
   }
 
   const count = option.beneficiaries.length;
@@ -79,8 +127,8 @@ export function completionSummary(option: ObjectiveOption, total: number): strin
   }
 
   return count === 1
-    ? `1 de ${total} lo ha completado`
-    : `${count} de ${total} lo han completado`;
+    ? `1 de ${contenders} lo ha completado`
+    : `${count} de ${contenders} lo han completado`;
 }
 
 /**
@@ -98,6 +146,22 @@ export type ObjectivePlacement<T> = {
 };
 
 /**
+ * El recuento que encabeza una clasificación: cuántos aparecen en su lista.
+ *
+ * En un objetivo normal son **contendientes** —hay un umbral o un premio al que
+ * aspirar—, pero en uno sin tope no se disputa nada: están los jugadores que ya
+ * cobran, y llamarles aspirantes sería mentir sobre lo que están haciendo. Las dos
+ * caras de la clasificación (la de `/objetivos` y la de la ficha) dicen lo mismo.
+ */
+export function standingsCountLabel(option: ObjectiveOption, total: number): string {
+  if (hasNoCap(option)) {
+    return total === 1 ? "1 jugador" : `${total} jugadores`;
+  }
+
+  return total === 1 ? "1 contendiente" : `${total} contendientes`;
+}
+
+/**
  * Ordena los participantes de una clasificación por el ranking del objetivo y
  * anota el puesto de cada uno.
  *
@@ -110,7 +174,9 @@ export type ObjectivePlacement<T> = {
  * inventar un segundo criterio para los que no disputan.
  *
  * Es puro: solo cruza las dos listas por `profileId`, sin conocer el objetivo.
- * Un ranking vacío deja la entrada intacta y todo el mundo sin puesto.
+ * Un ranking vacío deja la entrada intacta y todo el mundo sin puesto. El tramo
+ * final —quien no disputa— no llega a la cara pública: `objectiveStandingsView` lo
+ * descarta antes de pintar.
  */
 export function orderByObjectiveRanking<T extends { profileId: number }>(
   participants: readonly T[],
@@ -144,6 +210,92 @@ export function orderByObjectiveRanking<T extends { profileId: number }>(
   disputing.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
 
   return [...disputing, ...rest];
+}
+
+/**
+ * Lo que pinta la clasificación de un objetivo: las filas visibles y cuántos
+ * disputan.
+ */
+export type ObjectiveStandingsView<T> = {
+  /** Filas a pintar, ya ordenadas por el ranking del objetivo. */
+  rows: ObjectivePlacement<T>[];
+  /** Cuántos **disputan** el objetivo: la base de la cabecera y del resumen. */
+  contenders: number;
+};
+
+/**
+ * Prepara la clasificación de un objetivo para su cara pública: **solo las filas
+ * de quien lo disputa**.
+ *
+ * El listado de participantes del torneo es más largo que el del objetivo, y quien
+ * no ha empezado su participación no aporta nada aquí: sale sin valor ni puesto,
+ * alarga una lista que se lee de un vistazo y compite con la información real.
+ * Quien quiera el censo completo tiene la página de clasificación del torneo. Por
+ * eso se descarta el tramo final que devuelve `orderByObjectiveRanking`, y los
+ * puestos siguen siendo los del ranking (1 es el líder), sin renumerar nada.
+ *
+ * La **excepción** es `highlightProfileId`: el participante de la ficha que abrió
+ * la ventana mantiene su fila aunque no dispute (sin valor ni puesto), para que no
+ * desaparezca su propia referencia. Esa fila no suma en `contenders`.
+ *
+ * `contenders` cuenta solo a quien disputa **y está en la lista de participantes**
+ * —el ranking puede traer a alguien que la clasificación ya no tenga—, de modo que
+ * el recuento de la cabecera y el `completionSummary` digan lo mismo que las filas.
+ *
+ * Es puro: cruza las dos listas por `profileId`, sin conocer el objetivo.
+ */
+export function objectiveStandingsView<T extends { profileId: number }>(
+  participants: readonly T[],
+  ranking: readonly ObjectiveContender[],
+  highlightProfileId: number | null = null,
+): ObjectiveStandingsView<T> {
+  const placements = orderByObjectiveRanking(participants, ranking);
+
+  return {
+    rows: placements.filter(
+      (placement) =>
+        placement.contender !== null || placement.participant.profileId === highlightProfileId,
+    ),
+    contenders: placements.reduce(
+      (total, placement) => (placement.contender === null ? total : total + 1),
+      0,
+    ),
+  };
+}
+
+/**
+ * El rótulo de un objetivo con sus repeticiones delante: `2×Imparable`,
+ * `24×Victorias`. Sin repeticiones (`count === 1`) es la etiqueta a secas.
+ *
+ * Poner el multiplicador en el nombre y no al lado de los puntos deja la cifra
+ * limpia: así `2×Imparable +2` se lee como "dos veces Imparable, dos puntos", que es
+ * exactamente lo que pasó. Un logro repetible —`imparable` paga por día,
+ * `victorias` por victoria— sin el multiplicador parecería haber pagado dos puntos
+ * de golpe.
+ */
+export function objectiveTitle(objective: { label: string; count: number }): string {
+  return objective.count > 1 ? `${objective.count}×${objective.label}` : objective.label;
+}
+
+/**
+ * Qué fracción del valor del líder vale un contendiente, de `0` a `1`, para la
+ * barra de fondo de una fila de la clasificación.
+ *
+ * La referencia es el **primero del ranking** —el valor más alto de la lista—, así
+ * que la barra del líder llega al final y las demás se comparan unas con otras de
+ * un vistazo. Vale igual para un logro (avance sobre el umbral) y para una
+ * competición (valor de su métrica): en los dos casos se compara la cifra que da la
+ * posición, no la cercanía a cobrar el objetivo, que es otra lectura.
+ *
+ * Un líder sin valor (`0` o menos) no da escala: todo devuelve `0` y la fila se
+ * queda sin barra. Se satura en `1` por si un valor llega desordenado.
+ */
+export function contenderShare(value: number, leader: number): number {
+  if (leader <= 0) {
+    return 0;
+  }
+
+  return Math.min(1, Math.max(0, value / leader));
 }
 
 /**
@@ -190,8 +342,9 @@ export type ObjectiveClosenessInput = {
  *   puesto, más cerca de cobrarlo. El empate a fracción se rompe por distancia
  *   al líder, que decide quien ordena.
  *
- * Un valor sin referencia (logro sin umbral, o participante sin puesto) devuelve
- * `0`: no hay nada de lo que tirar para medir la cercanía.
+ * Un valor sin referencia devuelve `0`: un **logro sin tope** no tiene umbral al
+ * que acercarse —se cobra con cada victoria, no se completa—, y un participante sin
+ * puesto no tiene nada con lo que medir la distancia al primero.
  */
 export function objectiveCloseness(progress: ObjectiveClosenessInput): number {
   if (progress.kind === "achievement") {
@@ -219,7 +372,9 @@ export function objectiveCloseness(progress: ObjectiveClosenessInput): number {
  *
  * Reutiliza `objectiveCloseness`, la misma fracción común a logros y
  * competiciones, y no muta la entrada. `Array.prototype.sort` es estable, así
- * que a igual avance se conserva el orden de entrada (el del catálogo).
+ * que a igual avance se conserva el orden de entrada (el del catálogo). Un logro
+ * **sin tope** no tiene porcentaje que comparar (`0`, como cualquier valor sin
+ * umbral), así que queda al final del orden.
  */
 export function orderByObjectiveProgress<T extends ObjectiveClosenessInput>(
   items: readonly T[],
