@@ -1,6 +1,6 @@
 # Objetivos
 
-Los **82 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
+Los **83 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
 funcional: qué mide cada uno, cuántos puntos da y **quién lo cobra**. La puntuación base está en
 [`docs/PUNTUACION.md`](./PUNTUACION.md); aquí solo están los objetivos. El catálogo es el del código,
 pero el ruleset puede **desactivar** objetivos de una edición a otra (ver
@@ -13,7 +13,8 @@ Hay **dos formas de cobrar**, y es la diferencia de fondo de este catálogo:
 - **Competición** (`competition`): *winner-takes-all*. Lo cobra **una sola persona**, la que va
   primera. Un único poseedor.
 - **Logro** (`achievement`): lo cobra **todo el que cumple la condición**. Puede ser binario (se
-  cumple o no) o acumulativo (`imparable`: 1 punto por día, hasta 14). **No hay poseedor único.**
+  cumple o no), con tope (`imparable`: 1 punto por día, hasta 14) o **sin tope** (`victorias`: paga los
+  puntos por victoria de la regla activa por cada victoria). **No hay poseedor único.**
 
 Se resuelven sobre las mismas partidas que puntúan, así que el corte de inscripción de cada jugador
 también les aplica: un alta a mitad de torneo no puede ganar un objetivo con partidas anteriores. El
@@ -26,12 +27,12 @@ como **temporales** (puede cambiar de dueño hasta el cierre): ver [`PUNTUACION.
 
 | Grupo | Competiciones | Logros | Objetivos |
 |---|---|---|---|
-| Actividad | 1 | 1 | 2 |
+| Actividad | 1 | 2 | 3 |
 | Racha | 1 | 1 | 2 |
 | Hazañas | 0 | 3 | 3 |
 | Formatos | 4 | 0 | 4 |
 | Civilizaciones | 23 | 48 | 71 |
-| **Total** | **29** | **53** | **82** |
+| **Total** | **29** | **54** | **83** |
 
 El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 
@@ -50,12 +51,15 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
   partida cuyo formato no se pueda determinar no entra en ningún `rey-*`.
 - Las partidas con civilización **aleatoria** quedan fuera de los objetivos de civilización (no de los
   demás). El interruptor es `countRandomizedCivs` del ruleset.
+- En caso de empate lo cobra quien alcanzó esa cifra antes (desempate 3, ver
+  [Desempates](#desempates-dentro-de-un-objetivo)); la tarjeta lo dice en su descripción.
 
 ## Logros (cobra quien cumple)
 
 | Objetivo | Puntos | Condición |
 |---|---|---|
 | Imparable | 1 por día, tope 14 | Al menos una partida clasificatoria cada **día natural** (Europe/Madrid). |
+| Victorias | `pointsPerWin` por victoria, sin tope | Cada victoria clasificatoria. Es el objetivo que paga las victorias del torneo. |
 | Imbatible | 32 | Conseguir una racha de 5 victorias seguidas. |
 | Agresor | 24 | Ganar al menos 3 partidas de menos de 10 minutos. |
 | Estratega | 24 | Ganar al menos 3 partidas de más de 20 minutos. |
@@ -65,8 +69,12 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 | Jugón | 24 | Jugar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
 | Acólito `<civ>` (×23) | 6 | Jugar al menos 3 partidas con esa civilización. |
 
+- `victorias` **no tiene premio propio**: cada victoria vale lo que diga `pointsPerWin` del ruleset (hoy
+  2). Es la única fuente de lo que vale una victoria, así que un `objectives["victorias"]` retocado en
+  `Setting` se ignora. Su `points` en el catálogo (2) es documental.
 - En `agresor`/`estratega` las partidas sin duración quedan fuera. Umbrales: `< 600 s` y `> 1200 s`.
-- En `imparable` el valor del ranking es el número real de días; los puntos van con tope (14).
+- En `imparable` el valor del ranking es el número real de días; los puntos van con tope (14). Las
+  **repeticiones** que publica la web también son los días reales ("20×Imparable +14").
 - Las partidas con civilización aleatoria no cuentan para los objetivos de civilización.
 
 ### Familias
@@ -114,6 +122,11 @@ Si la clave no existe o no es válida, se usa el valor por defecto de `src/lib/m
 9 mapas reales de la rotación en curso. El detalle del refresco está en
 [`docs/OPERACION.md`](./OPERACION.md#pool-de-mapas).
 
+El avance del jugador en este objetivo se publica **por mapa**: los mapas del pool que le faltan y
+cuántas partidas le faltan en cada uno (`missing`, 1..3), sin los ya completados y sin el umbral. En la
+ficha se lee "Faltan 7 mapas · 1 × X, 2 × Y, 3 × Z"; el campo es `mapGaps` (ver el contrato de
+`ObjectiveContender` / `ParticipantObjective`).
+
 ## Desempates dentro de un objetivo
 
 Cadena lineal y estable, para **competiciones** (decide el poseedor) y para ordenar el ranking de un
@@ -137,7 +150,10 @@ logro (que no decide puntos: todos los que cumplen cobran):
 
 A diferencia del catálogo anterior, el total en juego **no es un número cerrado**: un logro lo cobra
 cada participante que lo cumple, así que su reparto se multiplica por el número de beneficiarios.
-`imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo
-contado una vez, `imparable` a su tope de 14— es **4.679 puntos**: es la cifra que resume la banda de
-`/puntuacion`. Los puntos por objetivo, uno a uno, están en las tablas de arriba y en
-`OBJECTIVE_POINTS`.
+`imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo de
+premio fijo contado una vez, `imparable` a su tope de 14— es **4.679 puntos**: es la cifra que resume la
+banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no reparte un premio fijo sino
+`pointsPerWin` por victoria y sin tope: contarlo una vez diría que el catálogo reparte una cifra que no
+reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en
+`kind === "achievement" && target === null`. Los puntos por objetivo, uno a uno, están en las tablas de
+arriba y en `OBJECTIVE_POINTS`.

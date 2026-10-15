@@ -119,7 +119,7 @@ la web; `Match` no se lee para pintar la clasificación.
 | `playerId` | `String` | FK a `Player.id`, cascada. |
 | `ruleSetVersion` | `Int` | Con qué versión de reglas se calculó. Permite convivir dos versiones sin pisarse. |
 | `rank` | `Int` | Puesto de competición con el desempate ya aplicado: dos filas empatadas en total, tasa de victorias, victorias y partidas **comparten** puesto (1, 2, 2, 4). **Se guarda** porque el orden no se resuelve en SQL. |
-| `total` | `Int` | `sum(byMode.points) + objectives.points`. |
+| `total` | `Int` | `objectives.points`: la suma de los objetivos del jugador. Todo punto sale de ahí (las victorias son el objetivo `victorias`). |
 | `wins`, `matches` | `Int` | Victorias y partidas clasificatorias. |
 | `streak` | `Int?` | Racha **actual del torneo**: positiva = victorias clasificatorias seguidas, negativa = derrotas seguidas. `null` sin ninguna clasificatoria contada (la web pinta "-"; no es `0`). No es la racha de la ladder: esa vive en `Player.streak`. |
 | `breakdown` | `Json` | Desglose (ver formato abajo). |
@@ -137,15 +137,29 @@ siempre presentes, con ceros si no aplican.
 
 ```json
 {
-  "ruleSetVersion": 3,
-  "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+  "ruleSetVersion": 4,
+  "rule": "2 puntos por victoria clasificatoria más 83 objetivos: 29 competiciones y 54 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
-  "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1", "lider-french"] }
+  "objectives": {
+    "points": 458,
+    "earned": ["victorias", "loco-por-ganar", "rey-1v1"],
+    "awards": {
+      "victorias": { "points": 168, "count": 84 },
+      "loco-por-ganar": { "points": 50, "count": 1 },
+      "rey-1v1": { "points": 240, "count": 1 }
+    }
+  }
 }
 ```
+
+`objectives.points` es el total de la fila. `awards` guarda, por id cobrado, el **importe real** y las
+**repeticiones** (`count`): `imparable` cobra 1 punto por día con tope y `victorias`, `pointsPerWin` por
+victoria, así que el precio del catálogo no es lo que se cobró. Las filas escritas antes de que
+existiera `awards` no lo traen, y quien las lea cae al precio de catálogo y a una repetición. `byMode` y
+`Match.points` son auditoría: no se suman al total.
 
 ## `ObjectiveEvent`
 
@@ -277,7 +291,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
-| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
+| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 2) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
 | `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |
