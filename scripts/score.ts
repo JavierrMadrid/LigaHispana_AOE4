@@ -30,11 +30,10 @@ async function main(): Promise<void> {
   console.log(`Partidas con puntos actualizados: ${result.matchesUpdated}`);
   console.log(`Jugadores en la clasificación: ${result.playersRanked}`);
   console.log(`Filas retiradas: ${result.playersUnranked}`);
-  console.log(`Puntos de partidas: ${result.totalPoints - result.objectivesPoints}`);
+  console.log(`Puntos repartidos: ${result.totalPoints}`);
   console.log(
-    `Puntos de objetivos: ${result.objectivesPoints} (${result.objectivesAwarded} con poseedor)`,
+    `Puntos de objetivos: ${result.objectivesPoints} (${result.objectivesAwarded} con cobrador)`,
   );
-  console.log(`Suma de puntos: ${result.totalPoints}`);
   console.log(`Duración: ${result.durationMs} ms`);
   console.log("");
 

@@ -62,7 +62,7 @@ const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
  * `OBJECTIVE_COUNT` para que el número no pueda cambiar en los dos sitios a la vez
  * sin que se note.
  */
-const EXPECTED_OBJECTIVE_COUNT = 82;
+const EXPECTED_OBJECTIVE_COUNT = 83;
 /**
  * Tercer jugador, solo para la ventana: sus partidas se colocan justo en los bordes
  * de `[from, to)` y son las que deciden qué cuenta.
@@ -1051,6 +1051,7 @@ async function checkObjectiveCatalogue(): Promise<void> {
     OBJECTIVE_POINTS,
     POLIFACETICO_ID,
     computeObjectives,
+    hasFixedPrize,
   } = await import("@/lib/objectives");
   const { DEFAULT_MAP_POOL } = await import("@/lib/map-pool");
 
@@ -1152,12 +1153,18 @@ async function checkObjectiveCatalogue(): Promise<void> {
   });
 
   await check("los puntos del catálogo por grupo son los de `docs/OBJETIVOS.md`", () => {
-    // Son los puntos que reparte **una** copia de cada objetivo. En los logros el
-    // reparto se multiplica por el número de beneficiarios, así que la suma no es
-    // un tope del torneo, solo la tabla del catálogo.
+    // Son los puntos que reparte **una** copia de cada objetivo de **premio fijo**. En
+    // los logros el reparto se multiplica por el número de beneficiarios, así que la
+    // suma no es un tope del torneo, solo la tabla del catálogo. `victorias` queda
+    // fuera: paga `pointsPerWin` por victoria y no tiene tope, así que contarlo una vez
+    // diría que el catálogo reparte una cifra que no reparte (ver `hasFixedPrize`).
     const porGrupo = new Map<string, number>();
 
     for (const definition of OBJECTIVE_DEFINITIONS) {
+      if (!hasFixedPrize(definition)) {
+        continue;
+      }
+
       porGrupo.set(definition.group, (porGrupo.get(definition.group) ?? 0) + definition.points);
     }
 
@@ -1169,7 +1176,7 @@ async function checkObjectiveCatalogue(): Promise<void> {
     assert.equal(
       [...porGrupo.values()].reduce((total, puntos) => total + puntos, 0),
       4679,
-      "Total de puntos",
+      "Total de puntos (sin el objetivo de victorias, que no es un premio fijo)",
     );
   });
 
@@ -2200,14 +2207,35 @@ async function runDatabaseChecks(): Promise<void> {
         ruleSetVersion: number;
         rule: string;
         byMode: Record<string, { wins: number; points: number; matches: number }>;
-        objectives: { points: number; earned: string[] };
+        objectives: {
+          points: number;
+          earned: string[];
+          awards: Record<string, { points: number; count: number }>;
+        };
       };
 
       const puntosDePartidas = DEFAULT_RULESET.pointsPerWin * score.wins;
+
+      // Con las reglas actuales todo punto de un jugador sale de sus objetivos: las
+      // victorias se cobran por el objetivo `victorias`, así que el total de la fila es
+      // el reparto de objetivos y `Match.points` es solo auditoría.
       assert.equal(
         score.total,
-        puntosDePartidas + breakdown.objectives.points,
-        "total = victorias × pointsPerWin + puntos de objetivos",
+        breakdown.objectives.points,
+        "el total de la fila es el reparto de objetivos",
+      );
+      assert.deepEqual(
+        breakdown.objectives.awards.victorias,
+        { points: puntosDePartidas, count: score.wins },
+        "el objetivo de victorias paga pointsPerWin por victoria",
+      );
+      assert.equal(
+        breakdown.objectives.points,
+        Object.values(breakdown.objectives.awards).reduce(
+          (sum, award) => sum + award.points,
+          0,
+        ),
+        "los puntos de objetivos son la suma de sus importes reales",
       );
 
       // Los puntos de la tabla y los de las partidas tienen que cuadrar.
@@ -2218,7 +2246,7 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(
         puntosEnPartidas._sum.points,
         puntosDePartidas,
-        "Match.points suma lo mismo que los puntos de partidas del desglose",
+        "Match.points suma lo mismo que los puntos por victoria del desglose",
       );
 
       // Ninguna partida en vivo ni abandonada puede haber colado puntos.
@@ -2237,30 +2265,48 @@ async function runDatabaseChecks(): Promise<void> {
       });
       assert.deepEqual(breakdown.byMode.rm_team, { wins: 0, points: 0, matches: 1 });
 
-      // Los objetivos del desglose tienen que existir y sumar lo que dice el ruleset.
+      // Los objetivos del desglose tienen que existir y cada uno llevar su importe: los
+      // puntos de la sección son la suma de los `awards`, no de los precios del catálogo
+      // (que en `imparable` es el tope y en `victorias`, el precio por unidad).
       assert.equal(
         breakdown.objectives.earned.every((id) => id in DEFAULT_RULESET.objectives),
         true,
         `objetivos desconocidos en el desglose: ${breakdown.objectives.earned.join(", ")}`,
       );
-      assert.equal(
-        breakdown.objectives.points,
-        breakdown.objectives.earned.reduce(
-          (sum, id) => sum + (DEFAULT_RULESET.objectives[id] ?? 0),
-          0,
-        ),
-        "los puntos de objetivos cuadran con los ids ganados",
+      assert.deepEqual(
+        breakdown.objectives.earned.slice().sort(),
+        Object.keys(breakdown.objectives.awards).slice().sort(),
+        "cada objetivo anotado en el desglose tiene su importe real",
       );
 
-      // Los puntos de partidas de toda la tabla suman lo que dice `Match.points`.
+      // Los puntos de auditoría de las partidas cuadran con el desglose por modo: ya no
+      // suman en el total, pero tienen que seguir describiendo lo que dice `Match.points`.
       const partidasAprobados = await db.match.aggregate({
         where: { player: { status: "APPROVED" }, mode: { in: DEFAULT_RULESET.modes } },
         _sum: { points: true },
       });
       assert.equal(
-        primera.totalPoints - primera.objectivesPoints,
+        (await db.playerScore.findMany({
+          where: { ruleSetVersion: RULESET_VERSION },
+          select: { breakdown: true },
+        })).reduce((sum, fila) => {
+          const byMode =
+            (fila.breakdown as { byMode?: Record<string, { points?: number }> } | null)?.byMode ??
+            {};
+
+          return (
+            sum +
+            Object.values(byMode).reduce((porModo, modo) => porModo + (modo.points ?? 0), 0)
+          );
+        }, 0),
         partidasAprobados._sum.points ?? 0,
-        "los puntos de partidas del recálculo cuadran con la suma de Match.points",
+        "los puntos por modo de la tabla cuadran con la suma de Match.points",
+      );
+
+      assert.equal(
+        primera.totalPoints,
+        primera.objectivesPoints,
+        "todo punto de la tabla sale de los objetivos",
       );
 
       // Los puestos de toda la tabla tienen que ser coherentes con el orden.
@@ -2354,10 +2400,12 @@ async function runDatabaseChecks(): Promise<void> {
         score.wins,
         "y las victorias también",
       );
+      // `Match.points` ya no suma en la clasificación (todo punto sale de los
+      // objetivos), pero tiene que seguir cuadrando con la auditoría del desglose.
       assert.equal(
         enJs.reduce((sum, fila) => sum + fila.points, 0),
-        score.total - breakdown.objectives.points,
-        "los puntos de `Match.points` son los que suman en la clasificación",
+        Object.values(breakdown.byMode).reduce((sum, modo) => sum + modo.points, 0),
+        "los puntos de `Match.points` son los que anota la auditoría por modo",
       );
       assert.equal(
         filas.filter((fila) => !countsAsRanked(fila, ventana, registeredAt, equipo)).every(
@@ -2370,10 +2418,12 @@ async function runDatabaseChecks(): Promise<void> {
 
     await check("los objetivos se publican con el contrato previsto", async () => {
       const {
+        IMPARABLE_ID,
         JUGON_ID,
         OBJECTIVE_COUNT,
         OBJECTIVE_GROUP_LABELS,
         POLIFACETICO_ID,
+        VICTORIAS_ID,
       } = await import("@/lib/objectives");
 
       const view = unwrapRead(await getObjectives(), "verify:objetivos/contrato");
@@ -2453,7 +2503,9 @@ async function runDatabaseChecks(): Promise<void> {
       for (const option of view.options) {
         assert.equal(
           option.points,
-          DEFAULT_RULESET.objectives[option.id],
+          option.id === VICTORIAS_ID
+            ? DEFAULT_RULESET.pointsPerWin
+            : DEFAULT_RULESET.objectives[option.id],
           `${option.id}: los puntos salen del ruleset`,
         );
         assert.ok(
@@ -2504,7 +2556,12 @@ async function runDatabaseChecks(): Promise<void> {
           }
         } else {
           assert.equal(option.holder, null, `${option.id}: un logro no tiene poseedor único`);
-          assert.ok(option.target !== null, `${option.id}: un logro tiene umbral`);
+          // Todo logro tiene umbral salvo el de victorias, que no se completa: se
+          // repite con cada victoria y no tiene tope.
+          assert.ok(
+            option.target !== null || option.id === VICTORIAS_ID,
+            `${option.id}: un logro tiene umbral (salvo el de victorias, sin tope)`,
+          );
           assert.equal(
             new Set(option.beneficiaries.map((beneficiary) => beneficiary.profileId)).size,
             option.beneficiaries.length,
@@ -2521,8 +2578,15 @@ async function runDatabaseChecks(): Promise<void> {
               `${option.id}: un beneficiario cobra puntos positivos`,
             );
             assert.ok(
-              beneficiary.points <= option.points,
-              `${option.id}: nadie cobra por encima de los puntos del objetivo`,
+              beneficiary.count >= 1,
+              `${option.id}: un beneficiario ha conseguido el objetivo al menos una vez`,
+            );
+            assert.equal(
+              option.id === VICTORIAS_ID || option.id === IMPARABLE_ID
+                ? beneficiary.count >= 1
+                : beneficiary.count === 1,
+              true,
+              `${option.id}: solo los logros repetibles publican más de una repetición`,
             );
             assert.ok(
               option.ranking.some(
@@ -3841,6 +3905,7 @@ function filaHistorial(row: {
             group: "actividad",
             metric: "partidas",
             points: 40,
+            count: 1,
           },
     gameId: row.objetivo === undefined ? "9000001" : null,
     opponentName: null,

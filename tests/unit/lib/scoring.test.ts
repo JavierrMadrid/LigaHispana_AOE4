@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { MatchResult } from "@/generated/prisma/enums";
-import { OBJECTIVE_COUNT, OBJECTIVE_POINTS } from "@/lib/objectives";
+import { OBJECTIVE_COUNT, OBJECTIVE_POINTS, type ObjectiveAward } from "@/lib/objectives";
 import {
   DEFAULT_RULESET,
   LEGACY_RULESET_VERSION,
@@ -84,8 +84,8 @@ describe("reglas v4 (constantes del motor)", () => {
     expect(DEFAULT_RULESET.countRandomizedCivs).toBe(false);
   });
 
-  it("el catálogo sigue siendo el de 82 objetivos de docs/OBJETIVOS.md", () => {
-    expect(OBJECTIVE_COUNT).toBe(82);
+  it("el catálogo sigue siendo el de 83 objetivos de docs/OBJETIVOS.md", () => {
+    expect(OBJECTIVE_COUNT).toBe(83);
     // El desglose de `PlayerScore` y `Setting["scoring.ruleset"].objectives` se
     // indexan por id, así que un objetivo sin puntos o con un id repetido
     // desaparecería de la clasificación sin que nada fallara.
@@ -166,6 +166,19 @@ describe("mergeRuleset: lo que se puede reconfigurar", () => {
     expect(ruleset.objectives["bienhadado"]).toBe(
       DEFAULT_RULESET.objectives["bienhadado"],
     );
+  });
+
+  it("un `objectives[\"victorias\"]` guardado no avisa: el motor no lo lee", () => {
+    // Lo que vale una victoria lo dice `pointsPerWin` (ver `computeObjectives`), así
+    // que el campo es un punto documental más del catálogo: se guarda como cualquier
+    // otro y no hay nada que arreglar ni que avisar. El panel no deja editarlo.
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      objectives: { victorias: 99 },
+    });
+
+    expect(warnings).toEqual([]);
+    expect(ruleset.objectives.victorias).toBe(99);
   });
 });
 
@@ -445,15 +458,17 @@ describe("ruleLabel", () => {
 
   it("cuenta los objetivos activos por forma de cobrar", () => {
     // 29 competiciones (loco-por-ganar, bienhadado, los 4 rey-* y los 23 masterizando-*)
-    // y 53 logros: es el reparto de `docs/OBJETIVOS.md`, y la etiqueta lo dice.
+    // y 54 logros (imparable, victorias, imbatible, agresor, estratega,
+    // por-tierra-y-agua, polifacetico, los 23 lider-*, jugon y los 23 acolito-*): es el
+    // reparto de `docs/OBJETIVOS.md`, y la etiqueta lo dice.
     expect(ruleLabel(base)).toBe(
-      "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+      "2 puntos por victoria clasificatoria más 83 objetivos: 29 competiciones y 54 logros",
     );
   });
 
   it("un objetivo desactivado deja de anunciarse", () => {
     expect(ruleLabel({ ...base, disabledObjectives: ["rey-1v1"] })).toBe(
-      "2 puntos por victoria clasificatoria más 81 objetivos: 28 competiciones y 53 logros",
+      "2 puntos por victoria clasificatoria más 82 objetivos: 28 competiciones y 54 logros",
     );
   });
 
@@ -536,6 +551,11 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
     return { matchPoints: 0, wins: 0, matches: 0, byMode: {}, ...overrides };
   }
 
+  /** Lo que un jugador cobra por objetivos; por defecto, nada. */
+  function premio(overrides: Partial<ObjectiveAward> = {}): ObjectiveAward {
+    return { points: 0, earned: [], awards: {}, ...overrides };
+  }
+
   const byModeCero = {
     rm_solo: { wins: 0, points: 0, matches: 0 },
     rm_team: { wins: 0, points: 0, matches: 0 },
@@ -550,8 +570,10 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
         { id: "a", profileId: 1 },
         { id: "b", profileId: 2 },
       ],
-      new Map([["b", agregado({ matchPoints: 6, wins: 3, matches: 4 })]]),
-      new Map(),
+      new Map([["b", agregado({ wins: 3, matches: 4 })]]),
+      new Map([
+        ["b", premio({ points: 6, earned: ["victorias"], awards: { victorias: { points: 6, count: 3 } } })],
+      ]),
       DEFAULT_RULESET,
     );
 
@@ -563,7 +585,7 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
       wins: 0,
       matches: 0,
       byMode: byModeCero,
-      objectives: { points: 0, earned: [] },
+      objectives: { points: 0, earned: [], awards: {} },
       rank: 2,
     });
     expect(filas[0].playerId).toBe("b");
@@ -579,8 +601,8 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
 
     const filas = rankApprovedPlayers(
       players,
-      new Map([["b", agregado({ matchPoints: 2, wins: 1, matches: 1 })]]),
-      new Map(),
+      new Map([["b", agregado({ wins: 1, matches: 1 })]]),
+      new Map([["b", premio({ points: 2 })]]),
       DEFAULT_RULESET,
     );
 
@@ -595,10 +617,13 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
         { id: "c", profileId: 3 },
       ],
       new Map([
-        ["c", agregado({ matchPoints: 4, wins: 2, matches: 2 })],
-        ["b", agregado({ matchPoints: 2, wins: 1, matches: 3 })],
+        ["c", agregado({ wins: 2, matches: 2 })],
+        ["b", agregado({ wins: 1, matches: 3 })],
       ]),
-      new Map(),
+      new Map([
+        ["c", premio({ points: 10 })],
+        ["b", premio({ points: 4 })],
+      ]),
       DEFAULT_RULESET,
     );
 
@@ -617,11 +642,15 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
         { id: "d", profileId: 4 },
       ],
       new Map([
-        ["a", agregado({ matchPoints: 4, wins: 2, matches: 2 })],
-        ["b", agregado({ matchPoints: 2, wins: 1, matches: 2 })],
-        ["c", agregado({ matchPoints: 2, wins: 1, matches: 2 })],
+        ["a", agregado({ wins: 2, matches: 2 })],
+        ["b", agregado({ wins: 1, matches: 2 })],
+        ["c", agregado({ wins: 1, matches: 2 })],
       ]),
-      new Map(),
+      new Map([
+        ["a", premio({ points: 10 })],
+        ["b", premio({ points: 4 })],
+        ["c", premio({ points: 4 })],
+      ]),
       DEFAULT_RULESET,
     );
 
@@ -633,23 +662,36 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
     ]);
   });
 
-  it("los puntos de objetivos se suman a quien los tiene", () => {
+  it("el total son los objetivos: `matchPoints` no se suma aparte", () => {
+    // Las victorias clasificatorias se cobran como el objetivo `victorias`, así que
+    // sumar además los puntos de `Match` contaría dos veces las victorias. El
+    // agregado los trae (para la auditoría del desglose) y no entran en el total.
     const filas = rankApprovedPlayers(
       [
         { id: "a", profileId: 1 },
         { id: "b", profileId: 2 },
       ],
       new Map([["a", agregado({ matchPoints: 4, wins: 2, matches: 3 })]]),
-      new Map([["a", { points: 125, earned: ["rey-1v1", "loco-por-ganar"] }]]),
+      new Map([
+        [
+          "a",
+          premio({
+            points: 125,
+            earned: ["victorias", "rey-1v1"],
+            awards: { victorias: { points: 4, count: 2 }, "rey-1v1": { points: 121, count: 1 } },
+          }),
+        ],
+      ]),
       DEFAULT_RULESET,
     );
 
     const filaA = filas.find((f) => f.playerId === "a");
 
-    expect(filaA?.total).toBe(129);
+    expect(filaA?.total).toBe(125);
     expect(filaA?.objectives).toEqual({
       points: 125,
-      earned: ["rey-1v1", "loco-por-ganar"],
+      earned: ["victorias", "rey-1v1"],
+      awards: { victorias: { points: 4, count: 2 }, "rey-1v1": { points: 121, count: 1 } },
     });
   });
 
@@ -659,7 +701,7 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
     const filas = rankApprovedPlayers(
       [{ id: "a", profileId: 1 }],
       new Map([["fantasma", agregado({ matchPoints: 99, wins: 9, matches: 9 })]]),
-      new Map(),
+      new Map([["fantasma", premio({ points: 999 })]]),
       DEFAULT_RULESET,
     );
 
@@ -679,11 +721,15 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
         { id: "mejor", profileId: 8 },
       ],
       new Map([
-        ["peorWinrate", agregado({ matchPoints: 10, wins: 3, matches: 5 })],
-        ["mismoTotalMenosVictorias", agregado({ matchPoints: 10, wins: 2, matches: 4 })],
-        ["mejor", agregado({ matchPoints: 10, wins: 3, matches: 4 })],
+        ["peorWinrate", agregado({ wins: 3, matches: 5 })],
+        ["mismoTotalMenosVictorias", agregado({ wins: 2, matches: 4 })],
+        ["mejor", agregado({ wins: 3, matches: 4 })],
       ]),
-      new Map(),
+      new Map([
+        ["peorWinrate", premio({ points: 10 })],
+        ["mismoTotalMenosVictorias", premio({ points: 10 })],
+        ["mejor", premio({ points: 10 })],
+      ]),
       DEFAULT_RULESET,
     );
 

@@ -17,8 +17,14 @@ import type { ScoringRuleset } from "@/lib/scoring";
  * - **Competición** (`kind: "competition"`): *winner-takes-all*, un único
  *   poseedor, el que va primero en su métrica. Es el modelo de siempre.
  * - **Logro** (`kind: "achievement"`): lo cobra **todo el que cumple la
- *   condición**. Puede ser binario (se cumple o no) o acumulativo (p. ej.
- *   `imparable`, con puntos por día). No tiene poseedor único.
+ *   condición**. Puede ser binario (se cumple o no), con tope (p. ej. `imparable`,
+ *   con puntos por día hasta 14) o **sin tope** (`victorias`, que paga los puntos
+ *   por victoria de la regla activa por cada victoria). No tiene poseedor único.
+ *
+ * Ojo con la suma nominal: **no todos los `points` del catálogo son un premio
+ * fijo**. `victorias` reparte por unidad y sin tope, así que su `points` (2) es
+ * documental y queda fuera de la cifra que resume `/puntuacion` (ver
+ * `hasFixedPrize`).
  *
  * Este módulo no decide nada por su cuenta: recibe las partidas clasificatorias
  * ya cargadas, el ruleset activo y el pool de mapas, y devuelve qué objetivos
@@ -57,7 +63,12 @@ export type ObjectiveDefinition = {
    */
   description: string;
   metric: ObjectiveMetric;
-  /** Puntos por defecto; el ruleset activo puede sobrescribirlos por id. */
+  /**
+   * Puntos por defecto; el ruleset activo puede sobrescribirlos por id.
+   *
+   * La excepción es `victorias`: no tiene premio propio, paga `ruleset.pointsPerWin`
+   * por victoria (ver su definición en el catálogo).
+   */
   points: number;
   /**
    * Id del objetivo **cabeza de familia** (el logro global que agrupa a sus
@@ -100,13 +111,38 @@ export type ObjectiveContender = {
   eligible: boolean;
   /** Detalle del objetivo; `null` cuando no aporta nada (ver `ObjectiveDetail`). */
   detail?: ObjectiveDetail | null;
+  /**
+   * Avance **por mapa**, solo en `por-tierra-y-agua`: los mapas del pool que al
+   * jugador le faltan por completar y cuántas partidas le faltan en cada uno.
+   *
+   * Es opcional y solo se publica donde aplica: el resto de objetivos no tiene
+   * mapas, y meter un `null` en cada contendiente de cada objetivo engordaría el
+   * snapshot de `Setting` sin decir nada. `null` explícito no llega: cuando no hay
+   * mapas el campo simplemente no está.
+   *
+   * `missing` es 1..3 (el umbral por mapa no se publica, el dato ya viene masticado
+   * como "cuántas partidas le faltan") y los mapas completos no aparecen. El orden es
+   * de menos a más `missing` y, a igualdad, el del pool.
+   */
+  mapGaps?: ObjectiveMapGap[] | null;
+};
+
+/** Un mapa del pool en el que a un jugador le faltan partidas (`ObjectiveContender.mapGaps`). */
+export type ObjectiveMapGap = {
+  /** Nombre del mapa, tal cual está en el pool (`Match.map`). */
+  map: string;
+  /** Partidas que le faltan para completarlo: 1..3. */
+  missing: number;
 };
 
 /**
- * Un beneficiario de un logro: quien lo ha completado y cuántos puntos cobra.
+ * Un beneficiario de un logro: quien lo ha completado, cuántos puntos cobra y
+ * cuántas veces lo ha conseguido.
  *
- * `points` es variable en `imparable` (1 por día, con tope); en el resto de logros
- * coincide con los puntos de la tarjeta.
+ * `points` es variable en `imparable` (1 por día, con tope) y en `victorias`
+ * (`pointsPerWin` por victoria, sin tope); en el resto de logros coincide con los
+ * puntos de la tarjeta. `count` es lo que permite pintar "2×Imparable": los días en
+ * `imparable`, las victorias en `victorias` y `1` en los objetivos que no se repiten.
  */
 export type ObjectiveBeneficiary = {
   profileId: number;
@@ -114,6 +150,8 @@ export type ObjectiveBeneficiary = {
   avatarUrl: string | null;
   profileUrl: string | null;
   points: number;
+  /** Repeticiones: días, victorias o 1 (ver `ObjectiveBeneficiary`). */
+  count: number;
 };
 
 /** Umbral de un logro: en qué unidad y cuánto hace falta para completarlo. */
@@ -130,7 +168,12 @@ export type ObjectiveOption = {
   /** La regla en una frase, tal cual está en el catálogo (`ObjectiveDefinition`). */
   description: string;
   metric: ObjectiveMetric;
-  /** Puntos que otorga poseerlo, ya con los overrides del ruleset aplicado. */
+  /**
+   * Puntos que otorga poseerlo, ya con los overrides del ruleset aplicado.
+   *
+   * En `victorias` es el precio **por victoria** (`ruleset.pointsPerWin`), porque el
+   * objetivo se repite: los puntos de un beneficiario son `points × count`.
+   */
   points: number;
   /** Cabeza de familia del objetivo (`ObjectiveDefinition.parent`). */
   parent: string | null;
@@ -200,7 +243,7 @@ export type ObjectiveView = {
  * permite desplegar una vista nueva sin que el primer lector interprete mal un
  * documento guardado con la forma anterior.
  */
-export const OBJECTIVES_SNAPSHOT_VERSION = 1;
+export const OBJECTIVES_SNAPSHOT_VERSION = 2;
 
 /**
  * La vista de objetivos tal y como se guarda: `ObjectiveView` más la marca de forma
@@ -348,6 +391,18 @@ export const POLIFACETICO_ID = "polifacetico";
 export const JUGON_ID = "jugon";
 export const IMPARABLE_ID = "imparable";
 export const POR_TIERRA_ID = "por-tierra-y-agua";
+export const VICTORIAS_ID = "victorias";
+
+/**
+ * Frase de desempate de las **competiciones**: es el desempate 3 de
+ * `docs/OBJETIVOS.md` dicho en una línea para la tarjeta.
+ *
+ * Se escribe aquí y no en cada descripción porque es la misma regla para todas
+ * (`loco-por-ganar`, `bienhadado`, los `rey-*` y los `masterizando-*`) y porque es
+ * la interfaz la que la enseña: una copia por objetivo acabaría diciendo cosas
+ * distintas del mismo desempate.
+ */
+const TIE_BREAK = "En caso de empate, lo cobra quien alcanzó esa cifra antes.";
 
 /**
  * Umbrales de los logros. Son **fijos** (están en `docs/OBJETIVOS.md`), a
@@ -380,7 +435,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     group: "actividad",
     kind: "competition",
     label: "Loco por ganar",
-    description: "El jugador con más partidas clasificatorias jugadas en el torneo.",
+    description: `El jugador con más partidas clasificatorias jugadas en el torneo. ${TIE_BREAK}`,
     metric: "partidas",
     points: 50,
     parent: null,
@@ -397,12 +452,38 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     parent: null,
     target: IMPARABLE_DAYS,
   },
+  /**
+   * El objetivo de ganar partidas.
+   *
+   * Es el único objetivo **sin tope**: paga los puntos por victoria de la regla
+   * activa por cada victoria clasificatoria, así que su `points` (2) es solo
+   * documental y el valor real es **siempre** `ruleset.pointsPerWin`. El motor lee
+   * la fuente única —`ruleset.pointsPerWin`— e **ignora** un
+   * `ruleset.objectives["victorias"]` si alguien llegara a guardarlo, que es lo que
+   * impide tener dos verdades sobre lo que vale una victoria.
+   *
+   * Por eso tampoco entra en la **suma nominal** del catálogo (ver
+   * `hasFixedPrize`): su reparto dependería de cuántas victorias sume el torneo.
+   */
+  {
+    id: VICTORIAS_ID,
+    group: "actividad",
+    kind: "achievement",
+    label: "Victorias",
+    description:
+      "Cada victoria clasificatoria paga los puntos por victoria de la regla activa, sin tope.",
+    metric: "victorias",
+    points: 2,
+    parent: null,
+    // Sin tope: el objetivo se repite con cada victoria y no se completa nunca.
+    target: null,
+  },
   {
     id: "bienhadado",
     group: "racha",
     kind: "competition",
     label: "Bienhadado",
-    description: "La racha de victorias seguidas más larga del torneo.",
+    description: `La racha de victorias seguidas más larga del torneo. ${TIE_BREAK}`,
     metric: "racha",
     points: 200,
     parent: null,
@@ -458,7 +539,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     group: "formato" as const,
     kind: "competition" as const,
     label: `Rey del ${format}`,
-    description: `El jugador con más victorias jugando en formato ${format}.`,
+    description: `El jugador con más victorias jugando en formato ${format}. ${TIE_BREAK}`,
     metric: "victorias" as const,
     points: REY_POINTS,
     parent: null,
@@ -469,7 +550,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     group: "civilizacion" as const,
     kind: "competition" as const,
     label: `Masterizando ${civ.name}`,
-    description: `El jugador con más victorias con ${civ.name}.`,
+    description: `El jugador con más victorias con ${civ.name}. ${TIE_BREAK}`,
     metric: "victorias" as const,
     points: MASTERIZANDO_POINTS,
     parent: null,
@@ -524,16 +605,60 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
 /** Total de objetivos del catálogo. */
 export const OBJECTIVE_COUNT = OBJECTIVE_DEFINITIONS.length;
 
+/**
+ * ¿El objetivo reparte un **premio fijo**, de los que cuenta la suma nominal de
+ * `docs/OBJETIVOS.md`?
+ *
+ * Solo `victorias` no lo es: paga `ruleset.pointsPerWin` por cada victoria y no
+ * tiene tope, así que sumar su `points` del catálogo diría que el torneo reparte una
+ * cifra que no reparte. Los demás logros sí tienen un tope (`imparable`, 14 días;
+ * `por-tierra-y-agua`, uno por mapa) y las competiciones, un único premio.
+ *
+ * `por-tierra-y-agua` se reconoce por su id y no por `target` porque su tope es el
+ * tamaño del pool activo y solo se conoce al calcular. En una `ObjectiveOption` ya
+ * resuelta el mismo criterio se lee en `kind === "achievement" && target === null`.
+ */
+export function hasFixedPrize(definition: ObjectiveDefinition): boolean {
+  return (
+    definition.kind === "competition" ||
+    definition.target !== null ||
+    definition.id === POR_TIERRA_ID
+  );
+}
+
 /** Puntos por defecto de cada objetivo, indexados por id. */
 export const OBJECTIVE_POINTS: Record<string, number> = Object.fromEntries(
   OBJECTIVE_DEFINITIONS.map((definition) => [definition.id, definition.points]),
 );
+
+/**
+ * Lo que un jugador cobra por **un** objetivo: importe real y repeticiones.
+ *
+ * Va junto al id y no en una lista aparte porque las dos cosas definen la misma
+ * fila del resumen (`2×Imparable +2`), y separarlas obligaría a cruzar dos listas
+ * en cada lector.
+ */
+export type ObjectiveAwardEntry = {
+  /** Puntos cobrados de verdad, ya con el tope o el precio por unidad aplicado. */
+  points: number;
+  /** Veces que se ha conseguido: días, victorias o `1` si no se repite. */
+  count: number;
+};
 
 export type ObjectiveAward = {
   /** Puntos que suma el jugador por objetivos. */
   points: number;
   /** Ids de los objetivos que posee o ha completado, en orden de presentación. */
   earned: string[];
+  /**
+   * El importe real y las repeticiones de cada id de `earned`, indexado por id.
+   *
+   * `earned` da los ids en orden; aquí está lo que hay que pintar de cada uno. Se
+   * guarda en el desglose de `PlayerScore` para que la clasificación publicada no
+   * tenga que reconstruir lo que cobró `imparable` (1 por día, con tope) a partir
+   * del precio del catálogo, que es solo el tope.
+   */
+  awards: Record<string, ObjectiveAwardEntry>;
 };
 
 /**
@@ -946,6 +1071,8 @@ type ObjectiveCandidate = {
   /** Cuándo se alcanzó `value`, para el desempate 3. */
   achievedAt: number;
   detail: ObjectiveDetail | null;
+  /** Avance por mapa, solo en `por-tierra-y-agua` (ver `ObjectiveContender.mapGaps`). */
+  mapGaps: ObjectiveMapGap[] | null;
 };
 
 function candidate(
@@ -956,8 +1083,9 @@ function candidate(
   eligible: boolean,
   achievedAt: number,
   detail: ObjectiveDetail | null = null,
+  mapGaps: ObjectiveMapGap[] | null = null,
 ): ObjectiveCandidate {
-  return { player, metric, value, matches, eligible, achievedAt, detail };
+  return { player, metric, value, matches, eligible, achievedAt, detail, mapGaps };
 }
 
 /**
@@ -992,6 +1120,10 @@ function toContender(value: ObjectiveCandidate): ObjectiveContender {
     matches: value.matches,
     eligible: value.eligible,
     detail: value.detail,
+    // Solo donde aplica: en el snapshot de `Setting` hay un contendiente por
+    // objetivo y jugador, y un `null` por contender engordaría el documento sin
+    // decir nada.
+    ...(value.mapGaps === null ? {} : { mapGaps: value.mapGaps }),
   };
 }
 
@@ -1067,6 +1199,32 @@ function countPoolMaps(byMap: ReadonlyMap<string, number>, mapPool: readonly str
   return count;
 }
 
+/**
+ * Los mapas del pool que a un jugador le faltan, con las partidas que le faltan en
+ * cada uno (`missing`, 1..3). Los completos no aparecen.
+ *
+ * Ordenado de menos a más `missing` y, a igualdad, en el orden del pool: el `sort`
+ * de `Array` es estable desde ES2019, así que basta con recorrer el pool en orden y
+ * pedir el orden por `missing`. El umbral (`MATCHES_PER_MAP`) no se publica: el dato
+ * ya va masticado como "cuántas partidas le faltan".
+ */
+function mapGapsFor(
+  byMap: ReadonlyMap<string, number>,
+  mapPool: readonly string[],
+): ObjectiveMapGap[] {
+  const gaps: ObjectiveMapGap[] = [];
+
+  for (const map of mapPool) {
+    const missing = MATCHES_PER_MAP - (byMap.get(map) ?? 0);
+
+    if (missing > 0) {
+      gaps.push({ map, missing });
+    }
+  }
+
+  return gaps.sort((a, b) => a.missing - b.missing);
+}
+
 function candidatesFor(
   definition: ObjectiveDefinition,
   players: readonly PlayerAggregate[],
@@ -1085,6 +1243,16 @@ function candidatesFor(
       .filter((player) => player.playedDays.size >= 1)
       .map((player) =>
         candidate(player, "dias", player.playedDays.size, player.matches, true, player.lastMatchAt),
+      );
+  }
+
+  if (definition.id === VICTORIAS_ID) {
+    // El ranking son todos los que han ganado algo, que es exactamente quien cobra:
+    // el objetivo no tiene umbral, se repite con cada victoria.
+    return players
+      .filter((player) => player.wins >= 1)
+      .map((player) =>
+        candidate(player, "victorias", player.wins, player.matches, true, player.lastWinAt),
       );
   }
 
@@ -1150,6 +1318,8 @@ function candidatesFor(
           player.matches,
           mapPool.length > 0 && covered === mapPool.length,
           player.lastMatchAt,
+          null,
+          mapGapsFor(player.byMap, mapPool),
         ),
       ];
     });
@@ -1273,6 +1443,13 @@ function targetFor(
     return null;
   }
 
+  // `victorias` no se completa nunca: se repite con cada victoria y no tiene tope,
+  // así que no hay barra de avance que pintar. Es la única excepción del tipo
+  // "sin umbral", y por eso `target: null` en la opción ya identifica el objetivo.
+  if (definition.id === VICTORIAS_ID) {
+    return null;
+  }
+
   return {
     unit: definition.metric,
     value: definition.id === POR_TIERRA_ID ? mapPool.length : (definition.target ?? 0),
@@ -1284,8 +1461,9 @@ function targetFor(
  *
  * Devuelve los puntos por jugador, que es lo que suma el motor a la clasificación:
  * en una competición solo el poseedor recibe sus puntos; en un logro, cada
- * beneficiario los suyos (`imparable` los reparte por día, con tope). Un objetivo
- * sin nadie que lo cumpla no reparte nada.
+ * beneficiario los suyos, con dos repartos variables —`imparable` los da por día,
+ * con tope, y `victorias` paga `ruleset.pointsPerWin` por victoria, sin tope—. Un
+ * objetivo sin nadie que lo cumpla no reparte nada.
  *
  * Los objetivos **desactivados** (`ruleset.disabledObjectives`) se saltan antes de
  * calcular nada: no entran en `options` (así no se publican ni entran en el
@@ -1303,11 +1481,12 @@ export function computeObjectives(
   const desactivados = new Set(ruleset.disabledObjectives);
   let holders = 0;
 
-  const addAward = (playerId: string, id: string, points: number): void => {
-    const award = pointsByPlayer.get(playerId) ?? { points: 0, earned: [] };
+  const addAward = (playerId: string, id: string, points: number, count: number): void => {
+    const award = pointsByPlayer.get(playerId) ?? { points: 0, earned: [], awards: {} };
 
     award.points += points;
     award.earned.push(id);
+    award.awards[id] = { points, count };
     pointsByPlayer.set(playerId, award);
   };
 
@@ -1319,14 +1498,20 @@ export function computeObjectives(
     }
 
     const sorted = candidatesFor(definition, players, mapPool).sort(compareCandidates);
-    const points = ruleset.objectives[definition.id] ?? definition.points;
+    // `victorias` no tiene precio propio: cada victoria vale lo que diga
+    // `ruleset.pointsPerWin`, y un `objectives["victorias"]` guardado se ignora para
+    // que no haya dos verdades sobre lo que vale una victoria.
+    const points =
+      definition.id === VICTORIAS_ID
+        ? ruleset.pointsPerWin
+        : (ruleset.objectives[definition.id] ?? definition.points);
 
     if (definition.kind === "competition") {
       const holder = sorted[0];
       const winner = holder !== undefined && holder.eligible ? holder : null;
 
       if (winner !== null) {
-        addAward(winner.player.playerId, definition.id, points);
+        addAward(winner.player.playerId, definition.id, points, 1);
         awarded.push({ id: definition.id, playerId: winner.player.playerId });
         holders += 1;
       }
@@ -1352,12 +1537,19 @@ export function computeObjectives(
     const beneficiaries = sorted.filter((value) => value.eligible);
 
     for (const beneficiary of beneficiaries) {
-      // En `imparable` los puntos son 1 por día, con el tope que marque el
-      // ruleset; en el resto de logros, los puntos de la tarjeta.
+      // Los tres repartos de un logro, en un solo sitio: `imparable` paga 1 por día
+      // con el tope que marque el ruleset, `victorias` paga por victoria sin tope y
+      // el resto cobra los puntos de la tarjeta una sola vez.
       const earned =
-        definition.id === IMPARABLE_ID ? Math.min(beneficiary.value, points) : points;
+        definition.id === VICTORIAS_ID
+          ? beneficiary.value * ruleset.pointsPerWin
+          : definition.id === IMPARABLE_ID
+            ? Math.min(beneficiary.value, points)
+            : points;
+      const count =
+        definition.id === VICTORIAS_ID || definition.id === IMPARABLE_ID ? beneficiary.value : 1;
 
-      addAward(beneficiary.player.playerId, definition.id, earned);
+      addAward(beneficiary.player.playerId, definition.id, earned, count);
       awarded.push({ id: definition.id, playerId: beneficiary.player.playerId });
     }
 
@@ -1381,7 +1573,14 @@ export function computeObjectives(
         name: value.player.name,
         avatarUrl: value.player.avatarUrl,
         profileUrl: aoe4WorldProfileUrl(value.player.profileId),
-        points: definition.id === IMPARABLE_ID ? Math.min(value.value, points) : points,
+        points:
+          definition.id === VICTORIAS_ID
+            ? value.value * ruleset.pointsPerWin
+            : definition.id === IMPARABLE_ID
+              ? Math.min(value.value, points)
+              : points,
+        count:
+          definition.id === VICTORIAS_ID || definition.id === IMPARABLE_ID ? value.value : 1,
       })),
       target: targetFor(definition, mapPool),
     });

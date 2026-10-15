@@ -11,7 +11,7 @@ import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { db } from "@/lib/db";
 import { unwrapRead } from "@/lib/db-errors";
 import { DIVISIONS, getStandings } from "@/lib/public";
-import { DEFAULT_RULESET, RULESET_VERSION } from "@/lib/scoring";
+import { RULESET_VERSION } from "@/lib/scoring";
 import { playerSyncKey } from "@/lib/settings";
 
 /**
@@ -373,8 +373,11 @@ async function runMockTournament(): Promise<void> {
     );
   }
 
-  // La clasificación de la v2 se compone de dos sumas que tienen que cuadrar:
-  // las victorias por `pointsPerWin` y los puntos de los objetivos ganados.
+  // Todo punto de un jugador sale de sus objetivos, así que la fila tiene que cuadrar
+  // con su desglose: el total es el de la sección de objetivos (las victorias van
+  // dentro, como objetivo `victorias`) y ese total es la suma de los importes reales
+  // anotados. No se reconstruye desde los ids: `imparable` reparte puntos por días y
+  // `victorias` por victorias, así que el catálogo no basta para rehacer la suma.
   const scores = await db.playerScore.findMany({
     where: { ruleSetVersion: RULESET_VERSION, player: { profileId: { in: MOCK_PROFILE_IDS } } },
     select: {
@@ -393,25 +396,21 @@ async function runMockTournament(): Promise<void> {
   const desglosesIncoherentes = scores.filter((score) => {
     const breakdown = score.breakdown as {
       byMode?: Record<string, { points?: number }>;
-      objectives?: { points?: number; earned?: string[] };
+      objectives?: {
+        points?: number;
+        earned?: string[];
+        awards?: Record<string, { points?: number }>;
+      };
     } | null;
 
     const objectives = breakdown?.objectives ?? { points: 0, earned: [] };
     const objectivesPoints = objectives.points ?? 0;
-    // No se reconstruye el reparto de objetivos desde `earned`: `imparable`
-    // reparte puntos variables (1 por día, con tope), así que el catálogo no
-    // basta para rehacer la suma. Lo que sí tiene que cuadrar es que el total sea
-    // los puntos por victoria más los de objetivos, y que los modos sumen el
-    // resto.
-    const porModos = Object.values(breakdown?.byMode ?? {}).reduce(
-      (sum, mode) => sum + (mode.points ?? 0),
+    const porAwards = Object.values(objectives.awards ?? {}).reduce(
+      (sum, award) => sum + (award.points ?? 0),
       0,
     );
 
-    return (
-      porModos !== score.total - objectivesPoints ||
-      score.total !== score.wins * DEFAULT_RULESET.pointsPerWin + objectivesPoints
-    );
+    return score.total !== objectivesPoints || porAwards !== objectivesPoints;
   });
 
   if (desglosesIncoherentes.length > 0) {

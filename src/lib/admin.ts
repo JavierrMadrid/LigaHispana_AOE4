@@ -8,9 +8,14 @@ import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { describeTeamSize, formatRelativeTime, teamSizesFromRawJson } from "@/lib/format";
 import { isRecord } from "@/lib/json";
 import { resolveObjective } from "@/lib/objective-events";
-import type { ObjectiveGroup, ObjectiveMetric } from "@/lib/objectives";
+import type { ObjectiveAwardEntry, ObjectiveGroup, ObjectiveMetric } from "@/lib/objectives";
 import { classificatoryWhere, readInstant, type ScoringWindow } from "@/lib/ranked-match";
-import { RULESET_VERSION, readRuleset, type ScoringRuleset } from "@/lib/scoring";
+import {
+  RULESET_VERSION,
+  readObjectiveAwards,
+  readRuleset,
+  type ScoringRuleset,
+} from "@/lib/scoring";
 import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/settings";
 
 /**
@@ -873,10 +878,18 @@ export type AdminMatchHistoryQuery = AdminPageQuery &
  *
  * Etiqueta, grupo y métrica salen del **catálogo** (`OBJECTIVE_DEFINITIONS`) y los
  * puntos del **ruleset activo**, con el mismo criterio que `objectiveLookup()` en
- * `src/lib/public.ts` (`ruleset.objectives[id] ?? definition.points`). La tabla
- * `ObjectiveEvent` no los guarda, y a propósito: una copia se quedaría vieja en
- * cuanto se retocara un punto en `Setting`. Es la fila de la interfaz la que tiene
- * todo resuelto, para que pintar un hito no obligue a mirar el catálogo.
+ * `src/lib/public.ts` (`ruleset.objectives[id] ?? definition.points`, con `victorias`
+ * pagando `pointsPerWin`). La tabla `ObjectiveEvent` no los guarda, y a propósito:
+ * una copia se quedaría vieja en cuanto se retocara un punto en `Setting`. Es la fila
+ * de la interfaz la que tiene todo resuelto, para que pintar un hito no obligue a
+ * mirar el catálogo.
+ *
+ * `points` y `count` son, además, **lo que cobró ese jugador** cuando se puede saber:
+ * el importe real de un logro repetible no es el de la tarjeta (`imparable` reparte 1
+ * por día con tope, `victorias` paga por victoria), y publicar el tope como si fuera
+ * lo cobrado sería el mismo error que tenía la clasificación. El detalle sale del
+ * desglose del jugador (ver `playerObjectiveAwards`); sin él, precio de catálogo y
+ * una repetición.
  */
 export type AdminObjectiveEvent = {
   /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`lider-japanese`…). */
@@ -893,8 +906,10 @@ export type AdminObjectiveEvent = {
    * se puede pintar sin mirar el catálogo.
    */
   metric: ObjectiveMetric;
-  /** Puntos que otorga poseerlo con las reglas vigentes. Es el mismo número que `points` de la fila. */
+  /** Puntos que el jugador cobró por este objetivo. Es el mismo número que `points` de la fila. */
   points: number;
+  /** Repeticiones cobradas: días, victorias o 1 (ver el tipo). */
+  count: number;
 };
 
 /**
@@ -930,7 +945,7 @@ export type AdminMatchHistoryRow = {
   playerId: string;
   playerName: string;
   playerProfileId: number;
-  /** Puntos que aporta la fila con el ruleset activo: los de la partida o los del objetivo. */
+  /** Puntos que aporta la fila: los de la partida, o los que el jugador **cobró** por el objetivo. */
   points: number;
   /** El objetivo cumplido, o `null` si la fila es una partida. Ver el tipo. */
   objective: AdminObjectiveEvent | null;
@@ -1030,10 +1045,10 @@ const OBJECTIVE_EVENT_SELECT = {
  * El criterio es **de lo mejor a lo peor**, y es una decisión: la columna muestra tres
  * cosas distintas —"Objetivo", "Victoria", "Derrota"— y recorrerla en diagonal tiene que
  * enseñar primero lo que primero se busca. Los hitos son lo raro y lo que más información
- * da (≤ 38 en toda la vida del torneo, frente a decenas de miles de partidas), así que
- * van delante; detrás quedan victorias y derrotas, que ya son el grueso, y donde lo
- * útil es agrupar por signo —"¿cuántas ha perdido?"—, que es justo lo que hace la
- * segunda pulsación de la cabecera.
+ * da (un objetivo por participante y por objetivo del catálogo, frente a decenas de
+ * miles de partidas), así que van delante; detrás quedan victorias y derrotas, que ya
+ * son el grueso, y donde lo útil es agrupar por signo —"¿cuántas ha perdido?"—, que es
+ * justo lo que hace la segunda pulsación de la cabecera.
  *
  * El cuarto rango (3) es para una partida sin resultado, que **no llega nunca** al feed:
  * `classificatoryWhere()` exige `result is not null`. El tipo de la fila lo admite, y un
@@ -1237,11 +1252,51 @@ export function historyHole(
 }
 
 /**
+ * El importe real y las repeticiones de los objetivos que cobró cada jugador,
+ * indexado por `Player.id`.
+ *
+ * Sale del **desglose** de `PlayerScore` de la versión activa del ruleset: es el
+ * único sitio donde está lo que se cobró de verdad (`ObjectiveEvent` guarda el id, no
+ * los puntos). Una consulta para todos los jugadores del feed, que son unos pocos: el
+ * historial no tiene que pedir el desglose fila a fila.
+ *
+ * Un jugador sin fila de la versión activa (o con un desglose anterior a `awards`) no
+ * aparece en el mapa, y su evento se publica a precio de catálogo con una repetición,
+ * que es lo máximo que se puede afirmar de aquella fila.
+ */
+async function playerObjectiveAwards(
+  playerIds: readonly string[],
+): Promise<Map<string, Record<string, ObjectiveAwardEntry>>> {
+  const ids = [...new Set(playerIds)];
+
+  if (ids.length === 0) {
+    return new Map();
+  }
+
+  const scores = await db.playerScore.findMany({
+    where: { ruleSetVersion: RULESET_VERSION, playerId: { in: ids } },
+    select: { playerId: true, breakdown: true },
+  });
+
+  const awards = new Map<string, Record<string, ObjectiveAwardEntry>>();
+
+  for (const score of scores) {
+    const parsed = readObjectiveAwards(score.breakdown);
+
+    if (parsed !== null) {
+      awards.set(score.playerId, parsed);
+    }
+  }
+
+  return awards;
+}
+
+/**
  * Los objetivos cumplidos que pasan el filtro, ya en filas del historial.
  *
- * Se piden **todos** (no una página): son como mucho 38 filas en toda la vida del
- * torneo, y hace falta el recuento para saber cuántas hay que colar antes de la
- * primera partida de la página.
+ * Se piden **todos** (no una página): son como mucho un objetivo por jugador y por
+ * objetivo del catálogo, y hace falta el recuento para saber cuántas hay que colar
+ * antes de la primera partida de la página.
  *
  * Vienen en el mismo orden que el comparador del merge (`objectiveEventOrderBy()`), que
  * es lo que permite que la mezcla siga siendo correcta cuando el `sort` cambia el eje
@@ -1264,10 +1319,15 @@ async function eventosDeObjetivo(
     select: OBJECTIVE_EVENT_SELECT,
   });
 
+  const awards = await playerObjectiveAwards(filas.map((fila) => fila.playerId));
   const rows: AdminMatchHistoryRow[] = [];
 
   for (const fila of filas) {
-    const objetivo = resolveObjective(fila.objectiveId, ruleset);
+    const objetivo = resolveObjective(
+      fila.objectiveId,
+      ruleset,
+      awards.get(fila.playerId) ?? null,
+    );
 
     if (objetivo === null) {
       console.warn(
@@ -1291,6 +1351,7 @@ async function eventosDeObjetivo(
         group: objetivo.group,
         metric: objetivo.metric,
         points: objetivo.points,
+        count: objetivo.count,
       },
       // Un objetivo no tiene rival, formato, mapa ni resultado: `null` es "no
       // aplica", no "faltan datos".
@@ -1330,7 +1391,7 @@ async function eventosDeObjetivo(
  * ## Los objetivos
  *
  * Los eventos de `ObjectiveEvent`: un objetivo cumplido por jugador, como mucho uno
- * por objetivo del catálogo (38 en total), escritos por el motor de puntuación. Se
+ * por objetivo del catálogo, escritos por el motor de puntuación. Se
  * filtran con el **mismo jugador y las mismas fechas** (sobre `achievedAt`, con los
  * mismos límites), y **no salen si hay filtro de resultado**: un objetivo no es ni
  * una victoria ni una derrota, y quien escribe `?resultado=WIN` está buscando las
@@ -1338,7 +1399,7 @@ async function eventosDeObjetivo(
  *
  * ## El merge, y por qué sale barato
  *
- * Los eventos son ≤ 38, así que se piden enteros (y por el mismo motivo no se pueden
+ * Los eventos son pocos, así que se piden enteros (y por el mismo motivo no se pueden
  * pedir en paralelo con las partidas: el hueco de partidas depende de cuántos son). El
  * hueco que hay que traer y por dónde se recorta la página están en `historyHole()`, que
  * explica la aritmética y que **no depende del eje del orden**: solo cuenta cuántas filas
