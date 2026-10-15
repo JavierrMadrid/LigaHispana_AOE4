@@ -31,6 +31,14 @@ type ObjectiveFlipDialogProps = {
  * especular: gira con clic o teclado y, al arrastrar, sigue al puntero (acotada)
  * mientras gira, y al soltarla vuelve a su sitio con un muelle. El arrastre queda
  * contenido para no salirse de la ventana, que recorta con `overflow-hidden`.
+ *
+ * **La X de cerrar va dentro de la tarjeta**, no en la esquina del `Modal`: así
+ * gira, se ladea y se mueve con ella en vez de quedarse suelta sobre la ventana,
+ * que era justo lo que se veía al inclinar la tarjeta. Por eso se pinta una por
+ * cara —la que se ve—: la oculta va `inert`, así que el foco no se duplica. El
+ * `Modal` sigue cerrando por `Esc`, clic en el fondo y devolviendo el foco, que no
+ * depende de dónde esté el botón. Al pasar el ratón por encima de la X la tarjeta
+ * no arrastra ni gira: `FlipCard` deja en paz los controles de sus caras.
  */
 export function ObjectiveFlipDialog({
   onClose,
@@ -40,12 +48,29 @@ export function ObjectiveFlipDialog({
   ariaLabel,
   cardLabel,
 }: ObjectiveFlipDialogProps) {
+  // El disco translúcido de debajo mantiene la X legible: el contenido de la cara
+  // pasa por debajo al desplazarse, y sin él el aspa quedaría sobre texto ajeno. Va
+  // antes que el contenido en el DOM —la posición la fija `absolute`— para que quien
+  // navega con teclado la encuentre sin recorrer la lista entera.
+  const withCloseButton = (content: ReactNode) => (
+    <div className="relative h-full">
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label={closeLabel}
+        className="absolute right-3 top-3 z-10 inline-flex size-9 items-center justify-center rounded-md bg-surface/90 text-muted backdrop-blur-sm transition-colors hover:bg-surface-raised hover:text-foreground"
+      >
+        <CloseIcon />
+      </button>
+      {content}
+    </div>
+  );
+
   return (
     <Modal
       open
       onClose={onClose}
       ariaLabel={ariaLabel}
-      closeLabel={closeLabel}
       className="m-auto h-[100dvh] max-h-[100dvh] w-full max-w-none overflow-hidden border-0 bg-transparent p-0 sm:h-[85vh] sm:max-h-[44rem] sm:max-w-3xl"
     >
       <div className="animate-dialog-in flex h-full w-full motion-reduce:animate-none">
@@ -61,10 +86,33 @@ export function ObjectiveFlipDialog({
           tilt={false}
           glare={false}
           hoverScale={1}
-          front={front}
-          back={back}
+          front={withCloseButton(front)}
+          back={withCloseButton(back)}
         />
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Aspa de cierre: dos trazos cruzados, mismo glifo que el del `Modal` (caja de 24,
+ * `currentColor`, 1.5 de grosor y extremos redondeados). Es decorativa: el nombre
+ * accesible lo pone el `aria-label` del botón.
+ */
+function CloseIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="size-5"
+    >
+      <path d="M6.5 6.5l11 11" />
+      <path d="M17.5 6.5l-11 11" />
+    </svg>
   );
 }
