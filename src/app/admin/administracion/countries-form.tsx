@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
 import { saveCountries } from "./actions";
 import { StatusLine } from "./fields";
@@ -25,10 +25,24 @@ type CountriesFormProps = {
  * El catálogo no se puede ampliar desde esta pantalla: cada país necesita su
  * código ISO de AoE4World para poder resolver el de un perfil, y eso vive en el
  * código. La pista lo dice para que nadie busque un "añadir país" que no existe.
+ *
+ * Las casillas son **controladas**: lo que se marca vive en el estado, no en el DOM. Y
+ * por eso hace falta el efecto de abajo, que vuelve a adoptar la lista del servidor
+ * cuando este contesta a un guardado.
  */
 export function CountriesForm({ catalog, selected }: CountriesFormProps) {
   const [state, formAction, pending] = useActionState(saveCountries, initialState);
   const [countries, setCountries] = useState<string[]>(selected);
+
+  // React resetea los campos cuando una Server Action termina: las casillas vuelven al
+  // valor con el que se montaron y, como el estado del cliente no cambia, ningún render
+  // las devuelve a su sitio —hasta recargar se ve la lista anterior a lo que se acaba
+  // de guardar—. Adoptar lo que manda el servidor es ese render: el estado no deriva de
+  // otro estado, es el mismo dato del servidor, y por eso se silencia la regla.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reaplica al DOM la lista que el servidor acaba de guardar
+    setCountries(selected);
+  }, [selected]);
 
   function toggle(country: string) {
     setCountries((current) =>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
 import type { ScoringRuleset } from "@/lib/scoring";
 import { saveScoringRuleset } from "./actions";
@@ -8,6 +8,15 @@ import { StatusLine, TextField } from "./fields";
 import { SwitchField } from "./switch-field";
 
 const initialState: AdminActionResult = { status: "idle", message: null };
+
+/**
+ * Prefijo del campo que lleva los puntos de un objetivo: `objectivePoints.<id>`.
+ *
+ * Tiene que ser el mismo que lee `saveScoringRuleset` (`OBJECTIVE_POINTS_PREFIX`). El
+ * literal se repite aquí porque un módulo `"use server"` solo exporta funciones async,
+ * así que la constante de la acción no se puede importar desde este componente.
+ */
+const OBJECTIVE_POINTS_FIELD_PREFIX = "objectivePoints.";
 
 /** Una familia de ladder que puede puntuar, con su nombre para la pantalla. */
 export type ModeOption = { value: string; label: string };
@@ -30,11 +39,28 @@ type RulesetFormProps = {
    * Los límites de la ventana ya convertidos al `datetime-local` de Madrid
    * (`formatMadridLocalInstant`). Vienen del servidor y no se calculan aquí: la
    * conversión vive en `@/lib/ranked-match`, que es `server-only` y no se puede
-   * importar desde un componente de cliente.
+   * importar desde un componente de cliente. Llegan otra vez con cada render del
+   * servidor, y el formulario los vuelve a adoptar: es lo que devuelve su valor a
+   * los campos después de guardar.
    */
   windowFrom: string;
   windowTo: string;
 };
+
+/**
+ * Los puntos de cada objetivo como texto, que es lo que se escribe en el campo.
+ *
+ * Sale de los grupos del catálogo, que es lo que manda el servidor. El mismo cálculo
+ * sirve para el estado inicial y para volver a adoptarlo cuando el servidor
+ * responde a un guardado, así que no puede haber dos versiones del mismo dato.
+ */
+function objectivePointTexts(groups: ObjectiveGroupBlock[]): Record<string, string> {
+  return Object.fromEntries(
+    groups.flatMap((group) =>
+      group.objectives.map((objective) => [objective.id, String(objective.points)]),
+    ),
+  );
+}
 
 /**
  * Las reglas de puntuación: ventana, familias, puntos, civ aleatoria y objetivos.
@@ -53,29 +79,46 @@ type RulesetFormProps = {
  * Los puntos por objetivo son opcionales: cada fila trae el valor actual y
  * vaciarla deja el que ya tenía. La acción lo trata así a propósito, para que
  * este formulario no pueda borrar un ajuste por no mencionarlo.
+ *
+ * Todo lo que se edita aquí es estado del cliente que **nace** de lo que manda el
+ * servidor: ventana, puntos, familias y objetivos activos. Cuando el servidor manda
+ * algo nuevo —cada render suyo trae objetos nuevos— el formulario lo vuelve a
+ * adoptar, porque React resetea los campos al terminar una Server Action.
  */
 export function RulesetForm({
   ruleset,
   modeOptions,
   groups,
-  windowFrom: initialWindowFrom,
-  windowTo: initialWindowTo,
+  windowFrom: serverWindowFrom,
+  windowTo: serverWindowTo,
 }: RulesetFormProps) {
   const [state, formAction, pending] = useActionState(saveScoringRuleset, initialState);
 
-  const [windowFrom, setWindowFrom] = useState(initialWindowFrom);
-  const [windowTo, setWindowTo] = useState(initialWindowTo);
+  const [windowFrom, setWindowFrom] = useState(serverWindowFrom);
+  const [windowTo, setWindowTo] = useState(serverWindowTo);
   const [pointsPerWin, setPointsPerWin] = useState(String(ruleset.pointsPerWin));
   const [countRandomizedCivs, setCountRandomizedCivs] = useState(ruleset.countRandomizedCivs);
   const [modes, setModes] = useState<string[]>(ruleset.modes);
   const [disabled, setDisabled] = useState<string[]>(ruleset.disabledObjectives);
   const [points, setPoints] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      groups.flatMap((group) =>
-        group.objectives.map((objective) => [objective.id, String(objective.points)]),
-      ),
-    ),
+    objectivePointTexts(groups),
   );
+
+  // React resetea los campos cuando una Server Action termina: los controlados vuelven
+  // al valor con el que se montaron y, como el estado del cliente no cambia, ningún
+  // render los devuelve a su sitio —hasta recargar se ve lo anterior a lo que se acaba
+  // de guardar—. Adoptar lo que manda el servidor es ese render: el estado no deriva de
+  // otro estado, es el mismo dato del servidor, y por eso se silencia la regla.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reaplica al DOM las reglas que el servidor acaba de guardar
+    setWindowFrom(serverWindowFrom);
+    setWindowTo(serverWindowTo);
+    setPointsPerWin(String(ruleset.pointsPerWin));
+    setCountRandomizedCivs(ruleset.countRandomizedCivs);
+    setModes(ruleset.modes);
+    setDisabled(ruleset.disabledObjectives);
+    setPoints(objectivePointTexts(groups));
+  }, [groups, ruleset, serverWindowFrom, serverWindowTo]);
 
   function toggleMode(mode: string) {
     setModes((current) =>
@@ -211,6 +254,7 @@ export function RulesetForm({
                           Puntos
                           <input
                             type="number"
+                            name={`${OBJECTIVE_POINTS_FIELD_PREFIX}${objective.id}`}
                             min={1}
                             step={1}
                             value={points[objective.id] ?? ""}
