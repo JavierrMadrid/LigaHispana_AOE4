@@ -437,6 +437,46 @@ describe("mergeRuleset: los objetivos desactivados", () => {
   });
 });
 
+describe("mergeRuleset: el candidato que guarda el panel de administración", () => {
+  /**
+   * Documento tal y como lo fusiona `saveScoringRuleset()`: los campos que el panel
+   * configura, y **sin `label`**, que se queda fuera antes de fusionar. Si la etiqueta
+   * viajara (el panel parte del ruleset activo, que la incluye), cualquier guardado que
+   * moviera puntos u objetivos traería la etiqueta de las reglas *anteriores* y
+   * `mergeRuleset` lo rechazaría con el aviso de "label se ignora".
+   */
+  const candidato = {
+    version: RULESET_VERSION,
+    modes: ["rm_solo"],
+    window: VENTANA,
+    pointsPerWin: 3,
+    countRandomizedCivs: true,
+    objectives: { "loco-por-ganar": 90 },
+    disabledObjectives: ["rey-1v1"],
+  };
+
+  it("un candidato sin `label` no avisa aunque cambien los puntos y los objetivos activos", () => {
+    const { ruleset, warnings } = mergeRuleset(candidato);
+
+    expect(warnings).toEqual([]);
+    expect(ruleset.pointsPerWin).toBe(3);
+    expect(ruleset.disabledObjectives).toEqual(["rey-1v1"]);
+    expect(ruleset.label).toBe(ruleLabel(ruleset));
+  });
+
+  it("la misma fusión con la etiqueta anterior sí avisa, y la descarta", () => {
+    // Es la lectura de un documento guardado con la etiqueta obsoleta, que tiene que
+    // seguir avisando: el aviso no se relaja, el panel simplemente no la manda.
+    const { ruleset, warnings } = mergeRuleset({
+      ...candidato,
+      label: DEFAULT_RULESET.label,
+    });
+
+    expect(warnings.some((w) => w.startsWith("label se ignora"))).toBe(true);
+    expect(ruleset.label).toBe(ruleLabel(ruleset));
+  });
+});
+
 describe("ruleLabel", () => {
   const base: Pick<ScoringRuleset, "pointsPerWin" | "disabledObjectives"> = {
     pointsPerWin: 2,

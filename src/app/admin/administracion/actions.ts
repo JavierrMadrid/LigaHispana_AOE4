@@ -427,7 +427,9 @@ const WINDOW_TO_INVALID_ERROR =
  * Es opcional: un formulario que no los mande deja los puntos que ya tenía cada
  * objetivo (los del catálogo o los que se hayan retocado), así que la pantalla puede
  * empezar editando solo la ventana y los objetivos activos y añadir los puntos por
- * objetivo cuando haga falta.
+ * objetivo cuando haga falta. Tiene que coincidir con el `name` que pinta
+ * `ruleset-form.tsx` (`OBJECTIVE_POINTS_FIELD_PREFIX`), que no puede importar esta
+ * constante: los módulos `"use server"` solo exportan funciones async.
  */
 const OBJECTIVE_POINTS_PREFIX = "objectivePoints.";
 
@@ -574,8 +576,18 @@ export async function saveScoringRuleset(
     objectives[key.slice(OBJECTIVE_POINTS_PREFIX.length)] = parsed;
   }
 
+  // El `label` no es un campo del formulario: es texto de producto que recalcula
+  // `mergeRuleset()` con los puntos y los objetivos que se acaban de fusionar. Si
+  // viajara en el candidato, la etiqueta guardada —la de las reglas *anteriores*— no
+  // coincidiría con la nueva en cuanto el cambio moviera puntos u objetivos, y
+  // `mergeRuleset` rechazaría el guardado con el aviso de "label se ignora". Se quita
+  // del candidato por eso, no del aviso: leer un documento guardado con la etiqueta
+  // obsoleta tiene que seguir avisando.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- la etiqueta se descarta a propósito
+  const { label: _etiquetaCalculada, ...documento } = actual;
+
   const candidato = {
-    ...actual,
+    ...documento,
     modes,
     // Un `to` vacío es la ventana abierta: hay que pedirlo dejando el campo vacío, y
     // `null` explícito es lo que `mergeRuleset` exige para no heredar el del documento
