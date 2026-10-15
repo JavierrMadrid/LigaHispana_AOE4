@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  completedContenders,
   completionSummary,
   contenderShare,
+  contenderShareOfObjective,
   contenderValue,
   formatMapPool,
   hasNoCap,
+  hasReachedTarget,
   objectiveCloseness,
   objectiveStandingsView,
   objectiveTitle,
@@ -115,27 +118,51 @@ function beneficiary(profileId: number): ObjectiveBeneficiary {
 }
 
 describe("completionSummary: cuántos han completado un logro", () => {
-  function withBeneficiaries(count: number, kind: ObjectiveKind = "achievement"): ObjectiveOption {
+  /**
+   * Un objetivo con umbral y sus contendientes: `values` son los valores del ranking,
+   * de modo que el recuento se mide contra el umbral (3 en este caso) y no contra quién
+   * cobra algo.
+   */
+  function withValues(values: number[], kind: ObjectiveKind = "achievement"): ObjectiveOption {
     return {
       ...option("victorias", kind, kind === "achievement" ? 3 : null),
-      beneficiaries: Array.from({ length: count }, (_, index) => beneficiary(index + 1)),
+      beneficiaries: values.map((_, index) => beneficiary(index + 1)),
+      ranking: values.map((value, index) => ({
+        ...contender(value),
+        profileId: index + 1,
+      })),
     };
   }
 
   it("un logro se lee sobre el total de contendientes", () => {
-    expect(completionSummary(withBeneficiaries(3), 12)).toBe("3 de 12 lo han completado");
+    expect(completionSummary(withValues([3, 3, 3, 1]), 12)).toBe("3 de 12 lo han completado");
   });
 
   it("singular cuando lo completa uno", () => {
-    expect(completionSummary(withBeneficiaries(1), 12)).toBe("1 de 12 lo ha completado");
+    expect(completionSummary(withValues([3, 1]), 12)).toBe("1 de 12 lo ha completado");
   });
 
-  it("sin completadores todavía no se inventa la fracción", () => {
-    expect(completionSummary(withBeneficiaries(0), 12)).toBe("Todavía nadie lo ha completado");
+  it("cobrar sin llegar al umbral no cuenta como completado", () => {
+    // `imparable` paga desde el primer día: con tres de catorce no lo ha completado
+    // nadie, aunque los nueve cobren.
+    const imparable: ObjectiveOption = {
+      ...option("dias", "achievement", 14),
+      beneficiaries: Array.from({ length: 9 }, (_, index) => beneficiary(index + 1)),
+      ranking: Array.from({ length: 9 }, (_, index) => ({
+        ...contender(3),
+        profileId: index + 1,
+      })),
+    };
+
+    expect(completionSummary(imparable, 9)).toBe("Todavía nadie lo ha completado");
+  });
+
+  it("sin nadie en el umbral no se inventa la fracción", () => {
+    expect(completionSummary(withValues([1, 2]), 12)).toBe("Todavía nadie lo ha completado");
   });
 
   it("una competición no cuenta completadores: dice si hay poseedor", () => {
-    const competition = withBeneficiaries(0, "competition");
+    const competition = withValues([], "competition");
 
     expect(completionSummary(competition, 12)).toBe("Sin poseedor todavía");
     expect(completionSummary({ ...competition, holder: contender(50) }, 12)).toBe(
@@ -144,10 +171,60 @@ describe("completionSummary: cuántos han completado un logro", () => {
   });
 
   it("un logro sin tope no habla de completadores: dice la regla", () => {
-    const noCap = withBeneficiaries(12, "achievement");
+    const noCap = withValues([12, 7], "achievement");
     noCap.target = null;
 
     expect(completionSummary(noCap, 12)).toBe("Sin tope: cada victoria suma");
+  });
+});
+
+describe("hasReachedTarget: el umbral es lo que marca «completado»", () => {
+  it("un logro acumulativo lo alcanza al llegar a su umbral", () => {
+    const imparable = option("dias", "achievement", 14);
+
+    expect(hasReachedTarget(imparable, 13)).toBe(false);
+    expect(hasReachedTarget(imparable, 14)).toBe(true);
+    expect(hasReachedTarget(imparable, 20)).toBe(true);
+  });
+
+  it("un logro binario es equivalente a cumplirlo", () => {
+    const logro = option("victorias", "achievement", 3);
+
+    expect(hasReachedTarget(logro, 2)).toBe(false);
+    expect(hasReachedTarget(logro, 3)).toBe(true);
+  });
+
+  it("un logro sin tope no llega nunca", () => {
+    expect(hasReachedTarget(option("victorias", "achievement", null), 999)).toBe(false);
+  });
+
+  it("una competición no se mide por su valor", () => {
+    expect(hasReachedTarget(option("partidas", "competition", null), 999)).toBe(false);
+  });
+});
+
+describe("completedContenders: el recuento del umbral", () => {
+  it("cuenta solo a los que llegan al umbral, no a los que cobran", () => {
+    const imparable: ObjectiveOption = {
+      ...option("dias", "achievement", 14),
+      beneficiaries: [beneficiary(1), beneficiary(2), beneficiary(3)],
+      ranking: [
+        { ...contender(14), profileId: 1 },
+        { ...contender(9), profileId: 2 },
+        { ...contender(3), profileId: 3 },
+      ],
+    };
+
+    expect(completedContenders(imparable)).toBe(1);
+  });
+
+  it("un logro sin tope no tiene completados", () => {
+    const noCap: ObjectiveOption = {
+      ...option("victorias", "achievement", null),
+      ranking: [{ ...contender(24), profileId: 1 }],
+    };
+
+    expect(completedContenders(noCap)).toBe(0);
   });
 });
 
@@ -499,26 +576,62 @@ describe("objectiveStandingsView", () => {
   });
 });
 
-describe("contenderShare: la parte del líder que vale una fila", () => {
-  it("el líder llega al final", () => {
+describe("contenderShare: la fracción contra una referencia", () => {
+  it("la referencia llega al final", () => {
     expect(contenderShare(50, 50)).toBe(1);
   });
 
-  it("el resto se mide contra el líder", () => {
+  it("el resto se mide contra ella", () => {
     expect(contenderShare(25, 50)).toBe(0.5);
     expect(contenderShare(1, 5)).toBe(0.2);
   });
 
-  it("un valor por encima del líder se satura", () => {
+  it("un valor por encima de la referencia se satura", () => {
     expect(contenderShare(60, 50)).toBe(1);
   });
 
-  it("un líder sin valor no da escala", () => {
+  it("una referencia sin valor no da escala", () => {
     expect(contenderShare(10, 0)).toBe(0);
     expect(contenderShare(10, -3)).toBe(0);
   });
 
   it("sin valor no hay barra", () => {
     expect(contenderShare(0, 50)).toBe(0);
+  });
+});
+
+describe("contenderShareOfObjective: qué mide la barra", () => {
+  const contender = (value: number) => ({ value });
+
+  it("en un logro con umbral, la barra es el avance del X/X de la fila", () => {
+    const imparable = option("dias", "achievement", 14);
+
+    expect(contenderShareOfObjective(imparable, contender(3), 3)).toBeCloseTo(3 / 14);
+    expect(contenderShareOfObjective(imparable, contender(7), 7)).toBe(0.5);
+    expect(contenderShareOfObjective(imparable, contender(14), 14)).toBe(1);
+  });
+
+  it("pasarse del umbral no pasa de la barra llena", () => {
+    expect(contenderShareOfObjective(option("dias", "achievement", 14), contender(20), 20)).toBe(1);
+  });
+
+  it("el umbral manda aunque el líder de la lista sea otro", () => {
+    const logro = option("victorias", "achievement", 3);
+
+    // El líder lleva 3 de 3 y esta fila 2: la barra es su avance, no su parte del líder.
+    expect(contenderShareOfObjective(logro, contender(2), 3)).toBeCloseTo(2 / 3);
+  });
+
+  it("en una competición se mide contra el líder, que es lo que la ordena", () => {
+    const competition = option("partidas", "competition", null);
+
+    expect(contenderShareOfObjective(competition, contender(25), 50)).toBe(0.5);
+    expect(contenderShareOfObjective(competition, contender(50), 50)).toBe(1);
+  });
+
+  it("en un logro sin tope también, porque no hay umbral", () => {
+    const noCap = option("victorias", "achievement", null);
+
+    expect(contenderShareOfObjective(noCap, contender(12), 24)).toBe(0.5);
   });
 });

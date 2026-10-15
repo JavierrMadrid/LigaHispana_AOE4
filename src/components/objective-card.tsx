@@ -6,7 +6,12 @@ import type {
 } from "@/lib/public";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
-import { formatMapPool, hasNoCap, prizeLabel } from "@/lib/objective-format";
+import {
+  completedContenders,
+  formatMapPool,
+  hasNoCap,
+  prizeLabel,
+} from "@/lib/objective-format";
 
 /**
  * Tarjeta de un objetivo especial.
@@ -79,7 +84,10 @@ export function ObjectiveSummary({
   );
 }
 
-/** El estado del objetivo: quién lo posee, o cuánta gente lo ha conseguido. */
+/**
+ * El estado del objetivo: quién lo posee, cuánta gente ha llegado al umbral, o —en un
+ * logro sin tope— cuánta gente ya cobra.
+ */
 export function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
   // Un logro sin tope no se "consigue": se cobra con cada unidad de su métrica, y
   // lo que interesa saber es cuánta gente ya suma. Decir "N jugadores lo han
@@ -99,6 +107,10 @@ export function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
     );
   }
 
+  // En los demás, «conseguido» es llegar al umbral, no cobrar algo: `imparable` paga
+  // desde el primer día y con tres de catorce no lo ha conseguido nadie todavía.
+  const completed = completedContenders(option);
+
   return (
     <div className="min-w-0">
       <p className="text-xs font-medium uppercase tracking-wide text-muted">
@@ -106,11 +118,11 @@ export function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
       </p>
       {option.kind === "achievement" ? (
         <p className="mt-1 truncate text-sm text-foreground">
-          {option.beneficiaries.length === 0
+          {completed === 0
             ? "Todavía nadie"
-            : option.beneficiaries.length === 1
+            : completed === 1
               ? "1 jugador"
-              : `${option.beneficiaries.length} jugadores`}
+              : `${completed} jugadores`}
         </p>
       ) : option.holder === null ? (
         <p className="mt-1 truncate text-sm text-muted">Sin poseedor todavía</p>

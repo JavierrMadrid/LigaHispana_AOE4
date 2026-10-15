@@ -53,6 +53,42 @@ export function hasNoCap(objective: {
 }
 
 /**
+ * Si un logro ha llegado a su umbral: es lo que la web marca como **completado**.
+ *
+ * No basta con cobrar algo. Un logro acumulativo paga desde el primer punto
+ * (`imparable`, 1 por día; `victorias`, por victoria), así que poner el check al
+ * primer día diría que está terminado cuando le quedan trece. La marca es el umbral
+ * —`value >= target`—, que en los logros binarios coincide con cumplirlos.
+ *
+ * Un logro **sin tope** no llega nunca (no se completa) y una competición no se mide
+ * por su valor, así que en los dos casos devuelve `false`: quien pinte decide con su
+ * poseedor (`holder`).
+ *
+ * Es puro y estructural: vale con el `value` de un contendiente del ranking igual que
+ * con el de la ficha de un participante.
+ */
+export function hasReachedTarget(
+  objective: { kind: ObjectiveKind; target: ObjectiveTarget | null },
+  value: number,
+): boolean {
+  const target = objective.target;
+
+  return objective.kind === "achievement" && target !== null && value >= target.value;
+}
+
+/**
+ * Cuántos contendientes de un logro han llegado a su umbral, que es el recuento que
+ * publican la tarjeta y el resumen de la clasificación.
+ *
+ * Sale del `ranking` del objetivo —el mismo que se pinta— y no de sus beneficiarios:
+ * en un logro acumulativo los beneficiarios son todos los que cobran algo, y el
+ * recuento de «completado» solo cuenta a los que están en el umbral.
+ */
+export function completedContenders(option: ObjectiveOption): number {
+  return option.ranking.filter((contender) => hasReachedTarget(option, contender.value)).length;
+}
+
+/**
  * El pie de la placa de premio de un objetivo: `puntos`, o `puntos por victoria`
  * en uno sin tope.
  *
@@ -102,14 +138,16 @@ export function contenderValue(option: ObjectiveOption, contender: ObjectiveCont
  * Texto del resumen de completadores, encabezando la clasificación de un
  * objetivo.
  *
- * En un **logro** son sus beneficiarios (`option.beneficiaries`), que se leen
- * **sobre el total de contendientes** del objetivo —los que están en su ranking,
- * que es justo lo que lista la cara de la clasificación—: "3 de 12 lo han
- * completado". En una **competición** solo hay un poseedor, así que un recuento no
- * aplica y se dice si está marcado o no. Y en un logro **sin tope** no hay
- * completadores que contar (todos los que suman lo están cobrando), así que se dice
- * la regla: "Sin tope: cada victoria suma". Es puro: solo depende del objetivo y
- * del número de contendientes.
+ * En un **logro** cuenta a quien ha **llegado a su umbral** (`hasReachedTarget`), que
+ * se lee **sobre el total de contendientes** del objetivo —los que están en su
+ * ranking, que es justo lo que lista la cara de la clasificación—: "3 de 12 lo han
+ * completado". No vale con cobrar algo: `imparable` paga desde el primer día, y decir
+ * "9 de 9 lo han completado" con tres días de catorce sería mentira. En una
+ * **competición** solo hay un poseedor, así que un recuento no aplica y se dice si
+ * está marcado o no. Y en un logro **sin tope** no hay completadores que contar (todos
+ * los que suman lo están cobrando, y nunca llega al umbral), así que se dice la regla:
+ * "Sin tope: cada victoria suma". Es puro: solo depende del objetivo y del número de
+ * contendientes.
  */
 export function completionSummary(option: ObjectiveOption, contenders: number): string {
   if (option.kind === "competition") {
@@ -120,7 +158,7 @@ export function completionSummary(option: ObjectiveOption, contenders: number): 
     return `Sin tope: cada ${metricUnit(option.metric, 1)} suma`;
   }
 
-  const count = option.beneficiaries.length;
+  const count = completedContenders(option);
 
   if (count === 0) {
     return "Todavía nadie lo ha completado";
@@ -278,24 +316,49 @@ export function objectiveTitle(objective: { label: string; count: number }): str
 }
 
 /**
- * Qué fracción del valor del líder vale un contendiente, de `0` a `1`, para la
- * barra de fondo de una fila de la clasificación.
+ * Qué fracción vale un contendiente, de `0` a `1`, contra la referencia que se le
+ * pase: el valor del líder o el umbral del objetivo (`contenderShareOfObjective`
+ * decide cuál toca).
  *
- * La referencia es el **primero del ranking** —el valor más alto de la lista—, así
- * que la barra del líder llega al final y las demás se comparan unas con otras de
- * un vistazo. Vale igual para un logro (avance sobre el umbral) y para una
- * competición (valor de su métrica): en los dos casos se compara la cifra que da la
- * posición, no la cercanía a cobrar el objetivo, que es otra lectura.
- *
- * Un líder sin valor (`0` o menos) no da escala: todo devuelve `0` y la fila se
- * queda sin barra. Se satura en `1` por si un valor llega desordenado.
+ * Con el líder, el primero de la lista llega al final y las demás barras se comparan
+ * unas con otras de un vistazo. Con el umbral, la barra es el avance del `X/X` que la
+ * fila enseña: 3 de 14 pide 21 %, no la barra llena. Una referencia sin valor (`0` o
+ * menos) no da escala —todo devuelve `0` y la fila se queda sin barra— y el resultado
+ * se satura en `1` por si un valor llega desordenado.
  */
-export function contenderShare(value: number, leader: number): number {
-  if (leader <= 0) {
+export function contenderShare(value: number, reference: number): number {
+  if (reference <= 0) {
     return 0;
   }
 
-  return Math.min(1, Math.max(0, value / leader));
+  return Math.min(1, Math.max(0, value / reference));
+}
+
+/**
+ * El ancho de la barra de fondo de una fila, según lo que el objetivo tenga que medir.
+ *
+ * - **Logro con umbral** (`imparable`, `polifacetico`, los binarios): contra el
+ *   **umbral** (`value / target`), para que la barra corresponda con el avance que la
+ *   fila escribe: 3 de 14 días va por una quinta parte, y solo llega al final quien
+ *   completa.
+ * - **Competición y logro sin tope** (`victorias`): no hay umbral contra el que medir
+ *   —lo que da la posición es la cifra a secas—, así que se compara con el **líder de
+ *   la lista**, que es lo único que las ordena.
+ *
+ * Es puro y estructural: vale con el `value` de un contendiente del ranking.
+ */
+export function contenderShareOfObjective(
+  objective: { kind: ObjectiveKind; target: ObjectiveTarget | null },
+  contender: { value: number },
+  leader: number,
+): number {
+  const target = objective.target;
+
+  if (objective.kind === "achievement" && target !== null) {
+    return contenderShare(contender.value, target.value);
+  }
+
+  return contenderShare(contender.value, leader);
 }
 
 /**

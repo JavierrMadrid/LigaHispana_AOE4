@@ -95,8 +95,9 @@ export function ObjectiveDialogCard({
           back={
             <div className="flex h-full flex-col">
               {/* `pt-14`/`sm:pt-16` le dejan sitio a la X de la cara, que vive en la
-                  esquina superior derecha de la tarjeta, por encima del relleno. */}
-              <header className="flex items-start gap-4 border-b border-line p-6 pt-14 sm:p-8 sm:pt-16">
+                  esquina superior derecha de la tarjeta. El relleno lateral va como
+                  margen para que la línea de debajo no cruce el marco de la tarjeta. */}
+              <header className="mx-6 flex items-start gap-4 border-b border-line pt-14 pb-6 sm:mx-8 sm:pt-16 sm:pb-8">
                 <span className="flex size-12 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
                   <ObjectiveIcon option={option} className="size-7 shrink-0" />
                 </span>

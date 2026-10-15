@@ -3,8 +3,10 @@
 import { useState, type ReactNode } from "react";
 import type { ObjectiveContender, ObjectiveOption } from "@/lib/public";
 import {
+  completedContenders,
   contenderValue,
   hasNoCap,
+  hasReachedTarget,
   prizeLabel,
   standingsCountLabel,
 } from "@/lib/objective-format";
@@ -41,6 +43,13 @@ type ObjectiveRankingDialogProps = {
  * cara de la clasificación y el giro descubre el resumen del jugador (`front`).
  * El `Modal` que la envuelve resuelve foco, `Esc`, cierre con clic en el fondo,
  * bloqueo del scroll y devolución del foco al disparador.
+ *
+ * La cara lleva el **marco** de la tarjeta a 10 y 16px del canto
+ * (`ObjectiveFlipDialog`), así que nada pintado lo cruza: la cabecera, el pie del
+ * paginador y la lista van con **márgenes** laterales y no con relleno, y el de las
+ * filas vive en la lista. Así las líneas de cabecera y pie, los filetes de las filas
+ * y el tinte del jugador resaltado empiezan y acaban donde el texto (24px del canto
+ * en móvil, 32px a partir de `sm`), sin moverse de donde ya estaban.
  */
 export function ObjectiveRankingDialog({
   option,
@@ -65,8 +74,10 @@ export function ObjectiveRankingDialog({
       back={
         <div className="flex h-full flex-col">
           {/* `pt-14`/`sm:pt-16` le dejan sitio a la X de la cara, que vive en la
-              esquina superior derecha de la tarjeta, por encima del relleno. */}
-          <header className="border-b border-line p-6 pt-14 sm:p-8 sm:pt-16">
+              esquina superior derecha de la tarjeta, por encima del relleno. El
+              relleno lateral va como margen para que la línea de debajo no cruce el
+              marco de la tarjeta. */}
+          <header className="mx-6 border-b border-line pt-14 pb-6 sm:mx-8 sm:pt-16 sm:pb-8">
             <div className="flex items-start gap-4">
               <span className="flex size-12 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
                 <ObjectiveIcon option={option} className="size-7 shrink-0" />
@@ -88,7 +99,7 @@ export function ObjectiveRankingDialog({
           </header>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="flex items-baseline justify-between gap-3 px-6 py-3 sm:px-8">
+            <div className="mx-6 flex items-baseline justify-between gap-3 py-3 sm:mx-8">
               <h3 className="font-display text-base font-semibold text-foreground">
                 Clasificación
               </h3>
@@ -98,11 +109,11 @@ export function ObjectiveRankingDialog({
             </div>
 
             {total === 0 ? (
-              <p className="border-t border-line px-6 py-8 text-center text-sm text-muted sm:px-8">
+              <p className="mx-6 border-t border-line py-8 text-center text-sm text-muted sm:mx-8">
                 {emptyMessage(option)}
               </p>
             ) : (
-              <ol className="divide-y divide-line border-t border-line">
+              <ol className="mx-6 divide-y divide-line border-t border-line sm:mx-8">
                 {rows.map((contender, index) => (
                   <RankingRow
                     key={contender.profileId}
@@ -117,7 +128,7 @@ export function ObjectiveRankingDialog({
           </div>
 
           {total > PAGE_SIZE ? (
-            <footer className="flex items-center justify-between gap-3 border-t border-line px-6 py-3 sm:px-8">
+            <footer className="mx-6 flex items-center justify-between gap-3 border-t border-line py-3 sm:mx-8">
               <PagerButton
                 label="Anterior"
                 disabled={page === 0}
@@ -142,11 +153,13 @@ export function ObjectiveRankingDialog({
 /** El poseedor actual en grande, el recuento de un logro, o por qué está libre. */
 function HolderSummary({ option }: { option: ObjectiveOption }) {
   if (option.kind === "achievement") {
-    // Un logro sin tope no se "consigue": se cobra con cada victoria, así que lo
-    // que se cuenta es cuánta gente ya cobra. El distintivo de la derecha dice la
-    // regla en dos palabras.
+    // Un logro sin tope no se "consigue": se cobra con cada victoria, así que lo que
+    // se cuenta es cuánta gente ya cobra. En los demás, el recuento es de quien ha
+    // **llegado al umbral**, no de quien ha rascado puntos: `imparable` paga desde el
+    // primer día y decir "9 jugadores lo han conseguido" con tres días de catorce
+    // sería mentira. El distintivo de la derecha dice la regla en dos palabras.
     const noCap = hasNoCap(option);
-    const count = option.beneficiaries.length;
+    const count = noCap ? option.beneficiaries.length : completedContenders(option);
 
     return (
       <div className="flex items-center gap-3 rounded-md border border-accent/25 bg-accent/5 p-3">
@@ -156,9 +169,11 @@ function HolderSummary({ option }: { option: ObjectiveOption }) {
               ? count === 1
                 ? "1 jugador ya cobra"
                 : `${count} jugadores ya cobran`
-              : count === 1
-                ? "1 jugador lo ha conseguido"
-                : `${count} jugadores lo han conseguido`}
+              : count === 0
+                ? "Todavía nadie lo ha conseguido"
+                : count === 1
+                  ? "1 jugador lo ha conseguido"
+                  : `${count} jugadores lo han conseguido`}
           </p>
           <p className="mt-0.5 text-xs leading-relaxed text-muted">{option.description}</p>
         </div>
@@ -209,20 +224,21 @@ function RankingRow({
   rank: number;
   highlightProfileId: number | null;
 }) {
-  // En una competición el distintivo es del poseedor; en un logro, de quien ya lo
-  // ha completado (`eligible`). Un logro sin tope no tiene distintivo: todos los
-  // que salen en la lista ya suman, así que marcarlos no dice nada.
-  const achieved =
+  // En una competición el distintivo es del poseedor; en un logro, de quien ha
+  // **llegado a su umbral** —no de quien cobra algo: `imparable` paga desde el primer
+  // día—. Un logro sin tope no tiene distintivo: todos los que salen en la lista ya
+  // suman y ninguno lo completa.
+  const completed =
     option.kind === "achievement"
-      ? contender.eligible
+      ? hasReachedTarget(option, contender.value)
       : contender.profileId === option.holder?.profileId;
   // Sin participante que resaltar (el caso de `/objetivos`) manda el cobrador;
   // con él, el resaltado se muda a su fila. La etiqueta no depende de esto.
   const highlighted =
-    highlightProfileId === null ? achieved : contender.profileId === highlightProfileId;
+    highlightProfileId === null ? completed : contender.profileId === highlightProfileId;
 
   return (
-    <li className={`flex items-center gap-3 px-6 py-3 sm:px-8 ${highlighted ? "bg-accent/5" : ""}`}>
+    <li className={`flex items-center gap-3 py-3 ${highlighted ? "bg-accent/5" : ""}`}>
       <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">{rank}</span>
       <PlayerAvatar name={contender.name} avatarUrl={contender.avatarUrl} className="size-8 text-xs" />
       <span className="min-w-0 flex-1">
@@ -233,12 +249,12 @@ function RankingRow({
         {highlighted ? (
           <span className="sr-only">(jugador de esta ficha)</span>
         ) : null}
-        {!achieved && option.kind === "competition" ? (
+        {!completed && option.kind === "competition" ? (
           <span className="mt-0.5 block text-xs text-muted">{ineligibleTag(option)}</span>
         ) : null}
       </span>
 
-      {achieved && !hasNoCap(option) ? (
+      {completed && !hasNoCap(option) ? (
         <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
           {option.kind === "achievement" ? "Conseguido" : "Poseedor"}
         </span>
