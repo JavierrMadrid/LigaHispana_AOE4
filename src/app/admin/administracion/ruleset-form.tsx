@@ -9,6 +9,18 @@ import { SwitchField } from "./switch-field";
 
 const initialState: AdminActionResult = { status: "idle", message: null };
 
+/**
+ * El objetivo que paga las victorias clasificatorias.
+ *
+ * Va como literal, y no importado de `@/lib/objectives`, por lo mismo que los ids de
+ * familia de la ficha: este componente es de cliente y no puede tirar del catálogo
+ * del servidor. Es contrato estable.
+ *
+ * No lleva campo de puntos propio: lo que vale una victoria lo dice «Puntos por
+ * victoria», y el servidor descarta un `objectivePoints.victorias` (ver `actions.ts`).
+ */
+const VICTORIAS_ID = "victorias";
+
 /** Una familia de ladder que puede puntuar, con su nombre para la pantalla. */
 export type ModeOption = { value: string; label: string };
 
@@ -42,7 +54,7 @@ type RulesetFormProps = {
  * Es el documento del que sale **toda** la clasificación, así que la pantalla
  * enseña los cuatro ajustes que mueven puntos y, debajo, el catálogo de
  * objetivos agrupado por grupos. Cada grupo es un bloque plegable —cerrado por
- * defecto, con su recuento— porque el catálogo tiene 82 entradas y desplegarlo
+ * defecto, con su recuento— porque el catálogo tiene 83 entradas y desplegarlo
  * entero convertiría el formulario en una lista interminable; los controles
  * siguen viajando con el formulario aunque el bloque esté cerrado.
  *
@@ -123,7 +135,7 @@ export function RulesetForm({
           step={1}
           value={pointsPerWin}
           onChange={setPointsPerWin}
-          hint="Puntos que suma cada victoria clasificatoria, antes de los objetivos."
+          hint="Lo que paga el objetivo Victorias: cada victoria clasificatoria suma esta cifra, sin tope. Los demás objetivos reparten aparte."
           required
         />
       </div>
@@ -168,7 +180,8 @@ export function RulesetForm({
         <p className="mt-1 max-w-[70ch] text-xs leading-relaxed text-muted">
           Un objetivo apagado deja de repartir puntos y desaparece de la web. Los
           puntos de cada objetivo se pueden ajustar; deja el valor que trae para no
-          tocarlo.
+          tocarlo. El de Victorias no tiene precio propio: lo paga «Puntos por
+          victoria».
         </p>
 
         <div className="mt-3 flex flex-col gap-2">
@@ -207,18 +220,24 @@ export function RulesetForm({
                           </span>
                         </label>
 
-                        <span className="flex items-center gap-2 text-xs text-muted">
-                          Puntos
-                          <input
-                            type="number"
-                            min={1}
-                            step={1}
-                            value={points[objective.id] ?? ""}
-                            onChange={(event) => setPoint(objective.id, event.target.value)}
-                            aria-label={`Puntos de ${objective.label}`}
-                            className="h-9 w-20 rounded-md border border-line bg-surface px-2 text-right text-sm tabular-nums text-foreground"
-                          />
-                        </span>
+                        {objective.id === VICTORIAS_ID ? (
+                          <span className="text-xs text-muted">
+                            Lo paga «Puntos por victoria»
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-2 text-xs text-muted">
+                            Puntos
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              value={points[objective.id] ?? ""}
+                              onChange={(event) => setPoint(objective.id, event.target.value)}
+                              aria-label={`Puntos de ${objective.label}`}
+                              className="h-9 w-20 rounded-md border border-line bg-surface px-2 text-right text-sm tabular-nums text-foreground"
+                            />
+                          </span>
+                        )}
 
                         {apagado ? (
                           <input type="hidden" name="disabledObjectives" value={objective.id} />
