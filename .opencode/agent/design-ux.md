@@ -2,7 +2,6 @@
 description: Diseño y UX (interfaces, componentes, Tailwind, copy). Úsalo para crear o modificar cualquier UI, página, componente o estilo visual del frontend.
 mode: subagent
 model: opencode-go/mimo-v2.6-flash
-variant: high
 temperature: 0.3
 permission:
   edit: allow
