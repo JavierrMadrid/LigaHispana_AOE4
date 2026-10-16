@@ -2,15 +2,22 @@ import "server-only";
 
 import { cache } from "react";
 import { Prisma } from "@/generated/prisma/client";
-import { PlayerStatus } from "@/generated/prisma/enums";
+import { MatchResult, PlayerStatus } from "@/generated/prisma/enums";
 import { parseGamePlayer } from "@/lib/aoe4world/parse";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
 import { type MatcherinoDonations } from "@/lib/donations";
 import { readEditionConfig, type EditionConfig } from "@/lib/edition";
-import { aoe4WorldProfileUrl, describeMode, describeTeamSize } from "@/lib/format";
+import {
+  aoe4WorldProfileUrl,
+  describeMode,
+  describeTeamSize,
+  teamSizesFromRawJson,
+} from "@/lib/format";
+import { compareFeedInstants, historyFeedPage, historyHole } from "@/lib/history-feed";
 import { isRecord } from "@/lib/json";
+import { resolveObjective } from "@/lib/objective-events";
 import {
   OBJECTIVE_DEFINITIONS,
   VICTORIAS_ID,
@@ -25,11 +32,23 @@ import {
   type ObjectiveOption,
   type ObjectiveTarget,
 } from "@/lib/objectives";
-import { rankedModesWhere } from "@/lib/ranked-match";
+import { rankedModesWhere, classificatoryWhere } from "@/lib/ranked-match";
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  dateRangeWhere,
+  hasDateBounds,
+  paginate,
+  readBoundedInt,
+  readSingleParam,
+  type DateRange,
+  type QueryParam,
+} from "@/lib/query-params";
 import { readMatcherinoDonations, readSyncRunTrace } from "@/lib/settings";
 import {
   RULESET_VERSION,
   loadObjectiveView,
+  playerObjectiveAwards,
   readObjectiveAwards,
   readRuleset,
   type ScoringRuleset,
@@ -1697,3 +1716,567 @@ export const getMatcherinoDonations = cache(
 export const getEditionConfig = cache(async (): Promise<PublicRead<EditionConfig>> => {
   return readFromDatabase("public/getEditionConfig", () => readEditionConfig());
 });
+
+/* -------------------------------------------------------------------------- */
+/* Historial público de ganancias de puntos                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Los filtros de `/historial`, tal como llegan de `searchParams`.
+ *
+ * Dos, y los dos sobre las **dos** clases de fila del feed (victorias y objetivos):
+ *
+ * - `jugador`: el `profileId` de AoE4World, que es el id público del participante —el
+ *   mismo de `/detalle-jugador/[profileId]`—, **no** el `Player.id` del panel. Un valor que no
+ *   sea un número se trata como ausencia de filtro, nunca como un filtro sin resultados:
+ *   una URL manipulada tiene que verse como "sin filtrar" y no como "este jugador no
+ *   tiene ninguna ganancia", que sería una afirmación falsa.
+ * - `from` / `to`: el mismo rango de fechas que el panel, con los mismos bordes
+ *   (ver `dateRangeWhere()`), aplicado a `Match.startedAt` y a `ObjectiveEvent.achievedAt`.
+ *   Ninguno de los dos separa las dos clases: el filtro es un rango de fechas, no "fechas
+ *   de partidas".
+ *
+ * `page` y `pageSize` son la paginación, acotada como en el panel. No hay `sort`: el feed
+ * público se lee siempre de lo más reciente a lo más antiguo, y el orden no se elige
+ * desde la URL.
+ */
+export type PointHistoryQuery = {
+  jugador?: QueryParam;
+  from?: QueryParam;
+  to?: QueryParam;
+  page?: QueryParam;
+  pageSize?: QueryParam;
+};
+
+/**
+ * Los filtros de `/historial`, ya validados.
+ *
+ * Se resuelven en un sitio y se reparten entre las dos consultas del feed, y por eso son
+ * un tipo y no dos valores sueltos: es lo que hace imposible que las dos mitades del
+ * merge se filtren por cosas distintas.
+ */
+export type PointHistoryFilters = {
+  /** `Player.profileId`, o `null` si no hay filtro (o el valor no se entiende). */
+  profileId: number | null;
+  /** Rango sobre `Match.startedAt` y, con los mismos límites, sobre `achievedAt`. */
+  rango: DateRange;
+};
+
+/**
+ * El filtro de participante de la URL, ya validado.
+ *
+ * `Player.profileId` de AoE4World es un entero positivo de siete u ocho cifras; el
+ * catálogo de perfiles es de la API, así que la forma que se admite es un número decimal
+ * sin signo y sin ceros a la izquierda. Lo que no encaje se trata como **ausencia de
+ * filtro**, igual que el `playerId` mal formado del panel y por el mismo motivo.
+ *
+ * Exportado para su test: es una función pura y es justo donde se decide qué hace una
+ * URL manipulada.
+ */
+export function readProfileIdFilter(value: QueryParam): number | null {
+  const raw = readSingleParam(value);
+
+  if (raw === null || !/^[1-9]\d{0,9}$/.test(raw)) {
+    return null;
+  }
+
+  const profileId = Number(raw);
+
+  return Number.isSafeInteger(profileId) ? profileId : null;
+}
+
+/**
+ * Los filtros de `/historial`, ya validados y listos para sus dos consultas.
+ *
+ * Exportado para su test, como `readProfileIdFilter`: las dos mitades del feed tienen que
+ * leer la misma URL de la misma manera.
+ */
+export function readPointHistoryFilters(query: PointHistoryQuery): PointHistoryFilters {
+  return {
+    profileId: readProfileIdFilter(query.jugador),
+    rango: dateRangeWhere(query.from, query.to),
+  };
+}
+
+/**
+ * El objetivo cumplido de una fila del feed público, ya resuelto para pintar.
+ *
+ * Etiqueta, grupo y métrica salen del **catálogo** (`OBJECTIVE_DEFINITIONS`), y son
+ * exactamente los tres campos que necesita `ObjectiveIcon` para elegir su glifo: un
+ * objetivo del historial se pinta con el mismo icono que su tarjeta en `/objetivos` y que
+ * en la clasificación.
+ *
+ * `points` y `count` son lo que **cobró ese jugador**, no el precio de catálogo: el
+ * importe de un logro repetible no es el de la tarjeta (`imparable` reparte 1 punto por
+ * día con tope y `victorias` paga por victoria), y publicar el tope como si fuera lo
+ * cobrado sería el error que ya se corrigió en la clasificación. Es el mismo lector que
+ * el panel (`resolveObjective()` con el desglose del jugador), así que las dos pantallas
+ * no pueden dar dos cifras del mismo hito.
+ */
+export type PointHistoryObjective = {
+  /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`lider-japanese`…). */
+  id: string;
+  label: string;
+  group: ObjectiveGroup;
+  /** Métrica que lo decide; con `id` y `group`, lo que elige el glifo. */
+  metric: ObjectiveMetric;
+  /** Puntos que el jugador cobró por este objetivo. */
+  points: number;
+  /** Repeticiones cobradas: días, victorias o 1 (ver `StandingObjective`). */
+  count: number;
+};
+
+/**
+ * Una fila del feed público de `/historial`: **una victoria clasificatoria o un objetivo
+ * cumplido**.
+ *
+ * ## Las dos clases se distinguen por `objective`
+ *
+ * `null` = fila de partida; no `null` = se cumplió un objetivo. Es el mismo discriminante
+ * y la misma decisión que en el feed del panel (`AdminMatchHistoryRow`), y por el mismo
+ * motivo: un `kind` aparte que nadie mantiene en sincronía con `objective` es una forma de
+ * que las dos clases de fila se contradigan.
+ *
+ * Los campos de partida (`gameId`, `opponentName`, `mode`, `leaderboard`, `map`,
+ * `teamSize`, `revertedAt`) son `null` en una fila de objetivo porque **no existen ahí**,
+ * no porque falten datos.
+ *
+ * ## Qué no sale de aquí
+ *
+ * `Match.id` (el cuid interno del panel), `rawJson` y todo lo de `AdminAction` se quedan
+ * fuera: esta lectura es la puerta de una pantalla pública y no publica nada que no se
+ * vaya a pintar. La identidad de la partida es su `gameId` de AoE4World, que ya es público.
+ *
+ * ## Qué significa una fila con `revertedAt`
+ *
+ * Es una ganancia **rechazada por la organización**: la partida se marcó como revertida y
+ * no cuenta para la clasificación. La fila sigue aquí a propósito (el panel la enseña por
+ * el mismo motivo: sin la fila no habría nada que deshacer), viaja con su marca para que
+ * la interfaz la tache, y **no** se debe sumar a nada. Puede traer `points: 0` —una
+ * victoria que se revirtió antes de que el motor la puntuara, o cuyos puntos se han
+ * puesto a cero al revertirla— o sus puntos originales; lo que decide que no cuenta es
+ * `revertedAt`, no el número.
+ *
+ * El filtro de la consulta deja fuera las victorias que **nunca** fueron una ganancia
+ * (fuera de la ventana, antes del alta del jugador, con el equipo desequilibrado…): esas
+ * tienen `points = 0` y `revertedAt = null`, y no salen.
+ */
+export type PointHistoryRow = {
+  /**
+   * Clave estable de la fila, única en todo el feed: `match:<gameId>:<profileId>` en una
+   * victoria y `objective:<id>:<profileId>` en un objetivo.
+   *
+   * Se compone en vez de publicar el cuid interno de `Match`, y sirve para las dos cosas
+   * que necesita una fila en una lista paginada: la `key` de React y el **desempate
+   * final** del orden (ver `comparePointHistory()`). Lleva el `profileId` porque la
+   * unicidad del modelo es por jugador y partida: en un 2v2 con dos participantes de la
+   * liga hay dos filas de la misma partida y cada una es una ganancia distinta.
+   */
+  id: string;
+  /**
+   * La fecha de la fila, y por lo que se ordena y se filtra: `Match.startedAt` en una
+   * victoria y `ObjectiveEvent.achievedAt` en un objetivo cumplido (el fin del torneo en
+   * los que se resuelven en caliente, que no se registran hasta que termina).
+   */
+  startedAt: Date;
+  /** Nombre de display del jugador, el mismo que ve en la clasificación. */
+  playerName: string;
+  /** `Player.profileId`: el id con el que se enlaza su ficha en `/detalle-jugador/[profileId]`. */
+  playerProfileId: number;
+  /** Puntos que aporta la fila: los de la partida o los que el jugador cobró por el objetivo. */
+  points: number;
+  /** El objetivo cumplido, o `null` si la fila es una victoria. Ver el tipo. */
+  objective: PointHistoryObjective | null;
+
+  /* ------------------------------- Solo victorias ----------------------------- */
+
+  /** `gameId` de AoE4World; `null` en una fila de objetivo. */
+  gameId: string | null;
+  opponentName: string | null;
+  /** Familia de ladder resuelta (`rm_solo` / `rm_team`); `null` en un objetivo. */
+  mode: string | null;
+  /** Literal de AoE4World (`rm_solo`, `rm_2v2`…); el copy puede necesitarlo. */
+  leaderboard: string | null;
+  map: string | null;
+  /**
+   * Tamaño real del partido («1vs1», «2vs2», «3vs3»…), leído de `rawJson.teams` y solo si
+   * la partida tiene dos bandos del mismo tamaño.
+   *
+   * No se puede sacar de `mode`/`leaderboard`: un ranked por equipos llega con
+   * `leaderboard: "rm_team"`, que no dice cuántos juegan. `null` cuando el payload no lo
+   * permite (y también en una fila de objetivo), y entonces la interfaz cae en
+   * `describeMode`.
+   */
+  teamSize: string | null;
+  /** Instante del revert, o `null` si la ganancia cuenta (o si la fila no es de partida). */
+  revertedAt: Date | null;
+};
+
+/**
+ * Una página del feed público de `/historial`.
+ *
+ * `total` son las filas del feed con el filtro puesto, de las dos clases, y es de donde
+ * sale `pageCount`. `page` llega **acotada** a `[1, pageCount]`, igual que en el panel: una
+ * URL que pide la 7 con un filtro que solo tiene dos páginas devuelve la última con filas.
+ */
+export type PointHistory = {
+  rows: PointHistoryRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Páginas que hay con este filtro; `0` si no hay ninguna fila. */
+  pageCount: number;
+};
+
+/**
+ * El orden del feed público: fecha descendente, la victoria antes que el objetivo y la
+ * clave de la clase como desempate final.
+ *
+ * ## Por qué es un orden total
+ *
+ * Es lo que necesita la paginación: sin un desempate único, dos filas del mismo instante
+ * pueden salir en cualquier orden entre sí y una página puede repetir o perder filas de la
+ * anterior. Y aquí el desempate **tiene que llegar a ser único**, porque los empates no son
+ * teóricos: todos los objetivos se registran con `achievedAt` = fin del torneo, así que el
+ * día del cierre hay muchas filas —varios jugadores por el mismo objetivo— con el mismo
+ * instante exacto.
+ *
+ * ## Y por qué tiene que decir lo mismo que las consultas
+ *
+ * El merge de las dos mitades solo es una ventana real del feed si cada mitad llega ya
+ * ordenada como este comparador las ordena (`historyHole()` cuenta con ello). Por eso el
+ * desempate es la misma pareja por la que ordenan los dos `orderBy`: el id de la clase
+ * (`gameId`/`objectiveId`, que en Postgres se ordena como texto) y, si dos filas comparten
+ * id de clase —la misma partida para dos jugadores, el mismo objetivo para dos
+ * beneficiarios—, el `profileId` del jugador.
+ *
+ * Los dos primeros criterios (fecha y clase) son los de `compareFeedInstants()`, que es lo
+ * que comparte con el panel; lo que cambia es solo el desempate, porque las claves de las
+ * filas no son las mismas.
+ *
+ * Exportado para su test: es una función pura y en la que se apoya que dos páginas
+ * consecutivas no repitan ni pierdan filas.
+ */
+export function comparePointHistory(a: PointHistoryRow, b: PointHistoryRow): number {
+  const porFechaYClase = compareFeedInstants(a, b);
+
+  if (porFechaYClase !== 0) {
+    return porFechaYClase;
+  }
+
+  const porClase = compareTextDesc(pointHistoryClassId(a), pointHistoryClassId(b));
+
+  if (porClase !== 0) {
+    return porClase;
+  }
+
+  return b.playerProfileId - a.playerProfileId;
+}
+
+/**
+ * El id de la clase de una fila: el `gameId` de la victoria o el id del objetivo.
+ *
+ * En una fila de partida el `gameId` no puede ser `null` (es lo que compone su `id`); el
+ * `?? ""` es solo para que el tipo —que lo declara opcional en las filas de objetivo— no
+ * obligue a un `!` que mentiría más.
+ */
+function pointHistoryClassId(row: PointHistoryRow): string {
+  return row.objective === null ? (row.gameId ?? "") : row.objective.id;
+}
+
+/** Comparación de dos textos en descendente, con la convención de `compareFeedInstants()`. */
+function compareTextDesc(a: string, b: string): number {
+  return a < b ? 1 : a > b ? -1 : 0;
+}
+
+/**
+ * El historial público de ganancias de puntos: **victorias clasificatorias y objetivos
+ * cumplidos**, mezclados en un solo feed, paginados en servidor y de lo más reciente a lo
+ * más antiguo.
+ *
+ * Es el feed de `/admin/historial` con otra cara: las mismas dos clases de fila (victorias
+ * clasificatorias y objetivos cumplidos), los mismos filtros de jugador y fechas y la misma
+ * paginación en servidor, pero solo con las ganancias —el panel enseña el recorrido entero,
+ * con las partidas de 0 puntos a la vista— y solo de participantes aprobados. No hay acciones
+ * del panel (revertir y restaurar son de `/admin`), ni filtro de resultado, ni selector de
+ * orden.
+ *
+ * ## Qué es una ganancia
+ *
+ * - **Una victoria clasificatoria** que aporta puntos: `result = WIN` y `points > 0`,
+ *   dentro de `classificatoryWhere()` (familia del ruleset y ventana). El corte de
+ *   inscripción y la condición de equipo **no** se pueden añadir a un `where` que abarca a
+ *   todos los jugadores, y no hace falta: ya están codificados en `Match.points`, porque el
+ *   motor solo puntúa lo que pasa las cinco condiciones (`rankedMatchSql()`). Una victoria
+ *   que nunca puntuó —fuera de la ventana, antes del alta, con el equipo desequilibrado— se
+ *   queda con `points = 0`: no es una ganancia y no sale.
+ * - **Una ganancia rechazada**: una victoria con `revertedAt` informado. Entra aunque sus
+ *   puntos sean 0 (una revertida no puntúa, y `Match.points` se pone a cero al recalcular),
+ *   y viaja con la marca para que la interfaz la tache. Es la decisión que ya tomó el
+ *   panel: el historial **cuenta** lo que se rechazó en vez de esconderlo.
+ * - **Un objetivo cumplido** (`ObjectiveEvent`): el hito ya ocurrió, así que no hay nada
+ *   que rechazar y no lleva marca. Los puntos son los que **cobró** ese jugador, con el
+ *   mismo lector que el panel.
+ *
+ * ## Y por qué no vale cualquier fila
+ *
+ * El feed solo publica a participantes **aprobados**, la misma regla que la clasificación,
+ * `/partidas` y la ficha de objetivos: quien no está en el torneo no tiene presencia
+ * pública, y sus partidas no están en ninguna tabla pública. En `Match` el filtro hay que
+ * ponerlo explícitamente, porque `Match.points` no depende del estado del jugador (el
+ * motor puntúa igual una victoria de alguien a quien después se le rechazó la solicitud) y
+ * sin él saldrían ganancias de gente que la web no enseña en ningún otro sitio.
+ *
+ * ## El merge, y por qué sale barato
+ *
+ * Los objetivos son pocos (un evento por jugador y por objetivo del catálogo), así que se
+ * piden enteros: el hueco de partidas depende de cuántos sean, y por eso no se pueden pedir
+ * en paralelo con ellas. La aritmética —cuántas partidas traer desde dónde y por dónde se
+ * recorta la página— es `historyHole()`/`historyFeedPage()`, las mismas que usa el panel, y
+ * el `count` de partidas no depende de eso, así que sí va en paralelo.
+ *
+ * ## Cómo se lee
+ *
+ * En cada llamada, sin caché: un lector no puede ver un historial viejo. Eso hace que la
+ * página que la use tenga que ser **dinámica** (ver el docblock de cabecera del módulo).
+ * Con la base de datos caída devuelve `{ status: "degraded", data: null }` en vez de
+ * propagar el error, y `data` es `null` y no una lista vacía para que la pantalla no pueda
+ * confundir "no hay ganancias" con "no lo hemos podido leer".
+ */
+export async function getPointHistory(
+  query: PointHistoryQuery = {},
+): Promise<PublicRead<PointHistory>> {
+  return readFromDatabase("public/getPointHistory", () => loadPointHistory(query));
+}
+
+/**
+ * Las columnas de `Match` que publica el feed, y las de `ObjectiveEvent`.
+ *
+ * Se declaran fuera de las consultas para no repetir la lista de campos, y son las que
+ * necesita cada fila y **ninguna más**: de `Match` no entra ni el `id` interno.
+ */
+const POINT_HISTORY_MATCH_SELECT = {
+  gameId: true,
+  startedAt: true,
+  opponentName: true,
+  points: true,
+  mode: true,
+  leaderboard: true,
+  map: true,
+  revertedAt: true,
+  // El tamaño del partido sale de `rawJson.teams`; Prisma no deja pedir una parte del
+  // JSON, y se lee solo para resolverlo aquí, sin publicarlo.
+  rawJson: true,
+  player: { select: { name: true, profileId: true } },
+} satisfies Prisma.MatchSelect;
+
+const POINT_HISTORY_OBJECTIVE_SELECT = {
+  objectiveId: true,
+  achievedAt: true,
+  playerId: true,
+  player: { select: { name: true, profileId: true } },
+} satisfies Prisma.ObjectiveEventSelect;
+
+type PointHistoryMatchSource = Prisma.MatchGetPayload<{
+  select: typeof POINT_HISTORY_MATCH_SELECT;
+}>;
+
+/**
+ * El orden de las **victorias** del feed, en `orderBy` de Prisma.
+ *
+ * Tiene que ser el mismo orden que devuelve `comparePointHistory()` recortado a la clase
+ * de las victorias, porque el merge compara las dos mitades: si la consulta las trajera en
+ * otro orden, la página dejaría de ser una ventana del feed real. De ahí que el desempate
+ * sea la misma pareja de antes: `gameId` y el `profileId` del jugador, que entre las dos
+ * son únicas (`@@unique([playerId, gameId])`).
+ */
+const POINT_HISTORY_MATCH_ORDER_BY: Prisma.MatchOrderByWithRelationInput[] = [
+  { startedAt: "desc" },
+  { gameId: "desc" },
+  { player: { profileId: "desc" } },
+];
+
+/**
+ * El orden de los **objetivos**, en `orderBy` de Prisma.
+ *
+ * Es el mismo criterio, con la clave de su clase: `objectiveId` y el `profileId` del
+ * beneficiario. El desempate por jugador no es decorativo: el día del cierre del torneo
+ * todos los eventos comparten `achievedAt`, y un logro lo cobran varios jugadores a la vez,
+ * así que sin él las filas de la consulta no estarían en el orden del comparador y el
+ * merge podría repetir o perder alguna.
+ */
+const POINT_HISTORY_OBJECTIVE_ORDER_BY: Prisma.ObjectiveEventOrderByWithRelationInput[] = [
+  { achievedAt: "desc" },
+  { objectiveId: "desc" },
+  { player: { profileId: "desc" } },
+];
+
+/** Una victoria del feed, ya en la forma que publica la pantalla. */
+function pointHistoryMatchRow(row: PointHistoryMatchSource): PointHistoryRow {
+  const profileId = row.player.profileId;
+
+  return {
+    // El `profileId` entra en la clave porque en un 2v2 con dos participantes de la liga
+    // hay dos filas de la misma partida, una por jugador.
+    id: `match:${row.gameId}:${profileId}`,
+    startedAt: row.startedAt,
+    playerName: row.player.name,
+    playerProfileId: profileId,
+    points: row.points,
+    objective: null,
+    gameId: row.gameId,
+    opponentName: row.opponentName,
+    mode: row.mode,
+    leaderboard: row.leaderboard,
+    map: row.map,
+    // El tamaño se resuelve aquí y no en la interfaz, igual que en el panel: `rawJson` es
+    // el payload literal de la API y no debe salir del DAL.
+    teamSize: describeTeamSize(teamSizesFromRawJson(row.rawJson)),
+    revertedAt: row.revertedAt,
+  };
+}
+
+/**
+ * Los objetivos cumplidos que pasan el filtro, ya en filas del feed.
+ *
+ * Se piden **todos** (no una página): son como mucho un objetivo por jugador y por objetivo
+ * del catálogo, y hace falta el recuento para saber cuántas filas caben delante de la
+ * página (ver `historyHole()`).
+ *
+ * Una fila cuyo `objectiveId` no está en el catálogo se descarta con un aviso en el log: solo
+ * puede existir si alguien insertó la fila a mano (el motor borra las que no corresponden en
+ * cada recálculo), y una fila de hito sin etiqueta no dice nada.
+ */
+async function pointHistoryObjectives(
+  where: Prisma.ObjectiveEventWhereInput,
+  ruleset: ScoringRuleset,
+): Promise<PointHistoryRow[]> {
+  const filas = await db.objectiveEvent.findMany({
+    where,
+    orderBy: POINT_HISTORY_OBJECTIVE_ORDER_BY,
+    select: POINT_HISTORY_OBJECTIVE_SELECT,
+  });
+
+  // El importe real y las repeticiones de cada jugador, en una consulta para todos: el
+  // mismo lector que usa el panel, para que las dos pantallas no puedan dar dos cifras
+  // distintas del mismo objetivo.
+  const awards = await playerObjectiveAwards(filas.map((fila) => fila.playerId));
+  const rows: PointHistoryRow[] = [];
+
+  for (const fila of filas) {
+    const objetivo = resolveObjective(
+      fila.objectiveId,
+      ruleset,
+      awards.get(fila.playerId) ?? null,
+    );
+
+    if (objetivo === null) {
+      console.warn(
+        `[public] Objetivo "${fila.objectiveId}": no está en el catálogo, su evento no se muestra.`,
+      );
+      continue;
+    }
+
+    rows.push({
+      // Con el `profileId` por el mismo motivo que las partidas: un logro lo cobran varios
+      // jugadores y cada uno es una ganancia.
+      id: `objective:${objetivo.id}:${fila.player.profileId}`,
+      startedAt: fila.achievedAt,
+      playerName: fila.player.name,
+      playerProfileId: fila.player.profileId,
+      points: objetivo.points,
+      objective: {
+        id: objetivo.id,
+        label: objetivo.label,
+        group: objetivo.group,
+        metric: objetivo.metric,
+        points: objetivo.points,
+        count: objetivo.count,
+      },
+      // Un objetivo no tiene rival, formato, mapa ni resultado: `null` es "no aplica", no
+      // "faltan datos". Y no lleva marca de revert: un hito no se rechaza.
+      gameId: null,
+      opponentName: null,
+      mode: null,
+      leaderboard: null,
+      map: null,
+      teamSize: null,
+      revertedAt: null,
+    });
+  }
+
+  return rows;
+}
+
+/** Arma la página del feed público, ya con el merge y el recorte hechos. */
+async function loadPointHistory(query: PointHistoryQuery): Promise<PointHistory> {
+  const page = readBoundedInt(query.page, { min: 1, max: 100_000, fallback: 1 });
+  const pageSize = readBoundedInt(query.pageSize, {
+    min: 1,
+    max: MAX_PAGE_SIZE,
+    fallback: DEFAULT_PAGE_SIZE,
+  });
+
+  const ruleset = await readRuleset();
+  const { profileId, rango } = readPointHistoryFilters(query);
+
+  // Los filtros se suman, no se eligen: `where` es una conjunción, así que aprobado +
+  // jugador + fechas + "es una ganancia" se combinan solos.
+  //
+  // El `null` del corte de inscripción es deliberado y es la excepción de este módulo,
+  // como en el panel: la consulta abarca a todos los jugadores y un `where` de Prisma no
+  // compara dos columnas. Lo que puntúa lo dice `Match.points`, que ya lleva aplicado ese
+  // corte y la condición de equipo (ver el docblock de `getPointHistory`).
+  //
+  // El rango del filtro va en `AND` y no suelto sobre `startedAt`, aunque en el panel sí
+  // vaya suelto: allí el filtro de fechas **sustituye** los límites de la ventana (para eso
+  // el panel lista el recorrido entero, con las partidas de 0 puntos incluidas), y aquí eso
+  // sería un error, porque una ganancia fuera de la ventana no es una ganancia. En `AND`, la
+  // ventana del ruleset sigue siendo un suelo y un techo, y el filtro de quien mira solo
+  // puede recortar por dentro.
+  const partidasWhere: Prisma.MatchWhereInput = {
+    ...classificatoryWhere(ruleset.modes, ruleset.window, null),
+    // `classificatoryWhere` ya exige `result not null`; aquí además tiene que ser victoria.
+    result: MatchResult.WIN,
+    // Una ganancia es una victoria que suma o una que se rechazó y queda marcada. Las que
+    // nunca puntuaron no llegan: tienen `points = 0` y no están revertidas.
+    OR: [{ points: { gt: 0 } }, { revertedAt: { not: null } }],
+    player: { status: PlayerStatus.APPROVED, ...(profileId === null ? {} : { profileId }) },
+    ...(hasDateBounds(rango) ? { AND: [{ startedAt: rango }] } : {}),
+  };
+
+  const eventosWhere: Prisma.ObjectiveEventWhereInput = {
+    player: { status: PlayerStatus.APPROVED, ...(profileId === null ? {} : { profileId }) },
+    ...(hasDateBounds(rango) ? { achievedAt: rango } : {}),
+  };
+
+  return paginate(async (wanted) => {
+    const skip = (wanted - 1) * pageSize;
+
+    // Los eventos salen enteros y antes que las partidas, porque el hueco depende de
+    // cuántos sean; el `count` de partidas no depende de eso y va en paralelo.
+    const [eventos, totalPartidas] = await Promise.all([
+      pointHistoryObjectives(eventosWhere, ruleset),
+      db.match.count({ where: partidasWhere }),
+    ]);
+
+    const { skipPartidas, takePartidas } = historyHole(skip, pageSize, eventos.length);
+
+    const partidas = await db.match.findMany({
+      where: partidasWhere,
+      orderBy: POINT_HISTORY_MATCH_ORDER_BY,
+      skip: skipPartidas,
+      take: takePartidas,
+      select: POINT_HISTORY_MATCH_SELECT,
+    });
+
+    return {
+      total: totalPartidas + eventos.length,
+      rows: historyFeedPage(partidas.map(pointHistoryMatchRow), eventos, {
+        skip,
+        pageSize,
+        compare: comparePointHistory,
+      }),
+    };
+  }, { page, pageSize });
+}
