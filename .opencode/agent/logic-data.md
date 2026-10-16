@@ -1,7 +1,7 @@
 ---
 description: Lógica, datos e integraciones (Prisma, Supabase Auth/Postgres, API de AoE4World, Server Actions, workers). Úsalo para cualquier cambio de lógica, base de datos, API o infraestructura.
 mode: subagent
-model: opencode-go/deepseek-v4.1-flash
+model: opencode/deepseek-v4.1-flash-free
 variant: high
 temperature: 0.2
 permission:
