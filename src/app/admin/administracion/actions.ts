@@ -31,6 +31,7 @@ import {
 } from "@/lib/edition-announcements";
 import { campoSiCambia } from "@/lib/player-fields";
 import { parseEmail } from "@/lib/player-input";
+import { VICTORIAS_ID } from "@/lib/objectives";
 import { parseMadridLocalInstant } from "@/lib/ranked-match";
 import { mergeRuleset, readRuleset, writeScoringRuleset, type ScoringRuleset } from "@/lib/scoring";
 
@@ -446,8 +447,8 @@ function disabledObjectivesText(ids: readonly string[]): string {
 /**
  * Los puntos de objetivos que han cambiado, como un solo campo del rastro.
  *
- * Va junto y no un campo por objetivo a propósito: son hasta 82 valores, y una frase
- * de historial con 82 campos no se lee. Lo que sí se ve es **cuáles** han cambiado y
+ * Va junto y no un campo por objetivo a propósito: son hasta 83 valores, y una frase
+ * de historial con 83 campos no se lee. Lo que sí se ve es **cuáles** han cambiado y
  * de qué valor a qué valor.
  */
 function objectivesChanged(
@@ -483,7 +484,7 @@ function objectivesChanged(
  * El formulario manda los campos que se editan, y lo que no manda se conserva: los
  * puntos por objetivo, si no vienen como `objectivePoints.<id>`, siguen con el valor
  * que tenían. Es lo contrario de "foto completa" de la edición y es deliberado: el
- * catálogo tiene 82 puntos y la pantalla puede no editarlos todos, así que un
+ * catálogo tiene 83 puntos y la pantalla puede no editarlos todos, así que un
  * formulario que no los mencione **no puede borrarlos**.
  *
  * ## Validación
@@ -559,6 +560,16 @@ export async function saveScoringRuleset(
       continue;
     }
 
+    const id = key.slice(OBJECTIVE_POINTS_PREFIX.length);
+
+    // `victorias` no tiene precio propio: cada victoria vale `pointsPerWin` (el motor
+    // ignora `objectives["victorias"]`), así que un campo con su nombre se descarta
+    // aquí. Ni escribe un valor que nadie lee ni deja en el historial un cambio que no
+    // ha existido.
+    if (id === VICTORIAS_ID) {
+      continue;
+    }
+
     const text = value.trim();
 
     // Vacío es "no lo toco": el formulario puede pintar el campo sin obligar a
@@ -573,7 +584,7 @@ export async function saveScoringRuleset(
       return { status: "error", message: OBJECTIVE_POINTS_INVALID_ERROR };
     }
 
-    objectives[key.slice(OBJECTIVE_POINTS_PREFIX.length)] = parsed;
+    objectives[id] = parsed;
   }
 
   // El `label` no es un campo del formulario: es texto de producto que recalcula

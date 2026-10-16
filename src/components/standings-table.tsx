@@ -9,6 +9,7 @@ import type {
   StandingRow,
 } from "@/lib/public";
 import { countryFlagSvgUrl, countryFlagUrl } from "@/lib/flag";
+import { objectiveTitle } from "@/lib/objective-format";
 import { ChannelLinks } from "@/components/channel-links";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
@@ -43,7 +44,8 @@ const OBJECTIVE_COLUMNS = 7;
  * ratón, sin glifos ni notas fijas que ensucien la tabla.
  */
 const POINTS_HINTS = {
-  permanent: "Permanentes: victorias y logros ya conseguidos, que no se pierden.",
+  permanent:
+    "Permanentes: logros ya conseguidos, que no se pierden. Las victorias van dentro, porque son el objetivo Victorias.",
   temporary:
     "Temporales: competiciones, que se deciden al cierre y pueden cambiar de dueño.",
 } as const;
@@ -836,7 +838,7 @@ function StandingsRow({
               // en su `title`.
               <span className="whitespace-nowrap text-xs leading-none tabular-nums">
                 <span title={POINTS_HINTS.permanent} className="text-foreground">
-                  {row.pointsByWins + row.pointsByAchievements}
+                  {row.pointsByAchievements}
                 </span>
                 <span aria-hidden="true" className="text-muted">
                   {" / "}
@@ -1135,7 +1137,7 @@ function CompactPointsBreakdown({ row }: { row: StandingRow }) {
   return (
     <p className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-line pt-2 text-xs">
       <span title={POINTS_HINTS.permanent} className="text-foreground">
-        {row.pointsByWins + row.pointsByAchievements} de permanentes
+        {row.pointsByAchievements} de permanentes
       </span>
       <span aria-hidden="true" className="text-muted">
         +
@@ -1151,10 +1153,10 @@ function CompactPointsBreakdown({ row }: { row: StandingRow }) {
  * Desglose del total de puntos de una fila y mando del resumen de objetivos.
  *
  * El total manda y debajo van sus dos mitades, que el jugador lee sin hover:
- * los puntos permanentes (victorias y logros ya conseguidos) y los temporales
- * (competiciones, que se deciden al cierre y pueden cambiar de dueño). La
- * aclaración de cada cifra va en su `title`, el apoyo discreto que ya usa la
- * tabla para lo que no cabe en la celda.
+ * los puntos permanentes (los **logros** ya conseguidos, con las victorias dentro
+ * porque son el objetivo Victorias) y los temporales (competiciones, que se deciden
+ * al cierre y pueden cambiar de dueño). La aclaración de cada cifra va en su
+ * `title`, el apoyo discreto que ya usa la tabla para lo que no cabe en la celda.
  *
  * El resumen de objetivos se abre desde aquí, que es lo que era informativo: si
  * el jugador tiene objetivos el bloque entero es un botón con
@@ -1388,7 +1390,9 @@ function Chevron({ expanded, className = "" }: { expanded: boolean; className?: 
  *
  * Es la cara "crónica" de la fila: los objetivos se agrupan por familia (el
  * orden de `StandingRow.objectives` ya llega agrupado) y cada uno se lee como
- * una ficha de botín, con su icono, su etiqueta y los puntos que aporta. Cada
+ * una ficha de botín, con su icono, su etiqueta y los puntos que aporta. Un
+ * objetivo repetible lleva delante sus repeticiones (`2×Imparable`) y las dos
+ * cifras son las que **cobró** el jugador, no el precio del catálogo. Cada
  * ficha va sobre `surface-raised` para que destaque del panel, que comparte el
  * tono de la fila, y su `title` —la regla del objetivo en una frase, del
  * catálogo— responde al "¿esto cómo se consigue?" sin cargar la ficha.
@@ -1420,7 +1424,9 @@ function ObjectivesDetail({ row }: { row: StandingRow }) {
                   className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-raised px-2.5 py-1 text-xs"
                 >
                   <ObjectiveIcon option={objective} className="size-4 shrink-0" />
-                  <span className="text-foreground">{objective.label}</span>
+                  <span className="tabular-nums text-foreground">
+                    {objectiveTitle(objective)}
+                  </span>
                   <span className="font-semibold tabular-nums text-accent">
                     +{objective.points}
                   </span>

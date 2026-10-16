@@ -14,7 +14,7 @@ import {
   leagueFilterRank,
   rankLevelToLeague,
 } from "@/components/league-icon";
-import { MapPool } from "@/components/objective-card";
+import { MapGaps, MapPool } from "@/components/objective-card";
 import { ObjectiveFeatureFrame } from "@/components/objective-feature-summary";
 import { ObjectiveFamilyRail } from "@/components/objective-family-rail";
 import { ObjectiveIcon } from "@/components/objective-icon";
@@ -22,7 +22,14 @@ import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
 import { PageHead } from "@/components/page-head";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { SectionIndexBar, type DocSection } from "@/components/section-index";
-import { objectiveCloseness, orderByObjectiveProgress } from "@/lib/objective-format";
+import {
+  hasNoCap,
+  hasReachedTarget,
+  objectiveCloseness,
+  objectiveTitle,
+  orderByObjectiveProgress,
+  prizeLabel,
+} from "@/lib/objective-format";
 
 /**
  * Las familias de objetivos de civilización, en el orden en que se leen: la
@@ -317,7 +324,8 @@ export function ParticipantObjectivesView({
           highlightProfileId={player.profileId}
           onClose={() => setActive(null)}
           front={
-            // El componente reserva arriba el aire del botón de cerrar del `Modal`.
+            // La X de cerrar vive en la esquina superior derecha de la propia cara
+            // (`ObjectiveFlipDialog`), así que el resumen le reserva ese aire.
             <div className="h-full overflow-y-auto">
               <ParticipantObjectiveFeatureSummary
                 objective={active}
@@ -513,7 +521,12 @@ function FamilyCarouselSection({
   mapPool: readonly string[];
   onOpen: (objective: ParticipantObjective) => void;
 }) {
-  const achieved = items.filter((objective) => objective.achieved).length;
+  // «Conseguidos» es llegar al umbral, como en el resto de la ficha: en estos
+  // subobjetivos (3 victorias o 3 partidas con una civilización) coincidía ya con
+  // cobrar algo, pero el criterio es el mismo en todas partes.
+  const completed = items.filter((objective) =>
+    hasReachedTarget(objective, objective.value),
+  ).length;
 
   return (
     <div id={id} className="scroll-mt-24">
@@ -521,7 +534,7 @@ function FamilyCarouselSection({
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
           <h3 className="font-display text-base font-semibold text-foreground">{title}</h3>
           <p className="text-xs tabular-nums text-muted">
-            {subobjectiveCount(items.length)} · {achievedCount(achieved)}
+            {subobjectiveCount(items.length)} · {achievedCount(completed)}
           </p>
         </div>
         <p className="mt-0.5 text-xs text-muted">
@@ -565,8 +578,6 @@ export function ParticipantObjectiveSummary({
   mapPool: readonly string[];
   dense?: boolean;
 }) {
-  const distance = formatDistance(objective);
-
   return (
     <div className={`flex h-full flex-col ${dense ? "p-3" : "p-4"}`}>
       <div className="flex items-start gap-3">
@@ -583,7 +594,7 @@ export function ParticipantObjectiveSummary({
               <span className="text-xs text-muted">({objective.detail.label})</span>
             ) : null}
             {objective.achieved ? (
-              <AchievedBadge />
+              <AchievedBadge objective={objective} />
             ) : objective.kind === "competition" ? (
               <PositionBadge position={objective.position} />
             ) : null}
@@ -591,25 +602,12 @@ export function ParticipantObjectiveSummary({
           <p className="mt-0.5 text-xs text-muted">{groupLabels[objective.group]}</p>
         </div>
 
-        <PointsPlate points={objective.points} achieved={objective.achieved} />
+        <PointsPlate objective={objective} />
       </div>
 
       <dl className="mt-3 grid grid-cols-3 gap-x-3 gap-y-2">
         <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
-        {objective.kind === "achievement" ? (
-          <>
-            <Fact label="Estado" value={objective.achieved ? "Conseguido" : "En camino"} />
-            <Fact label="Te falta" value={remainingText(objective) ?? "—"} />
-          </>
-        ) : (
-          <>
-            <Fact
-              label="Posición"
-              value={objective.achieved ? "Poseído" : positionText(objective)}
-            />
-            <Fact label="Al primero" value={distance ?? "—"} />
-          </>
-        )}
+        <ObjectiveFacts objective={objective} />
       </dl>
 
       <AchievementProgress objective={objective} />
@@ -623,7 +621,7 @@ export function ParticipantObjectiveSummary({
       </p>
 
       {objective.metric === "mapas" && mapPool.length > 0 ? (
-        <MapPool maps={mapPool} />
+        <ObjectiveMapDetail objective={objective} mapPool={mapPool} />
       ) : null}
 
       <div className="mt-auto flex items-end justify-end border-t border-line pt-3">
@@ -656,12 +654,13 @@ export function ParticipantObjectiveFeatureSummary({
   groupLabels: Record<ObjectiveGroup, string>;
   mapPool: readonly string[];
 }) {
-  const distance = formatDistance(objective);
   // En la tarjeta grande, la barra del logro ya resume "X de Y": repetir "Tu
   // avance" justo encima es redundante. Solo se conserva cuando la barra no se
-  // pinta —logro sin umbral o ya conseguido—, para no perder la cifra.
+  // pinta —logro sin umbral, sin tope o ya en el umbral—, para no perder la cifra.
   const showProgressBar =
-    objective.kind === "achievement" && objective.target !== null && !objective.achieved;
+    objective.kind === "achievement" &&
+    objective.target !== null &&
+    !hasReachedTarget(objective, objective.value);
 
   return (
     <ObjectiveFeatureFrame
@@ -674,7 +673,7 @@ export function ParticipantObjectiveFeatureSummary({
       }
       badges={
         objective.achieved ? (
-          <AchievedBadge />
+          <AchievedBadge objective={objective} />
         ) : objective.kind === "competition" ? (
           <PositionBadge position={objective.position} />
         ) : null
@@ -684,31 +683,18 @@ export function ParticipantObjectiveFeatureSummary({
       description={objective.description}
       detail={
         objective.metric === "mapas" && mapPool.length > 0 ? (
-          <MapPool maps={mapPool} />
+          <ObjectiveMapDetail objective={objective} mapPool={mapPool} />
         ) : undefined
       }
       progress={
-        <div className="flex flex-col gap-4">
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+        <div className="flex flex-col gap-5">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-4">
             {showProgressBar ? null : (
               <div className="col-span-2">
                 <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
               </div>
             )}
-            {objective.kind === "achievement" ? (
-              <>
-                <Fact label="Estado" value={objective.achieved ? "Conseguido" : "En camino"} />
-                <Fact label="Te falta" value={remainingText(objective) ?? "—"} />
-              </>
-            ) : (
-              <>
-                <Fact
-                  label="Posición"
-                  value={objective.achieved ? "Poseído" : positionText(objective)}
-                />
-                <Fact label="Al primero" value={distance ?? "—"} />
-              </>
-            )}
+            <ObjectiveFacts objective={objective} />
           </dl>
 
           <AchievementProgress objective={objective} />
@@ -716,6 +702,64 @@ export function ParticipantObjectiveFeatureSummary({
       }
       actionLabel="Ver clasificación"
     />
+  );
+}
+
+/**
+ * Los dos datos de avance de un objetivo, según su forma: un logro enseña su estado
+ * y lo que le falta, y una competición, su puesto y la distancia al primero.
+ *
+ * En un logro **sin tope** (`victorias`) no hay umbral que alcanzar —se cobra con
+ * cada victoria y no se termina nunca—, así que el estado dice la regla y lo que
+ * falta se queda en el guion del "no aplica", el mismo que usa la distancia de una
+ * competición sin puesto. Lo que lleva cobrado lo dice la placa de la cabecera.
+ *
+ * «Conseguido» es llegar al umbral, no cobrar algo: un logro acumulativo a medias se
+ * lee **en camino** con lo que le queda (`imparable`, 3 de 14 días → "En camino" y
+ * "Te falta: 11 días"), aunque su punto por día ya esté en el haber.
+ */
+function ObjectiveFacts({ objective }: { objective: ParticipantObjective }) {
+  if (objective.kind === "achievement") {
+    const state = hasNoCap(objective)
+      ? "Sin tope"
+      : hasReachedTarget(objective, objective.value)
+        ? "Conseguido"
+        : "En camino";
+
+    return (
+      <>
+        <Fact label="Estado" value={state} />
+        <Fact label="Te falta" value={remainingText(objective) ?? "—"} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Fact label="Posición" value={objective.achieved ? "Poseído" : positionText(objective)} />
+      <Fact label="Al primero" value={formatDistance(objective) ?? "—"} />
+    </>
+  );
+}
+
+/**
+ * El detalle de mapas de un logro `por-tierra-y-agua` en la ficha.
+ *
+ * Con avance del jugador (`mapGaps`) se enseñan los mapas que le faltan, que es lo
+ * único accionable; sin él —no aparece en el ranking del objetivo— se enseña el pool
+ * entero, que es lo que exige la regla.
+ */
+function ObjectiveMapDetail({
+  objective,
+  mapPool,
+}: {
+  objective: ParticipantObjective;
+  mapPool: readonly string[];
+}) {
+  return objective.mapGaps === null ? (
+    <MapPool maps={mapPool} />
+  ) : (
+    <MapGaps gaps={objective.mapGaps} />
   );
 }
 
@@ -779,6 +823,11 @@ function Chevron() {
  * los ya conseguidos. Los conseguidos se distinguen por el tinte, el subtítulo
  * ("Conseguido", en lugar del grupo) y el check; así "En posesión" conserva la
  * lectura de botín aunque comparta el tratamiento compacto.
+ *
+ * Un logro **sin tope** va en el mismo sitio —está cobrando puntos— pero no lleva
+ * el check ni el «Conseguido», que ahí no significan nada: el subtítulo dice la
+ * regla («Sin tope») y el rótulo lleva delante sus repeticiones (`24×Victorias`),
+ * con lo que va sumado en la cifra de la derecha.
  */
 function ObjectiveChip({
   objective,
@@ -790,13 +839,27 @@ function ObjectiveChip({
   onOpen: (objective: ParticipantObjective) => void;
 }) {
   const achieved = objective.achieved;
+  const noCap = hasNoCap(objective);
+  // Cobrar y completar son cosas distintas: `imparable` paga desde el primer día, así
+  // que un logro a medias se lee «en camino» aunque esté en el haber del jugador.
+  const reached = hasReachedTarget(objective, objective.value);
+  const subtitle = achieved
+    ? noCap
+      ? "Sin tope"
+      : reached
+        ? "Conseguido"
+        : "En camino"
+    : groupLabels[objective.group];
+  // Un logro sin tope todavía sin cobrar enseña el precio de cada unidad, no un
+  // premio: el chip lo dice al lado para no parecer que reparte eso de golpe.
+  const unitPrice = noCap && !achieved;
 
   return (
     <button
       type="button"
       onClick={() => onOpen(objective)}
       aria-label={`Ver la clasificación de ${objective.label}${
-        achieved ? " (conseguido)" : ""
+        achieved && (noCap || reached) ? (noCap ? " (sin tope)" : " (conseguido)") : ""
       }`}
       className={`group flex w-full items-center gap-3 rounded-md border px-3 py-2.5 text-left transition-colors ${
         achieved
@@ -814,21 +877,26 @@ function ObjectiveChip({
         <ObjectiveIcon option={objective} className="size-4 shrink-0" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-foreground transition-colors group-hover:text-accent">
-          {objective.label}
+        <span className="block truncate text-sm tabular-nums text-foreground transition-colors group-hover:text-accent">
+          {objectiveTitle(objective)}
         </span>
         <span
           className={`block truncate text-xs ${achieved ? "text-accent" : "text-muted"}`}
         >
-          {achieved ? "Conseguido" : groupLabels[objective.group]}
+          {subtitle}
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-1.5">
-        {achieved ? <CheckIcon className="size-3.5 shrink-0 text-accent" /> : null}
+        {achieved && !noCap && reached ? (
+          <CheckIcon className="size-3.5 shrink-0 text-accent" />
+        ) : null}
         <span className="font-display text-sm font-semibold tabular-nums text-muted">
           {objective.points}
-          <span className="sr-only"> puntos</span>
+          {unitPrice ? null : <span className="sr-only"> puntos</span>}
         </span>
+        {unitPrice ? (
+          <span className="text-xs text-muted">{prizeLabel(objective)}</span>
+        ) : null}
       </span>
     </button>
   );
@@ -899,8 +967,19 @@ function Fact({
   );
 }
 
-/** Los puntos que reparte el objetivo, en una placa a la derecha de la fila. */
-function PointsPlate({ points, achieved }: { points: number; achieved: boolean }) {
+/**
+ * Los puntos del objetivo en la ficha, en una placa a la derecha de la fila.
+ *
+ * La cifra es **lo que el jugador lleva cobrado** por ese objetivo (o lo que
+ * cobraría: el precio del catálogo si aún no lo tiene, y en un logro sin tope sin
+ * cobrar todavía, el valor de cada unidad). Por eso el pie cambia: `puntos` cuando la
+ * cifra es un total suyo, y `puntos por victoria` cuando lo que enseña es lo que paga
+ * cada unidad, o parecería que el objetivo reparte eso de golpe.
+ */
+function PointsPlate({ objective }: { objective: ParticipantObjective }) {
+  const achieved = objective.achieved;
+  const unitPrice = hasNoCap(objective) && !achieved;
+
   return (
     <span
       className={`shrink-0 rounded-md border px-2.5 py-1.5 text-right ${
@@ -914,21 +993,45 @@ function PointsPlate({ points, achieved }: { points: number; achieved: boolean }
           achieved ? "text-accent" : "text-foreground"
         }`}
       >
-        {points}
+        {objective.points}
       </span>
-      <span className="mt-1 block text-xs font-medium uppercase tracking-wide text-muted">
-        puntos
+      <span className="mt-1 block max-w-[6.5rem] text-xs font-medium uppercase leading-tight tracking-wide text-muted">
+        {unitPrice ? prizeLabel(objective) : "puntos"}
       </span>
     </span>
   );
 }
 
-/** Distintivo del objetivo que el jugador posee ahora mismo. */
-function AchievedBadge() {
+/**
+ * Distintivo del logro en el haber del jugador: dice en qué punto está.
+ *
+ * Un logro sin tope no se «consigue» (se cobra con cada victoria y no hay un momento
+ * en que se termine), y uno acumulativo con umbral puede estar **en camino** aunque ya
+ * pague: `imparable` da un punto por día, así que con tres de catorce no lleva check.
+ * El check es del umbral, no de cobrar.
+ */
+function AchievedBadge({ objective }: { objective: ParticipantObjective }) {
+  if (hasNoCap(objective)) {
+    return <Badge>Sin tope</Badge>;
+  }
+
+  if (!hasReachedTarget(objective, objective.value)) {
+    return <Badge>En camino</Badge>;
+  }
+
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
+    <Badge>
       <CheckIcon className="size-3 shrink-0" />
       Conseguido
+    </Badge>
+  );
+}
+
+/** El cromo de las tres caras del distintivo: mismo tono de acento para las tres. */
+function Badge({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
+      {children}
     </span>
   );
 }
@@ -961,11 +1064,14 @@ function PositionBadge({ position }: { position: number | null }) {
 }
 
 /**
- * Barra de avance de un logro: cuánto lleva de su umbral. La barra solo refuerza
- * el dato, que ya va en "Tu avance"; por eso es decorativa.
+ * Barra de avance de un logro: cuánto lleva de su umbral. La barra solo refuerza el
+ * dato, que ya va en "Tu avance"; por eso es decorativa. Solo desaparece cuando no hay
+ * umbral (una competición no llega aquí, y `victorias` no se completa) o cuando el
+ * logro ya ha llegado a él: mientras va **en camino**, la barra es justo lo que dice
+ * cuánto le queda, aunque el punto por día ya esté cobrado.
  */
 function AchievementProgress({ objective }: { objective: ParticipantObjective }) {
-  if (objective.target === null || objective.achieved) {
+  if (objective.target === null || hasReachedTarget(objective, objective.value)) {
     return null;
   }
 

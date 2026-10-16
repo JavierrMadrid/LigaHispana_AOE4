@@ -17,6 +17,7 @@ import {
   objectivesSnapshotFingerprint,
   readObjectivesSnapshotValue,
   type ObjectiveAward,
+  type ObjectiveAwardEntry,
   type ObjectiveOption,
   type ObjectiveView,
   type ObjectivesSnapshot,
@@ -32,11 +33,14 @@ import { readMapPool, writeScoringLastRun } from "@/lib/settings";
 /**
  * Motor de puntuación (reglas v4).
  *
- * La regla completa está en `docs/PUNTUACION.md`: 2 puntos por victoria
- * clasificatoria más los objetivos de `objectives.ts`, que son de dos formas:
- * competiciones (un único poseedor) y logros (los cobra quien los cumple). Aquí
- * vive lo que no es cálculo: el ruleset (configurable en `Setting`), el agregado
- * (`PlayerScore`) y el orden final de la clasificación.
+ * La regla completa está en `docs/PUNTUACION.md`: los puntos por victoria
+ * clasificatoria (`ruleset.pointsPerWin`) más los objetivos de `objectives.ts`, que
+ * son de dos formas: competiciones (un único poseedor) y logros (los cobra quien los
+ * cumple). Con las reglas actuales las victorias **son** un objetivo más (`victorias`, sin tope),
+ * así que el total de un jugador es la suma de sus objetivos y `pointsPerWin` es la
+ * única fuente de lo que vale una victoria. Aquí vive lo que no es cálculo: el
+ * ruleset (configurable en `Setting`), el agregado (`PlayerScore`) y el orden final de
+ * la clasificación.
  *
  * La v4 añade **objetivos desactivados** (`disabledObjectives`): el ruleset puede
  * apagar objetivos del catálogo, y uno apagado no se computa, no se publica, no da
@@ -339,6 +343,10 @@ export function mergeRuleset(stored: unknown): RulesetMergeResult {
         if (parsed === null) {
           warnings.push(`objectives["${id}"] no es un entero positivo: ${JSON.stringify(raw)}`);
         } else {
+          // `victorias` se guarda como cualquier otro, pero el motor **no lo lee**:
+          // su valor por victoria es `pointsPerWin` (ver `computeObjectives`), así que
+          // un documento con `objectives["victorias"]` retocado a mano no cambia lo
+          // que se cobra ni se avisa de nada: no hay nada que arreglar.
           ruleset.objectives[id] = parsed;
         }
       }
@@ -596,7 +604,14 @@ export async function writeScoringRuleset(
 export type ScoreBreakdownMode = {
   /** Victorias clasificatorias en este modo. */
   wins: number;
-  /** Puntos aportados por este modo, solo de partidas (sin objetivos). */
+  /**
+   * Puntos aportados por este modo, solo de partidas (sin objetivos).
+   *
+   * Es **auditoría**, no reparto: con las reglas actuales todo punto de un jugador se
+   * cobra como objetivo (`victorias` incluido), así que este número no entra en
+   * `total`. Se conserva para poder mirar de dónde salieron los puntos de partida sin
+   * volver a agregar `Match`.
+   */
   points: number;
   /** Partidas clasificatorias resueltas en este modo, ganadas y perdidas. */
   matches: number;
@@ -613,24 +628,94 @@ export type ScoreBreakdownMode = {
  * ```json
  * {
  *   "ruleSetVersion": 4,
- *   "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+ *   "rule": "2 puntos por victoria clasificatoria más 83 objetivos: 29 competiciones y 54 logros",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
  *   },
- *   "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1"] }
+ *   "objectives": {
+ *     "points": 125,
+ *     "earned": ["victorias", "loco-por-ganar", "rey-1v1"],
+ *     "awards": {
+ *       "victorias": { "points": 168, "count": 84 },
+ *       "loco-por-ganar": { "points": 50, "count": 1 }
+ *     }
+ *   }
  * }
  * ```
  *
- * La suma de `byMode[*].points` más `objectives.points` es `total`: comprobar
- * eso es comprobar que la tabla cuadra con `Match.points`.
+ * **El total de la fila son los puntos de objetivos**: `PlayerScore.total` es
+ * `objectives.points` y nada más. Las victorias clasificatorias también se cobran por
+ * ahí —son el objetivo `victorias`, a `pointsPerWin` por victoria—, así que todo punto
+ * de un jugador sale de sus objetivos.
+ *
+ * `byMode[*].points` y `Match.points` se conservan como **auditoría** (y para el
+ * detalle por modo), pero ya no entran en el total. `awards` guarda, por id cobrado,
+ * el importe real y las repeticiones: es lo que permite publicar `2×Imparable +2` sin
+ * rehacer la cuenta desde el catálogo, cuyo precio en `imparable` es solo el tope.
  */
 export type ScoreBreakdown = {
   ruleSetVersion: number;
   rule: string;
   byMode: Record<string, ScoreBreakdownMode>;
-  objectives: { points: number; earned: string[] };
+  objectives: {
+    points: number;
+    /** Ids cobrados, en orden de presentación del catálogo. */
+    earned: string[];
+    /**
+     * Importe real y repeticiones por id. **Ausente** en las filas escritas antes de
+     * que existiera (y en el desglose de un jugador sin objetivos va vacío): quien lo
+     * lea tiene que caer al precio de catálogo y a una repetición, no inventarse un
+     * cero. Ver `readObjectiveAwards` y `splitStandingPoints`.
+     */
+    awards: Record<string, ObjectiveAwardEntry>;
+  };
 };
+
+/**
+ * El importe real y las repeticiones de cada objetivo cobrado, leídos de un
+ * `breakdown` guardado.
+ *
+ * Devuelve `null` cuando la fila es anterior a la forma nueva (`earned: string[]`
+ * sin `awards`) o no se puede leer: quien llama cae entonces al precio de catálogo
+ * del objetivo y a una repetición, que es lo máximo que aquella fila permite
+ * afirmar. Se lee como `unknown` porque la columna es `Json` y su forma depende de
+ * la versión de las reglas que produjo la fila.
+ */
+export function readObjectiveAwards(
+  breakdown: unknown,
+): Record<string, ObjectiveAwardEntry> | null {
+  if (!isRecord(breakdown) || !isRecord(breakdown.objectives)) {
+    return null;
+  }
+
+  const awards = breakdown.objectives.awards;
+
+  if (!isRecord(awards)) {
+    return null;
+  }
+
+  const parsed: Record<string, ObjectiveAwardEntry> = {};
+
+  for (const [id, entry] of Object.entries(awards)) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+
+    const { points, count } = entry;
+
+    if (typeof points !== "number" || !Number.isFinite(points)) {
+      continue;
+    }
+
+    parsed[id] = {
+      points,
+      count: typeof count === "number" && Number.isFinite(count) ? count : 1,
+    };
+  }
+
+  return parsed;
+}
 
 function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode> {
   const modes = new Set<string>([...RANKED_MODES, ...ruleset.modes]);
@@ -722,7 +807,7 @@ async function readObjectivesSnapshot(client: RulesetClient = db): Promise<Objec
  *
  * La comparación es contra la huella y no contra el JSON guardado: `jsonb` normaliza
  * el orden de las claves, así que el documento leído nunca es textualmente igual al
- * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (82
+ * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (83
  * objetivos con sus rankings completos) para dejarlos idénticos.
  */
 async function writeObjectivesSnapshot(view: ObjectiveView, client: RulesetClient): Promise<void> {
@@ -779,11 +864,16 @@ export type RecomputeScoresResult = {
    * tiene fila con ceros.
    */
   playersUnranked: number;
-  /** Suma de `PlayerScore.total`: partidas y objetivos. */
+  /**
+   * Suma de `PlayerScore.total`. Con las reglas actuales todo punto de un jugador
+   * sale de sus objetivos —las victorias también, como objetivo `victorias`—, así que
+   * hoy coincide con `objectivesPoints`; se publican los dos porque uno es el total de
+   * la tabla y el otro, el reparto por objetivos.
+   */
   totalPoints: number;
   /** Objetivos con al menos un cobrador en este recálculo. */
   objectivesAwarded: number;
-  /** Puntos repartidos por objetivos. */
+  /** Puntos repartidos por objetivos, sumados de todas las filas de la tabla. */
   objectivesPoints: number;
   durationMs: number;
 };
@@ -791,9 +881,11 @@ export type RecomputeScoresResult = {
 /**
  * Agregado de partidas de un jugador: lo que aporta el SQL a la clasificación.
  *
- * `matchPoints` son solo los puntos de partidas (sin objetivos); los objetivos se
- * suman al montar la fila, en `rankApprovedPlayers()`. Un jugador aprobado sin
- * ninguna clasificatoria **no aparece** aquí: quien llama lo trata como ceros.
+ * `matchPoints` es **auditoría**: la suma de `Match.points` de sus clasificatorias.
+ * Deliberadamente **no** entra en el total, porque todo punto de un jugador se cobra
+ * por sus objetivos (`victorias` incluido, que es un objetivo más); se conserva para
+ * poder contrastar el `UPDATE` de `Match.points` contra la tabla. Un jugador aprobado
+ * sin ninguna clasificatoria **no aparece** aquí: quien llama lo trata como ceros.
  */
 export type AggregatedRow = {
   matchPoints: number;
@@ -815,7 +907,11 @@ export type RankedStanding = {
   wins: number;
   matches: number;
   byMode: Record<string, ScoreBreakdownMode>;
-  objectives: { points: number; earned: string[] };
+  objectives: {
+    points: number;
+    earned: string[];
+    awards: Record<string, ObjectiveAwardEntry>;
+  };
   /**
    * Puesto 1-based de competición sobre todos los aprobados: dos filas con la
    * misma tupla de criterios lo comparten y el siguiente hueco se salta.
@@ -933,6 +1029,15 @@ export function compareStandings(
  * puesto. Los que no tienen partidas van con 0 puntos, 0 victorias y 0 partidas,
  * así que quedan detrás de cualquiera que haya jugado alguna y comparten entre
  * ellos el último puesto.
+ *
+ * ## El total son los objetivos
+ *
+ * `total` es la suma de los objetivos del jugador y **nada más**: las victorias
+ * clasificatorias se cobran como el objetivo `victorias` (`pointsPerWin` por
+ * victoria), así que todo punto sale de ahí. Los `matchPoints` del agregado son
+ * auditoría y no se suman: sumarlos contaría dos veces las victorias, y además haría
+ * que un objetivo apagado dejara de descontar (el total tiene que salir de los
+ * objetivos **activos** del ruleset).
  */
 export function rankApprovedPlayers(
   players: readonly { id: string; profileId: number }[],
@@ -957,8 +1062,12 @@ export function rankApprovedPlayers(
         wins: aggregate.wins,
         matches: aggregate.matches,
         byMode: aggregate.byMode,
-        total: aggregate.matchPoints + objectivePoints,
-        objectives: { points: objectivePoints, earned: award?.earned ?? [] },
+        total: objectivePoints,
+        objectives: {
+          points: objectivePoints,
+          earned: award?.earned ?? [],
+          awards: award?.awards ?? {},
+        },
       };
     })
     .sort(compareStandings);

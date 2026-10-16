@@ -62,9 +62,14 @@ cambia sin desplegar. La página `/puntuacion` muestra el periodo con las fechas
 de la base falla, cae al texto genérico y no inventa fechas.
 
 La página `/puntuacion` lee además el **ruleset activo** para las demás cifras: los puntos por victoria
-y los **objetivos activos**, de los que salen el recuento y el total que reparten (hoy 82 y 4.679
+y los **objetivos activos**, de los que salen el recuento y el total que reparten (hoy 83 y 4.679
 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de resumen no se pinta y
 los párrafos caen a su forma genérica, en vez de enseñar los números de la edición anterior.
+
+La suma de 4.679 es la de los objetivos de **premio fijo** (cada uno contado una vez, `imparable` a su
+tope): `victorias` queda fuera, porque no reparte un premio sino `pointsPerWin` por victoria y sin tope
+(ver [`OBJETIVOS.md`](./OBJETIVOS.md#total-de-puntos)). El criterio está en código (`hasFixedPrize()`);
+en una tarjeta ya resuelta se reconoce en `kind === "achievement" && target === null`.
 
 En el panel (`/admin/administracion/puntuacion`) la ventana se escribe como **fecha y hora local de
 Europe/Madrid** (`datetime-local`), que es la zona con la que la organización lee el torneo; el
@@ -93,6 +98,17 @@ entrar. `registeredAt` es la fecha del envío del alta (no la de la aprobación)
 - **Sin ponderación por formato**: una victoria en 2v2 vale lo mismo que en 1v1. El ruleset admite un
   `pointsByMode` si algún día hiciera falta.
 
+## Cómo se cobra una victoria
+
+Cada victoria clasificatoria se cobra como el objetivo **`victorias`**: un logro repetible, sin tope, que
+paga `ruleset.pointsPerWin` por victoria. `pointsPerWin` es la **única fuente** de lo que vale una
+victoria —un `objectives["victorias"]` guardado en `Setting` se ignora—, así que no puede haber dos
+cifras distintas de lo mismo.
+
+Con eso, **todo punto de un jugador sale de sus objetivos**: `PlayerScore.total` es la suma de los
+objetivos de esa fila. `Match.points` y `byMode[*].points` se conservan como **auditoría** (y para
+`/admin/historial`), pero no se suman aparte: hacerlo contaría dos veces las victorias.
+
 ## Permanentes y temporales
 
 La clasificación publica el total partido en dos columnas, y las dos suman **siempre** el total
@@ -100,14 +116,15 @@ La clasificación publica el total partido en dos columnas, y las dos suman **si
 
 | Columna | Qué la compone |
 |---|---|
-| **Permanentes** | Las victorias clasificatorias más los **logros** ya conseguidos (`kind: "achievement"`), que se cobran al cumplirlos y no se pierden. |
+| **Permanentes** | Los **logros** ya conseguidos (`kind: "achievement"`), que se cobran al cumplirlos y no se pierden. Las victorias están aquí, porque son el objetivo `victorias`. |
 | **Temporales** | Las **competiciones** (`kind: "competition"`), que se deciden al cierre y pueden cambiar de dueño. |
 
-El motor guarda el total de objetivos y los ids cobrados, no el precio de cada uno, así que el reparto
-se reconstruye al leer la clasificación: las competiciones a precio del catálogo —su precio es fijo— y
-los logros por diferencia. De ahí sale exacto `imparable`, que reparte 1 punto por día con tope y cuyo
-precio de catálogo es solo el tope. La diferencia entre competición y logro está en
-[`OBJETIVOS.md`](./OBJETIVOS.md).
+El motor guarda, por objetivo cobrado, su importe real y sus repeticiones (`breakdown.objectives.awards`),
+así que el total es exacto. Para repartirlo entre las dos columnas, las competiciones salen de sumar su
+precio de catálogo —su precio es fijo— recortado al total, y los logros son **el resto** hasta el total:
+`imparable` reparte 1 punto por día con tope, `victorias` paga por victoria, y sumar precios de logros se
+quedaría con puntos que aquella fila no cobró. De ahí sale exacto también `imparable`. La diferencia
+entre competición y logro está en [`OBJETIVOS.md`](./OBJETIVOS.md).
 
 ## Desempates de la clasificación
 
@@ -140,7 +157,7 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
 ```json
 {
   "version": 4,
-  "label": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+  "label": "2 puntos por victoria clasificatoria más 83 objetivos: 29 competiciones y 54 logros",
   "modes": ["rm_solo", "rm_team"],
   "window": { "from": "2026-09-15T00:00:00.000Z", "to": "2026-10-15T00:00:00.000Z" },
   "pointsPerWin": 2,
@@ -166,9 +183,11 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
   y `to <= from` se rechaza entero. El panel convierte antes la fecha y hora local de Madrid a UTC
   (ver [La ventana](#la-ventana)), así que lo guardado siempre cumple esto.
 - **La etiqueta (`label`) la calcula el código** (`ruleLabel()`), no el documento: sale de
-  `pointsPerWin` y de los objetivos **activos** ("2 puntos por victoria clasificatoria más 81 objetivos:
-  28 competiciones y 53 logros" con un objetivo apagado). El `label` guardado se ignora y
+  `pointsPerWin` y de los objetivos **activos** ("2 puntos por victoria clasificatoria más 82 objetivos:
+  28 competiciones y 54 logros" con un objetivo apagado). El `label` guardado se ignora y
   `ensureRuleset` corrige la copia de la tabla.
+- **`objectives["victorias"]` se ignora** por el motor: lo que vale una victoria lo dice `pointsPerWin`
+  (ver [Cómo se cobra una victoria](#cómo-se-cobra-una-victoria)). El panel no deja editarlo.
 - Cada recálculo escribe `PlayerScore` solo en la versión activa; las versiones anteriores se quedan
   como histórico. El rastro de la última pasada va en `Setting["scoring.lastRun"]`.
 
@@ -185,21 +204,36 @@ aplican.
 ```json
 {
   "ruleSetVersion": 4,
-  "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+  "rule": "2 puntos por victoria clasificatoria más 83 objetivos: 29 competiciones y 54 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
-  "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1", "lider-french"] }
+  "objectives": {
+    "points": 458,
+    "earned": ["victorias", "loco-por-ganar", "rey-1v1"],
+    "awards": {
+      "victorias": { "points": 168, "count": 84 },
+      "loco-por-ganar": { "points": 50, "count": 1 },
+      "rey-1v1": { "points": 240, "count": 1 }
+    }
+  }
 }
 ```
+
+- `objectives.points` es el total de la fila: todo punto de un jugador sale de sus objetivos.
+- `awards` guarda, por id cobrado, el **importe real** y las **repeticiones** (`count`), que es lo que
+  permite publicar `2×Imparable +2` sin rehacer la cuenta desde el catálogo. Va aparte de `earned` (los
+  ids, en orden) y **falta** en las filas escritas antes de que existiera: quien lo lea cae al precio de
+  catálogo y a una repetición.
+- `byMode` y `Match.points` son **auditoría** y no se suman al total.
 
 ## Ejemplo
 
 Jugador con 140 clasificatorias y 84 victorias (60 %):
 
-- Partidas: 84 × 2 = **168 puntos**.
-- Objetivos: 185 puntos (ver [`OBJETIVOS.md`](./OBJETIVOS.md)).
+- Objetivos: las 84 victorias del objetivo `victorias` (84 × 2 = **168 puntos**) más 185 puntos de los
+  demás objetivos.
 - Total: **353 puntos**.
 
 Los objetivos rompen empates y premian el estilo; con 2 puntos por victoria, completarlos pesa más que

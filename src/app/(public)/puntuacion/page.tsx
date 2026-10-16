@@ -9,6 +9,7 @@ import {
   type DocSection,
 } from "@/components/section-index";
 import { formatTournamentWindow } from "@/lib/format";
+import { hasNoCap } from "@/lib/objective-format";
 import { getEditionConfig, getObjectives, getTournamentWindow } from "@/lib/public";
 
 export const metadata: Metadata = {
@@ -31,7 +32,11 @@ const SECTIONS: readonly DocSection[] = [
 // Una página generada en el `build` enseñaría las cifras de la edición anterior.
 export const dynamic = "force-dynamic";
 
-/** Miles con el punto de español: 4.679, no 4679. */
+/**
+ * Miles con el separador de español, el punto. Con CLDR, `es-ES` no agrupa las
+ * cifras de cuatro dígitos —4679, no 4.679—, así que el total del torneo se lee
+ * entero y solo los millones llevan punto.
+ */
 const countFormat = new Intl.NumberFormat("es-ES");
 
 export default async function ScoringPage() {
@@ -52,10 +57,15 @@ export default async function ScoringPage() {
   const objectives = objectivesRead.status === "ok" ? objectivesRead.data : null;
   const pointsPerWin = objectives?.pointsPerWin ?? null;
   const objectiveCount = objectives?.options.length ?? null;
+  // La suma de los objetivos de **premio fijo**: `victorias` queda fuera, porque no
+  // reparte un premio sino que paga por victoria y sin tope. Sumarlo diría que el
+  // torneo reparte una cifra que no reparte (ver `docs/PUNTUACION.md`).
   const objectivePoints =
     objectives === null
       ? null
-      : objectives.options.reduce((total, option) => total + option.points, 0);
+      : objectives.options
+          .filter((option) => !hasNoCap(option))
+          .reduce((total, option) => total + option.points, 0);
 
   const edition = editionRead.status === "ok" ? editionRead.data : null;
   const prize = edition !== null && edition.prize.amount !== null ? edition.prize : null;
@@ -98,7 +108,7 @@ export default async function ScoringPage() {
               <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
                 {pointsPerWin}
               </dd>
-              <dt className="text-sm text-muted">puntos por victoria</dt>
+              <dt className="text-sm text-muted">puntos por victoria, sin tope</dt>
             </div>
             <div className="flex items-baseline gap-2">
               <dd className="font-display text-2xl font-semibold tabular-nums text-muted">
@@ -111,7 +121,8 @@ export default async function ScoringPage() {
                 {objectiveCount}
               </dd>
               <dt className="text-sm text-muted">
-                objetivos que reparten {countFormat.format(objectivePoints)} puntos en total
+                objetivos, con {countFormat.format(objectivePoints)} puntos de premio
+                fijo
               </dt>
             </div>
           </dl>
@@ -156,7 +167,14 @@ export default async function ScoringPage() {
                       <strong className="font-semibold text-foreground">
                         {pointsPerWin} {pointsPerWin === 1 ? "punto" : "puntos"}
                       </strong>
-                      .
+                      , que paga el objetivo{" "}
+                      <Link
+                        href="/objetivos"
+                        className="text-accent underline underline-offset-4 hover:text-accent-strong"
+                      >
+                        Victorias
+                      </Link>
+                      : sin umbral ni tope, suma con cada partida ganada.
                     </>
                   ) : (
                     "Cada victoria en una partida clasificatoria suma puntos."
@@ -189,8 +207,11 @@ export default async function ScoringPage() {
                 Una victoria vale lo mismo en 1vs1 que en partidas por equipos.
               </p>
               <p>
-                El total de un jugador es la suma de sus puntos por victorias más
-                los puntos extra de los objetivos.
+                El total de un jugador es la suma de sus objetivos: los{" "}
+                <strong className="font-semibold text-foreground">permanentes</strong>{" "}
+                (los logros que ya ha conseguido, con Victorias dentro) y los{" "}
+                <strong className="font-semibold text-foreground">temporales</strong>{" "}
+                (las competiciones, que se deciden al cierre).
               </p>
             </div>
           </section>
@@ -288,7 +309,7 @@ export default async function ScoringPage() {
             <SectionHeading title="Objetivos especiales" />
             <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
-                Además de las victorias, el torneo reparte puntos extra entre{" "}
+                El torneo reparte puntos extra entre{" "}
                 {objectiveCount !== null ? (
                   <strong className="font-semibold text-foreground">
                     {objectiveCount} objetivos
@@ -296,7 +317,9 @@ export default async function ScoringPage() {
                 ) : (
                   "los objetivos especiales"
                 )}
-                .
+                . Uno de ellos es{" "}
+                <strong className="font-semibold text-foreground">Victorias</strong>:
+                el que paga cada victoria clasificatoria, sin umbral ni tope.
               </p>
               <p>
                 Hay dos formas de cobrarlos: las{" "}
@@ -310,9 +333,10 @@ export default async function ScoringPage() {
                 también respetan la fecha de inscripción.
               </p>
               <p>
-                Cada logro tiene su umbral fijo: 3 victorias o partidas con una
-                civilización, 3 partidas cortas o largas, una racha de 5 victorias,
-                etc.
+                Casi todos los logros tienen su umbral fijo: 3 victorias o partidas
+                con una civilización, 3 partidas cortas o largas, una racha de 5
+                victorias, etc. Los repetibles —Victorias, Imparable— suman una vez
+                por unidad: por victoria y por día.
               </p>
               <p>
                 Todos se resuelven en cada recálculo, así que quién los cobra puede

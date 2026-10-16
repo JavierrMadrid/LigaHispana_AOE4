@@ -1,24 +1,59 @@
 import type { ObjectiveContender, ObjectiveOption } from "@/lib/public";
 import {
   completionSummary,
+  contenderShareOfObjective,
   contenderValue,
-  orderByObjectiveRanking,
+  hasNoCap,
+  hasReachedTarget,
+  objectiveStandingsView,
+  standingsCountLabel,
 } from "@/lib/objective-format";
+import { emptyMessage } from "@/components/objective-card";
 import { PlayerAvatar } from "@/components/player-avatar";
 
 /**
- * Clasificación de un objetivo: el listado de participantes del torneo con su
- * avance y un check en quien lo ha completado (logro) o en su poseedor
- * (competición).
+ * Clasificación de un objetivo: la lista de **quien lo disputa**, con su avance y un
+ * check en quien ha **llegado al umbral** (logro) o en su poseedor (competición); en
+ * un logro **sin tope** no hay check que poner, porque no se completa.
+ *
+ * «Completado» es el umbral, no cobrar algo (`hasReachedTarget`): un logro acumulativo
+ * paga desde el primer punto, así que `imparable` con tres días de catorce no lleva
+ * check —le quedan once— y el resumen tampoco lo cuenta.
  *
  * El orden es el **ranking del objetivo** (`option.ranking`), de más a menos: el
- * que va primero es el más avanzado. Quien **no disputa** el objetivo ahora mismo
- * —no aparece en el ranking— queda al final, en el orden de la clasificación
- * general, y se queda sin valor ni posición, sin inventarle un cero. El número de
- * cada fila es esa posición dentro del objetivo (`1` es el líder); el avance sale
- * del ranking cruzado por `profileId`: en un logro es `value/target` (12/23
- * civilizaciones, 2/3 victorias) y en una competición el valor de su métrica
- * (victorias, partidas, racha), que es lo que le da su posición.
+ * que va primero es el más avanzado. Quien no ha empezado su participación **no
+ * aparece**: sale sin valor ni puesto, y el censo completo está en la página de
+ * clasificación del torneo. La única excepción es `highlightProfileId`, que
+ * conserva su fila —sin valor y sin puesto, no se le inventa un cero— para la ficha
+ * de un jugador. El número de cada fila es su posición dentro del objetivo (`1` es
+ * el líder); el avance sale del ranking cruzado por `profileId`: en un logro es
+ * `value/target` (12/23 civilizaciones, 2/3 victorias) y en una competición el
+ * valor de su métrica (victorias, partidas, racha), que es lo que le da su
+ * posición.
+ *
+ * ## La barra de fondo
+ *
+ * Cada fila lleva una barra con su avance. **Qué mide depende del objetivo**
+ * (`contenderShareOfObjective`): en un **logro con umbral** es el avance sobre el
+ * umbral, para que corresponda con el `X/X` que la fila escribe —`imparable` con tres
+ * días de catorce va por una quinta parte, no por el final—; en una **competición** y
+ * en un logro **sin tope** (`victorias`) no hay umbral contra el que medir, así que se
+ * compara con el **líder de la lista**, que es lo único que los ordena.
+ *
+ * Es fondo del tramo de la fila que va del canto del contenido a la columna de la
+ * cifra —no pasa por debajo del número— y con el mismo aire a los dos lados (12px, el
+ * `gap` de la fila): por eso se cuelga de un envoltorio con puesto, avatar, nombre y
+ * distintivo, y la cifra queda fuera.
+ *
+ * ## Lo pintado a sangre se queda dentro del marco
+ *
+ * La tarjeta de la ventana lleva un marco a 10 y 16px del canto
+ * (`ObjectiveFlipDialog`), así que nada pintado puede cruzarlo: los tres bloques de
+ * esta cara —cabecera, resumen y lista— van con **márgenes** laterales y no con
+ * relleno, y el de las filas vive en la lista. Así los filetes de separación, el
+ * tinte de la fila resaltada y la barra empiezan y acaban donde empieza el texto
+ * (24px del canto en móvil, 32px a partir de `sm`). El texto no se mueve: solo cambia
+ * quién pone el relleno.
  */
 
 /** Un participante del torneo, con lo mínimo para pintar la fila. */
@@ -29,20 +64,7 @@ export type ObjectiveStandingPlayer = {
   profileUrl: string;
 };
 
-/**
- * Los `profileId` que han cumplido un objetivo, sean beneficiarios de un logro
- * o el poseedor de una competición. Es puro: solo depende del objetivo.
- */
-export function completedProfileIds(option: ObjectiveOption): Set<number> {
-  if (option.kind === "achievement") {
-    return new Set(option.beneficiaries.map((beneficiary) => beneficiary.profileId));
-  }
-
-  return option.holder === null ? new Set() : new Set([option.holder.profileId]);
-}
-
-export function ObjectiveStandings({
-  option,
+export function ObjectiveStandings({  option,
   players,
   highlightProfileId = null,
 }: {
@@ -60,37 +82,44 @@ export function ObjectiveStandings({
     );
   }
 
-  const completed = completedProfileIds(option);
-  const orderedPlayers = orderByObjectiveRanking(players, option.ranking);
+  const { rows, contenders } = objectiveStandingsView(
+    players,
+    option.ranking,
+    highlightProfileId,
+  );
+  // El primero de la lista ya ordenada es el más avanzado. Su valor es la escala de
+  // la barra solo donde no hay umbral contra el que medir (competiciones y logros sin
+  // tope); en un logro con umbral, la barra se mide contra el umbral y esto no se usa.
+  const leader = rows[0]?.contender?.value ?? 0;
 
   return (
     <>
-      <div className="flex items-baseline justify-between gap-3 px-6 py-3 sm:px-8">
+      <div className="mx-6 flex items-baseline justify-between gap-3 py-3 sm:mx-8">
         <h3 className="font-display text-base font-semibold text-foreground">Clasificación</h3>
         <span className="text-xs tabular-nums text-muted">
-          {players.length === 1 ? "1 participante" : `${players.length} participantes`}
+          {standingsCountLabel(option, contenders)}
         </span>
       </div>
 
-      <p className="border-t border-line px-6 py-2.5 text-xs text-muted sm:px-8">
-        {completionSummary(option, players.length)}
+      <p className="mx-6 border-t border-line py-2.5 text-xs text-muted sm:mx-8">
+        {completionSummary(option, contenders)}
       </p>
 
-      {players.length === 0 ? (
-        <p className="border-t border-line px-6 py-8 text-center text-sm text-muted sm:px-8">
-          Todavía no hay participantes en la clasificación.
+      {rows.length === 0 ? (
+        <p className="mx-6 border-t border-line py-8 text-center text-sm text-muted sm:mx-8">
+          {emptyMessage(option)}
         </p>
       ) : (
-        <ol className="divide-y divide-line border-t border-line">
-          {orderedPlayers.map(({ participant, contender, position }) => (
+        <ol className="mx-6 divide-y divide-line border-t border-line sm:mx-8">
+          {rows.map(({ participant, contender, position }) => (
             <StandingRow
               key={participant.profileId}
               option={option}
               player={participant}
               contender={contender}
               position={position}
-              achieved={completed.has(participant.profileId)}
               highlight={participant.profileId === highlightProfileId}
+              leader={leader}
             />
           ))}
         </ol>
@@ -104,8 +133,8 @@ function StandingRow({
   player,
   contender,
   position,
-  achieved,
   highlight,
+  leader,
 }: {
   option: ObjectiveOption;
   player: ObjectiveStandingPlayer;
@@ -113,40 +142,74 @@ function StandingRow({
   contender: ObjectiveContender | null;
   /** Puesto en el objetivo (`1` es el más avanzado), o `null` si no lo disputa. */
   position: number | null;
-  achieved: boolean;
   highlight: boolean;
+  /**
+   * Valor del primero de la lista: la escala de la barra donde no hay umbral
+   * (competición o logro sin tope). Ver `contenderShareOfObjective`.
+   */
+  leader: number;
 }) {
-  return (
-    <li
-      className={`flex items-center gap-3 px-6 py-3 sm:px-8 ${highlight ? "bg-accent/5" : ""}`}
-    >
-      <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">
-        {position === null ? null : position}
-      </span>
-      <PlayerAvatar name={player.name} avatarUrl={player.avatarUrl} className="size-8 text-xs" />
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground/90">
-        {/* Solo el nombre es enlace: el hueco de la columna no debe navegar. */}
-        <a
-          href={player.profileUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline-offset-4 transition-colors hover:text-accent hover:underline"
-        >
-          {player.name}
-          <span className="sr-only"> en AoE4World (se abre en una pestaña nueva)</span>
-        </a>
-      </span>
+  const share =
+    contender === null ? 0 : contenderShareOfObjective(option, contender, leader);
+  // Completado es **llegar al umbral**, no cobrar algo: `imparable` paga desde el
+  // primer día. La competición la marca su poseedor, como siempre.
+  const completed =
+    contender !== null &&
+    (option.kind === "competition"
+      ? contender.profileId === option.holder?.profileId
+      : hasReachedTarget(option, contender.value));
 
-      {achieved ? (
-        <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
-          <CheckIcon />
-          {option.kind === "competition" ? "Poseedor" : "Conseguido"}
+  return (
+    <li className={`flex items-center gap-3 py-3 ${highlight ? "bg-accent/5" : ""}`}>
+      {/* La barra es fondo del tramo que va del canto del contenido a la cifra, con
+          el mismo aire a los dos lados (el `gap` de la fila, 12px): arranca un pelo
+          dentro del contenido y el 100 % acaba antes de la columna del número. Va
+          detrás de puesto, avatar, nombre y distintivo —por eso el envoltorio la
+          aísla, y el `-z-10` la deja por debajo de todo lo suyo— y es decorativa. */}
+      <div className="relative isolate flex min-w-0 flex-1 items-center gap-3">
+        {share > 0 ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-3 right-0 -z-10"
+          >
+            <span
+              className="absolute inset-y-0 left-0 bg-accent/10"
+              style={{ width: `${share * 100}%` }}
+            />
+          </span>
+        ) : null}
+
+        <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">
+          {position === null ? null : position}
         </span>
-      ) : (
-        <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-line text-muted/50">
-          <span className="sr-only">Sin completar</span>
+        <PlayerAvatar name={player.name} avatarUrl={player.avatarUrl} className="size-8 text-xs" />
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground/90">
+          {/* Solo el nombre es enlace: el hueco de la columna no debe navegar. */}
+          <a
+            href={player.profileUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline-offset-4 transition-colors hover:text-accent hover:underline"
+          >
+            {player.name}
+            <span className="sr-only"> en AoE4World (se abre en una pestaña nueva)</span>
+          </a>
+          {highlight ? <span className="sr-only"> (jugador de esta ficha)</span> : null}
         </span>
-      )}
+
+        {/* En un logro sin tope no hay distintivo: todo el que sale en la lista ya
+            está sumando, así que marcarlos a todos con el check no diría nada. */}
+        {hasNoCap(option) ? null : completed ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
+            <CheckIcon />
+            {option.kind === "competition" ? "Poseedor" : "Conseguido"}
+          </span>
+        ) : (
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-line text-muted/50">
+            <span className="sr-only">Sin completar</span>
+          </span>
+        )}
+      </div>
 
       <span className="shrink-0 text-right text-xs tabular-nums text-foreground/90">
         {contender === null ? (

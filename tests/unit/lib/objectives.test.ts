@@ -4,10 +4,15 @@ import {
   IMPARABLE_ID,
   JUGON_ID,
   OBJECTIVES_SNAPSHOT_VERSION,
+  OBJECTIVE_COUNT,
+  OBJECTIVE_DEFINITIONS,
   OBJECTIVE_POINTS,
   POLIFACETICO_ID,
+  POR_TIERRA_ID,
+  VICTORIAS_ID,
   computeObjectives,
   currentTournamentStreak,
+  hasFixedPrize,
   objectiveStanding,
   objectivesSnapshotFingerprint,
   readObjectivesSnapshotValue,
@@ -280,6 +285,108 @@ describe("imparable: 1 punto por día natural, con tope", () => {
     expect(imparable.beneficiaries.find((b) => b.profileId === 1)?.points).toBe(14);
     expect(imparable.beneficiaries.find((b) => b.profileId === 2)?.points).toBe(5);
   });
+
+  it("las repeticiones son los días reales, sin el tope de los puntos", () => {
+    // Es lo que permite pintar "20×Imparable +14": se cobran 14 puntos, pero el
+    // objetivo se ha conseguido 20 veces.
+    const players = [aggregate(1, { playedDays: days(20), matches: 20 })];
+    const { options } = computeObjectives(players, DEFAULT_RULESET, []);
+
+    expect(optionById(options, IMPARABLE_ID).beneficiaries[0]).toMatchObject({
+      points: 14,
+      count: 20,
+    });
+  });
+});
+
+describe("victorias: puntos por victoria, sin tope", () => {
+  it("paga pointsPerWin por cada victoria y anota las victorias como repeticiones", () => {
+    const players = [
+      aggregate(1, { wins: 4, matches: 9, lastWinAt: 500 }),
+      aggregate(2, { wins: 1, matches: 2, lastWinAt: 200 }),
+      // Sin victorias no disputa el objetivo: no entra ni en el ranking.
+      aggregate(3, { wins: 0, matches: 3 }),
+    ];
+
+    const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+    const victorias = optionById(options, VICTORIAS_ID);
+
+    expect(victorias.kind).toBe("achievement");
+    expect(victorias.holder).toBeNull();
+    // Sin umbral: el objetivo se repite con cada victoria y no se completa.
+    expect(victorias.target).toBeNull();
+    expect(playerIds(victorias.beneficiaries)).toEqual([1, 2]);
+    expect(victorias.beneficiaries[0]).toMatchObject({ points: 8, count: 4 });
+    expect(victorias.beneficiaries[1]).toMatchObject({ points: 2, count: 1 });
+
+    expect(pointsByPlayer.get("p1")?.awards[VICTORIAS_ID]).toEqual({ points: 8, count: 4 });
+    expect(pointsByPlayer.get("p3")?.earned ?? []).not.toContain(VICTORIAS_ID);
+  });
+
+  it("el importe sale de `pointsPerWin`, no de un punto guardado para el objetivo", () => {
+    // Es la fuente única: un `objectives["victorias"]` retocado se ignora.
+    const ruleset = { ...DEFAULT_RULESET, pointsPerWin: 5, objectives: { ...OBJECTIVE_POINTS, [VICTORIAS_ID]: 99 } };
+    const players = [aggregate(1, { wins: 3, matches: 3, lastWinAt: 100 })];
+
+    const { options, pointsByPlayer } = computeObjectives(players, ruleset, []);
+
+    expect(optionById(options, VICTORIAS_ID).points).toBe(5);
+    expect(optionById(options, VICTORIAS_ID).beneficiaries[0]?.points).toBe(15);
+    expect(pointsByPlayer.get("p1")?.awards[VICTORIAS_ID]).toEqual({ points: 15, count: 3 });
+  });
+
+  it("el ranking son todos los que han ganado algo, ordenados por victorias", () => {
+    const players = [
+      aggregate(1, { wins: 1, matches: 5 }),
+      aggregate(2, { wins: 6, matches: 9 }),
+      aggregate(3, { wins: 0, matches: 2 }),
+    ];
+
+    const { options } = computeObjectives(players, DEFAULT_RULESET, []);
+    const victorias = optionById(options, VICTORIAS_ID);
+
+    expect(playerIds(victorias.ranking)).toEqual([1, 2]);
+    expect(victorias.ranking[0].profileId).toBe(2);
+    expect(victorias.ranking.every((contender) => contender.eligible)).toBe(true);
+  });
+});
+
+describe("hasFixedPrize: qué cuenta la suma nominal", () => {
+  function definition(id: string) {
+    const found = OBJECTIVE_DEFINITIONS.find((item) => item.id === id);
+
+    if (found === undefined) {
+      throw new Error(`No existe el objetivo ${id}`);
+    }
+
+    return found;
+  }
+
+  it("todo el catálogo reparte un premio fijo menos el objetivo de victorias", () => {
+    const sinPremio = OBJECTIVE_DEFINITIONS.filter((item) => !hasFixedPrize(item));
+
+    expect(sinPremio.map((item) => item.id)).toEqual([VICTORIAS_ID]);
+  });
+
+  it("los objetivos con tope sí cuentan, incluido `por-tierra-y-agua`", () => {
+    // Su tope es el tamaño del pool y solo se conoce al calcular, pero el premio es
+    // fijo: no crece con las partidas.
+    expect(hasFixedPrize(definition(POR_TIERRA_ID))).toBe(true);
+    expect(hasFixedPrize(definition(IMPARABLE_ID))).toBe(true);
+    expect(hasFixedPrize(definition("rey-1v1"))).toBe(true);
+    expect(hasFixedPrize(definition(VICTORIAS_ID))).toBe(false);
+  });
+
+  it("el catálogo nominal sigue sumando 4.679 puntos", () => {
+    // Es la cifra de `docs/OBJETIVOS.md`, que es la que resume la banda de
+    // `/puntuacion`. `victorias` queda fuera porque reparte por victoria y sin tope.
+    const total = OBJECTIVE_DEFINITIONS.filter(hasFixedPrize).reduce(
+      (sum, item) => sum + item.points,
+      0,
+    );
+
+    expect(total).toBe(4679);
+  });
 });
 
 describe("por tierra y agua: cubre cada mapa del pool", () => {
@@ -306,6 +413,47 @@ describe("por tierra y agua: cubre cada mapa del pool", () => {
     expect(objetivo.target).toEqual({ unit: "mapas", value: 2 });
     expect(playerIds(objetivo.beneficiaries)).toEqual([1]);
     expect(objetivo.ranking.find((c) => c.profileId === 2)?.value).toBe(1);
+  });
+
+  it("publica los mapas que faltan, con las partidas que faltan en cada uno", () => {
+    // `missing` es 1..3 y los mapas completos no aparecen; el umbral por mapa no se
+    // publica porque el dato ya va masticado. El jugador tiene `Gorge` completo, que
+    // es lo que le mete en el ranking del objetivo.
+    const jugador = aggregate(2, {
+      byMap: new Map([
+        ["Gorge", 3],
+        ["Dry Arabia", 2],
+        ["Baltic", 1],
+        ["Atacama", 0],
+      ]),
+    });
+
+    const { options } = computeObjectives([jugador], DEFAULT_RULESET, [
+      "Gorge",
+      "Dry Arabia",
+      "Baltic",
+      "Atacama",
+      "Nagari",
+    ]);
+    const contender = optionById(options, "por-tierra-y-agua").ranking[0];
+
+    expect(contender.mapGaps).toEqual([
+      { map: "Dry Arabia", missing: 1 },
+      { map: "Baltic", missing: 2 },
+      // `Atacama` y `Nagari` empatan a 3 faltantes: el orden del pool los deja en el
+      // mismo orden en que están en el pool.
+      { map: "Atacama", missing: 3 },
+      { map: "Nagari", missing: 3 },
+    ]);
+  });
+
+  it("los objetivos que no son de mapas no publican avance por mapa", () => {
+    const jugador = aggregate(1, { wins: 3, matches: 4, byCiv: new Map([["french", civ(3, 3)]]) });
+    const { options } = computeObjectives([jugador], DEFAULT_RULESET, ["Gorge"]);
+
+    expect(optionById(options, VICTORIAS_ID).ranking[0].mapGaps).toBeUndefined();
+    expect(optionById(options, "lider-french").ranking[0].mapGaps).toBeUndefined();
+    expect(optionById(options, "masterizando-french").holder?.mapGaps).toBeUndefined();
   });
 });
 
@@ -348,6 +496,23 @@ describe("catálogo de puntos", () => {
       expect(points, `puntos de ${id}`).toBeGreaterThan(0);
     }
   });
+
+  it("el catálogo tiene 83 objetivos", () => {
+    expect(OBJECTIVE_COUNT).toBe(OBJECTIVE_DEFINITIONS.length);
+    expect(OBJECTIVE_COUNT).toBe(83);
+  });
+
+  it("las competiciones dicen en su descripción cómo se desempata", () => {
+    // Es el desempate 3 de `docs/OBJETIVOS.md`, y va en la tarjeta porque decide
+    // quién cobra.
+    const conDesempate = ["loco-por-ganar", "bienhadado", "rey-1v1", "masterizando-japanese"];
+
+    for (const id of conDesempate) {
+      expect(OBJECTIVE_DEFINITIONS.find((item) => item.id === id)?.description, id).toContain(
+        "En caso de empate, lo cobra quien alcanzó esa cifra antes.",
+      );
+    }
+  });
 });
 
 describe("snapshot de la vista de objetivos", () => {
@@ -376,10 +541,25 @@ describe("snapshot de la vista de objetivos", () => {
   });
 
   it("sin la marca de forma o con otra se cae al cómputo en vivo", () => {
-    expect(readObjectivesSnapshotValue(snapshot({ snapshotVersion: 2 }), RULESET_VERSION)).toBeNull();
+    expect(
+      readObjectivesSnapshotValue(
+        snapshot({ snapshotVersion: OBJECTIVES_SNAPSHOT_VERSION + 1 }),
+        RULESET_VERSION,
+      ),
+    ).toBeNull();
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: undefined }), RULESET_VERSION),
     ).toBeNull();
+  });
+
+  it("un snapshot de la forma anterior no vale: la vista cambió de forma", () => {
+    // La v2 añadió `count` a los beneficiarios y `mapGaps` al contendiente de
+    // `por-tierra-y-agua`: un documento con la forma vieja se rechaza y la vista se
+    // recalcula en vivo, que es lo que evita publicar un reparto a medias.
+    expect(
+      readObjectivesSnapshotValue(snapshot({ snapshotVersion: 1 }), RULESET_VERSION),
+    ).toBeNull();
+    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(2);
   });
 
   it("un snapshot de otra versión de las reglas no vale", () => {

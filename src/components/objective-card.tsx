@@ -1,8 +1,17 @@
 import type { ReactNode } from "react";
-import type { ObjectiveContender, ObjectiveOption } from "@/lib/public";
+import type {
+  ObjectiveContender,
+  ObjectiveMapGap,
+  ObjectiveOption,
+} from "@/lib/public";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
-import { formatMapPool } from "@/lib/objective-format";
+import {
+  completedContenders,
+  formatMapPool,
+  hasNoCap,
+  prizeLabel,
+} from "@/lib/objective-format";
 
 /**
  * Tarjeta de un objetivo especial.
@@ -10,8 +19,9 @@ import { formatMapPool } from "@/lib/objective-format";
  * Se lee como un cartel del premio: arriba el emblema, el nombre y la regla en
  * una frase, con los puntos en juego en una placa a la derecha; debajo, el
  * estado (poseedor único en una competición, cuántos lo han conseguido en un
- * logro) y la puerta a la clasificación. La lista entera de participantes no
- * vive aquí: se enseña en la ventana que abre la tarjeta (`ObjectiveDialogCard`).
+ * logro, cuántos ya suman en uno sin tope) y la puerta a la clasificación. La
+ * lista entera de participantes no vive aquí: se enseña en la ventana que abre la
+ * tarjeta (`ObjectiveDialogCard`).
  *
  * Es presentacional: quien la coloca decide el alto —y el `BorderGlow` que le
  * pinta el cromo— y le pone encima el botón que abre la clasificación.
@@ -49,7 +59,7 @@ export function ObjectiveSummary({
         <h3 className="min-w-0 flex-1 font-display text-base font-semibold leading-snug text-foreground">
           {option.label}
         </h3>
-        <PrizePlate points={option.points} />
+        <PrizePlate option={option} />
       </div>
 
       <p className="mt-2 text-sm leading-relaxed text-muted">{option.description}</p>
@@ -74,8 +84,33 @@ export function ObjectiveSummary({
   );
 }
 
-/** El estado del objetivo: quién lo posee, o cuánta gente lo ha conseguido. */
+/**
+ * El estado del objetivo: quién lo posee, cuánta gente ha llegado al umbral, o —en un
+ * logro sin tope— cuánta gente ya cobra.
+ */
 export function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
+  // Un logro sin tope no se "consigue": se cobra con cada unidad de su métrica, y
+  // lo que interesa saber es cuánta gente ya suma. Decir "N jugadores lo han
+  // conseguido" sería falso (lo están cobrando todos, hoy y mañana).
+  if (hasNoCap(option)) {
+    return (
+      <div className="min-w-0">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted">Sin tope</p>
+        <p className="mt-1 truncate text-sm text-foreground">
+          {option.beneficiaries.length === 0
+            ? "Todavía nadie"
+            : option.beneficiaries.length === 1
+              ? "1 jugador ya cobra"
+              : `${option.beneficiaries.length} jugadores ya cobran`}
+        </p>
+      </div>
+    );
+  }
+
+  // En los demás, «conseguido» es llegar al umbral, no cobrar algo: `imparable` paga
+  // desde el primer día y con tres de catorce no lo ha conseguido nadie todavía.
+  const completed = completedContenders(option);
+
   return (
     <div className="min-w-0">
       <p className="text-xs font-medium uppercase tracking-wide text-muted">
@@ -83,11 +118,11 @@ export function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
       </p>
       {option.kind === "achievement" ? (
         <p className="mt-1 truncate text-sm text-foreground">
-          {option.beneficiaries.length === 0
+          {completed === 0
             ? "Todavía nadie"
-            : option.beneficiaries.length === 1
+            : completed === 1
               ? "1 jugador"
-              : `${option.beneficiaries.length} jugadores`}
+              : `${completed} jugadores`}
         </p>
       ) : option.holder === null ? (
         <p className="mt-1 truncate text-sm text-muted">Sin poseedor todavía</p>
@@ -123,15 +158,53 @@ export function MapPool({ maps }: { maps: readonly string[] }) {
   );
 }
 
+/**
+ * Lo que le falta a un jugador en `por-tierra-y-agua`: los mapas del pool que no
+ * tiene y cuántas partidas le faltan en cada uno, de menos a más.
+ *
+ * Es la cara **personal** del pool (la de la ficha del jugador): la tarjeta de
+ * `/objetivos` lista el pool entero, y aquí lo que se lee es la distancia que le
+ * queda. Los mapas ya completados no salen —no hay nada que decir de ellos— y el
+ * número de cada uno es lo que le falta, no lo que lleva.
+ */
+export function MapGaps({ gaps }: { gaps: readonly ObjectiveMapGap[] }) {
+  if (gaps.length === 0) {
+    return (
+      <p className="mt-2 line-clamp-2 text-xs leading-relaxed">
+        <span className="font-medium text-foreground/90">Pool completo</span>
+        <span className="text-muted"> · los tienes todos</span>
+      </p>
+    );
+  }
+
+  return (
+    <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted">
+      <span className="font-medium text-foreground/90">
+        {gaps.length === 1 ? "Falta 1 mapa" : `Faltan ${gaps.length} mapas`}
+      </span>
+      {" · "}
+      {gapList(gaps)}
+    </p>
+  );
+}
+
+/** La lista de huecos, en el mismo registro que `formatMapPool`: coma y un espacio. */
+function gapList(gaps: readonly ObjectiveMapGap[]): string {
+  return gaps.map((gap) => `${gap.missing} × ${gap.map}`).join(", ");
+}
+
 /** La placa del premio: los puntos que reparte el objetivo, a la derecha. */
-export function PrizePlate({ points }: { points: number }) {
+export function PrizePlate({ option }: { option: ObjectiveOption }) {
   return (
     <span className="shrink-0 rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-right">
       <span className="block font-display text-xl font-semibold leading-none tabular-nums text-accent">
-        +{points}
+        +{option.points}
       </span>
-      <span className="mt-1 block text-xs font-medium uppercase tracking-wide text-muted">
-        puntos
+      {/* En un objetivo sin tope la cifra es por unidad y el pie lo dice; el
+          `max-w` mantiene la placa estrecha también con el pie de dos renglones,
+          para que no se coma el ancho del título en la tarjeta. */}
+      <span className="mt-1 block max-w-[7rem] text-xs font-medium uppercase leading-tight tracking-wide text-muted">
+        {prizeLabel(option)}
       </span>
     </span>
   );
@@ -168,6 +241,10 @@ export function ContenderName({
 
 /** Por qué el objetivo todavía no lo cobra nadie, con el matiz de cada familia. */
 export function emptyMessage(option: ObjectiveOption): string {
+  if (hasNoCap(option)) {
+    return "Todavía nadie ha ganado una partida clasificatoria.";
+  }
+
   if (option.kind === "achievement") {
     return "Todavía nadie ha completado este logro.";
   }
