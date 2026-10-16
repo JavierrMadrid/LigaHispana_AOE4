@@ -19,17 +19,12 @@ import Link from "next/link";
  * menos contraste, la misma lectura. El hover sube el tinte y el filete un punto,
  * y el enlace entero es la zona pulsable. El foco lo dibuja el anillo dorado
  * global por fuera, que sobre el tinte se lee.
- *
- * El relleno lateral es `px-3.5` a cualquier ancho —el mismo de los enlaces de la
- * navegación— y no crece desde `sm`: esos 8 px que se ahorran son parte del margen
- * con el que la celda de acciones cabe en su columna cuando la cabecera junta sus
- * tres celdas en una sola fila (`2xl`).
  */
 export function ParticipateCta() {
   return (
     <Link
       href="/participar"
-      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md border border-accent/40 bg-accent/10 px-3.5 py-2.5 text-sm font-medium text-accent transition-colors hover:border-accent/60 hover:bg-accent/15 hover:text-accent-strong"
+      className="inline-flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md border border-accent/40 bg-accent/10 px-3.5 py-2.5 text-sm font-medium text-accent transition-colors hover:border-accent/60 hover:bg-accent/15 hover:text-accent-strong sm:px-4"
     >
       Inscríbete
       {/* En el móvil más estrecho (320 px) el icono cede su sitio al wordmark,
