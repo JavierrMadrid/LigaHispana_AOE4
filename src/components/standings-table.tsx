@@ -1262,18 +1262,19 @@ function PointsDisclosure({
 }
 
 /**
- * Enlace a la ficha de objetivos de un jugador.
+ * Enlace al detalle de un jugador, que abre en sus objetivos.
  *
  * Es la acción que hacía la antigua columna de objetivos, que ya no existe, y
  * vive en la columna derecha del resumen desplegable, que es donde se pide:
- * quien abre los objetivos de un jugador es quien quiere el detalle. El texto
- * encabeza esa columna —el mismo registro que los rótulos de grupo ("Actividad",
- * "Racha")— y debajo va la diana, centrada, que es el glifo que identificaba la
- * columna; el conjunto se centra en vertical en el alto del panel (ver
- * `ObjectivesDetail`). A `size-6` (24 px) mide lo mismo que los iconos de
- * objetivo de las tarjetas del catálogo (`ObjectiveIcon`) y conserva el trazo de
- * 1.5 de todos los glifos del sitio. No lleva relleno vertical: el área de
- * pulsación ya la dan las dos líneas.
+ * quien abre los objetivos de un jugador es quien quiere el detalle. La ficha
+ * tiene dos vistas —objetivos e historial de puntos— y este enlace entra por la
+ * primera; cambiar de vista ya es cosa de sus pestañas. El texto encabeza esa
+ * columna —el mismo registro que los rótulos de grupo ("Actividad", "Racha")— y
+ * debajo va la diana, centrada, que es el glifo que identificaba la columna; el
+ * conjunto se centra en vertical en el alto del panel (ver `ObjectivesDetail`). A
+ * `size-6` (24 px) mide lo mismo que los iconos de objetivo de las tarjetas del
+ * catálogo (`ObjectiveIcon`) y conserva el trazo de 1.5 de todos los glifos del
+ * sitio. No lleva relleno vertical: el área de pulsación ya la dan las dos líneas.
  */
 function ObjectivesLink({
   profileId,
@@ -1291,7 +1292,7 @@ function ObjectivesLink({
 
   return (
     <Link
-      href={`/objetivos/${profileId}`}
+      href={`/detalle-jugador/${profileId}`}
       aria-label={hint}
       title={hint}
       className="inline-flex flex-col items-center gap-1.5 rounded-md text-xs font-medium text-muted underline-offset-4 transition-colors hover:text-accent focus-visible:text-accent"

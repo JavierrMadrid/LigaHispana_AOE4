@@ -1,27 +1,19 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import Link from "next/link";
 import type {
   ObjectiveGroup,
   ParticipantObjective,
   ParticipantObjectives,
 } from "@/lib/public";
 import { BorderGlow } from "@/components/border-glow";
-import { divisionColor } from "@/components/division-icon";
-import {
-  LeagueIcon,
-  leagueFilterRank,
-  rankLevelToLeague,
-} from "@/components/league-icon";
 import { MapGaps, MapPool } from "@/components/objective-card";
 import { ObjectiveFeatureFrame } from "@/components/objective-feature-summary";
 import { ObjectiveFamilyRail } from "@/components/objective-family-rail";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
-import { PageHead } from "@/components/page-head";
-import { PlayerAvatar } from "@/components/player-avatar";
 import { SectionIndexBar, type DocSection } from "@/components/section-index";
+import { StatFigure } from "@/components/stat-figure";
 import {
   hasNoCap,
   hasReachedTarget,
@@ -54,12 +46,17 @@ const SECTIONS: readonly DocSection[] = [
 const SECTION_INDEX_LABEL = "Secciones de los objetivos del participante";
 
 /**
- * Ficha pública de objetivos de un participante.
+ * La pestaña de objetivos de la ficha de un participante.
  *
- * Es la vista de detalle de la columna "Objetivos" de la clasificación: la
- * misma captura de `/objetivos` proyectada sobre un jugador. No recalcula nada
- * —el DAL reutiliza el motor de objetivos—, así que lo que se lee aquí no puede
+ * Es la vista de detalle de la columna "Objetivos" de la clasificación: la misma
+ * captura de `/objetivos` proyectada sobre un jugador. No recalcula nada —el DAL
+ * reutiliza el motor de objetivos—, así que lo que se lee aquí no puede
  * contradecir al ranking de cada objetivo.
+ *
+ * La cabecera del participante (identidad y cifras) y las pestañas son del layout:
+ * aquí solo va lo que es de objetivos —la entradilla del mejor objetivo, el índice
+ * de secciones y los bloques—, de modo que pasar a la pestaña de historial no
+ * repinte lo que no ha cambiado.
  *
  * Los objetivos **individuales** se leen en tres bloques, en este orden: lo
  * primero es lo que está al alcance —ordenado de más a menos cerca de cobrarlo—
@@ -119,10 +116,9 @@ export function ParticipantObjectivesView({
         ];
   });
 
-  // Las cuentas de cabecera son del catálogo entero: los carruseles también son
-  // objetivos. Las secciones que vienen debajo muestran solo los individuales.
-  const achieved = options.filter((option) => option.achieved);
-  const earnedPoints = achieved.reduce((total, option) => total + option.points, 0);
+  // Los puntos de la carrera y el resumen se cuentan sobre los **individuales**:
+  // son los que esta pestaña lista. Las cifras de la cabecera —las que hablan del
+  // catálogo entero, carruseles incluidos— las cuenta el layout.
   const contendingPoints = contending.reduce(
     (total, option) => total + option.points,
     0,
@@ -135,114 +131,19 @@ export function ParticipantObjectivesView({
   const leading = contending.filter((option) => option.position === 1).length;
   const oneAway = contending.filter((option) => option.position === 2).length;
 
-  // El emblema sale del `rankLevel` en crudo, como en la clasificación; si no
-  // está, cae al emblema de la división ya resuelta. Un jugador sin clasificar
-  // no pinta escudo.
-  const league =
-    rankLevelToLeague(player.rankLevel) ??
-    (player.division === null ? null : leagueFilterRank(player.division));
-
   return (
     <div className="flex flex-col gap-8">
-      <PageHead title={`Objetivos de ${player.name}`} />
-
-      <nav aria-label="Migas de pan" className="min-w-0 text-sm">
-        <ol className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <li className="flex min-w-0 items-center gap-x-2">
-            <Link href="/" className="text-muted transition-colors hover:text-accent">
-              Clasificación
-            </Link>
-            <span aria-hidden="true" className="text-muted/50">
-              /
-            </span>
-          </li>
-          <li className="flex min-w-0 items-center gap-x-2">
-            <Link
-              href="/objetivos"
-              className="text-muted transition-colors hover:text-accent"
-            >
-              Objetivos
-            </Link>
-            <span aria-hidden="true" className="text-muted/50">
-              /
-            </span>
-          </li>
-          <li className="min-w-0">
-            <span aria-current="page" title={player.name} className="block truncate">
-              {player.name}
-            </span>
-          </li>
-        </ol>
-      </nav>
-
       {/*
-        Cabecera: la identidad entera es un solo enlace a AoE4World (avatar,
-        nombre y emblema), con las tres cifras de cabecera a la derecha y la
-        entradilla narrativa debajo. La frase del mejor objetivo sube aquí para
-        que la historia se lea en la primera pantalla, y así "En resumen" puede
-        contar la carrera sin repetir estas cifras.
+        La entradilla del mejor objetivo abre la pestaña: es de objetivos —habla
+        de cuál es el más cercano—, así que no vive en la cabecera del layout, que
+        es común a las dos vistas. Va en su propia caja para que la historia se lea
+        antes que las secciones, que es donde se comprueba.
       */}
-      <header className="thread-top relative overflow-hidden rounded-lg border border-line bg-surface px-5 py-5">
-        <div className="flex flex-wrap items-start gap-x-6 gap-y-4">
-          <a
-            href={player.profileUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="group flex min-w-0 items-center gap-4 rounded-sm"
-          >
-            <PlayerAvatar
-              name={player.name}
-              avatarUrl={player.avatarUrl}
-              className="size-16 text-lg"
-            />
-            <span className="min-w-0">
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="truncate font-display text-2xl font-semibold text-foreground underline-offset-4 transition-colors group-hover:text-accent group-hover:underline">
-                  {player.name}
-                </span>
-                {league !== null ? (
-                  <span
-                    className="inline-flex shrink-0"
-                    style={{ color: divisionColor(league.division) }}
-                  >
-                    <LeagueIcon rank={league} label={league.label} className="h-7 w-5" />
-                  </span>
-                ) : null}
-              </span>
-              <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted">
-                {league === null ? (
-                  <span>Sin clasificar</span>
-                ) : (
-                  <span style={{ color: divisionColor(league.division) }}>
-                    {league.label}
-                  </span>
-                )}
-                <span className="underline-offset-4 transition-colors group-hover:text-accent">
-                  Perfil en AoE4World
-                </span>
-              </span>
-            </span>
-            <span className="sr-only">(se abre en una pestaña nueva)</span>
-          </a>
-
-          <dl className="ml-auto flex flex-wrap items-start gap-x-8 gap-y-3">
-            <HeaderStat
-              label="Objetivos en posesión"
-              value={`${achieved.length} de ${options.length}`}
-            />
-            <HeaderStat
-              label="Puntos de objetivos"
-              value={String(earnedPoints)}
-              accent
-            />
-            <HeaderStat label="Al alcance" value={String(contending.length)} />
-          </dl>
-        </div>
-
-        <p className="mt-4 max-w-[68ch] border-t border-line pt-4 text-sm leading-relaxed text-muted">
+      <div className="rounded-lg border border-line bg-surface px-5 py-4">
+        <p className="max-w-[68ch] text-sm leading-relaxed text-muted">
           <BestBetNote bestBet={bestBet} bestDistance={bestDistance} />
         </p>
-      </header>
+      </div>
 
       <SectionIndexBar sections={SECTIONS} ariaLabel={SECTION_INDEX_LABEL} />
 
@@ -341,9 +242,9 @@ export function ParticipantObjectivesView({
 }
 
 /**
- * Entradilla narrativa de la cabecera: qué objetivo es hoy el más cercano y
- * cuánto le falta. Sin ninguno al alcance, explica por qué y cuándo aparecerá,
- * que es lo que debe hacer un vacío.
+ * Entradilla narrativa que abre la pestaña de objetivos: qué objetivo es hoy el
+ * más cercano y cuánto le falta. Sin ninguno al alcance, explica por qué y cuándo
+ * aparecerá, que es lo que debe hacer un vacío.
  *
  * La frase se adapta al tipo del objetivo más cercano: un logro se cuenta por lo
  * que le falta para el umbral; una competición, por el puesto y la distancia al
@@ -926,14 +827,14 @@ function SummarySection({
       </div>
       <div className="mt-3 rounded-lg border border-line bg-surface p-5">
         <dl className="flex flex-wrap items-start gap-x-10 gap-y-4">
-          <HeaderStat
+          <StatFigure
             label="Objetivos que lideras"
             value={String(leading)}
             accent={leading > 0}
           />
-          <HeaderStat label="En el podio de aspirantes" value={String(onPodium)} />
-          <HeaderStat label="A un puesto del liderato" value={String(oneAway)} />
-          <HeaderStat label="Puntos al alcance" value={String(contendingPoints)} />
+          <StatFigure label="En el podio de aspirantes" value={String(onPodium)} />
+          <StatFigure label="A un puesto del liderato" value={String(oneAway)} />
+          <StatFigure label="Puntos al alcance" value={String(contendingPoints)} />
         </dl>
       </div>
     </section>
@@ -1094,30 +995,6 @@ function AchievementProgress({ objective }: { objective: ParticipantObjective })
           style={{ width: `${percent}%` }}
         />
       </div>
-    </div>
-  );
-}
-
-/** Entrada de las cuentas de cabecera y del resumen. */
-function HeaderStat({
-  label,
-  value,
-  accent = false,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <div className="min-w-0">
-      <dd
-        className={`font-display text-lg font-semibold tabular-nums ${
-          accent ? "text-accent" : "text-foreground"
-        }`}
-      >
-        {value}
-      </dd>
-      <dt className="text-xs text-muted">{label}</dt>
     </div>
   );
 }

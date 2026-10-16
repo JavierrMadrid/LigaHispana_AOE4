@@ -5,6 +5,7 @@ import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PageSizeSelect } from "@/components/page-size-select";
+import { Pagination } from "@/components/pagination";
 import { SortableHeaderLink } from "@/components/sortable-header";
 import {
   getAdminMatchHistory,
@@ -17,7 +18,6 @@ import { describeMode, formatAbsoluteTime } from "@/lib/format";
 import { objectiveTitle } from "@/lib/objective-format";
 import { OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
 import { MatchHistoryFilters } from "./match-history-filters";
-import { Pagination } from "../pagination";
 
 export const metadata: Metadata = {
   title: { absolute: "Historial de partidas · Admin" },

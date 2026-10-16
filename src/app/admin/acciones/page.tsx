@@ -3,12 +3,12 @@ import type { AdminActionType } from "@/generated/prisma/enums";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { EmptyState } from "@/components/empty-state";
 import { PageSizeSelect } from "@/components/page-size-select";
+import { Pagination } from "@/components/pagination";
 import { SortableHeaderLink } from "@/components/sortable-header";
 import { getAdminActions } from "@/lib/admin";
 import { isRevertibleActionType } from "@/lib/admin-revert";
 import { getAdminAccess, requireAdmin } from "@/lib/auth";
 import { formatAbsoluteTime } from "@/lib/format";
-import { Pagination } from "../pagination";
 import { RevertButton } from "./revert-button";
 
 export const metadata: Metadata = {
