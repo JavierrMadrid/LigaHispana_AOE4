@@ -14,14 +14,12 @@ import { SponsorLogo } from "@/components/sponsor";
  * acciones y el canto de la ventana: el `right` es un cuarto de la ventana menos
  * 20rem —64 px a 1536, 80 a 1600 y 160 a 1920—, con un mínimo de 24 px para
  * tableta, que es donde ese cuarto se queda corto. La celda de las acciones le
- * reserva el ancho para que el paño cuelgue por fuera de los controles y no tape
- * "Inscríbete" ni "Admin": la reserva es de `pr-24` mientras la cabecera va en dos
- * filas y de `pr-12` desde `2xl`, donde las tres celdas comparten fila y el ancho
- * se reparte entre todas. Con esa reserva estrecha quedan 20 px de aire entre los
- * controles y el paño en la anchura de activación (1536), y más a partir de ahí
- * —28 a 1568, 36 a 1600 y 116 a 1920—, porque el paño se separa del canto más
- * deprisa de lo que crece el contenedor, que ya está en su máximo. Por debajo de
- * `md` no se pinta: ahí la cabecera va justa y el crédito sigue entero en el pie.
+ * reserva el ancho (`md:pr-24`) para que el paño cuelgue por fuera de los
+ * controles y no tape "Inscríbete" ni "Admin": es la misma reserva en todos los
+ * tramos, y con ella la holgura entre los controles y el paño nunca baja de 28 px
+ * —el mínimo está mientras la ventana no alcanza el ancho máximo del contenedor—
+ * y crece por encima: 44 a 1440, 68 a 1536 y 164 a 1920. Por debajo de `md` no se
+ * pinta: ahí la cabecera va justa y el crédito sigue entero en el pie.
  *
  * Es pura decoración: el escudo es `alt=""` y no hay texto, así que no añade
  * nada al árbol accesible. Quien acredita al patrocinador es el pie.
