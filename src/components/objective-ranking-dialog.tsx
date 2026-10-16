@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import type { ObjectiveContender, ObjectiveOption } from "@/lib/public";
 import {
   completedContenders,
+  contenderShareOfObjective,
   contenderValue,
   hasNoCap,
   hasReachedTarget,
@@ -14,6 +15,7 @@ import {
   ContenderName,
   emptyMessage,
   ineligibleTag,
+  MapGaps,
 } from "@/components/objective-card";
 import { ObjectiveFlipDialog } from "@/components/objective-flip-dialog";
 import { ObjectiveIcon } from "@/components/objective-icon";
@@ -25,9 +27,10 @@ const PAGE_SIZE = 10;
 type ObjectiveRankingDialogProps = {
   option: ObjectiveOption;
   /**
-   * Participante a resaltar en la lista, para las vistas que abren el diálogo
-   * desde la ficha de un jugador concreto. Sin él (`null`/`undefined`), el
-   * resaltado recae en el poseedor, que es el comportamiento de `/objetivos`.
+   * Participante de la ficha que abrió la ventana: su fila lleva la etiqueta
+   * «Tú» y su detalle de mapas encabeza la lista. Sin él (`null`/`undefined`)
+   * no se marca a nadie; hoy la única pantalla que la monta es la ficha de un
+   * participante, que siempre lo pasa.
    */
   highlightProfileId?: number | null;
   /** Cara frontal de la tarjeta: el resumen del avance del jugador. */
@@ -48,8 +51,26 @@ type ObjectiveRankingDialogProps = {
  * (`ObjectiveFlipDialog`), así que nada pintado lo cruza: la cabecera, el pie del
  * paginador y la lista van con **márgenes** laterales y no con relleno, y el de las
  * filas vive en la lista. Así las líneas de cabecera y pie, los filetes de las filas
- * y el tinte del jugador resaltado empiezan y acaban donde el texto (24px del canto
+ * y la barra de avance empiezan y acaban donde el texto (24px del canto
  * en móvil, 32px a partir de `sm`), sin moverse de donde ya estaban.
+ *
+ * ## La barra de fondo de cada fila
+ *
+ * El mismo tratamiento que la clasificación de `/objetivos`
+ * (`ObjectiveStandings`): fondo del tramo que va del canto del contenido a la
+ * columna de la cifra, con el mismo aire a los dos lados (12px, el `gap` de la
+ * fila), para no pasar por debajo del número. **Qué mide depende del objetivo**
+ * (`contenderShareOfObjective`): en un logro con tope, el avance sobre su
+ * umbral; en una competición o en un logro sin tope, la distancia al **líder de
+ * la lista**, que es la primera entrada de `option.ranking`. Es decorativa: la
+ * cifra real la escribe la fila.
+ *
+ * ## El detalle de mapas del jugador
+ *
+ * En `por-tierra-y-agua`, lo que le falta al jugador de la ficha encabeza el
+ * scroll, **entre la cabecera y la lista**: es información suya, así que va
+ * antes que la clasificación neutra, y en su sitio —y no dentro de su fila—
+ * porque la paginación puede dejar al jugador fuera de la primera página.
  */
 export function ObjectiveRankingDialog({
   option,
@@ -63,6 +84,19 @@ export function ObjectiveRankingDialog({
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const start = page * PAGE_SIZE;
   const rows = option.ranking.slice(start, start + PAGE_SIZE);
+  // El primero de la lista ya ordenada es el más avanzado. Su valor es la escala de
+  // la barra donde no hay umbral contra el que medir (competición y logro sin tope);
+  // en un logro con tope la barra se mide contra su umbral y esto no se usa.
+  const leader = option.ranking[0]?.value ?? 0;
+  // Los mapas que le faltan al jugador de la ficha salen de su entrada en el propio
+  // ranking, que es la misma que pinta la lista: `mapGaps` solo lo publica el
+  // objetivo de mapas y solo para quien aparece en él.
+  const yours =
+    highlightProfileId === null
+      ? null
+      : (option.ranking.find((contender) => contender.profileId === highlightProfileId) ?? null);
+  const yourGaps =
+    option.metric === "mapas" ? (yours?.mapGaps ?? null) : null;
 
   return (
     <ObjectiveFlipDialog
@@ -99,6 +133,18 @@ export function ObjectiveRankingDialog({
           </header>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* El detalle de mapas va con margen propio, pegado a la línea de la
+                cabecera y cerrando con filete: lo que le falta al jugador se lee
+                antes que la clasificación, esté o no su fila en esta página. */}
+            {yourGaps !== null ? (
+              <div className="mx-6 border-b border-line pb-4 sm:mx-8">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted">
+                  Tus mapas
+                </p>
+                <MapGaps gaps={yourGaps} />
+              </div>
+            ) : null}
+
             <div className="mx-6 flex items-baseline justify-between gap-3 py-3 sm:mx-8">
               <h3 className="font-display text-base font-semibold text-foreground">
                 Clasificación
@@ -121,6 +167,7 @@ export function ObjectiveRankingDialog({
                     contender={contender}
                     rank={start + index + 1}
                     highlightProfileId={highlightProfileId}
+                    leader={leader}
                   />
                 ))}
               </ol>
@@ -212,17 +259,31 @@ function HolderSummary({ option }: { option: ObjectiveOption }) {
   );
 }
 
-/** Una fila del listado: posición, avatar, nombre y el valor de la métrica. */
+/**
+ * Una fila del listado: posición, avatar, nombre, el valor de la métrica y la
+ * barra de avance que hay detrás.
+ *
+ * La fila no se tiñe: al jugador de la ficha lo marca la etiqueta «Tú», que se
+ * ve sin fondo y no compite con la barra. El tinte de `bg-accent/5` era del
+ * catálogo —allí marca a quien ya ha completado el objetivo— y esta ventana solo
+ * se abre desde la ficha, donde el sombreado esconde la barra.
+ */
 function RankingRow({
   option,
   contender,
   rank,
   highlightProfileId,
+  leader,
 }: {
   option: ObjectiveOption;
   contender: ObjectiveContender;
   rank: number;
   highlightProfileId: number | null;
+  /**
+   * Valor del primero de la lista: la escala de la barra donde no hay umbral
+   * (competición o logro sin tope). Ver `contenderShareOfObjective`.
+   */
+  leader: number;
 }) {
   // En una competición el distintivo es del poseedor; en un logro, de quien ha
   // **llegado a su umbral** —no de quien cobra algo: `imparable` paga desde el primer
@@ -232,38 +293,72 @@ function RankingRow({
     option.kind === "achievement"
       ? hasReachedTarget(option, contender.value)
       : contender.profileId === option.holder?.profileId;
-  // Sin participante que resaltar (el caso de `/objetivos`) manda el cobrador;
-  // con él, el resaltado se muda a su fila. La etiqueta no depende de esto.
-  const highlighted =
-    highlightProfileId === null ? completed : contender.profileId === highlightProfileId;
+  const you = highlightProfileId !== null && contender.profileId === highlightProfileId;
+  const share = contenderShareOfObjective(option, contender, leader);
 
   return (
-    <li className={`flex items-center gap-3 py-3 ${highlighted ? "bg-accent/5" : ""}`}>
-      <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">{rank}</span>
-      <PlayerAvatar name={contender.name} avatarUrl={contender.avatarUrl} className="size-8 text-xs" />
-      <span className="min-w-0 flex-1">
-        <ContenderName
-          contender={contender}
-          className="w-fit max-w-full truncate text-sm text-foreground/90"
-        />
-        {highlighted ? (
-          <span className="sr-only">(jugador de esta ficha)</span>
+    <li className="flex items-center gap-3 py-3">
+      {/* La barra es fondo del tramo que va del canto del contenido a la cifra, con
+          el mismo aire a los dos lados (el `gap` de la fila, 12px): arranca un pelo
+          dentro del contenido y el 100 % acaba antes de la columna del número. Va
+          detrás de puesto, avatar, nombre, etiqueta y distintivo —por eso el
+          envoltorio la aísla, y el `-z-10` la deja por debajo de todo lo suyo— y es
+          decorativa. */}
+      <div className="relative isolate flex min-w-0 flex-1 items-center gap-3">
+        {share > 0 ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-3 right-0 -z-10"
+          >
+            <span
+              className="absolute inset-y-0 left-0 bg-accent/10"
+              style={{ width: `${share * 100}%` }}
+            />
+          </span>
         ) : null}
-        {!completed && option.kind === "competition" ? (
-          <span className="mt-0.5 block text-xs text-muted">{ineligibleTag(option)}</span>
-        ) : null}
-      </span>
 
-      {completed && !hasNoCap(option) ? (
-        <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
-          {option.kind === "achievement" ? "Conseguido" : "Poseedor"}
+        <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">{rank}</span>
+        <PlayerAvatar name={contender.name} avatarUrl={contender.avatarUrl} className="size-8 text-xs" />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <ContenderName
+              contender={contender}
+              className="w-fit min-w-0 max-w-full truncate text-sm text-foreground/90"
+            />
+            {you ? <YouBadge /> : null}
+          </span>
+          {!completed && option.kind === "competition" ? (
+            <span className="mt-0.5 block text-xs text-muted">{ineligibleTag(option)}</span>
+          ) : null}
         </span>
-      ) : null}
+
+        {completed && !hasNoCap(option) ? (
+          <span className="shrink-0 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
+            {option.kind === "achievement" ? "Conseguido" : "Poseedor"}
+          </span>
+        ) : null}
+      </div>
 
       <span className="shrink-0 text-sm tabular-nums text-foreground/90">
         {contenderValue(option, contender)}
       </span>
     </li>
+  );
+}
+
+/**
+ * La etiqueta visible de la fila del jugador de la ficha, junto a su nombre.
+ *
+ * Sustituye al `sr-only` de antes: el «Tú» es texto que se lee y además es lo
+ * que hace findable la fila ahora que no lleva tinte. Mismo cromo que los
+ * distintivos de la casa (`Poseedor`, `Conseguido`) para que se lea como una
+ * marca de la lista y no como un texto suelto.
+ */
+function YouBadge() {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
+      Tú
+    </span>
   );
 }
 
