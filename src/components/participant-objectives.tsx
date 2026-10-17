@@ -18,7 +18,7 @@ import {
   hasNoCap,
   hasReachedTarget,
   objectiveCloseness,
-  objectiveTitle,
+  objectiveTitleParts,
   orderByObjectiveProgress,
   prizeLabel,
 } from "@/lib/objective-format";
@@ -727,8 +727,9 @@ function Chevron() {
  *
  * Un logro **sin tope** va en el mismo sitio —está cobrando puntos— pero no lleva
  * el check ni el «Conseguido», que ahí no significan nada: el subtítulo dice la
- * regla («Sin tope») y el rótulo lleva delante sus repeticiones (`24×Victorias`),
- * con lo que va sumado en la cifra de la derecha.
+ * regla («Sin tope») y el rótulo lleva delante sus repeticiones (`24 x Victorias`),
+ * atenuadas para que manden la etiqueta y los puntos, con lo que va sumado en la
+ * cifra de la derecha.
  */
 function ObjectiveChip({
   objective,
@@ -754,6 +755,9 @@ function ObjectiveChip({
   // Un logro sin tope todavía sin cobrar enseña el precio de cada unidad, no un
   // premio: el chip lo dice al lado para no parecer que reparte eso de golpe.
   const unitPrice = noCap && !achieved;
+  // El prefijo de repeticiones se pinta atenuado: quien manda es la etiqueta y, al
+  // lado, los puntos. El `text-muted` propio evita que herede el hover del botón.
+  const { repetitions, label } = objectiveTitleParts(objective);
 
   return (
     <button
@@ -779,7 +783,10 @@ function ObjectiveChip({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm tabular-nums text-foreground transition-colors group-hover:text-accent">
-          {objectiveTitle(objective)}
+          {repetitions === null ? null : (
+            <span className="text-muted">{`${repetitions} `}</span>
+          )}
+          {label}
         </span>
         <span
           className={`block truncate text-xs ${achieved ? "text-accent" : "text-muted"}`}

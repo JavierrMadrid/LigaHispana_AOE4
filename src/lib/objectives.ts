@@ -141,7 +141,7 @@ export type ObjectiveMapGap = {
  *
  * `points` es variable en `imparable` (1 por día, con tope) y en `victorias`
  * (`pointsPerWin` por victoria, sin tope); en el resto de logros coincide con los
- * puntos de la tarjeta. `count` es lo que permite pintar "2×Imparable": los días en
+ * puntos de la tarjeta. `count` es lo que permite pintar "2 x Imparable": los días en
  * `imparable`, las victorias en `victorias` y `1` en los objetivos que no se repiten.
  */
 export type ObjectiveBeneficiary = {
@@ -635,7 +635,7 @@ export const OBJECTIVE_POINTS: Record<string, number> = Object.fromEntries(
  * Lo que un jugador cobra por **un** objetivo: importe real y repeticiones.
  *
  * Va junto al id y no en una lista aparte porque las dos cosas definen la misma
- * fila del resumen (`2×Imparable +2`), y separarlas obligaría a cruzar dos listas
+ * fila del resumen (`2 x Imparable +2`), y separarlas obligaría a cruzar dos listas
  * en cada lector.
  */
 export type ObjectiveAwardEntry = {

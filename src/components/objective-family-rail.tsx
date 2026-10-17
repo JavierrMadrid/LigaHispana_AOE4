@@ -24,6 +24,43 @@ const FAMILY_CIV_PREFIXES = ["lider-", "acolito-", MASTERIZANDO_PREFIX] as const
 /** Separación entre tarjetas (`gap-4`), para avanzar una tarjeta por pulsación. */
 const SCROLL_STEP_GAP = 16;
 
+/**
+ * Alto que se le supone a una línea de rueda (`deltaMode` 1). Los navegadores
+ * que lo usan —Firefox— no publican la altura real, y 16 px es el alto de
+ * línea de referencia en el que coinciden.
+ */
+const WHEEL_LINE_HEIGHT = 16;
+
+/**
+ * Gesto de rueda que hace falta acumular para pasar a la tarjeta siguiente. Con
+ * esto, una muesca de ratón (100 px) mueve una tarjeta y el gesto continuo de un
+ * panel táctil no se dispara con las primeras migas de un roce.
+ */
+const WHEEL_STEP_THRESHOLD = 40;
+
+/**
+ * Cuánto avanza el riel al pasar una tarjeta: el ancho real del primer `<li>`
+ * más el hueco entre tarjetas (o el ancho visible si todavía no hay ninguna).
+ * Lo comparten los botones de flecha y la rueda.
+ */
+function railStep(rail: HTMLUListElement): number {
+  const first = rail.querySelector("li");
+
+  return first === null
+    ? rail.clientWidth * 0.9
+    : first.getBoundingClientRect().width + SCROLL_STEP_GAP;
+}
+
+/** Mueve el riel una tarjeta, sin animación si se ha pedido menos movimiento. */
+function scrollRailByStep(rail: HTMLUListElement, direction: -1 | 1) {
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  rail.scrollBy({
+    left: direction * railStep(rail),
+    behavior: reduce ? "auto" : "smooth",
+  });
+}
+
 /** `true` si el id es una competición `masterizando-<civ>`. */
 export function isMasterizandoId(id: string): boolean {
   return id.startsWith(MASTERIZANDO_PREFIX);
@@ -67,8 +104,10 @@ type ObjectiveFamilyRailProps<T extends { id: string; label: string }> = {
  * distintas sobre el mismo riel. El filtro
  * no filtra: **salta** a la tarjeta de esa civilización dentro del riel
  * (`scrollIntoView`), que es lo que se pidió para no perder de vista el conjunto.
- * El riel se recorre con la rueda o el gesto táctil nativos, con el teclado —cada
- * tarjeta es un botón, y enfocarla la trae a la vista— y con dos botones de
+ * El riel se recorre con la rueda del ratón —el gesto vertical pasa las tarjetas
+ * mientras al riel le quede recorrido y, en los extremos, sigue desplazando la
+ * página como siempre—, con el gesto táctil nativo, con el teclado
+ * —cada tarjeta es un botón, y enfocarla la trae a la vista— y con dos botones de
  * flecha que avanzan una tarjeta; se atenúan en los extremos. No hay arrastre con
  * el ratón: el gesto no funcionaba bien y, al quitarlo, el clic de la tarjeta
  * abre su clasificación como en el resto del sitio.
@@ -172,23 +211,101 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
     return () => observer.disconnect();
   }, [updateScrollState, items.length]);
 
-  // Avanza una tarjeta; el paso sale del ancho real del primer `<li>` más el
-  // hueco entre tarjetas, así vale para los dos anchos (rejilla y riel).
-  function scrollByStep(direction: -1 | 1) {
+  /**
+   * La rueda del ratón mueve el riel, no la página: es el gesto que ya anuncia el
+   * carril y lo que hace navegable el conjunto sin arrastrar.
+   *
+   * Va como listener nativo y no como `onWheel` porque React registra los eventos
+   * de rueda como **pasivos** y `preventDefault()` se ignoraría.
+   *
+   * ## Por qué pasa tarjetas en vez de sumar el delta a `scrollLeft`
+   *
+   * El riel encaja con `snap-mandatory`, y en él el navegador reengancha cualquier
+   * posición programática al punto de anclaje más cercano: sumar 100 px de rueda
+   * desde una tarjeta vuelve a la misma tarjeta (comprobado en Chromium), así que
+   * la rueda quedaría muerta. Para convivir con el encaje, el gesto se acumula
+   * —normalizando `deltaMode`— y cada umbral mueve **una tarjeta**, el mismo paso
+   * que dan las flechas y al que el encaje va a llevar de todas formas.
+   *
+   * Solo se cancela el evento —y solo se mueve— cuando el riel desborda y le
+   * queda recorrido en esa dirección: en un extremo, el evento sigue su curso y la
+   * página se desplaza verticalmente como siempre. El desplazamiento táctil no
+   * pasa por aquí: no dispara `wheel`.
+   */
+  useEffect(() => {
+    let accumulated = 0;
+    let lastDirection: -1 | 1 = 1;
+
+    function handleWheel(event: WheelEvent) {
+      const rail = railRef.current;
+
+      // Sin componente vertical, con `ctrl` (pellizco de zoom) o sin riel, el
+      // gesto no es del riel: se deja tal cual.
+      if (rail === null || event.deltaY === 0 || event.ctrlKey) {
+        return;
+      }
+
+      const remaining = rail.scrollWidth - rail.clientWidth;
+
+      if (remaining <= 0) {
+        return;
+      }
+
+      // `deltaMode` viene en píxeles (0), líneas (1) o páginas (2): el mismo
+      // gesto vale tres magnitudes distintas.
+      const unit =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? WHEEL_LINE_HEIGHT
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? rail.clientWidth
+            : 1;
+      const delta = event.deltaY * unit;
+      const direction: -1 | 1 = delta < 0 ? -1 : 1;
+      // Con tolerancia de 1 px: `scrollLeft` puede quedar fraccionario tras un
+      // gesto suave y un extremo exacto no debe dejar pasar la rueda en balde.
+      const atStart = rail.scrollLeft <= 0;
+      const atEnd = rail.scrollLeft >= remaining - 1;
+
+      if ((direction === -1 && atStart) || (direction === 1 && atEnd)) {
+        return;
+      }
+
+      // Un cambio de sentido estrena gesto: lo acumulado en el otro no cuenta.
+      if (direction !== lastDirection) {
+        accumulated = 0;
+        lastDirection = direction;
+      }
+
+      event.preventDefault();
+      accumulated += delta;
+
+      if (Math.abs(accumulated) < WHEEL_STEP_THRESHOLD) {
+        return;
+      }
+
+      accumulated = 0;
+      scrollRailByStep(rail, direction);
+    }
+
     const rail = railRef.current;
 
     if (rail === null) {
       return;
     }
 
-    const first = rail.querySelector("li");
-    const step =
-      first === null
-        ? rail.clientWidth * 0.9
-        : first.getBoundingClientRect().width + SCROLL_STEP_GAP;
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    rail.addEventListener("wheel", handleWheel, { passive: false });
 
-    rail.scrollBy({ left: direction * step, behavior: reduce ? "auto" : "smooth" });
+    return () => rail.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  // Avanza una tarjeta; el paso sale del ancho real del primer `<li>` más el
+  // hueco entre tarjetas, así vale para los dos anchos (rejilla y riel).
+  function scrollByStep(direction: -1 | 1) {
+    const rail = railRef.current;
+
+    if (rail !== null) {
+      scrollRailByStep(rail, direction);
+    }
   }
 
   function jumpTo(civ: string) {

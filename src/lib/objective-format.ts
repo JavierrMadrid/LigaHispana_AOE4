@@ -301,18 +301,49 @@ export function objectiveStandingsView<T extends { profileId: number }>(
   };
 }
 
+/** Las dos partes del rótulo de un objetivo, por separado y sin pintar. */
+export type ObjectiveTitleParts = {
+  /** Prefijo de repeticiones (`2 x`, `24 x`), o `null` si no se repite. */
+  repetitions: string | null;
+  /** La etiqueta del objetivo, sin tocar. */
+  label: string;
+};
+
 /**
- * El rótulo de un objetivo con sus repeticiones delante: `2×Imparable`,
- * `24×Victorias`. Sin repeticiones (`count === 1`) es la etiqueta a secas.
+ * Las dos mitades del rótulo de un objetivo: `2 x` + `Imparable`.
+ *
+ * Separarlas permite pintar el prefijo **atenuado** sin escribirlo dos veces: el
+ * gris le quita énfasis porque no es el dato que se lee, solo cuántas veces se
+ * cobró; los puntos de al lado ya dicen lo que valió. Sin repeticiones
+ * (`count === 1`) no hay prefijo y el rótulo es la etiqueta a secas.
  *
  * Poner el multiplicador en el nombre y no al lado de los puntos deja la cifra
- * limpia: así `2×Imparable +2` se lee como "dos veces Imparable, dos puntos", que es
- * exactamente lo que pasó. Un logro repetible —`imparable` paga por día,
+ * limpia: así `2 x Imparable +2` se lee como "dos veces Imparable, dos puntos", que
+ * es exactamente lo que pasó. Un logro repetible —`imparable` paga por día,
  * `victorias` por victoria— sin el multiplicador parecería haber pagado dos puntos
  * de golpe.
  */
+export function objectiveTitleParts(objective: {
+  label: string;
+  count: number;
+}): ObjectiveTitleParts {
+  return {
+    repetitions: objective.count > 1 ? `${objective.count} x` : null,
+    label: objective.label,
+  };
+}
+
+/**
+ * El rótulo de un objetivo en texto plano: `2 x Imparable`, `24 x Victorias`.
+ *
+ * Es lo que necesitan los sitios sin marcado propio —las frases del historial y
+ * los `aria-label`—, así que se apoya en `objectiveTitleParts` para que la regla
+ * del prefijo viva en un solo sitio.
+ */
 export function objectiveTitle(objective: { label: string; count: number }): string {
-  return objective.count > 1 ? `${objective.count}×${objective.label}` : objective.label;
+  const { repetitions, label } = objectiveTitleParts(objective);
+
+  return repetitions === null ? label : `${repetitions} ${label}`;
 }
 
 /**

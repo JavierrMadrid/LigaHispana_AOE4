@@ -164,7 +164,7 @@ export type { PublicRead };
  * día con tope y `victorias`, `pointsPerWin` por victoria, así que el precio del
  * catálogo (el tope del primero, el precio por unidad del segundo) no es lo que el
  * jugador se llevó. `count` es el número de repeticiones —días, victorias o 1— y es
- * lo que permite pintar `2×Imparable +2`.
+ * lo que permite pintar `2 x Imparable +2`.
  *
  * Una fila escrita antes de que el desglose guardara ese detalle no lo trae: se cae
  * entonces al precio del catálogo y a una repetición, que es lo máximo que aquella

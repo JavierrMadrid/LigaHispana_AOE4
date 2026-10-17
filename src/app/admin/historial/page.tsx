@@ -75,7 +75,7 @@ function formatLabel(row: AdminMatchHistoryRow): string {
  * secundaria, y decirlos dos veces en la misma celda sobraría.
  *
  * Un objetivo repetible enseña sus repeticiones pegadas al rótulo
- * (`20×Imparable`), el mismo formato que la clasificación: la tabla apunta una sola
+ * (`20 x Imparable`), el mismo formato que la clasificación: la tabla apunta una sola
  * fila por jugador y objetivo, así que el multiplicador es lo que cuenta que
  * `imparable` ya va por veinte días o `victorias` por veinticuatro victorias.
  */

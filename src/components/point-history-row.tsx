@@ -8,7 +8,7 @@ import {
 
 /**
  * La frase de una ganancia, sin el nombre delante: `ganó a Chocola`, `ganó la
- * partida 2vs2` o `cumplió «2×Imparable»`.
+ * partida 2vs2` o `cumplió «2 x Imparable»`.
  *
  * En un **1v1** se nombra al rival, que es lo que la frase añade; en una partida
  * **por equipos** no, y es importante: `Match` guarda un solo rival —el primer
