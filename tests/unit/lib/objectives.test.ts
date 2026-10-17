@@ -300,7 +300,7 @@ describe("imparable: 1 punto por día natural, con tope", () => {
   });
 
   it("las repeticiones son los días reales, sin el tope de los puntos", () => {
-    // Es lo que permite pintar "20×Imparable +14": se cobran 14 puntos, pero el
+    // Es lo que permite pintar "20 x Imparable +14": se cobran 14 puntos, pero el
     // objetivo se ha conseguido 20 veces.
     const players = [aggregate(1, { playedDays: days(20), matches: 20 })];
     const { options } = computeObjectives(players, DEFAULT_RULESET, []);

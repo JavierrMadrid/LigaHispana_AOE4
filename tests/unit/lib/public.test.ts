@@ -381,7 +381,7 @@ describe("splitStandingPoints", () => {
  *
  * El importe y las repeticiones salen de `awards`; sin él, del precio del catálogo y
  * una repetición. Es lo que hace que una fila con tres días de `imparable` publique
- * 3 puntos (`3×Imparable`) y no el tope de 14.
+ * 3 puntos (`3 x Imparable`) y no el tope de 14.
  */
 describe("earnedObjectives", () => {
   const catalogo = new Map<string, StandingObjective>([

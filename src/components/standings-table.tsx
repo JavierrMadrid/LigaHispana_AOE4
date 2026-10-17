@@ -1,21 +1,33 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
+import { loadObjectiveOption } from "@/app/(public)/(inicio)/actions";
 import type {
   DivisionId,
   ObjectiveGroup,
+  ObjectiveOption,
   StandingObjective,
   StandingRow,
 } from "@/lib/public";
 import { countryFlagSvgUrl, countryFlagUrl } from "@/lib/flag";
-import { objectiveTitle } from "@/lib/objective-format";
+import { objectiveTitle, objectiveTitleParts } from "@/lib/objective-format";
 import { ChannelLinks } from "@/components/channel-links";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
 import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
 import { LiveDot } from "@/components/live-dot";
+import { Modal } from "@/components/modal";
+import { ObjectiveFeatureSummary } from "@/components/objective-feature-summary";
 import { ObjectiveIcon } from "@/components/objective-icon";
+import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
 import { PlayerAvatar } from "@/components/player-avatar";
 import {
   DivisionFilterButtons,
@@ -118,6 +130,19 @@ const GROUP_LABELS: Record<ObjectiveGroup, string> = {
   formato: "Formatos",
   civilizacion: "Civilizaciones",
 };
+
+/**
+ * Lo que la ventana de un objetivo del resumen está haciendo ahora mismo.
+ *
+ * Vive en `StandingsTable` y no en cada fila porque la tabla y la lista móvil
+ * pintan las mismas filas dos veces: una sola instancia de la ventana para las
+ * dos. El rótulo viaja con el estado para poder nombrar el objetivo en la carga
+ * y en el aviso de error aunque el chip que lo abrió ya no esté en el DOM.
+ */
+type ObjectiveDialogState =
+  | { status: "loading"; id: string; label: string }
+  | { status: "ready"; option: ObjectiveOption }
+  | { status: "error"; label: string };
 
 function normalize(value: string): string {
   return value
@@ -244,6 +269,15 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
   // filtros y a la reordenación, que solo cambian qué filas se pintan y en qué
   // orden, no el estado de cada jugador.
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
+  const [objectiveDialog, setObjectiveDialog] = useState<ObjectiveDialogState | null>(
+    null,
+  );
+  // Cada apertura invalida la anterior: si una lectura llega tarde, se descarta
+  // en lugar de abrir una ventana que ya no es la que se pidió.
+  const objectiveRequestRef = useRef(0);
+  const objectiveErrorTitleId = useId();
+  const loadingObjectiveId =
+    objectiveDialog?.status === "loading" ? objectiveDialog.id : null;
 
   const filtered = useMemo(() => {
     const needle = normalize(query.trim());
@@ -326,6 +360,52 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
     });
   }
 
+  /**
+   * Abre la clasificación de un objetivo del resumen. El catálogo completo no
+   * viaja en las props de la página —solo los objetivos ya cobrados de cada
+   * fila—, así que se pide al servidor el objetivo pulsado y la ventana se pinta
+   * cuando llega; hasta entonces el chip queda ocupado (`aria-busy`) sin cambiar
+   * de tamaño.
+   */
+  function openObjectiveDialog(objective: StandingObjective) {
+    const request = objectiveRequestRef.current + 1;
+
+    objectiveRequestRef.current = request;
+    setObjectiveDialog({
+      status: "loading",
+      id: objective.id,
+      label: objective.label,
+    });
+
+    void loadObjectiveOption(objective.id).then(
+      (option) => {
+        if (objectiveRequestRef.current !== request) {
+          return;
+        }
+
+        setObjectiveDialog(
+          option === null
+            ? { status: "error", label: objective.label }
+            : { status: "ready", option },
+        );
+      },
+      () => {
+        if (objectiveRequestRef.current !== request) {
+          return;
+        }
+
+        setObjectiveDialog({ status: "error", label: objective.label });
+      },
+    );
+  }
+
+  function closeObjectiveDialog() {
+    // Invalida cualquier lectura en vuelo: si llega después de cerrar, no vuelve
+    // a abrir la ventana por su cuenta.
+    objectiveRequestRef.current += 1;
+    setObjectiveDialog(null);
+  }
+
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -345,6 +425,15 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* La carga del objetivo se anuncia con texto y con `aria-busy` en el
+          chip: el aviso tiene que existir antes de cambiar, o el lector de
+          pantalla no lo lee. No ocupa hueco (`sr-only`). */}
+      <p role="status" className="sr-only">
+        {objectiveDialog?.status === "loading"
+          ? `Cargando la clasificación de ${objectiveDialog.label}`
+          : ""}
+      </p>
+
       <StandingsFilters
         query={query}
         onQueryChange={setQuery}
@@ -422,6 +511,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                 row={row}
                 objectivesExpanded={expanded.has(row.profileId)}
                 onToggleObjectives={toggleObjectives}
+                onOpenObjective={openObjectiveDialog}
+                loadingObjectiveId={loadingObjectiveId}
               />
             ))}
           </ul>
@@ -509,6 +600,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                     row={row}
                     objectivesExpanded={expanded.has(row.profileId)}
                     onToggleObjectives={toggleObjectives}
+                    onOpenObjective={openObjectiveDialog}
+                    loadingObjectiveId={loadingObjectiveId}
                   />
                 ))}
               </table>
@@ -516,6 +609,52 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
           </div>
         </>
       )}
+
+      {objectiveDialog !== null && objectiveDialog.status === "ready" ? (
+        <ObjectiveRankingDialog
+          key={objectiveDialog.option.id}
+          option={objectiveDialog.option}
+          onClose={closeObjectiveDialog}
+          front={
+            // La X de cerrar vive en la esquina superior derecha de la cara
+            // (`ObjectiveFlipDialog`), así que el resumen le reserva ese aire.
+            <div className="h-full overflow-y-auto">
+              <ObjectiveFeatureSummary option={objectiveDialog.option} />
+            </div>
+          }
+        />
+      ) : null}
+
+      {objectiveDialog !== null && objectiveDialog.status === "error" ? (
+        <Modal
+          open
+          onClose={closeObjectiveDialog}
+          labelledBy={objectiveErrorTitleId}
+          className="m-auto w-[calc(100%-2rem)] max-w-md rounded-lg border border-line bg-surface p-0 text-foreground"
+        >
+          <div className="p-5">
+            <h2
+              id={objectiveErrorTitleId}
+              className="font-display text-lg font-semibold text-foreground"
+            >
+              No se ha podido cargar la clasificación
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-muted">
+              No se ha podido cargar la clasificación de «{objectiveDialog.label}».
+              Vuelve a intentarlo en unos minutos.
+            </p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={closeObjectiveDialog}
+                className="inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong active:translate-y-px"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }
@@ -769,10 +908,15 @@ function StandingsRow({
   row,
   objectivesExpanded,
   onToggleObjectives,
+  onOpenObjective,
+  loadingObjectiveId,
 }: {
   row: StandingRow;
   objectivesExpanded: boolean;
   onToggleObjectives: (profileId: number) => void;
+  onOpenObjective: (objective: StandingObjective) => void;
+  /** Objetivo cuya clasificación se está leyendo ahora mismo, o `null`. */
+  loadingObjectiveId: string | null;
 }) {
   const league = rankLevelToLeague(row.rankLevel);
   const objectivesPanelId = `objetivos-${row.profileId}`;
@@ -924,7 +1068,11 @@ function StandingsRow({
             {/* Filete de 1px que separa el desplegable de la fila: hereda el
                 relleno del `<td>`, así que no toca los bordes del panel. */}
             <div className="border-t border-line pt-3">
-              <ObjectivesDetail row={row} />
+              <ObjectivesDetail
+                row={row}
+                onOpenObjective={onOpenObjective}
+                loadingObjectiveId={loadingObjectiveId}
+              />
             </div>
           </td>
         </tr>
@@ -945,10 +1093,15 @@ function StandingsCard({
   row,
   objectivesExpanded,
   onToggleObjectives,
+  onOpenObjective,
+  loadingObjectiveId,
 }: {
   row: StandingRow;
   objectivesExpanded: boolean;
   onToggleObjectives: (profileId: number) => void;
+  onOpenObjective: (objective: StandingObjective) => void;
+  /** Objetivo cuya clasificación se está leyendo ahora mismo, o `null`. */
+  loadingObjectiveId: string | null;
 }) {
   const objectivesPanelId = `objetivos-movil-${row.profileId}`;
   // La bandera de la tarjeta es un icono junto a la identidad, no un fondo a
@@ -1008,7 +1161,11 @@ function StandingsCard({
 
       {objectivesExpanded ? (
         <div id={objectivesPanelId} className="relative z-10 mt-3 border-t border-line pt-3">
-          <ObjectivesDetail row={row} />
+          <ObjectivesDetail
+            row={row}
+            onOpenObjective={onOpenObjective}
+            loadingObjectiveId={loadingObjectiveId}
+          />
         </div>
       ) : null}
     </li>
@@ -1392,11 +1549,20 @@ function Chevron({ expanded, className = "" }: { expanded: boolean; className?: 
  * Es la cara "crónica" de la fila: los objetivos se agrupan por familia (el
  * orden de `StandingRow.objectives` ya llega agrupado) y cada uno se lee como
  * una ficha de botín, con su icono, su etiqueta y los puntos que aporta. Un
- * objetivo repetible lleva delante sus repeticiones (`2×Imparable`) y las dos
+ * objetivo repetible lleva delante sus repeticiones (`2 x Imparable`), atenuadas
+ * para que el peso lo lleven la etiqueta y la cifra, y las dos
  * cifras son las que **cobró** el jugador, no el precio del catálogo. Cada
  * ficha va sobre `surface-raised` para que destaque del panel, que comparte el
  * tono de la fila, y su `title` —la regla del objetivo en una frase, del
  * catálogo— responde al "¿esto cómo se consigue?" sin cargar la ficha.
+ *
+ * Cada chip es un botón: abre, por encima, la clasificación del objetivo en la
+ * misma ventana volteable que usa su tarjeta en `/objetivos` —el resumen del
+ * catálogo es la cara frontal y el ranking, la posterior—. En reposo el chip no
+ * cambia de aspecto; al pasar el ratón solo se marca el borde y quien navega con
+ * teclado lo alcanza como cualquier botón. El estado de carga y la ventana viven
+ * en `StandingsTable`, que pinta las filas dos veces (tabla y tarjetas) y monta
+ * una sola instancia de cada una.
  *
  * ## El enlace en su propia columna
  *
@@ -1410,7 +1576,15 @@ function Chevron({ expanded, className = "" }: { expanded: boolean; className?: 
  * se apila y el enlace queda debajo alineado a la derecha, el mismo lado que
  * ocupa cuando hay sitio: la tarjeta de móvil usa este mismo componente.
  */
-function ObjectivesDetail({ row }: { row: StandingRow }) {
+function ObjectivesDetail({
+  row,
+  onOpenObjective,
+  loadingObjectiveId,
+}: {
+  row: StandingRow;
+  onOpenObjective: (objective: StandingObjective) => void;
+  loadingObjectiveId: string | null;
+}) {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
       <div className="flex min-w-0 flex-1 flex-wrap gap-x-6 gap-y-3">
@@ -1418,21 +1592,34 @@ function ObjectivesDetail({ row }: { row: StandingRow }) {
           <div key={group} className="flex flex-col gap-1.5">
             <p className="text-xs font-medium text-muted">{GROUP_LABELS[group]}</p>
             <ul className="flex flex-wrap gap-1.5">
-              {groupItems.map((objective) => (
-                <li
-                  key={objective.id}
-                  title={objective.description}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-raised px-2.5 py-1 text-xs"
-                >
-                  <ObjectiveIcon option={objective} className="size-4 shrink-0" />
-                  <span className="tabular-nums text-foreground">
-                    {objectiveTitle(objective)}
-                  </span>
-                  <span className="font-semibold tabular-nums text-accent">
-                    +{objective.points}
-                  </span>
-                </li>
-              ))}
+              {groupItems.map((objective) => {
+                const { repetitions, label } = objectiveTitleParts(objective);
+
+                return (
+                  <li key={objective.id} className="inline-flex">
+                    <button
+                      type="button"
+                      title={objective.description}
+                      aria-label={`Ver la clasificación de ${objectiveTitle(objective)}`}
+                      aria-haspopup="dialog"
+                      aria-busy={loadingObjectiveId === objective.id || undefined}
+                      onClick={() => onOpenObjective(objective)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-raised px-2.5 py-1 text-xs transition-colors hover:border-line-strong"
+                    >
+                      <ObjectiveIcon option={objective} className="size-4 shrink-0" />
+                      <span className="tabular-nums text-foreground">
+                        {repetitions === null ? null : (
+                          <span className="text-muted">{`${repetitions} `}</span>
+                        )}
+                        {label}
+                      </span>
+                      <span className="font-semibold tabular-nums text-accent">
+                        +{objective.points}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ))}

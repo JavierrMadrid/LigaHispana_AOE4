@@ -223,7 +223,7 @@ aplican.
 
 - `objectives.points` es el total de la fila: todo punto de un jugador sale de sus objetivos.
 - `awards` guarda, por id cobrado, el **importe real** y las **repeticiones** (`count`), que es lo que
-  permite publicar `2×Imparable +2` sin rehacer la cuenta desde el catálogo. Va aparte de `earned` (los
+  permite publicar `2 x Imparable +2` sin rehacer la cuenta desde el catálogo. Va aparte de `earned` (los
   ids, en orden) y **falta** en las filas escritas antes de que existiera: quien lo lea cae al precio de
   catálogo y a una repetición.
 - `byMode` y `Match.points` son **auditoría** y no se suman al total.

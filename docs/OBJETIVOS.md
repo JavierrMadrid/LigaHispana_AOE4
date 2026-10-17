@@ -87,7 +87,7 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
   hazaña (métrica `partidas`): ese recuento es su valor de ranking, con umbral 1. Cómo se consigue, en
   [`OPERACION.md`](./OPERACION.md#resumen-de-partida).
 - En `imparable` el valor del ranking es el número real de días; los puntos van con tope (14). Las
-  **repeticiones** que publica la web también son los días reales ("20×Imparable +14").
+  **repeticiones** que publica la web también son los días reales ("20 x Imparable +14").
 - Las partidas con civilización aleatoria no cuentan para los objetivos de civilización.
 
 ### Familias
