@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Cinzel, Geist } from "next/font/google";
 import { BackToTop } from "@/components/back-to-top";
+import { readSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -19,28 +20,10 @@ const cinzel = Cinzel({
 
 // Dominio público del sitio, del que cuelgan las rutas absolutas de las
 // imágenes para compartir (`opengraph-image`, iconos) y los canónicos. Se
-// resuelve por capas para que funcione sin configurar nada y aun así admita
-// dominio propio, y para que el build no se rompa en desarrollo local.
-//   1. `NEXT_PUBLIC_SITE_URL`: dominio personalizado, con protocolo.
-//   2. `VERCEL_PROJECT_PRODUCTION_URL`: dominio de producción que Vercel inyecta
-//      en tiempo de build, sin protocolo; se usa también en los despliegues de
-//      rama para que las tarjetas sociales apunten siempre a producción.
-//   3. `http://localhost:3000`: fallback de desarrollo local.
-//
-// Se evalúa al importar el módulo, o sea en `next build`: son variables de build
-// (`NEXT_PUBLIC_*` las sustituye Next por un literal), no de runtime, así que aquí
-// no tiene sentido mirar los bindings del Worker.
-function getSiteUrl(): URL {
-  const configured = process.env.NEXT_PUBLIC_SITE_URL;
-  if (configured) return new URL(configured);
-
-  const vercelProduction = process.env.VERCEL_PROJECT_PRODUCTION_URL;
-  if (vercelProduction) return new URL(`https://${vercelProduction}`);
-
-  return new URL("http://localhost:3000");
-}
-
-const siteUrl = getSiteUrl();
+// resuelve en `src/lib/site-url.ts`, que es la misma fuente que usa el informe
+// diario del bot para el enlace a la web: dos dominios se verían en cuanto uno
+// de los dos se tocara.
+const siteUrl = readSiteUrl();
 
 export const metadata: Metadata = {
   metadataBase: siteUrl,

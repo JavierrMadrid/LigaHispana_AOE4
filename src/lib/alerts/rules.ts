@@ -34,11 +34,21 @@ import { isRecord } from "@/lib/json";
  *
  * ## El sujeto de una regla
  *
- * Tres reglas hablan de **alguien**: R2 del rival (`opponentProfileId`) y R3 del
+ * Dos reglas hablan de **alguien**: R2 del rival (`opponentProfileId`) y R3 del
  * compañero (`profileId` de `rawJson.teams`). Las demás hablan del jugador, y su
  * sujeto es `null`. El sujeto se identifica por `profileId` y no por nombre,
  * porque el nombre cambia y el `profileId` no; y puede ser de alguien que no está
  * en la liga, que es lo normal en un torneo individual.
+ *
+ * ## Las dos reglas retiradas
+ *
+ * `TEAMMATE_ELO_GAP` (R4) y `LOW_DIVISION_TEAM_GAME` (R5) **ya no se calculan**:
+ * su caso exacto (un equipo desequilibrado) dejó de ser un aviso y pasó a ser una
+ * condición de puntuación —una partida por equipos con un compañero a dos escalones
+ * o más **no cuenta**; ver `src/lib/ranked-match.ts`—. Lo que se queda es su
+ * **etiqueta y su frase**, porque hay filas históricas del enum que el panel y el
+ * informe siguen pintando: el valor del enum y `ALERT_RULE_LABELS` y
+ * `alertSummary()` no se pueden borrar sin dejar esas filas sin texto.
  */
 
 export { SUBDIVISION_RANK_LEVELS, type SubdivisionRankLevel } from "@/lib/divisions";
@@ -61,7 +71,13 @@ export const ALERTS_RULESET_VERSION = 1;
 /** Texto de producto: lo fija el código y describe qué se está vigilando. */
 export const ALERTS_RULE_LABEL = "Alertas de comportamiento sobre partidas clasificatorias";
 
-/** Reglas que miran una racha de partidas consecutivas. */
+/**
+ * Reglas que miran una racha de partidas consecutivas.
+ *
+ * Los dos últimos valores son **legado**: el motor ya no los calcula (ver el
+ * docblock del módulo) y se quedan solo porque hay filas de `Alert` escritas con
+ * ellos que el panel y el informe siguen leyendo.
+ */
 export type StreakAlertRule =
   | "SHORT_MATCH_STREAK"
   | "REPEATED_OPPONENT_STREAK"
@@ -78,19 +94,26 @@ export type TotalAlertRule =
  *
  * No tienen racha ni acumulado: se comprueba una cosa (el historial de partidas del
  * jugador, la ladder por delante de lo que nos llega, si su cuenta de Discord está en
- * el servidor) y, mientras siga siendo cierto, el mismo hecho. Se evalúan en
- * `src/lib/history-checks.ts` y `src/lib/discord/check.ts`, desde el worker del
- * sincronizador, porque no leen `Match` sino columnas de `Player`, una ruta del sitio de
- * AoE4World y la API de Discord.
+ * el servidor, si tiene algún canal de directo) y, mientras siga siendo cierto, el
+ * mismo hecho. Las tres primeras se evalúan en `src/lib/history-checks.ts` y
+ * `src/lib/discord/check.ts`, desde el worker del sincronizador, porque no leen
+ * `Match` sino columnas de `Player`, una ruta del sitio de AoE4World y la API de
+ * Discord; la del canal la evalúa `evaluateAlerts()` (`src/lib/alerts/evaluate.ts`),
+ * que ya lee a los aprobados en cada pasada.
  *
  * Su `dedupeKey` es estable por (regla, tipo, jugador) —sin partida ancla ni número—,
  * porque si no, reevaluarlas cada 10 minutos insertaría una fila nueva cada 12 horas
  * para siempre. Ver el docblock de `alertDedupeKey()`.
+ *
+ * `NO_STREAM_CHANNEL` es la única **condicional**: solo se evalúa si la edición
+ * declara la retransmisión obligatoria (`Setting["edition.config"]`). Apagarla no
+ * borra las alertas ya escritas: `Alert` es *append-only*.
  */
 export type StateAlertRule =
   | "HISTORY_NOT_PUBLIC"
   | "MISSING_LADDER_MATCHES"
-  | "DISCORD_NOT_IN_GUILD";
+  | "DISCORD_NOT_IN_GUILD"
+  | "NO_STREAM_CHANNEL";
 
 export type AlertsRuleName = StreakAlertRule | TotalAlertRule | StateAlertRule;
 
@@ -113,6 +136,10 @@ export type AlertKindName =
  * entrar sin decidir aquí su etiqueta, igual que el `switch` de `alertSummary()`
  * obliga a decidir su frase. La diferencia entre las dos es que la etiqueta **no**
  * lleva el nombre del jugador ni ningún número: describe la regla, no el hallazgo.
+ *
+ * Las dos entradas marcadas como legado son las de las reglas retiradas: se quedan
+ * porque hay filas históricas de `Alert` con esos valores y el panel las pinta con
+ * esta etiqueta.
  */
 export const ALERT_RULE_LABELS = {
   SHORT_MATCH_STREAK: "Partidas cortas seguidas",
@@ -121,11 +148,14 @@ export const ALERT_RULE_LABELS = {
   REPEATED_OPPONENT_TOTAL: "Rival repetido, en total",
   REPEATED_TEAMMATE_STREAK: "Compañero repetido, en rachas",
   REPEATED_TEAMMATE_TOTAL: "Compañero repetido, en total",
+  // Legado: regla retirada, solo para filas históricas.
   TEAMMATE_ELO_GAP: "Brecha de elo con un compañero",
+  // Legado: regla retirada, solo para filas históricas.
   LOW_DIVISION_TEAM_GAME: "Equipo en una división muy distinta",
   HISTORY_NOT_PUBLIC: "Historial de partidas no público",
   MISSING_LADDER_MATCHES: "Partidas de ladder que no nos llegan",
   DISCORD_NOT_IN_GUILD: "Discord sin estar en el servidor",
+  NO_STREAM_CHANNEL: "Participante sin canal de directo",
 } as const satisfies Record<AlertsRuleName, string>;
 
 /**
@@ -158,10 +188,6 @@ export type AlertsThresholds = {
   repeatedTeammateStreak: number;
   /** R3: partidas con el mismo compañero en total, un único aviso al llegar. */
   repeatedTeammateTotal: number;
-  /** R4: diferencia de elo con un compañero, en valor absoluto, para avisar. */
-  teammateEloGap: number;
-  /** R5: diferencia de escalones (en valor absoluto) entre la división del jugador y la de la partida de equipo. */
-  lowDivisionSteps: number;
 };
 
 export type AlertsRuleset = {
@@ -174,9 +200,9 @@ export type AlertsRuleset = {
  * Los valores con los que se publica el ruleset la primera vez.
  *
  * Son los que acordaron cliente y organización: 3 minutos, rachas de 2 y 3,
- * acumulados cada 5 y cada 10, 7 partidas con el mismo compañero, 500 de elo y
- * 3 escalones de división. Se cambian en `Setting["alerts.ruleset"]` sin
- * desplegar, igual que los puntos por victoria del motor de puntuación.
+ * acumulados cada 5 y cada 10 y 7 partidas con el mismo compañero. Se cambian en
+ * `Setting["alerts.ruleset"]` sin desplegar, igual que los puntos por victoria del
+ * motor de puntuación.
  */
 export const DEFAULT_ALERTS_RULESET: AlertsRuleset = {
   version: ALERTS_RULESET_VERSION,
@@ -189,8 +215,6 @@ export const DEFAULT_ALERTS_RULESET: AlertsRuleset = {
     repeatedOpponentTotalStep: 10,
     repeatedTeammateStreak: 3,
     repeatedTeammateTotal: 7,
-    teammateEloGap: 500,
-    lowDivisionSteps: 3,
   },
 };
 
@@ -214,8 +238,6 @@ const THRESHOLD_KEYS = [
   "repeatedOpponentTotalStep",
   "repeatedTeammateStreak",
   "repeatedTeammateTotal",
-  "teammateEloGap",
-  "lowDivisionSteps",
 ] as const satisfies readonly (keyof AlertsThresholds)[];
 
 export type AlertsRulesetMergeResult = {
@@ -301,6 +323,35 @@ export type AlertSubject = {
 export const SELF_SUBJECT: AlertSubject = { key: "yo", profileId: null, name: null };
 
 /**
+ * Los cuatro sitios donde una ficha declara un canal de directo.
+ *
+ * Son columnas de `Player`: las tres que escribe el panel (o la inscripción) más el
+ * `twitchUrl` que publica AoE4World en el perfil, que es el respaldo del canal de
+ * Twitch (ver `src/lib/public.ts`).
+ */
+export type StreamChannels = {
+  twitchChannel: string | null;
+  youtubeChannel: string | null;
+  kickChannel: string | null;
+  twitchUrl: string | null;
+};
+
+/**
+ * ¿La ficha tiene algún canal de directo declarado? (`NO_STREAM_CHANNEL`)
+ *
+ * Es puro y se prueba aparte: lo que decide esta regla es una condición de columnas,
+ * no una partida. Se pregunta por **todas** las formas a la vez porque el canal puede
+ * estar en cualquiera de las cuatro, y un valor que no está vacío cuenta aunque no sea
+ * un canal válido —eso lo valida el formulario, no la alerta—: de lo que avisa la
+ * regla es de una ficha **sin ningún canal**, no de una con el canal mal escrito.
+ */
+export function hasStreamChannel(player: StreamChannels): boolean {
+  return [player.twitchChannel, player.youtubeChannel, player.kickChannel, player.twitchUrl].some(
+    (channel) => typeof channel === "string" && channel.trim() !== "",
+  );
+}
+
+/**
  * Cómo se resolvió que la cuenta de Discord de un participante no está en el
  * servidor del torneo (`DISCORD_NOT_IN_GUILD`).
  *
@@ -320,25 +371,6 @@ export type DiscordNotInGuildResolvedBy = "discordUserId" | "username";
 export type AlertAnchorDetail = {
   /** Duración en segundos, si la partida la trae. */
   durationSeconds?: number;
-  /** Mayor brecha de elo con un compañero en esa partida (R4). */
-  eloGap?: number;
-  /**
-   * Diferencia de escalones entre la subdivisión de la partida y la del jugador
-   * en esa misma partida de equipo (R5). Positivo si la partida está por debajo,
-   * negativo si está por encima; el aviso sale con el valor absoluto.
-   */
-  steps?: number;
-  /**
-   * Media de **rating** de la partida de equipo (R5). Es la escala de la ladder,
-   * la misma que `selfRating`; **no** es el `mmr` de la partida.
-   */
-  averageRating?: number;
-  /** Rating del jugador en esa partida de equipo (R5). */
-  selfRating?: number;
-  /** Subdivisión a la que corresponde la media de rating de la partida, ya resuelta (R5). */
-  gameSubdivision?: string;
-  /** Subdivisión del jugador en esa partida de equipo, ya resuelta (R5). */
-  playerSubdivision?: string;
 
   /* Reglas de estado: la evidencia con la que se comprobó. */
 
@@ -409,7 +441,7 @@ export type AlertTriggerInput = {
   threshold: number;
   anchorGameId: string | null;
   anchorStartedAt: Date | null;
-  /** Familia de ladder de la partida (`Match.mode`), de la que salen los cortes de R5. */
+  /** Familia de ladder de la partida ancla (`Match.mode`), cuando la tiene. */
   anchorLadder?: string | null;
   /**
    * Ventana del torneo, **solo para las reglas que miran partidas**.
@@ -512,10 +544,6 @@ export function partidas(count: number): string {
   return count === 1 ? "1 partida" : `${count} partidas`;
 }
 
-function conY(n: number): string {
-  return n === 1 ? "1 escalón" : `${n} escalones`;
-}
-
 /**
  * La frase de una alerta, en la forma en que se pinta.
  *
@@ -541,27 +569,13 @@ export function alertSummary(input: AlertTriggerInput): string {
       }${cierre}`;
     case "REPEATED_TEAMMATE_TOTAL":
       return `${partidas(input.count)} de equipo con ${input.subject.name ?? "el mismo compañero"} en total`;
-    case "TEAMMATE_ELO_GAP": {
-      const gap = input.detail?.eloGap;
-
-      return gap === undefined
-        ? `${partidas(input.count)} de equipo con un compañero muy por encima o por debajo${cierre}`
-        : `${partidas(input.count)} de equipo con un compañero a ${gap} de elo${cierre}`;
-    }
-    case "LOW_DIVISION_TEAM_GAME": {
-      const steps = input.detail?.steps;
-
-      if (steps === undefined) {
-        return `${partidas(input.count)} de equipos en una división muy distinta a la suya${cierre}`;
-      }
-
-      // `steps` positivo es que la partida está por debajo del jugador y negativo
-      // que está por encima; la frase conserva ese sentido, que es lo que el
-      // número quiere decir.
-      const sentido = steps < 0 ? "por encima" : "por debajo";
-
-      return `${partidas(input.count)} de equipos ${conY(Math.abs(steps))} ${sentido} de su división${cierre}`;
-    }
+    // Las dos frases siguientes son de reglas retiradas (ver el docblock del
+    // módulo). Se quedan por las filas históricas, y sin el detalle que las
+    // acompañaba —`eloGap` y `steps`, que ya no existen— dicen su forma genérica.
+    case "TEAMMATE_ELO_GAP":
+      return `${partidas(input.count)} de equipo con un compañero muy por encima o por debajo${cierre}`;
+    case "LOW_DIVISION_TEAM_GAME":
+      return `${partidas(input.count)} de equipos en una división muy distinta a la suya${cierre}`;
     // Las dos de estado van al final y sin `cierre`: no son un tramo que se cierre,
     // son algo que se ha comprobado. Las frases dicen **qué se ha comprobado**, nunca
     // por qué: el equipo de Alerts no sabe si el jugador cambió el ajuste, si se le
@@ -579,6 +593,11 @@ export function alertSummary(input: AlertTriggerInput): string {
     // hacer, y el equipo de Alertas no puede distinguir eso desde aquí.
     case "DISCORD_NOT_IN_GUILD":
       return "Su Discord no está en el servidor del torneo";
+    // La cuarta de estado, y la única que solo se comprueba si la edición la pide.
+    // Como las otras tres, dice **qué se ha comprobado** y no por qué: no consta
+    // ningún canal, y si es un olvido o una decisión no se sabe desde aquí.
+    case "NO_STREAM_CHANNEL":
+      return "Su ficha no tiene ningún canal de directo";
   }
 }
 

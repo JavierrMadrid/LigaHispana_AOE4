@@ -309,6 +309,72 @@ export function mergeCountries(stored: unknown): CountriesMergeResult {
 }
 
 /**
+ * La selección de países que llega de un formulario, validada y en el orden del
+ * catálogo. **Pura**: no lee nada y no escribe nada, así que se puede comprobar sin
+ * base de datos ni red.
+ *
+ * Es lo que valida la Server Action que publica la lista (`saveCountries`) y lo que
+ * no puede hacer `mergeCountries()`: aquella lee un documento **ya guardado** y, si no
+ * lo entiende, lo descarta entero y usa los de por defecto —que es lo correcto para
+ * una lectura—, mientras que aquí lo que hay que responder es **qué está mal**, para
+ * que quien lo ha escrito lo corrija. Por eso devuelve un error y no un aviso.
+ *
+ * ## Qué acepta
+ *
+ * Cada rótulo tiene que estar **exactamente** en `DEFAULT_COUNTRIES`, sin duplicados y
+ * con al menos uno. La lista admitida **no se puede ampliar más allá del catálogo sin
+ * tocar código**: los ISO de AoE4World con los que se resuelve el país de un perfil
+ * viven en `COUNTRY_LABEL_BY_ISO`, en este mismo módulo, así que un rótulo nuevo no
+ * tendría ISO con el que compararse (lo comprueba `npm run verify:sync`).
+ *
+ * El resultado va **en el orden del catálogo** (`DEFAULT_COUNTRIES`) y no en el del
+ * formulario: es el orden en el que se enseña la lista y en el que se guarda, y no
+ * puede depender de cómo hayan llegado las casillas marcadas.
+ *
+ * Los espacios de fuera se recortan y las entradas vacías se ignoran —es lo que ya
+ * hace `readList()` con un `FormData`—, pero no se pliega ni el acento ni la
+ * mayúscula: un rótulo que no sea el del catálogo se rechaza y se dice cuál, porque
+ * aquí se está publicando la lista, no resolviendo lo que escribió una persona.
+ */
+export type CountrySelection =
+  | { ok: true; countries: string[] }
+  | { ok: false; error: string };
+
+export function normalizeCountrySelection(selected: readonly string[]): CountrySelection {
+  const vistos = new Set<string>();
+
+  for (const bruto of selected) {
+    const country = bruto.trim();
+
+    if (country === "") {
+      continue;
+    }
+
+    if (!DEFAULT_COUNTRIES.includes(country)) {
+      return {
+        ok: false,
+        error: `No se puede admitir «${country}»: no está en el catálogo de países del torneo.`,
+      };
+    }
+
+    if (vistos.has(country)) {
+      return { ok: false, error: `«${country}» está repetido en la lista de países admitidos.` };
+    }
+
+    vistos.add(country);
+  }
+
+  if (vistos.size === 0) {
+    return {
+      ok: false,
+      error: "Hay que admitir al menos un país: sin lista no se puede inscribir nadie.",
+    };
+  }
+
+  return { ok: true, countries: DEFAULT_COUNTRIES.filter((country) => vistos.has(country)) };
+}
+
+/**
  * La lista de países que admite el torneo ahora mismo.
  *
  * Si nadie ha publicado `registration.countries`, devuelve `DEFAULT_COUNTRIES`

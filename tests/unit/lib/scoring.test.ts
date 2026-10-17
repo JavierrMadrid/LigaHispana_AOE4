@@ -1,19 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import { MatchResult } from "@/generated/prisma/enums";
-import { OBJECTIVE_COUNT, OBJECTIVE_POINTS } from "@/lib/objectives";
+import { OBJECTIVE_COUNT, OBJECTIVE_POINTS, type ObjectiveAward } from "@/lib/objectives";
 import {
   DEFAULT_RULESET,
+  LEGACY_RULESET_VERSION,
   RULESET_VERSION,
-  RULE_LABEL,
   SCORING_RULESET_KEY,
   compareStandings,
   countsAsRanked,
   mergeRuleset,
   rankApprovedPlayers,
+  ruleLabel,
   type AggregatedRow,
+  type ScoringRuleset,
   type ScoringWindow,
 } from "@/lib/scoring";
+import type { TeamTierContext } from "@/lib/ranked-match";
 
 /**
  * El motor de puntos, en lo que se puede comprobar sin base de datos.
@@ -49,10 +52,24 @@ function partida(overrides: Partial<Parameters<typeof countsAsRanked>[0]> = {}) 
   };
 }
 
-describe("reglas v3 (constantes del motor)", () => {
+describe("reglas v4 (constantes del motor)", () => {
   it("el ruleset por defecto es el de la versión que declara el código", () => {
     expect(DEFAULT_RULESET.version).toBe(RULESET_VERSION);
+    expect(RULESET_VERSION).toBe(4);
+    expect(LEGACY_RULESET_VERSION).toBe(3);
     expect(SCORING_RULESET_KEY).toBe("scoring.ruleset");
+  });
+
+  it("el catálogo arranca completo: ningún objetivo desactivado", () => {
+    expect(DEFAULT_RULESET.disabledObjectives).toEqual([]);
+  });
+
+  it("la etiqueta por defecto es la que calcula `ruleLabel()`", () => {
+    // Ya no es una constante: sale de los puntos por victoria y de los objetivos
+    // activos, así que el texto guardado y el del código no pueden divergir.
+    expect(DEFAULT_RULESET.label).toBe(ruleLabel(DEFAULT_RULESET));
+    expect(DEFAULT_RULESET.label).toContain("2 puntos por victoria clasificatoria");
+    expect(DEFAULT_RULESET.label).toContain(`más ${OBJECTIVE_COUNT} objetivos`);
   });
 
   it("las familias por defecto son las dos ladders ranked", () => {
@@ -67,8 +84,8 @@ describe("reglas v3 (constantes del motor)", () => {
     expect(DEFAULT_RULESET.countRandomizedCivs).toBe(false);
   });
 
-  it("el catálogo sigue siendo el de 82 objetivos de docs/OBJETIVOS.md", () => {
-    expect(OBJECTIVE_COUNT).toBe(82);
+  it("el catálogo sigue siendo el de 88 objetivos de docs/OBJETIVOS.md", () => {
+    expect(OBJECTIVE_COUNT).toBe(88);
     // El desglose de `PlayerScore` y `Setting["scoring.ruleset"].objectives` se
     // indexan por id, así que un objetivo sin puntos o con un id repetido
     // desaparecería de la clasificación sin que nada fallara.
@@ -150,6 +167,19 @@ describe("mergeRuleset: lo que se puede reconfigurar", () => {
       DEFAULT_RULESET.objectives["bienhadado"],
     );
   });
+
+  it("un `objectives[\"victorias\"]` guardado no avisa: el motor no lo lee", () => {
+    // Lo que vale una victoria lo dice `pointsPerWin` (ver `computeObjectives`), así
+    // que el campo es un punto documental más del catálogo: se guarda como cualquier
+    // otro y no hay nada que arreglar ni que avisar. El panel no deja editarlo.
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      objectives: { victorias: 99 },
+    });
+
+    expect(warnings).toEqual([]);
+    expect(ruleset.objectives.victorias).toBe(99);
+  });
 });
 
 describe("mergeRuleset: lo que se rechaza, siempre con aviso", () => {
@@ -186,12 +216,12 @@ describe("mergeRuleset: lo que se rechaza, siempre con aviso", () => {
     expect(warnings.some((w) => w.includes(`no es ${RULESET_VERSION}`))).toBe(true);
   });
 
-  it("la etiqueta la fija el código, no el documento guardado", () => {
+  it("la etiqueta la calcula el código, no el documento guardado", () => {
     // Es texto de producto y aparece en la interfaz: un `label` guardado que
     // describiera otra versión de las reglas haría que `/objetivos` mintiera.
     const { ruleset, warnings } = mergeRuleset({ ...VALIDO, label: "10 puntos por ganar" });
 
-    expect(ruleset.label).toBe(RULE_LABEL);
+    expect(ruleset.label).toBe(ruleLabel(DEFAULT_RULESET));
     expect(warnings.some((w) => w.startsWith("label se ignora"))).toBe(true);
   });
 
@@ -314,6 +344,194 @@ describe("mergeRuleset: no toca el documento por defecto", () => {
   });
 });
 
+describe("mergeRuleset: la migración v3 → v4", () => {
+  /**
+   * Documento v3 tal y como está hoy en producción: los mismos campos que la v4 salvo
+   * `disabledObjectives`, que en la v3 no existe.
+   */
+  const V3 = {
+    version: LEGACY_RULESET_VERSION,
+    label: "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+    modes: ["rm_solo"],
+    window: { from: "2026-09-15T00:00:00.000Z", to: "2026-10-15T00:00:00.000Z" },
+    pointsPerWin: 3,
+    countRandomizedCivs: true,
+    objectives: { "loco-por-ganar": 90 },
+  };
+
+  it("un documento v3 se migra en vez de descartarse", () => {
+    const { ruleset, warnings } = mergeRuleset(V3);
+
+    expect(ruleset.version).toBe(RULESET_VERSION);
+    expect(ruleset.pointsPerWin).toBe(3);
+    expect(ruleset.modes).toEqual(["rm_solo"]);
+    expect(ruleset.countRandomizedCivs).toBe(true);
+    expect(ruleset.objectives["loco-por-ganar"]).toBe(90);
+    expect(ruleset.disabledObjectives).toEqual([]);
+    expect(warnings.some((w) => w.includes("se migran"))).toBe(true);
+  });
+
+  it("el documento migrado lleva la etiqueta recalculada, no la guardada", () => {
+    // La etiqueta de la v3 se escribió cuando el catálogo entero estaba activo: si se
+    // copiara tal cual, el motor anunciaría unos objetivos que ya no son los suyos.
+    const { ruleset } = mergeRuleset(V3);
+
+    expect(ruleset.label).toBe(ruleLabel(ruleset));
+    expect(ruleset.label).not.toBe(V3.label);
+  });
+
+  it("el documento migrado se puede volver a guardar sin avisos", () => {
+    // Es la propiedad de la que depende `ensureRuleset()`: publica una vez el
+    // documento migrado y, a partir de ahí, ni avisa en cada lectura ni lo reescribe.
+    const migrado = mergeRuleset(V3).ruleset;
+    const segunda = mergeRuleset(migrado);
+
+    expect(segunda.warnings).toEqual([]);
+    expect(segunda.ruleset).toEqual(migrado);
+  });
+
+  it("una versión más antigua o futura sigue descartándose entera", () => {
+    for (const version of [1, 2, 5, 99]) {
+      const { ruleset, warnings } = mergeRuleset({ ...V3, version });
+
+      expect(ruleset).toEqual(DEFAULT_RULESET);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("se ignoran las reglas guardadas");
+    }
+  });
+});
+
+describe("mergeRuleset: los objetivos desactivados", () => {
+  it("aplica la lista y recalcula la etiqueta con los que quedan", () => {
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      disabledObjectives: ["loco-por-ganar", "rey-1v1"],
+    });
+
+    expect(warnings).toEqual([]);
+    expect(ruleset.disabledObjectives).toEqual(["loco-por-ganar", "rey-1v1"]);
+    expect(ruleset.label).toContain(`más ${OBJECTIVE_COUNT - 2} objetivos`);
+  });
+
+  it("un id que no está en el catálogo se avisa y se ignora, sin tumbar el resto", () => {
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      disabledObjectives: ["objetivo-inventado", "rey-1v1"],
+    });
+
+    expect(ruleset.disabledObjectives).toEqual(["rey-1v1"]);
+    expect(warnings.some((w) => w.includes("objetivo-inventado"))).toBe(true);
+  });
+
+  it("un id repetido cuenta una sola vez", () => {
+    const { ruleset, warnings } = mergeRuleset({
+      ...VALIDO,
+      disabledObjectives: ["rey-1v1", "rey-1v1"],
+    });
+
+    expect(ruleset.disabledObjectives).toEqual(["rey-1v1"]);
+    expect(warnings.some((w) => w.includes("repetido"))).toBe(true);
+  });
+
+  it("lo que no es una lista se descarta entero", () => {
+    for (const malo of ["rey-1v1", 3, { "rey-1v1": true }, null]) {
+      const { ruleset, warnings } = mergeRuleset({ ...VALIDO, disabledObjectives: malo });
+
+      expect(ruleset.disabledObjectives).toEqual([]);
+      expect(warnings.some((w) => w.startsWith("disabledObjectives"))).toBe(true);
+    }
+  });
+
+  it("un documento sin el campo deja el catálogo completo activo", () => {
+    const { ruleset, warnings } = mergeRuleset(VALIDO);
+
+    expect(ruleset.disabledObjectives).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+});
+
+describe("mergeRuleset: el candidato que guarda el panel de administración", () => {
+  /**
+   * Documento tal y como lo fusiona `saveScoringRuleset()`: los campos que el panel
+   * configura, y **sin `label`**, que se queda fuera antes de fusionar. Si la etiqueta
+   * viajara (el panel parte del ruleset activo, que la incluye), cualquier guardado que
+   * moviera puntos u objetivos traería la etiqueta de las reglas *anteriores* y
+   * `mergeRuleset` lo rechazaría con el aviso de "label se ignora".
+   */
+  const candidato = {
+    version: RULESET_VERSION,
+    modes: ["rm_solo"],
+    window: VENTANA,
+    pointsPerWin: 3,
+    countRandomizedCivs: true,
+    objectives: { "loco-por-ganar": 90 },
+    disabledObjectives: ["rey-1v1"],
+  };
+
+  it("un candidato sin `label` no avisa aunque cambien los puntos y los objetivos activos", () => {
+    const { ruleset, warnings } = mergeRuleset(candidato);
+
+    expect(warnings).toEqual([]);
+    expect(ruleset.pointsPerWin).toBe(3);
+    expect(ruleset.disabledObjectives).toEqual(["rey-1v1"]);
+    expect(ruleset.label).toBe(ruleLabel(ruleset));
+  });
+
+  it("la misma fusión con la etiqueta anterior sí avisa, y la descarta", () => {
+    // Es la lectura de un documento guardado con la etiqueta obsoleta, que tiene que
+    // seguir avisando: el aviso no se relaja, el panel simplemente no la manda.
+    const { ruleset, warnings } = mergeRuleset({
+      ...candidato,
+      label: DEFAULT_RULESET.label,
+    });
+
+    expect(warnings.some((w) => w.startsWith("label se ignora"))).toBe(true);
+    expect(ruleset.label).toBe(ruleLabel(ruleset));
+  });
+});
+
+describe("ruleLabel", () => {
+  const base: Pick<ScoringRuleset, "pointsPerWin" | "disabledObjectives"> = {
+    pointsPerWin: 2,
+    disabledObjectives: [],
+  };
+
+  it("cuenta los objetivos activos por forma de cobrar", () => {
+    // 29 competiciones (loco-por-ganar, bienhadado, los 4 rey-* y los 23 masterizando-*)
+    // y 59 logros (imparable, victorias, imbatible, ansioso, agresor, estratega, las
+    // cuatro hazañas del summary, por-tierra-y-agua, polifacetico, los 23 lider-*,
+    // jugon y los 23 acolito-*): es el reparto de `docs/OBJETIVOS.md`, y la etiqueta
+    // lo dice.
+    expect(ruleLabel(base)).toBe(
+      "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
+    );
+  });
+
+  it("un objetivo desactivado deja de anunciarse", () => {
+    expect(ruleLabel({ ...base, disabledObjectives: ["rey-1v1"] })).toBe(
+      "2 puntos por victoria clasificatoria más 87 objetivos: 28 competiciones y 59 logros",
+    );
+  });
+
+  it("los puntos por victoria van en singular cuando son uno", () => {
+    expect(ruleLabel({ ...base, pointsPerWin: 1 })).toContain("1 punto por victoria clasificatoria");
+  });
+
+  it("con todo el catálogo apagado no anuncia objetivos", () => {
+    expect(ruleLabel({ ...base, disabledObjectives: Object.keys(OBJECTIVE_POINTS) })).toBe(
+      "2 puntos por victoria clasificatoria, sin objetivos",
+    );
+  });
+
+  it("es puro: no toca el documento por defecto", () => {
+    const antes = structuredClone(DEFAULT_RULESET);
+
+    ruleLabel({ ...base, disabledObjectives: ["rey-1v1", "loco-por-ganar"] });
+
+    expect(DEFAULT_RULESET).toEqual(antes);
+  });
+});
+
 describe("desempate de la clasificación", () => {
   const fila = (profileId: number, total: number, wins: number, matches: number) => ({
     profileId,
@@ -322,40 +540,49 @@ describe("desempate de la clasificación", () => {
     matches,
   });
 
-  it("ordena por total y luego por victorias", () => {
-    const filas = [fila(3, 10, 2, 8), fila(1, 20, 1, 9), fila(2, 10, 5, 9)];
+  const orden = (filas: ReturnType<typeof fila>[]) =>
+    [...filas].sort(compareStandings).map((f) => f.profileId);
 
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2, 3]);
+  it("ordena por total descendente", () => {
+    expect(orden([fila(3, 10, 2, 8), fila(1, 20, 1, 9), fila(2, 5, 5, 9)])).toEqual([1, 3, 2]);
   });
 
-  it("a igual total y victorias gana el mejor porcentaje de victorias", () => {
-    // 3/4 (0.75) va delante de 3/5 (0.60), con las mismas victorias y el mismo total.
-    const filas = [fila(2, 10, 3, 5), fila(1, 10, 3, 4)];
-
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2]);
+  it("a igual total decide la tasa de victorias, y va antes que las victorias", () => {
+    // 3/4 (0,75) por delante de 4/6 (0,67): el segundo gana más partidas y aun así
+    // queda detrás. Es el cambio de orden de la regla: antes decidían las
+    // victorias y ganaba el de 4.
+    expect(orden([fila(2, 10, 4, 6), fila(1, 10, 3, 4)])).toEqual([1, 2]);
   });
 
-  it("el winrate va antes que `profileId`: gana el mejor ratio aunque tenga id mayor", () => {
-    const filas = [fila(1, 10, 3, 5), fila(9, 10, 3, 4)];
-
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([9, 1]);
+  it("a igual total y tasa deciden las victorias", () => {
+    // Las dos tasas son 0,5: 3/6 frente a 2/4.
+    expect(orden([fila(2, 10, 2, 4), fila(1, 10, 3, 6)])).toEqual([1, 2]);
   });
 
-  it("mismo total, victorias y partidas: el winrate no decide y cierra `profileId`", () => {
-    // Con los mismos números el producto cruzado da 0 y el orden lo fija
-    // `profileId`, que es único.
-    const filas = [fila(2, 10, 3, 5), fila(1, 10, 3, 5)];
-
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([1, 2]);
+  it("a igual total, tasa y victorias deciden las partidas jugadas", () => {
+    // Dos con 0 victorias: la tasa empata (0) y gana quien más partidas jugó.
+    expect(orden([fila(2, 0, 0, 0), fila(5, 0, 0, 4)])).toEqual([5, 2]);
   });
 
-  it("con `matches` 0 el winrate no rompe nada y decide `profileId`", () => {
-    // Un aprobado sin partidas tiene fila con `matches` 0, así que el comparador
-    // se defiende del 0 en vez de producir `NaN` (que ordenaría de forma no
-    // determinista).
-    const filas = [fila(5, 0, 0, 0), fila(2, 0, 0, 0)];
+  it("la tasa va antes que `profileId`: gana el mejor ratio aunque tenga id mayor", () => {
+    expect(orden([fila(1, 10, 3, 5), fila(9, 10, 3, 4)])).toEqual([9, 1]);
+  });
 
-    expect([...filas].sort(compareStandings).map((f) => f.profileId)).toEqual([2, 5]);
+  it("misma tupla: el comparador cierra en `profileId`", () => {
+    // Con los mismos números el comparador no distingue —en la clasificación
+    // comparten puesto—, así que el orden de presentación lo fija `profileId`.
+    expect(orden([fila(2, 10, 3, 5), fila(1, 10, 3, 5)])).toEqual([1, 2]);
+  });
+
+  it("con `matches` 0 el comparador no produce `NaN`", () => {
+    // Un aprobado sin partidas tiene fila con `matches` 0. El producto cruzado vale
+    // 0 —no `NaN`, que ordenaría de forma no determinista—, así que la tupla
+    // empata y el orden lo cierra `profileId`.
+    const sinPartidas = fila(5, 0, 0, 0);
+    const otraSinPartidas = fila(2, 0, 0, 0);
+
+    expect(compareStandings(sinPartidas, otraSinPartidas)).toBe(3);
+    expect(orden([sinPartidas, otraSinPartidas])).toEqual([2, 5]);
   });
 });
 
@@ -363,6 +590,11 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
   /** Agregado de ejemplo; por defecto, un jugador sin partidas. */
   function agregado(overrides: Partial<AggregatedRow> = {}): AggregatedRow {
     return { matchPoints: 0, wins: 0, matches: 0, byMode: {}, ...overrides };
+  }
+
+  /** Lo que un jugador cobra por objetivos; por defecto, nada. */
+  function premio(overrides: Partial<ObjectiveAward> = {}): ObjectiveAward {
+    return { points: 0, earned: [], awards: {}, ...overrides };
   }
 
   const byModeCero = {
@@ -379,8 +611,10 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
         { id: "a", profileId: 1 },
         { id: "b", profileId: 2 },
       ],
-      new Map([["b", agregado({ matchPoints: 6, wins: 3, matches: 4 })]]),
-      new Map(),
+      new Map([["b", agregado({ wins: 3, matches: 4 })]]),
+      new Map([
+        ["b", premio({ points: 6, earned: ["victorias"], awards: { victorias: { points: 6, count: 3 } } })],
+      ]),
       DEFAULT_RULESET,
     );
 
@@ -392,7 +626,7 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
       wins: 0,
       matches: 0,
       byMode: byModeCero,
-      objectives: { points: 0, earned: [] },
+      objectives: { points: 0, earned: [], awards: {} },
       rank: 2,
     });
     expect(filas[0].playerId).toBe("b");
@@ -408,46 +642,97 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
 
     const filas = rankApprovedPlayers(
       players,
-      new Map([["b", agregado({ matchPoints: 2, wins: 1, matches: 1 })]]),
-      new Map(),
+      new Map([["b", agregado({ wins: 1, matches: 1 })]]),
+      new Map([["b", premio({ points: 2 })]]),
       DEFAULT_RULESET,
     );
 
     expect(filas.map((f) => f.profileId).sort((x, y) => x - y)).toEqual([11, 22, 33]);
   });
 
-  it("los puestos son densos 1..N", () => {
+  it("sin empates los puestos son 1..N", () => {
     const filas = rankApprovedPlayers(
       [
         { id: "a", profileId: 1 },
         { id: "b", profileId: 2 },
         { id: "c", profileId: 3 },
       ],
-      new Map([["c", agregado({ matchPoints: 4, wins: 2, matches: 2 })]]),
-      new Map(),
+      new Map([
+        ["c", agregado({ wins: 2, matches: 2 })],
+        ["b", agregado({ wins: 1, matches: 3 })],
+      ]),
+      new Map([
+        ["c", premio({ points: 10 })],
+        ["b", premio({ points: 4 })],
+      ]),
       DEFAULT_RULESET,
     );
 
+    expect(filas.map((f) => f.playerId)).toEqual(["c", "b", "a"]);
     expect(filas.map((f) => f.rank)).toEqual([1, 2, 3]);
   });
 
-  it("los puntos de objetivos se suman a quien los tiene", () => {
+  it("los empates comparten puesto y se saltan el hueco (1, 2, 2, 4)", () => {
+    // `b` y `c` tienen la misma tupla (mismo total, misma tasa, mismas victorias y
+    // mismas partidas), así que comparten el puesto 2 y el 3 queda vacío.
+    const filas = rankApprovedPlayers(
+      [
+        { id: "a", profileId: 1 },
+        { id: "b", profileId: 2 },
+        { id: "c", profileId: 3 },
+        { id: "d", profileId: 4 },
+      ],
+      new Map([
+        ["a", agregado({ wins: 2, matches: 2 })],
+        ["b", agregado({ wins: 1, matches: 2 })],
+        ["c", agregado({ wins: 1, matches: 2 })],
+      ]),
+      new Map([
+        ["a", premio({ points: 10 })],
+        ["b", premio({ points: 4 })],
+        ["c", premio({ points: 4 })],
+      ]),
+      DEFAULT_RULESET,
+    );
+
+    expect(filas.map((f) => [f.playerId, f.rank])).toEqual([
+      ["a", 1],
+      ["b", 2],
+      ["c", 2],
+      ["d", 4],
+    ]);
+  });
+
+  it("el total son los objetivos: `matchPoints` no se suma aparte", () => {
+    // Las victorias clasificatorias se cobran como el objetivo `victorias`, así que
+    // sumar además los puntos de `Match` contaría dos veces las victorias. El
+    // agregado los trae (para la auditoría del desglose) y no entran en el total.
     const filas = rankApprovedPlayers(
       [
         { id: "a", profileId: 1 },
         { id: "b", profileId: 2 },
       ],
       new Map([["a", agregado({ matchPoints: 4, wins: 2, matches: 3 })]]),
-      new Map([["a", { points: 125, earned: ["rey-1v1", "loco-por-ganar"] }]]),
+      new Map([
+        [
+          "a",
+          premio({
+            points: 125,
+            earned: ["victorias", "rey-1v1"],
+            awards: { victorias: { points: 4, count: 2 }, "rey-1v1": { points: 121, count: 1 } },
+          }),
+        ],
+      ]),
       DEFAULT_RULESET,
     );
 
     const filaA = filas.find((f) => f.playerId === "a");
 
-    expect(filaA?.total).toBe(129);
+    expect(filaA?.total).toBe(125);
     expect(filaA?.objectives).toEqual({
       points: 125,
-      earned: ["rey-1v1", "loco-por-ganar"],
+      earned: ["victorias", "rey-1v1"],
+      awards: { victorias: { points: 4, count: 2 }, "rey-1v1": { points: 121, count: 1 } },
     });
   });
 
@@ -457,7 +742,7 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
     const filas = rankApprovedPlayers(
       [{ id: "a", profileId: 1 }],
       new Map([["fantasma", agregado({ matchPoints: 99, wins: 9, matches: 9 })]]),
-      new Map(),
+      new Map([["fantasma", premio({ points: 999 })]]),
       DEFAULT_RULESET,
     );
 
@@ -467,8 +752,8 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
   });
 
   it("el orden respeta `compareStandings`", () => {
-    // Mismo total: gana quien tiene más victorias; con las mismas, mejor winrate;
-    // y con lo mismo, `profileId` ascendente.
+    // Mismo total: gana la mejor tasa de victorias; con la misma, más victorias; y
+    // con lo mismo, más partidas. `sinPartidas` cierra la tabla con 0 puntos.
     const filas = rankApprovedPlayers(
       [
         { id: "sinPartidas", profileId: 9 },
@@ -477,11 +762,15 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
         { id: "mejor", profileId: 8 },
       ],
       new Map([
-        ["peorWinrate", agregado({ matchPoints: 10, wins: 3, matches: 5 })],
-        ["mismoTotalMenosVictorias", agregado({ matchPoints: 10, wins: 2, matches: 4 })],
-        ["mejor", agregado({ matchPoints: 10, wins: 3, matches: 4 })],
+        ["peorWinrate", agregado({ wins: 3, matches: 5 })],
+        ["mismoTotalMenosVictorias", agregado({ wins: 2, matches: 4 })],
+        ["mejor", agregado({ wins: 3, matches: 4 })],
       ]),
-      new Map(),
+      new Map([
+        ["peorWinrate", premio({ points: 10 })],
+        ["mismoTotalMenosVictorias", premio({ points: 10 })],
+        ["mejor", premio({ points: 10 })],
+      ]),
       DEFAULT_RULESET,
     );
 
@@ -495,29 +784,43 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
 });
 
 describe("qué cuenta como partida clasificatoria", () => {
+  /**
+   * Contexto de equipos **sin cortes**: la condición de compañeros no se puede
+   * comprobar, así que estos casos miden las otras cinco. La condición de equipos
+   * tiene sus propias comprobaciones en `ranked-match.test.ts`, que es donde vive.
+   */
+  const SIN_EQUIPOS: TeamTierContext = { profileId: 9_000_001, cutoffs: null };
+
   // El `null` es el caso de toda la fila que ya estaba en la base cuando se añadió
   // `Player.registeredAt`: cuenta desde el principio de la ventana.
   it("una partida resuelta, rankeada, dentro de la ventana y no revertida cuenta", () => {
-    expect(countsAsRanked(partida(), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida(), VENTANA, null, SIN_EQUIPOS)).toBe(true);
   });
 
   it("una partida en curso no cuenta, ni a favor ni en contra", () => {
     // Sin `finishedAt` la API todavía no ha publicado el desenlace.
-    expect(countsAsRanked(partida({ finishedAt: null }), VENTANA, null)).toBe(false);
+    expect(countsAsRanked(partida({ finishedAt: null }), VENTANA, null, SIN_EQUIPOS)).toBe(false);
     // Y sin `result` tampoco, que es el mismo hecho por el otro lado.
-    expect(countsAsRanked(partida({ result: null }), VENTANA, null)).toBe(false);
+    expect(countsAsRanked(partida({ result: null }), VENTANA, null, SIN_EQUIPOS)).toBe(false);
   });
 
   it("una partida revertida deja de contar aunque siga en la tabla", () => {
     expect(
-      countsAsRanked(partida({ revertedAt: new Date("2026-09-21T00:00:00Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ revertedAt: new Date("2026-09-21T00:00:00Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(false);
   });
 
   it("solo cuentan las familias ranked del ruleset", () => {
-    expect(countsAsRanked(partida({ mode: "rm_team" }), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida({ mode: "rm_team" }), VENTANA, null, SIN_EQUIPOS)).toBe(true);
     for (const modo of ["rm_1v1", "qm_ffa", "ew_1v1", "custom_8v8", null]) {
-      expect(countsAsRanked(partida({ mode: modo }), VENTANA, null), String(modo)).toBe(false);
+      expect(countsAsRanked(partida({ mode: modo }), VENTANA, null, SIN_EQUIPOS), String(modo)).toBe(
+        false,
+      );
     }
   });
 
@@ -525,37 +828,65 @@ describe("qué cuenta como partida clasificatoria", () => {
     // Lo que decide es cuándo se jugó, no cuándo se publicó el resultado: una
     // partida empezada el último día puede terminar después y sigue contando.
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-09-15T00:00:00.000Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-09-15T00:00:00.000Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(true);
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-10-15T00:00:00.000Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-10-15T00:00:00.000Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(false);
     expect(
-      countsAsRanked(partida({ startedAt: new Date("2026-10-14T23:59:59.999Z") }), VENTANA, null),
+      countsAsRanked(
+        partida({ startedAt: new Date("2026-10-14T23:59:59.999Z") }),
+        VENTANA,
+        null,
+        SIN_EQUIPOS,
+      ),
     ).toBe(true);
   });
 
   it("con `to` a `null` la ventana está abierta por la derecha", () => {
     const abierta: ScoringWindow = { from: "2026-09-15T00:00:00.000Z", to: null };
 
-    expect(countsAsRanked(partida({ startedAt: new Date("2030-01-01T00:00:00Z") }), abierta, null)).toBe(
-      true,
-    );
+    expect(
+      countsAsRanked(
+        partida({ startedAt: new Date("2030-01-01T00:00:00Z") }),
+        abierta,
+        null,
+        SIN_EQUIPOS,
+      ),
+    ).toBe(true);
   });
 
   it("una victoria cuenta lo mismo que una derrota", () => {
     // La clasificación cuenta `wins` y `matches` por separado: perder una
     // clasificatoria no puede restar puntos, solo no sumarlos.
-    expect(countsAsRanked(partida({ result: MatchResult.LOSS }), VENTANA, null)).toBe(true);
+    expect(countsAsRanked(partida({ result: MatchResult.LOSS }), VENTANA, null, SIN_EQUIPOS)).toBe(
+      true,
+    );
   });
 
   it("con `registeredAt` el corte sube y las partidas anteriores dejan de contar", () => {
     // `partida()` arranca el 20 de septiembre a las 12:00, así que con el alta de
     // esa misma medianoche deja de contar y con la del 19 sigue contando.
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.000Z"))).toBe(true);
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.001Z"))).toBe(false);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.000Z"), SIN_EQUIPOS),
+    ).toBe(true);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-20T12:00:00.001Z"), SIN_EQUIPOS),
+    ).toBe(false);
     // Un alta anterior a la ventana es lo mismo que no tener fecha: es el caso de
     // todo el que ya estaba inscrito.
-    expect(countsAsRanked(partida(), VENTANA, new Date("2026-09-01T00:00:00.000Z"))).toBe(true);
+    expect(
+      countsAsRanked(partida(), VENTANA, new Date("2026-09-01T00:00:00.000Z"), SIN_EQUIPOS),
+    ).toBe(true);
   });
 });

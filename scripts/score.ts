@@ -2,7 +2,7 @@ import "./load-env.mjs";
 
 import { unwrapRead } from "@/lib/db-errors";
 import { getStandings } from "@/lib/public";
-import { RULE_LABEL, recomputeScores } from "@/lib/scoring";
+import { readRuleset, recomputeScores } from "@/lib/scoring";
 
 /**
  * Recalcular la clasificación a mano, sin levantar el servidor.
@@ -19,25 +19,28 @@ import { RULE_LABEL, recomputeScores } from "@/lib/scoring";
 
 async function main(): Promise<void> {
   const result = await recomputeScores();
+  // La etiqueta sale del ruleset **activo** y no de una constante: se calcula con los
+  // objetivos que estén activos, así que el rastro no puede anunciar un catálogo que
+  // ya no es el que ha puntuado.
+  const ruleset = await readRuleset();
 
   console.log("");
   console.log("--- Clasificación ---");
-  console.log(`Versión de reglas: ${result.ruleSetVersion} (${RULE_LABEL})`);
+  console.log(`Versión de reglas: ${result.ruleSetVersion} (${ruleset.label})`);
   console.log(`Partidas con puntos actualizados: ${result.matchesUpdated}`);
   console.log(`Jugadores en la clasificación: ${result.playersRanked}`);
   console.log(`Filas retiradas: ${result.playersUnranked}`);
-  console.log(`Puntos de partidas: ${result.totalPoints - result.objectivesPoints}`);
+  console.log(`Puntos repartidos: ${result.totalPoints}`);
   console.log(
-    `Puntos de objetivos: ${result.objectivesPoints} (${result.objectivesAwarded} con poseedor)`,
+    `Puntos de objetivos: ${result.objectivesPoints} (${result.objectivesAwarded} con cobrador)`,
   );
-  console.log(`Suma de puntos: ${result.totalPoints}`);
   console.log(`Duración: ${result.durationMs} ms`);
   console.log("");
 
   // `unwrapRead` y no el dato pelado: una herramienta de terminal tiene que
   // abortar si la base de datos no responde, no imprimir una clasificación vacía
   // como si el torneo no tuviera jugadores.
-  const standings = unwrapRead(await getStandings(), "score");
+  const standings = unwrapRead(await getStandings(), "score").rows;
 
   if (standings.length === 0) {
     console.log("Todavía no hay jugadores aprobados con partidas clasificatorias resueltas.");

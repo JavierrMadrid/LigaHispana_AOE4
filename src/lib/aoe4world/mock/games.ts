@@ -91,8 +91,8 @@ type MockGameBase = {
   ongoing: boolean;
   averageMmr: number;
   /**
-   * Media de **rating** de la partida (`average_rating`), la que compara R5. Es
-   * distinta de `averageMmr`: la API publica las dos y sus escalas no coinciden.
+   * Media de **rating** de la partida (`average_rating`). Es distinta de
+   * `averageMmr`: la API publica las dos y sus escalas no coinciden.
    */
   averageRating: number;
   teams: MockGameSide[][];

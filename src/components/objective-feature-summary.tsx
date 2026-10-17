@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ObjectiveOption } from "@/lib/public";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { MapPool, ObjectiveStatus } from "@/components/objective-card";
+import { prizeLabel } from "@/lib/objective-format";
 
 /**
  * Cara frontal de la tarjeta grande volteable: el resumen de un objetivo en una
@@ -21,8 +22,11 @@ import { MapPool, ObjectiveStatus } from "@/components/objective-card";
  * para la ficha de un jugador), y `ObjectiveDialogCard` decide cuándo se enseña.
  */
 
-/** Lo mínimo para elegir el emblema de un objetivo. */
-export type FeatureTarget = Pick<ObjectiveOption, "id" | "group" | "metric">;
+/** Lo mínimo para elegir el emblema de un objetivo y leer su premio. */
+export type FeatureTarget = Pick<
+  ObjectiveOption,
+  "id" | "group" | "metric" | "kind" | "target" | "points"
+>;
 
 type ObjectiveFeatureFrameProps = {
   target: FeatureTarget;
@@ -52,9 +56,23 @@ type ObjectiveFeatureFrameProps = {
  * (derecha) de la acción, que cierra centrada. En móvil llena la pantalla y
  * desplaza sin recortar.
  *
- * El relleno reserva el aire del botón de cerrar del `Modal` arriba a la derecha
- * y deja respirar la tarjeta por los cuatro lados, sin que nada toque el borde
- * redondeado.
+ * Las separaciones están medidas para que la tarjeta en grande se lea por bloques
+ * —título, emblema, descripción con su detalle, avance y pie— y no como una columna
+ * apretada: 56px entre el título y el emblema y entre este y la descripción (72px a
+ * partir de `sm`), 16px hasta el detalle, 24px del avance al filete del pie y otros
+ * tantos bajo él. Es un aire que crece en la tarjeta y no en la pequeña, y que en las
+ * ventanas bajas no se cobra recortando: el sobrante lo absorbe el `flex-1` del
+ * cuerpo y, si no hay, la cara desplaza.
+ *
+ * La fila del avance va además **más adentro** que el cuerpo en horizontal (32px del
+ * canto en móvil, 48px a partir de `sm`, el doble de separación del filete del marco):
+ * sus dos textos son los extremos de la tarjeta —el estado a la izquierda y los puntos
+ * a la derecha— y así no se pegan a la línea. Los demás bloques no se mueven, y el
+ * pie, que va centrado, tampoco.
+ *
+ * El relleno reserva el aire de la X de cerrar, que va dentro de la propia cara
+ * (arriba a la derecha) y deja respirar la tarjeta por los cuatro lados, sin que
+ * nada toque el borde redondeado.
  */
 export function ObjectiveFeatureFrame({
   target,
@@ -85,23 +103,30 @@ export function ObjectiveFeatureFrame({
         <span aria-hidden="true" className="mx-auto mt-3 block h-px w-16 bg-accent/40" />
       </header>
 
-      <div className="flex flex-1 flex-col items-center pt-10 sm:pt-14">
+      <div className="flex flex-1 flex-col items-center pt-14 sm:pt-[4.5rem]">
         <Medallion target={target} />
 
-        <div className="mt-10 w-full min-w-0 max-w-md text-center sm:mt-14">
+        <div className="mt-14 w-full min-w-0 max-w-md text-center sm:mt-[4.5rem]">
           <p className="text-base leading-relaxed text-muted sm:text-lg">{description}</p>
           {detail !== undefined ? (
-            <div className="mt-3 text-xs leading-relaxed text-muted">{detail}</div>
+            <div className="mt-4 text-xs leading-relaxed text-muted">{detail}</div>
           ) : null}
         </div>
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-4">
+      {/* La fila del estado y los puntos va más adentro que el resto: sus textos son
+          los extremos de la tarjeta, así que se separan del filete del marco el doble
+          que el cuerpo (32px del canto en móvil, 48px a partir de `sm`, 8px más que el
+          armazón), y el `ml-auto` de los puntos mantiene su borde derecho cuando la
+          fila envuelve. El pie y el tinte del marco no se mueven. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-2 pb-6 sm:px-4">
         <div className="min-w-0 sm:flex-1">{progress}</div>
-        <FeaturePoints points={points} tone={pointsTone} />
+        <div className="ml-auto">
+          <FeaturePoints target={target} points={points} tone={pointsTone} />
+        </div>
       </div>
 
-      <footer className="flex shrink-0 items-center justify-center border-t border-line pt-4">
+      <footer className="flex shrink-0 items-center justify-center border-t border-line pt-6">
         {/* El clic lo recoge el `FlipCard`; el pie solo anuncia la acción. */}
         <span className="pointer-events-none inline-flex shrink-0 items-center gap-1 text-sm font-medium text-accent">
           {actionLabel}
@@ -178,10 +203,20 @@ export function ObjectiveFeatureSummary({
 
 /**
  * Los puntos del objetivo, en línea sobre el filete: la cifra con el peso de la
- * casa —oro, o neutra si el objetivo aún no se cobra— y la palabra «puntos» en
- * pequeño. Van en una sola línea, sin caja, a la derecha del estado.
+ * casa —oro, o neutra si el objetivo aún no se cobra— y su unidad en pequeño. Van
+ * en una sola línea, sin caja, a la derecha del estado. En un objetivo sin tope la
+ * cifra es por unidad y la unidad lo dice (`puntos por victoria`), para que no se lea
+ * como un premio que el objetivo reparte una vez.
  */
-function FeaturePoints({ points, tone }: { points: number; tone: "accent" | "neutral" }) {
+function FeaturePoints({
+  target,
+  points,
+  tone,
+}: {
+  target: FeatureTarget;
+  points: number;
+  tone: "accent" | "neutral";
+}) {
   const accent = tone === "accent";
 
   return (
@@ -193,7 +228,7 @@ function FeaturePoints({ points, tone }: { points: number; tone: "accent" | "neu
       >
         +{points}
       </span>
-      <span className="text-xs font-medium text-muted">puntos</span>
+      <span className="text-xs font-medium text-muted">{prizeLabel(target)}</span>
     </span>
   );
 }

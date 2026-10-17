@@ -1,20 +1,33 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
+import { loadObjectiveOption } from "@/app/(public)/(inicio)/actions";
 import type {
   DivisionId,
   ObjectiveGroup,
+  ObjectiveOption,
   StandingObjective,
   StandingRow,
 } from "@/lib/public";
 import { countryFlagSvgUrl, countryFlagUrl } from "@/lib/flag";
+import { objectiveTitle, objectiveTitleParts } from "@/lib/objective-format";
 import { ChannelLinks } from "@/components/channel-links";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
 import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
 import { LiveDot } from "@/components/live-dot";
+import { Modal } from "@/components/modal";
+import { ObjectiveFeatureSummary } from "@/components/objective-feature-summary";
 import { ObjectiveIcon } from "@/components/objective-icon";
+import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
 import { PlayerAvatar } from "@/components/player-avatar";
 import {
   DivisionFilterButtons,
@@ -32,7 +45,22 @@ import {
 const HEADING = "px-3 pb-2 text-xs font-medium text-muted";
 const CELL = "bg-surface px-3 py-2.5 transition-colors group-hover:bg-surface-raised";
 /** La fila desplegable de objetivos ocupa el ancho de toda la tabla. */
-const OBJECTIVE_COLUMNS = 8;
+const OBJECTIVE_COLUMNS = 7;
+
+/**
+ * Las dos mitades del total de puntos, explicadas.
+ *
+ * Van en `title` nativo, que es el apoyo discreto que ya usa la tabla para lo
+ * que no cabe en la celda (el nombre de la liga, "en partida ahora mismo"): el
+ * rótulo de la columna nombra las dos partes y lo demás se lee al pasar el
+ * ratón, sin glifos ni notas fijas que ensucien la tabla.
+ */
+const POINTS_HINTS = {
+  permanent:
+    "Permanentes: logros ya conseguidos, que no se pierden. Las victorias van dentro, porque son el objetivo Victorias.",
+  temporary:
+    "Temporales: competiciones, que se deciden al cierre y pueden cambiar de dueño.",
+} as const;
 
 /**
  * Medalla de podio: oro, plata y bronce por tokens. Es la única marca de las tres
@@ -102,6 +130,19 @@ const GROUP_LABELS: Record<ObjectiveGroup, string> = {
   formato: "Formatos",
   civilizacion: "Civilizaciones",
 };
+
+/**
+ * Lo que la ventana de un objetivo del resumen está haciendo ahora mismo.
+ *
+ * Vive en `StandingsTable` y no en cada fila porque la tabla y la lista móvil
+ * pintan las mismas filas dos veces: una sola instancia de la ventana para las
+ * dos. El rótulo viaja con el estado para poder nombrar el objetivo en la carga
+ * y en el aviso de error aunque el chip que lo abrió ya no esté en el DOM.
+ */
+type ObjectiveDialogState =
+  | { status: "loading"; id: string; label: string }
+  | { status: "ready"; option: ObjectiveOption }
+  | { status: "error"; label: string };
 
 function normalize(value: string): string {
   return value
@@ -213,7 +254,8 @@ function compareRows(
  * Clasificación con filtros y orden en cliente. El servidor le pasa las filas ya
  * resueltas y aquí solo se filtra, se ordena y se pinta: búsqueda por nombre de
  * display, nombre oficial o canal, toggles de "en partida" y "en directo" y
- * selección única de división, todo combinado con AND. El orden por defecto es el del servidor (puesto
+ * selección múltiple de divisiones —ninguna marcada significa todas—, todo
+ * combinado con AND. El orden por defecto es el del servidor (puesto
  * ascendente) y las cabeceras alternan ascendente, descendente y vuelta al
  * orden original.
  */
@@ -221,12 +263,21 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
   const [query, setQuery] = useState("");
   const [playingOnly, setPlayingOnly] = useState(false);
   const [liveOnly, setLiveOnly] = useState(false);
-  const [division, setDivision] = useState<DivisionId | null>(null);
+  const [divisions, setDivisions] = useState<DivisionId[]>([]);
   const [sort, setSort] = useState<SortState>(null);
   // Objetivos desplegados, por `profileId`: al vivir aquí sobrevive a los
   // filtros y a la reordenación, que solo cambian qué filas se pintan y en qué
   // orden, no el estado de cada jugador.
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
+  const [objectiveDialog, setObjectiveDialog] = useState<ObjectiveDialogState | null>(
+    null,
+  );
+  // Cada apertura invalida la anterior: si una lectura llega tarde, se descarta
+  // en lugar de abrir una ventana que ya no es la que se pidió.
+  const objectiveRequestRef = useRef(0);
+  const objectiveErrorTitleId = useId();
+  const loadingObjectiveId =
+    objectiveDialog?.status === "loading" ? objectiveDialog.id : null;
 
   const filtered = useMemo(() => {
     const needle = normalize(query.trim());
@@ -240,7 +291,10 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
         return false;
       }
 
-      if (division !== null && row.division !== division) {
+      if (
+        divisions.length > 0 &&
+        (row.division === null || !divisions.includes(row.division))
+      ) {
         return false;
       }
 
@@ -258,7 +312,7 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
 
       return true;
     });
-  }, [rows, query, playingOnly, liveOnly, division]);
+  }, [rows, query, playingOnly, liveOnly, divisions]);
 
   // La ordenación se aplica sobre el resultado ya filtrado: primero se decide
   // quién entra y después en qué orden se muestra.
@@ -270,17 +324,20 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
     return [...filtered].sort((a, b) => compareRows(a, b, sort));
   }, [filtered, sort]);
 
-  const hasFilters = query.trim() !== "" || playingOnly || liveOnly || division !== null;
+  const hasFilters =
+    query.trim() !== "" || playingOnly || liveOnly || divisions.length > 0;
   // Solo los controles plegables: la búsqueda está a la vista, así que no entra
-  // en el contador del botón "Filtros".
+  // en el contador del botón "Filtros". La selección de divisiones cuenta como
+  // un filtro, no como uno por división: el contador dice cuántos filtros hay
+  // puestos, no cuántos botones están encendidos.
   const activeFilterCount =
-    (playingOnly ? 1 : 0) + (liveOnly ? 1 : 0) + (division !== null ? 1 : 0);
+    (playingOnly ? 1 : 0) + (liveOnly ? 1 : 0) + (divisions.length > 0 ? 1 : 0);
 
   function clearFilters() {
     setQuery("");
     setPlayingOnly(false);
     setLiveOnly(false);
-    setDivision(null);
+    setDivisions([]);
   }
 
   // Un clic ordena ascendente, el segundo descendente y el tercero devuelve el
@@ -303,6 +360,52 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
     });
   }
 
+  /**
+   * Abre la clasificación de un objetivo del resumen. El catálogo completo no
+   * viaja en las props de la página —solo los objetivos ya cobrados de cada
+   * fila—, así que se pide al servidor el objetivo pulsado y la ventana se pinta
+   * cuando llega; hasta entonces el chip queda ocupado (`aria-busy`) sin cambiar
+   * de tamaño.
+   */
+  function openObjectiveDialog(objective: StandingObjective) {
+    const request = objectiveRequestRef.current + 1;
+
+    objectiveRequestRef.current = request;
+    setObjectiveDialog({
+      status: "loading",
+      id: objective.id,
+      label: objective.label,
+    });
+
+    void loadObjectiveOption(objective.id).then(
+      (option) => {
+        if (objectiveRequestRef.current !== request) {
+          return;
+        }
+
+        setObjectiveDialog(
+          option === null
+            ? { status: "error", label: objective.label }
+            : { status: "ready", option },
+        );
+      },
+      () => {
+        if (objectiveRequestRef.current !== request) {
+          return;
+        }
+
+        setObjectiveDialog({ status: "error", label: objective.label });
+      },
+    );
+  }
+
+  function closeObjectiveDialog() {
+    // Invalida cualquier lectura en vuelo: si llega después de cerrar, no vuelve
+    // a abrir la ventana por su cuenta.
+    objectiveRequestRef.current += 1;
+    setObjectiveDialog(null);
+  }
+
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -322,6 +425,15 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* La carga del objetivo se anuncia con texto y con `aria-busy` en el
+          chip: el aviso tiene que existir antes de cambiar, o el lector de
+          pantalla no lo lee. No ocupa hueco (`sr-only`). */}
+      <p role="status" className="sr-only">
+        {objectiveDialog?.status === "loading"
+          ? `Cargando la clasificación de ${objectiveDialog.label}`
+          : ""}
+      </p>
+
       <StandingsFilters
         query={query}
         onQueryChange={setQuery}
@@ -329,8 +441,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
         onPlayingOnlyChange={setPlayingOnly}
         liveOnly={liveOnly}
         onLiveOnlyChange={setLiveOnly}
-        division={division}
-        onDivisionChange={setDivision}
+        divisions={divisions}
+        onDivisionsChange={setDivisions}
       />
 
       <MobileStandingsControls
@@ -340,8 +452,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
         onPlayingOnlyChange={setPlayingOnly}
         liveOnly={liveOnly}
         onLiveOnlyChange={setLiveOnly}
-        division={division}
-        onDivisionChange={setDivision}
+        divisions={divisions}
+        onDivisionsChange={setDivisions}
         activeFilterCount={activeFilterCount}
         sort={sort}
         onSort={toggleSort}
@@ -399,6 +511,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                 row={row}
                 objectivesExpanded={expanded.has(row.profileId)}
                 onToggleObjectives={toggleObjectives}
+                onOpenObjective={openObjectiveDialog}
+                loadingObjectiveId={loadingObjectiveId}
               />
             ))}
           </ul>
@@ -412,10 +526,10 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
               <table className="w-full min-w-[900px] border-separate border-spacing-y-1.5 text-sm">
                 <caption className="sr-only">
                   Clasificación de la liga: puesto, jugador, partidas jugadas,
-                  puntos totales con su desglose por victorias y objetivos, elo,
-                  victorias y derrotas y racha. El nombre de cada jugador enlaza
-                  con su perfil de AoE4World y la última columna con su ficha de
-                  objetivos.
+                  puntos totales con su desglose en permanentes (victorias y
+                  logros) y temporales (competiciones), elo, victorias y derrotas
+                  y racha. El nombre de cada jugador enlaza con su perfil de
+                  AoE4World y sus puntos abren el resumen de objetivos.
                 </caption>
                 <thead>
                   <tr>
@@ -446,7 +560,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                     />
                     <SortableHeader
                       label="Puntos"
-                      sublabel="victorias / objetivos"
+                      sublabel="permanentes / temporales"
+                      sublabelHint={`${POINTS_HINTS.permanent} ${POINTS_HINTS.temporary}`}
                       sortKey="points"
                       sort={sort}
                       onSort={toggleSort}
@@ -467,6 +582,9 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                       onSort={toggleSort}
                       className="w-24"
                     />
+                    {/* Última columna de la tabla: además del dato lleva la
+                        bandera del país, que se cuelga del borde derecho de la
+                        fila. */}
                     <SortableHeader
                       label="Racha"
                       sortKey="streak"
@@ -474,12 +592,6 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                       onSort={toggleSort}
                       className="w-20"
                     />
-                    {/* Columna de acción, no de dato: enlaza con la ficha de
-                        objetivos del jugador. No es ordenable, así que no pasa
-                        por `SortableHeader`; solo lleva el `scope` de columna. */}
-                    <th scope="col" className={`${HEADING} w-24 text-center`}>
-                      Objetivos
-                    </th>
                   </tr>
                 </thead>
                 {sorted.map((row) => (
@@ -488,6 +600,8 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
                     row={row}
                     objectivesExpanded={expanded.has(row.profileId)}
                     onToggleObjectives={toggleObjectives}
+                    onOpenObjective={openObjectiveDialog}
+                    loadingObjectiveId={loadingObjectiveId}
                   />
                 ))}
               </table>
@@ -495,6 +609,52 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
           </div>
         </>
       )}
+
+      {objectiveDialog !== null && objectiveDialog.status === "ready" ? (
+        <ObjectiveRankingDialog
+          key={objectiveDialog.option.id}
+          option={objectiveDialog.option}
+          onClose={closeObjectiveDialog}
+          front={
+            // La X de cerrar vive en la esquina superior derecha de la cara
+            // (`ObjectiveFlipDialog`), así que el resumen le reserva ese aire.
+            <div className="h-full overflow-y-auto">
+              <ObjectiveFeatureSummary option={objectiveDialog.option} />
+            </div>
+          }
+        />
+      ) : null}
+
+      {objectiveDialog !== null && objectiveDialog.status === "error" ? (
+        <Modal
+          open
+          onClose={closeObjectiveDialog}
+          labelledBy={objectiveErrorTitleId}
+          className="m-auto w-[calc(100%-2rem)] max-w-md rounded-lg border border-line bg-surface p-0 text-foreground"
+        >
+          <div className="p-5">
+            <h2
+              id={objectiveErrorTitleId}
+              className="font-display text-lg font-semibold text-foreground"
+            >
+              No se ha podido cargar la clasificación
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-muted">
+              No se ha podido cargar la clasificación de «{objectiveDialog.label}».
+              Vuelve a intentarlo en unos minutos.
+            </p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={closeObjectiveDialog}
+                className="inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong active:translate-y-px"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }
@@ -525,8 +685,8 @@ function MobileStandingsControls({
   onPlayingOnlyChange,
   liveOnly,
   onLiveOnlyChange,
-  division,
-  onDivisionChange,
+  divisions,
+  onDivisionsChange,
   activeFilterCount,
   sort,
   onSort,
@@ -537,8 +697,8 @@ function MobileStandingsControls({
   onPlayingOnlyChange: (value: boolean) => void;
   liveOnly: boolean;
   onLiveOnlyChange: (value: boolean) => void;
-  division: DivisionId | null;
-  onDivisionChange: (value: DivisionId | null) => void;
+  divisions: readonly DivisionId[];
+  onDivisionsChange: (value: DivisionId[]) => void;
   activeFilterCount: number;
   sort: SortState;
   onSort: (key: SortKey) => void;
@@ -615,7 +775,7 @@ function MobileStandingsControls({
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <span className="text-xs font-semibold text-muted">División</span>
-            <DivisionFilterButtons division={division} onDivisionChange={onDivisionChange} />
+            <DivisionFilterButtons divisions={divisions} onDivisionsChange={onDivisionsChange} />
           </div>
         </div>
       ) : null}
@@ -633,6 +793,7 @@ function SortableHeader({
   label,
   visual,
   sublabel,
+  sublabelHint,
   sortKey,
   sort,
   onSort,
@@ -648,6 +809,11 @@ function SortableHeader({
    * accesible del control de ordenación: es apoyo visual para las celdas.
    */
   sublabel?: string;
+  /**
+   * Aclaración de la leyenda, como `title` nativo. El sitio no tiene notas fijas
+   * en la tabla: lo que no cabe se cuenta al pasar el ratón.
+   */
+  sublabelHint?: string;
   sortKey: SortKey;
   sort: SortState;
   onSort: (key: SortKey) => void;
@@ -676,7 +842,10 @@ function SortableHeader({
           <SortIndicator state={state} />
         </button>
         {sublabel !== undefined ? (
-          <span className="whitespace-nowrap text-xs font-normal leading-none text-muted">
+          <span
+            title={sublabelHint}
+            className="whitespace-nowrap text-xs font-normal leading-none text-muted"
+          >
             {sublabel}
           </span>
         ) : null}
@@ -739,10 +908,15 @@ function StandingsRow({
   row,
   objectivesExpanded,
   onToggleObjectives,
+  onOpenObjective,
+  loadingObjectiveId,
 }: {
   row: StandingRow;
   objectivesExpanded: boolean;
   onToggleObjectives: (profileId: number) => void;
+  onOpenObjective: (objective: StandingObjective) => void;
+  /** Objetivo cuya clasificación se está leyendo ahora mismo, o `null`. */
+  loadingObjectiveId: string | null;
 }) {
   const league = rankLevelToLeague(row.rankLevel);
   const objectivesPanelId = `objetivos-${row.profileId}`;
@@ -782,12 +956,7 @@ function StandingsRow({
             />
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <PlayerName row={row} />
-              <PlayerChips
-                row={row}
-                objectivesExpanded={objectivesExpanded}
-                objectivesPanelId={objectivesPanelId}
-                onToggleObjectives={onToggleObjectives}
-              />
+              <PlayerChips row={row} />
             </div>
           </div>
         </td>
@@ -799,24 +968,35 @@ function StandingsRow({
         </td>
 
         <td className={`${CELL} text-center`}>
-          {/* Total dominante con su desglose debajo: las tres cifras se leen
-              sin hover, y el total conserva el peso del dato principal. La
-              leyenda del desglose vive en la cabecera de la columna. */}
-          <div className="relative z-[1] flex flex-col items-center gap-0.5">
-            <span className="font-semibold tabular-nums text-foreground">
-              {row.points}
-            </span>
-            <span className="whitespace-nowrap text-xs leading-none tabular-nums text-muted">
-              {row.pointsByWins}
-              <span aria-hidden="true"> / </span>
-              {row.pointsByObjectives}
-            </span>
-          </div>
+          <PointsDisclosure
+            row={row}
+            expanded={objectivesExpanded}
+            panelId={objectivesPanelId}
+            onToggle={onToggleObjectives}
+            align="center"
+            className="relative z-[1]"
+            sublabel={
+              // Los permanentes van en el tono del dato y los temporales en el
+              // de la leyenda: la parte sólida del total y la que puede cambiar
+              // de dueño se distinguen de un vistazo, y cada cifra se explica
+              // en su `title`.
+              <span className="whitespace-nowrap text-xs leading-none tabular-nums">
+                <span title={POINTS_HINTS.permanent} className="text-foreground">
+                  {row.pointsByAchievements}
+                </span>
+                <span aria-hidden="true" className="text-muted">
+                  {" / "}
+                </span>
+                <span title={POINTS_HINTS.temporary} className="text-muted">
+                  {row.pointsByCompetitions}
+                </span>
+              </span>
+            }
+          />
         </td>
 
         <td className={`${CELL} text-center`}>
           <span className="relative z-[1] inline-flex items-center justify-center gap-1.5 tabular-nums text-foreground">
-            {row.elo === null ? <span className="text-muted">-</span> : row.elo}
             {league !== null ? (
               <span
                 title={league.label}
@@ -826,6 +1006,7 @@ function StandingsRow({
                 <LeagueIcon rank={league} label={league.label} className="h-6 w-4" />
               </span>
             ) : null}
+            {row.elo === null ? <span className="text-muted">-</span> : row.elo}
           </span>
         </td>
 
@@ -839,16 +1020,10 @@ function StandingsRow({
           </span>
         </td>
 
-        <td className={`${CELL} text-center tabular-nums`}>
-          <span className="relative z-[1]">
-            <StreakValue streak={row.streak} />
-          </span>
-        </td>
-
         <td
           className={`${CELL} relative ${
             objectivesExpanded ? "rounded-tr-lg" : "rounded-r-lg"
-          } text-center`}
+          } text-center tabular-nums`}
         >
           {flagSvg !== null ? (
             <>
@@ -872,8 +1047,8 @@ function StandingsRow({
           {row.country !== null ? (
             <span className="sr-only">País: {row.country}</span>
           ) : null}
-          <span className="relative z-10 inline-flex">
-            <ObjectivesLink profileId={row.profileId} name={row.name} />
+          <span className="relative z-[1]">
+            <StreakValue streak={row.streak} />
           </span>
         </td>
       </tr>
@@ -893,7 +1068,11 @@ function StandingsRow({
             {/* Filete de 1px que separa el desplegable de la fila: hereda el
                 relleno del `<td>`, así que no toca los bordes del panel. */}
             <div className="border-t border-line pt-3">
-              <ObjectivesDetail objectives={row.objectives} />
+              <ObjectivesDetail
+                row={row}
+                onOpenObjective={onOpenObjective}
+                loadingObjectiveId={loadingObjectiveId}
+              />
             </div>
           </td>
         </tr>
@@ -914,10 +1093,15 @@ function StandingsCard({
   row,
   objectivesExpanded,
   onToggleObjectives,
+  onOpenObjective,
+  loadingObjectiveId,
 }: {
   row: StandingRow;
   objectivesExpanded: boolean;
   onToggleObjectives: (profileId: number) => void;
+  onOpenObjective: (objective: StandingObjective) => void;
+  /** Objetivo cuya clasificación se está leyendo ahora mismo, o `null`. */
+  loadingObjectiveId: string | null;
 }) {
   const objectivesPanelId = `objetivos-movil-${row.profileId}`;
   // La bandera de la tarjeta es un icono junto a la identidad, no un fondo a
@@ -953,32 +1137,35 @@ function StandingsCard({
             {row.country !== null ? (
               <span className="sr-only">País: {row.country}</span>
             ) : null}
-            <PlayerChips
-              row={row}
-              objectivesExpanded={objectivesExpanded}
-              objectivesPanelId={objectivesPanelId}
-              onToggleObjectives={onToggleObjectives}
-            />
+            <PlayerChips row={row} />
           </div>
           <CompactStats row={row} />
           <CompactPointsBreakdown row={row} />
         </div>
 
-        <div className="shrink-0 text-right">
-          <span className="block font-semibold tabular-nums text-foreground">
-            {row.points}
-          </span>
-          {/* En la tabla de escritorio el desglose se explica con el subtítulo de
-              la columna; aquí, sin columna, hace falta el rótulo. */}
-          <span className="block text-xs font-medium uppercase tracking-wide text-muted">
-            Puntos
-          </span>
-        </div>
+        <PointsDisclosure
+          row={row}
+          expanded={objectivesExpanded}
+          panelId={objectivesPanelId}
+          onToggle={onToggleObjectives}
+          align="end"
+          sublabel={
+            // En la tabla de escritorio el desglose se explica con el subtítulo
+            // de la columna; aquí, sin columna, hace falta el rótulo.
+            <span className="text-xs font-medium uppercase tracking-wide text-muted">
+              Puntos
+            </span>
+          }
+        />
       </div>
 
       {objectivesExpanded ? (
         <div id={objectivesPanelId} className="relative z-10 mt-3 border-t border-line pt-3">
-          <ObjectivesDetail objectives={row.objectives} />
+          <ObjectivesDetail
+            row={row}
+            onOpenObjective={onOpenObjective}
+            loadingObjectiveId={loadingObjectiveId}
+          />
         </div>
       ) : null}
     </li>
@@ -986,8 +1173,7 @@ function StandingsCard({
 }
 
 /**
- * Señales de estado del jugador en la fila: en partida, los canales de directo y
- * el desplegable de objetivos.
+ * Señales de estado del jugador en la fila: en partida y los canales de directo.
  *
  * Las tres plataformas se pintan con `ChannelLinks`, que resuelve el icono, la URL
  * y el color de cada una, y solo aparece la plataforma que tiene canal. La plataforma
@@ -995,20 +1181,9 @@ function StandingsCard({
  * dos, se ven las dos iluminadas, que es lo que está pasando.
  *
  * Vive aparte porque la fila de la tabla y la tarjeta de móvil comparten
- * exactamente los mismos indicadores; solo cambia a qué panel de objetivos apunta el
- * botón.
+ * exactamente los mismos indicadores: son las señales del nombre, no de la fila.
  */
-function PlayerChips({
-  row,
-  objectivesExpanded,
-  objectivesPanelId,
-  onToggleObjectives,
-}: {
-  row: StandingRow;
-  objectivesExpanded: boolean;
-  objectivesPanelId: string;
-  onToggleObjectives: (profileId: number) => void;
-}) {
+function PlayerChips({ row }: { row: StandingRow }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
       {row.isPlaying ? (
@@ -1035,14 +1210,6 @@ function PlayerChips({
             : { channel: row.kickChannel, isLive: row.kickIsLive }
         }
       />
-      {row.objectives.length > 0 ? (
-        <ObjectivesToggle
-          count={row.objectives.length}
-          expanded={objectivesExpanded}
-          controls={objectivesPanelId}
-          onClick={() => onToggleObjectives(row.profileId)}
-        />
-      ) : null}
     </div>
   );
 }
@@ -1088,8 +1255,7 @@ function CompactStats({ row }: { row: StandingRow }) {
         <dt className="truncate text-muted">V - D</dt>
       </div>
       <div className="min-w-0">
-        <dd className="flex min-w-0 items-baseline gap-1 text-sm font-medium tabular-nums text-foreground">
-          <span className="min-w-0 truncate">{row.elo === null ? "-" : row.elo}</span>
+        <dd className="flex min-w-0 items-center gap-1 text-sm font-medium tabular-nums text-foreground">
           {league !== null ? (
             <span
               title={league.label}
@@ -1099,6 +1265,7 @@ function CompactStats({ row }: { row: StandingRow }) {
               <LeagueIcon rank={league} label={league.label} className="h-5 w-3.5" />
             </span>
           ) : null}
+          <span className="min-w-0 truncate">{row.elo === null ? "-" : row.elo}</span>
         </dd>
         <dt className="truncate text-muted">Elo</dt>
       </div>
@@ -1116,63 +1283,179 @@ function CompactStats({ row }: { row: StandingRow }) {
  * Desglose del total de puntos por debajo de `lg`.
  *
  * En la tabla lo explica el subtítulo de la columna; en la tarjeta, sin columna,
- * hace falta el rótulo. Es texto explicativo y no una cifra que se compare de
- * una tarjeta a otra, así que puede partirse en varias líneas: lo que no puede
- * es recortarse. Comparte fila con el enlace a la ficha de objetivos, que en
- * móvil es la única puerta a esa página (la tabla y su columna de acción no se
- * pintan aquí).
+ * hace falta la leyenda, aquí con las palabras enteras: la tarjeta tiene sitio y
+ * los dos términos ("permanentes", "temporales") son los que hay que aprender
+ * para leer la tabla. Los permanentes van en el tono del dato y los temporales
+ * en el de la leyenda, la misma distinción que en la columna Puntos. Es texto
+ * explicativo y no una cifra que se compare de una tarjeta a otra, así que puede
+ * partirse en varias líneas: lo que no puede es recortarse.
  */
 function CompactPointsBreakdown({ row }: { row: StandingRow }) {
   return (
-    <p className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-line pt-2 text-xs text-muted">
-      <span>{row.pointsByWins} de victorias</span>
-      <span aria-hidden="true">+</span>
-      <span>{row.pointsByObjectives} de objetivos</span>
-      <ObjectivesLink
-        profileId={row.profileId}
-        name={row.name}
-        showLabel
-        className="ml-auto"
-      />
+    <p className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-line pt-2 text-xs">
+      <span title={POINTS_HINTS.permanent} className="text-foreground">
+        {row.pointsByAchievements} de permanentes
+      </span>
+      <span aria-hidden="true" className="text-muted">
+        +
+      </span>
+      <span title={POINTS_HINTS.temporary} className="text-muted">
+        {row.pointsByCompetitions} de temporales
+      </span>
     </p>
   );
 }
 
 /**
- * Enlace a la ficha de objetivos de un jugador.
+ * Desglose del total de puntos de una fila y mando del resumen de objetivos.
  *
- * Es la única acción de navegación de la fila, aparte del nombre: lleva a
- * `/objetivos/<profileId>`, la página que desarrolla el avance del participante
- * en los 82 objetivos. El icono (una diana) es el mismo en escritorio y en la
- * tarjeta de móvil, donde además se acompaña del texto para que no dependa de
- * que se reconozca el glifo. Siempre lleva `aria-label` con el nombre, porque en
- * la tabla el enlace es solo el icono.
+ * El total manda y debajo van sus dos mitades, que el jugador lee sin hover:
+ * los puntos permanentes (los **logros** ya conseguidos, con las victorias dentro
+ * porque son el objetivo Victorias) y los temporales (competiciones, que se deciden
+ * al cierre y pueden cambiar de dueño). La aclaración de cada cifra va en su
+ * `title`, el apoyo discreto que ya usa la tabla para lo que no cabe en la celda.
+ *
+ * El resumen de objetivos se abre desde aquí, que es lo que era informativo: si
+ * el jugador tiene objetivos el bloque entero es un botón con
+ * `aria-expanded`/`aria-controls` —la afordancia es el chevron, y el color del
+ * total al pasar el ratón—, y si no tiene ninguno se queda como estaba, sin un
+ * control que no haría nada.
+ *
+ * ## La misma pieza en dos sitios, con la misma geometría en los dos
+ *
+ * `align` es lo único que cambia: `center` en la celda de la tabla, `end` en la
+ * tarjeta. La **forma del bloque no depende de si hay control**: el botón y el
+ * texto comparten las mismas clases de disposición, y en la celda llevan
+ * `w-full`, que es la única manera de que el botón mida como el bloque de nivel
+ * bloque y la cifra quede centrada igual en todas las filas. Sin ese ancho, el
+ * navegador da al botón el ancho de su contenido y la columna se ve centrada en
+ * unas filas y pegada a la izquierda en otras.
+ *
+ * ## Por qué el chevron de la celda va colgado del número
+ *
+ * Centrar el grupo "cifra + chevron" dejaría la cifra media marca a la
+ * izquierda del centro, y las filas sin objetivos —que no tienen chevron— la
+ * dejarían centrada. Colgándolo con posición absoluta del número, el chevron no
+ * ocupa hueco: la cifra queda exactamente en el mismo sitio con y sin
+ * objetivos, y el mando se lee igual. En la tarjeta no se cuelga porque el
+ * bloque está alineado a la derecha y el chevron se saldría del borde, que
+ * además recorta: ahí va en línea y alinea el borde derecho del rótulo.
+ */
+function PointsDisclosure({
+  row,
+  expanded,
+  panelId,
+  onToggle,
+  sublabel,
+  align,
+  className = "",
+}: {
+  row: StandingRow;
+  expanded: boolean;
+  panelId: string;
+  onToggle: (profileId: number) => void;
+  /** Leyenda bajo el total: el desglose en la tabla, el rótulo en la tarjeta. */
+  sublabel: ReactNode;
+  /** `center`: celda de la tabla. `end`: bloque de la tarjeta, a su derecha. */
+  align: "center" | "end";
+  /** Clases de posición del host, como el nivel de apilado sobre la bandera. */
+  className?: string;
+}) {
+  const hasObjectives = row.objectives.length > 0;
+  const layout =
+    align === "center"
+      ? "w-full items-center"
+      : "shrink-0 items-end text-right";
+  const chevron = (
+    <Chevron
+      expanded={expanded}
+      className={
+        expanded ? "text-accent" : "text-muted group-hover/points:text-accent"
+      }
+    />
+  );
+  const content = (
+    <>
+      <span className="relative inline-flex items-center gap-1">
+        <span className="font-semibold tabular-nums text-foreground transition-colors group-hover/points:text-accent">
+          {row.points}
+        </span>
+        {hasObjectives
+          ? align === "center"
+            ? // Colgado del número: así el chevron no cuenta como ancho y la
+              // cifra no se mueve respecto a las filas que no lo tienen.
+              <span className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2">
+                {chevron}
+              </span>
+            : chevron
+          : null}
+      </span>
+      {sublabel}
+    </>
+  );
+
+  if (!hasObjectives) {
+    return <div className={`flex flex-col gap-0.5 ${layout} ${className}`}>{content}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-controls={panelId}
+      onClick={() => onToggle(row.profileId)}
+      title={expanded ? "Ocultar el resumen de objetivos" : "Ver el resumen de objetivos"}
+      className={`group/points flex flex-col gap-0.5 rounded-md ${layout} ${className}`}
+    >
+      {content}
+      {/* El chevron es decorativo y el `title` no llega a un lector de pantalla,
+          así que la acción se nombra aquí: el nombre accesible del botón es el
+          total con su desglose más esto. */}
+      <span className="sr-only">
+        {expanded ? "Ocultar" : "Ver"} los objetivos de {row.name}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Enlace al detalle de un jugador, que abre en sus objetivos.
+ *
+ * Es la acción que hacía la antigua columna de objetivos, que ya no existe, y
+ * vive en la columna derecha del resumen desplegable, que es donde se pide:
+ * quien abre los objetivos de un jugador es quien quiere el detalle. La ficha
+ * tiene dos vistas —objetivos e historial de puntos— y este enlace entra por la
+ * primera; cambiar de vista ya es cosa de sus pestañas. El texto encabeza esa
+ * columna —el mismo registro que los rótulos de grupo ("Actividad", "Racha")— y
+ * debajo va la diana, centrada, que es el glifo que identificaba la columna; el
+ * conjunto se centra en vertical en el alto del panel (ver `ObjectivesDetail`). A
+ * `size-6` (24 px) mide lo mismo que los iconos de objetivo de las tarjetas del
+ * catálogo (`ObjectiveIcon`) y conserva el trazo de 1.5 de todos los glifos del
+ * sitio. No lleva relleno vertical: el área de pulsación ya la dan las dos líneas.
  */
 function ObjectivesLink({
   profileId,
   name,
-  showLabel = false,
-  className = "",
+  label,
 }: {
   profileId: number;
   name: string;
-  /** Pinta el texto "Ver objetivos" junto al icono (tarjeta de móvil). */
-  showLabel?: boolean;
-  className?: string;
+  /** Texto visible del enlace (la cabecera de la columna). */
+  label: string;
 }) {
+  // El texto accesible no repite la etiqueta visible —que encabeza la columna—
+  // sino que nombra la acción entera y a quién pertenece el avance.
+  const hint = `Ver detalle del avance de objetivos de ${name}`;
+
   return (
     <Link
-      href={`/objetivos/${profileId}`}
-      aria-label={`Ver los objetivos de ${name}`}
-      title={`Ver los objetivos de ${name}`}
-      className={`inline-flex items-center rounded-md text-muted underline-offset-4 transition-colors hover:text-accent focus-visible:text-accent ${
-        showLabel
-          ? "gap-1.5 py-1 text-xs font-medium"
-          : "size-9 justify-center"
-      } ${className}`}
+      href={`/detalle-jugador/${profileId}`}
+      aria-label={hint}
+      title={hint}
+      className="inline-flex flex-col items-center gap-1.5 rounded-md text-xs font-medium text-muted underline-offset-4 transition-colors hover:text-accent focus-visible:text-accent"
     >
-      <TargetIcon className="size-4 shrink-0" />
-      {showLabel ? <span>Ver objetivos</span> : null}
+      <span>{label}</span>
+      <TargetIcon className="size-6 shrink-0" />
     </Link>
   );
 }
@@ -1235,47 +1518,18 @@ function MedalIcon({ rank, className }: { rank: number; className?: string }) {
 }
 
 /**
- * Control del desplegable de objetivos: un botón de texto, en el mismo registro
- * discreto que los controles en texto de la tabla ("Quitar filtros"), con un
- * chevron que señala el estado. Se pinta el texto y el icono dentro del mismo
- * botón, así que cualquiera de los dos abre y cierra.
+ * Chevron del desplegable: hacia abajo cerrado, girado hacia arriba abierto. El
+ * color entra por `className`, porque el mismo glifo marca el mando de los
+ * objetivos y hereda el estado del botón que lo contiene.
  */
-function ObjectivesToggle({
-  count,
-  expanded,
-  controls,
-  onClick,
-}: {
-  count: number;
-  expanded: boolean;
-  controls: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      aria-controls={controls}
-      onClick={onClick}
-      className={`-my-3.5 inline-flex shrink-0 items-center gap-1 rounded-sm py-3.5 text-xs font-medium underline-offset-4 transition-colors hover:underline ${
-        expanded ? "text-accent" : "text-muted hover:text-accent"
-      }`}
-    >
-      +{count} {count === 1 ? "objetivo" : "objetivos"}
-      <Chevron expanded={expanded} />
-    </button>
-  );
-}
-
-/** Chevron del desplegable: hacia abajo cerrado, girado hacia arriba abierto. */
-function Chevron({ expanded }: { expanded: boolean }) {
+function Chevron({ expanded, className = "" }: { expanded: boolean; className?: string }) {
   return (
     <svg
       viewBox="0 0 12 12"
       aria-hidden="true"
       className={`size-3 shrink-0 transition-transform motion-reduce:transition-none ${
         expanded ? "rotate-180" : ""
-      }`}
+      } ${className}`}
     >
       <path
         d="M3 4.5 6 7.5l3-3"
@@ -1294,32 +1548,85 @@ function Chevron({ expanded }: { expanded: boolean }) {
  *
  * Es la cara "crónica" de la fila: los objetivos se agrupan por familia (el
  * orden de `StandingRow.objectives` ya llega agrupado) y cada uno se lee como
- * una ficha de botín, con su icono, su etiqueta y los puntos que aporta. Cada
+ * una ficha de botín, con su icono, su etiqueta y los puntos que aporta. Un
+ * objetivo repetible lleva delante sus repeticiones (`2 x Imparable`), atenuadas
+ * para que el peso lo lleven la etiqueta y la cifra, y las dos
+ * cifras son las que **cobró** el jugador, no el precio del catálogo. Cada
  * ficha va sobre `surface-raised` para que destaque del panel, que comparte el
- * tono de la fila.
+ * tono de la fila, y su `title` —la regla del objetivo en una frase, del
+ * catálogo— responde al "¿esto cómo se consigue?" sin cargar la ficha.
+ *
+ * Cada chip es un botón: abre, por encima, la clasificación del objetivo en la
+ * misma ventana volteable que usa su tarjeta en `/objetivos` —el resumen del
+ * catálogo es la cara frontal y el ranking, la posterior—. En reposo el chip no
+ * cambia de aspecto; al pasar el ratón solo se marca el borde y quien navega con
+ * teclado lo alcanza como cualquier botón. El estado de carga y la ventana viven
+ * en `StandingsTable`, que pinta las filas dos veces (tabla y tarjetas) y monta
+ * una sola instancia de cada una.
+ *
+ * ## El enlace en su propia columna
+ *
+ * A la derecha del bloque de familias vive el enlace a la ficha del jugador, que
+ * es el detalle completo: es la acción del panel entero y no de un grupo, así
+ * que va separado por un filete y no como una ficha más. El filete se estira al
+ * alto del bloque (`sm:self-stretch`) y el enlace se centra en la columna
+ * (`sm:items-center`): su texto es la cabecera de esa columna —con el registro
+ * de los rótulos de grupo— y la diana va debajo, en el centro, como emblema. Por
+ * debajo de `sm` la columna no cabría sin apretar los chips, así que el bloque
+ * se apila y el enlace queda debajo alineado a la derecha, el mismo lado que
+ * ocupa cuando hay sitio: la tarjeta de móvil usa este mismo componente.
  */
-function ObjectivesDetail({ objectives }: { objectives: StandingObjective[] }) {
+function ObjectivesDetail({
+  row,
+  onOpenObjective,
+  loadingObjectiveId,
+}: {
+  row: StandingRow;
+  onOpenObjective: (objective: StandingObjective) => void;
+  loadingObjectiveId: string | null;
+}) {
   return (
-    <div className="flex flex-wrap gap-x-6 gap-y-3">
-      {groupObjectives(objectives).map(([group, groupItems]) => (
-        <div key={group} className="flex flex-col gap-1.5">
-          <p className="text-xs font-medium text-muted">{GROUP_LABELS[group]}</p>
-          <ul className="flex flex-wrap gap-1.5">
-            {groupItems.map((objective) => (
-              <li
-                key={objective.id}
-                className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-raised px-2.5 py-1 text-xs"
-              >
-                <ObjectiveIcon option={objective} className="size-4 shrink-0" />
-                <span className="text-foreground">{objective.label}</span>
-                <span className="font-semibold tabular-nums text-accent">
-                  +{objective.points}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+    <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
+      <div className="flex min-w-0 flex-1 flex-wrap gap-x-6 gap-y-3">
+        {groupObjectives(row.objectives).map(([group, groupItems]) => (
+          <div key={group} className="flex flex-col gap-1.5">
+            <p className="text-xs font-medium text-muted">{GROUP_LABELS[group]}</p>
+            <ul className="flex flex-wrap gap-1.5">
+              {groupItems.map((objective) => {
+                const { repetitions, label } = objectiveTitleParts(objective);
+
+                return (
+                  <li key={objective.id} className="inline-flex">
+                    <button
+                      type="button"
+                      title={objective.description}
+                      aria-label={`Ver la clasificación de ${objectiveTitle(objective)}`}
+                      aria-haspopup="dialog"
+                      aria-busy={loadingObjectiveId === objective.id || undefined}
+                      onClick={() => onOpenObjective(objective)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-raised px-2.5 py-1 text-xs transition-colors hover:border-line-strong"
+                    >
+                      <ObjectiveIcon option={objective} className="size-4 shrink-0" />
+                      <span className="tabular-nums text-foreground">
+                        {repetitions === null ? null : (
+                          <span className="text-muted">{`${repetitions} `}</span>
+                        )}
+                        {label}
+                      </span>
+                      <span className="font-semibold tabular-nums text-accent">
+                        +{objective.points}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end sm:items-center sm:border-l sm:border-line sm:pl-4 sm:self-stretch">
+        <ObjectivesLink profileId={row.profileId} name={row.name} label="Ver avance" />
+      </div>
     </div>
   );
 }
@@ -1350,6 +1657,19 @@ function groupObjectives(
  *
  * El segundo se omite cuando no aporta: si aún no se ha sincronizado (`null`) o
  * si coincide con el de display, repetirlo bajo el primero solo añadiría ruido.
+ * Pero su sitio se reserva siempre, para que la identidad mida lo mismo tenga
+ * o no nombre oficial y ninguna fila crezca respecto a sus vecinas.
+ *
+ * Cuando no hay nombre oficial, el alto que se reserva se reparte en dos mitades,
+ * una encima y otra debajo del nombre, en lugar de dejarlo entero debajo: así el
+ * nombre de una línea queda centrado en el bloque —alineado con el avatar y los
+ * chips, que se centran contra él— en vez de pegado arriba con el hueco vacío
+ * debajo. Se reparte en dos y no se centra con `justify-center` porque el bloque
+ * mide lo que mide su contenido: sin el hueco, no hay alto que repartir. Las dos
+ * mitades suman el mismo alto que la línea que sustituyen, así que el bloque
+ * sigue midiendo igual en la tabla y en la tarjeta, donde el nombre tiene otro
+ * tamaño de letra.
+ *
  * Todo el bloque enlaza con el perfil de AoE4World, así que la fila de la tabla
  * y la tarjeta de móvil comparten el enlace en la propia identidad.
  */
@@ -1369,6 +1689,9 @@ function PlayerName({ row }: { row: StandingRow }) {
       // compensan para que la tarjeta no crezca por debajo de `lg`.
       className="group/name -my-3 flex min-w-0 flex-col rounded-sm py-3"
     >
+      {officialName === null ? (
+        <span aria-hidden="true" className="h-2 shrink-0" />
+      ) : null}
       <span
         title={row.name}
         className="max-w-[21rem] truncate font-medium text-foreground underline-offset-4 transition-colors group-hover/name:text-accent group-hover/name:underline"
@@ -1382,7 +1705,11 @@ function PlayerName({ row }: { row: StandingRow }) {
         >
           {officialName}
         </span>
-      ) : null}
+      ) : (
+        // La otra mitad del alto reservado. Es el de una línea de `text-xs`, que
+        // es el registro del nombre oficial: 8 px arriba y 8 px abajo.
+        <span aria-hidden="true" className="h-2 shrink-0" />
+      )}
       <span className="sr-only">(se abre en una pestaña nueva)</span>
     </a>
   );

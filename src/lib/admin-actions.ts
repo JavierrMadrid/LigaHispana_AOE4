@@ -32,6 +32,12 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * este módulo es exhaustivo sobre él para que un tipo nuevo no pueda salir con una
  * frase inventada.
  *
+ * La gestión de los admins y la configuración de la edición entran por el mismo
+ * criterio, aunque no cambien lo que ve un jugador: quién puede tocar los datos del
+ * torneo y con qué reglas es justo lo que hay que poder reconstruir, y `AdminAction`
+ * es el único sitio donde queda. Sus valores van **al final del enum**, como los de
+ * aprobar y rechazar, por la regla de `ALTER TYPE … ADD VALUE`.
+ *
  * ## El texto de cada tipo
  *
  * | Tipo | Frase |
@@ -43,8 +49,14 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * | `PLAYER_REJECTED` | `Rechazo de BeastWizard (AoE4World 123456)` |
  * | `MATCH_POINTS_REVERTED` | `Revertidos 2 puntos de la partida G-12345 de BeastWizard` |
  * | `MATCH_POINTS_RESTORED` | `Restaurados 2 puntos de la partida G-12345 de BeastWizard` |
+ * | `ADMIN_ADDED` | `Invitación enviada a pedro@correo.com` / `Alta de pedro@correo.com, que ya tenía cuenta en la web` |
+ * | `ADMIN_DEACTIVATED` | `Baja de pedro@correo.com` |
+ * | `ADMIN_REACTIVATED` | `Reactivación de pedro@correo.com` |
+ * | `ACTION_REVERTED` | `Revertida la acción: Baja de BeastWizard` |
+ * | `CONFIG_CHANGED` | `Cambio de configuración: ventana del torneo` |
  *
- * En las dos últimas el nombre del jugador va al final y no escondido en `details`:
+ * En `MATCH_POINTS_REVERTED` y `MATCH_POINTS_RESTORED` el nombre del jugador va al
+ * final y no escondido en `details`:
  * es la parte que se lee, y un historial de "G-12345" a secas obligaría a ir al filtro
  * de la pestaña de partidas para saber de quién era. Una partida de 0 puntos (una
  * derrota) produce "Revertidos 0 puntos…", que es la verdad: no puntuaba, y aun así
@@ -169,13 +181,75 @@ type MatchPointsEntry = {
   points: number;
 };
 
+/** Alta de un admin: invitación nueva, o el acceso que se le da a quien ya tenía cuenta. */
+type AdminAddedEntry = {
+  type: "ADMIN_ADDED";
+  /** `Admin.email`, ya canónico. */
+  email: string;
+  /**
+   * De dónde sale la cuenta.
+   *
+   * `invited` es que no existía en Supabase Auth y se le ha creado por invitación;
+   * `linked` es que ya tenía cuenta —como los admins anteriores a la lista
+   * explícita— y solo se le ha dado acceso. La misma frase no vale para las dos: en
+   * una se ha mandado un correo y en la otra no.
+   */
+  mode: "invited" | "linked";
+};
+
+/** Baja de un admin: se desactiva, no se borra. */
+type AdminDeactivatedEntry = {
+  type: "ADMIN_DEACTIVATED";
+  email: string;
+};
+
+/** Reactivación de un admin que estaba de baja. */
+type AdminReactivatedEntry = {
+  type: "ADMIN_REACTIVATED";
+  email: string;
+};
+
+/**
+ * Reversión de una acción anterior.
+ *
+ * La marca real vive en la fila original (`AdminAction.revertedAt`), no aquí: este
+ * tipo es la **línea** que se añade al historial para dejar constancia de quién
+ * deshizo qué, con el resumen de la acción revertida ya redactado, para no tener que
+ * cruzar dos filas para entender una.
+ */
+type ActionRevertedEntry = {
+  type: "ACTION_REVERTED";
+  /** `AdminAction.id` de la acción revertida. */
+  actionId: string;
+  /** El `summary` de esa acción. */
+  actionSummary: string;
+};
+
+/**
+ * Cambio de la configuración de la edición (ventana, objetivos, premio, modos…).
+ *
+ * Reutiliza `CampoEditado` a propósito: es la misma idea que la edición de un
+ * jugador —qué campo, con qué rótulo y sus dos valores— y tener el mismo formato
+ * evita que el historial y el `details` de dos acciones que hacen lo mismo se lean
+ * de dos maneras.
+ */
+type ConfigChangedEntry = {
+  type: "CONFIG_CHANGED";
+  cambios: CampoEditado[];
+};
+
 /** Lo que hay que saber de una acción, según su tipo. */
 export type AdminActionEntry =
   | PlayerCreatedEntry
   | PlayerEditedEntry
   | PlayerRemovedEntry
   | PlayerStatusEntry
-  | MatchPointsEntry;
+  | MatchPointsEntry
+  | AdminAddedEntry
+  | AdminDeactivatedEntry
+  | AdminReactivatedEntry
+  | ActionRevertedEntry
+  | ConfigChangedEntry;
 
 /** `1 punto` y `0 puntos`: el plural no es un detalle de estilo en un historial. */
 export function puntos(count: number): string {
@@ -218,7 +292,40 @@ export function adminActionSummary(entry: AdminActionEntry): string {
       return `Revertidos ${puntos(entry.points)} ${deLaPartida(entry)}`;
     case AdminActionType.MATCH_POINTS_RESTORED:
       return `Restaurados ${puntos(entry.points)} ${deLaPartida(entry)}`;
+    case AdminActionType.ADMIN_ADDED:
+      return entry.mode === "invited"
+        ? `Invitación enviada a ${entry.email}`
+        : `Alta de ${entry.email}, que ya tenía cuenta en la web`;
+    case AdminActionType.ADMIN_DEACTIVATED:
+      return `Baja de ${entry.email}`;
+    case AdminActionType.ADMIN_REACTIVATED:
+      return `Reactivación de ${entry.email}`;
+    case AdminActionType.ACTION_REVERTED:
+      return `Revertida la acción: ${entry.actionSummary}`;
+    case AdminActionType.CONFIG_CHANGED:
+      return `Cambio de configuración: ${entry.cambios
+        .map((cambio) => cambio.etiqueta)
+        .join(", ")}`;
   }
+}
+
+/**
+ * Los valores `antes`/`despues` de cada cambio, como claves planas de `details`.
+ *
+ * Una clave por campo (`name.antes`, `name.despues`…) y no un objeto anidado: el DAL
+ * aplana `details` a primitivos de un nivel, así que lo anidado se descartaría al
+ * leer. La comparten la edición de un jugador y el cambio de configuración, que son
+ * el mismo caso leído dos veces.
+ */
+function camposEnDetails(cambios: readonly CampoEditado[]): Record<string, string | null> {
+  const details: Record<string, string | null> = {};
+
+  for (const cambio of cambios) {
+    details[`${cambio.campo}.antes`] = cambio.antes;
+    details[`${cambio.campo}.despues`] = cambio.despues;
+  }
+
+  return details;
 }
 
 /**
@@ -238,22 +345,12 @@ export function adminActionDetails(entry: AdminActionEntry): Prisma.InputJsonObj
       // anidado se descartaría al leer y no habría rastro utilizable. El nombre se
       // guarda aparte de los cambios porque es el estado **después**, y el `antes` de
       // cada campo va en su propia clave.
-      //
-      // `InputJsonObject` es de solo lectura (las claves son fijas en el tipo), así
-      // que las claves por campo se montan en un objeto corriente y se devuelve al
-      // final: solo estos valores entran, todos primitivos de primer nivel.
-      const details: Record<string, string | number | null> = {
+      return {
         name: entry.name,
         profileId: entry.profileId,
         campos: entry.cambios.map((cambio) => cambio.campo).join(","),
+        ...camposEnDetails(entry.cambios),
       };
-
-      for (const cambio of entry.cambios) {
-        details[`${cambio.campo}.antes`] = cambio.antes;
-        details[`${cambio.campo}.despues`] = cambio.despues;
-      }
-
-      return details;
     }
     case AdminActionType.PLAYER_REMOVED:
       return { name: entry.name, profileId: entry.profileId, matchCount: entry.matchCount };
@@ -280,6 +377,18 @@ export function adminActionDetails(entry: AdminActionEntry): Prisma.InputJsonObj
         gameId: entry.gameId,
         pointsBefore: 0,
         pointsAfter: entry.points,
+      };
+    case AdminActionType.ADMIN_ADDED:
+      return { email: entry.email, mode: entry.mode };
+    case AdminActionType.ADMIN_DEACTIVATED:
+    case AdminActionType.ADMIN_REACTIVATED:
+      return { email: entry.email };
+    case AdminActionType.ACTION_REVERTED:
+      return { actionId: entry.actionId, actionSummary: entry.actionSummary };
+    case AdminActionType.CONFIG_CHANGED:
+      return {
+        campos: entry.cambios.map((cambio) => cambio.campo).join(","),
+        ...camposEnDetails(entry.cambios),
       };
   }
 }

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
+import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { CIVILIZATIONS, CIVILIZATION_IDS } from "@/lib/civs";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { isRecord } from "@/lib/json";
@@ -16,8 +17,14 @@ import type { ScoringRuleset } from "@/lib/scoring";
  * - **Competición** (`kind: "competition"`): *winner-takes-all*, un único
  *   poseedor, el que va primero en su métrica. Es el modelo de siempre.
  * - **Logro** (`kind: "achievement"`): lo cobra **todo el que cumple la
- *   condición**. Puede ser binario (se cumple o no) o acumulativo (p. ej.
- *   `imparable`, con puntos por día). No tiene poseedor único.
+ *   condición**. Puede ser binario (se cumple o no), con tope (p. ej. `imparable`,
+ *   con puntos por día hasta 14) o **sin tope** (`victorias`, que paga los puntos
+ *   por victoria de la regla activa por cada victoria). No tiene poseedor único.
+ *
+ * Ojo con la suma nominal: **no todos los `points` del catálogo son un premio
+ * fijo**. `victorias` reparte por unidad y sin tope, así que su `points` (2) es
+ * documental y queda fuera de la cifra que resume `/puntuacion` (ver
+ * `hasFixedPrize`).
  *
  * Este módulo no decide nada por su cuenta: recibe las partidas clasificatorias
  * ya cargadas, el ruleset activo y el pool de mapas, y devuelve qué objetivos
@@ -37,6 +44,7 @@ export type ObjectiveMetric =
   | "partidas"
   | "victorias"
   | "racha"
+  | "racha-partidas"
   | "dias"
   | "civilizaciones"
   | "mapas";
@@ -56,7 +64,12 @@ export type ObjectiveDefinition = {
    */
   description: string;
   metric: ObjectiveMetric;
-  /** Puntos por defecto; el ruleset activo puede sobrescribirlos por id. */
+  /**
+   * Puntos por defecto; el ruleset activo puede sobrescribirlos por id.
+   *
+   * La excepción es `victorias`: no tiene premio propio, paga `ruleset.pointsPerWin`
+   * por victoria (ver su definición en el catálogo).
+   */
   points: number;
   /**
    * Id del objetivo **cabeza de familia** (el logro global que agrupa a sus
@@ -99,13 +112,38 @@ export type ObjectiveContender = {
   eligible: boolean;
   /** Detalle del objetivo; `null` cuando no aporta nada (ver `ObjectiveDetail`). */
   detail?: ObjectiveDetail | null;
+  /**
+   * Avance **por mapa**, solo en `por-tierra-y-agua`: los mapas del pool que al
+   * jugador le faltan por completar y cuántas partidas le faltan en cada uno.
+   *
+   * Es opcional y solo se publica donde aplica: el resto de objetivos no tiene
+   * mapas, y meter un `null` en cada contendiente de cada objetivo engordaría el
+   * snapshot de `Setting` sin decir nada. `null` explícito no llega: cuando no hay
+   * mapas el campo simplemente no está.
+   *
+   * `missing` es 1..3 (el umbral por mapa no se publica, el dato ya viene masticado
+   * como "cuántas partidas le faltan") y los mapas completos no aparecen. El orden es
+   * de menos a más `missing` y, a igualdad, el del pool.
+   */
+  mapGaps?: ObjectiveMapGap[] | null;
+};
+
+/** Un mapa del pool en el que a un jugador le faltan partidas (`ObjectiveContender.mapGaps`). */
+export type ObjectiveMapGap = {
+  /** Nombre del mapa, tal cual está en el pool (`Match.map`). */
+  map: string;
+  /** Partidas que le faltan para completarlo: 1..3. */
+  missing: number;
 };
 
 /**
- * Un beneficiario de un logro: quien lo ha completado y cuántos puntos cobra.
+ * Un beneficiario de un logro: quien lo ha completado, cuántos puntos cobra y
+ * cuántas veces lo ha conseguido.
  *
- * `points` es variable en `imparable` (1 por día, con tope); en el resto de logros
- * coincide con los puntos de la tarjeta.
+ * `points` es variable en `imparable` (1 por día, con tope) y en `victorias`
+ * (`pointsPerWin` por victoria, sin tope); en el resto de logros coincide con los
+ * puntos de la tarjeta. `count` es lo que permite pintar "2 x Imparable": los días en
+ * `imparable`, las victorias en `victorias` y `1` en los objetivos que no se repiten.
  */
 export type ObjectiveBeneficiary = {
   profileId: number;
@@ -113,6 +151,8 @@ export type ObjectiveBeneficiary = {
   avatarUrl: string | null;
   profileUrl: string | null;
   points: number;
+  /** Repeticiones: días, victorias o 1 (ver `ObjectiveBeneficiary`). */
+  count: number;
 };
 
 /** Umbral de un logro: en qué unidad y cuánto hace falta para completarlo. */
@@ -129,7 +169,12 @@ export type ObjectiveOption = {
   /** La regla en una frase, tal cual está en el catálogo (`ObjectiveDefinition`). */
   description: string;
   metric: ObjectiveMetric;
-  /** Puntos que otorga poseerlo, ya con los overrides del ruleset aplicado. */
+  /**
+   * Puntos que otorga poseerlo, ya con los overrides del ruleset aplicado.
+   *
+   * En `victorias` es el precio **por victoria** (`ruleset.pointsPerWin`), porque el
+   * objetivo se repite: los puntos de un beneficiario son `points × count`.
+   */
   points: number;
   /** Cabeza de familia del objetivo (`ObjectiveDefinition.parent`). */
   parent: string | null;
@@ -194,12 +239,18 @@ export type ObjectiveView = {
 /**
  * Versión de la **forma** del snapshot de `Setting["scoring.objectives"]`.
  *
- * Sube cuando cambia la forma de `ObjectiveView` (no cuando cambian los datos): un
- * documento con otra marca se rechaza y la vista se recalcula en vivo. Es lo que
- * permite desplegar una vista nueva sin que el primer lector interprete mal un
- * documento guardado con la forma anterior.
+ * Sube cuando cambia la forma de `ObjectiveView` y también cuando un documento
+ * guardado dejaría de ser cierto aunque su forma siga siendo válida: un catálogo con
+ * objetivos nuevos, por ejemplo, que un snapshot anterior no lleva. Un documento con
+ * otra marca se rechaza y la vista se recalcula en vivo, que es lo que permite
+ * desplegar una vista nueva sin que el primer lector interprete mal un documento
+ * guardado antes.
+ *
+ * La v3 es el segundo caso: la forma de `ObjectiveView` no cambia, pero el catálogo
+ * pasa de 83 a 88 objetivos (los cinco del *summary*), así que un snapshot v2 —que
+ * no los tiene— se rechaza en vez de publicarse sin ellos.
  */
-export const OBJECTIVES_SNAPSHOT_VERSION = 1;
+export const OBJECTIVES_SNAPSHOT_VERSION = 3;
 
 /**
  * La vista de objetivos tal y como se guarda: `ObjectiveView` más la marca de forma
@@ -347,6 +398,23 @@ export const POLIFACETICO_ID = "polifacetico";
 export const JUGON_ID = "jugon";
 export const IMPARABLE_ID = "imparable";
 export const POR_TIERRA_ID = "por-tierra-y-agua";
+export const VICTORIAS_ID = "victorias";
+export const ANSIOSO_ID = "ansioso";
+export const FAST_FEUDAL_ID = "avance-relampago-feudal";
+export const FAST_CASTLE_ID = "avance-relampago-castillos";
+export const FAST_IMPERIAL_ID = "avance-relampago-imperial";
+export const DEFENDER_ID = "defensor-del-pueblo";
+
+/**
+ * Frase de desempate de las **competiciones**: es el desempate 3 de
+ * `docs/OBJETIVOS.md` dicho en una línea para la tarjeta.
+ *
+ * Se escribe aquí y no en cada descripción porque es la misma regla para todas
+ * (`loco-por-ganar`, `bienhadado`, los `rey-*` y los `masterizando-*`) y porque es
+ * la interfaz la que la enseña: una copia por objetivo acabaría diciendo cosas
+ * distintas del mismo desempate.
+ */
+const TIE_BREAK = "En caso de empate, lo cobra quien alcanzó esa cifra antes.";
 
 /**
  * Umbrales de los logros. Son **fijos** (están en `docs/OBJETIVOS.md`), a
@@ -361,6 +429,29 @@ const IMPARABLE_DAYS = 14;
 /** Duración de una partida corta (`agresor`) y larga (`estratega`), en segundos. */
 const SHORT_MATCH_SECONDS = 600;
 const LONG_MATCH_SECONDS = 1200;
+
+/**
+ * Umbrales de los objetivos que se cobran con el **summary** de la partida.
+ *
+ * Salen de `Match.apm`, `Match.feudalAgeSeconds` (y compañía) y de los aldeanos
+ * perdidos, que los rellena `src/lib/aoe4world/summary.ts`: la partida no los trae
+ * en el listado, así que hasta que ese paso no ha corrido estas constantes no
+ * tienen con qué cumplirse. Están aquí y no en `Setting` por lo mismo que el resto
+ * de umbrales: son fijos y están en `docs/OBJETIVOS.md`.
+ */
+const APM_THRESHOLD = 120;
+const ANSIOSO_STREAK = 3;
+/** Segundos de los tres `avance-relampago-*`: 4, 9 y 16 minutos. */
+const FAST_FEUDAL_SECONDS = 240;
+const FAST_CASTLE_SECONDS = 540;
+const FAST_IMPERIAL_SECONDS = 960;
+/** Partidas que hay que cumplir para cobrar una hazaña: una basta. */
+const HAZANA_MATCHES = 1;
+/** Umbrales de `defensor-del-pueblo`: partida larga y bajas de aldeanos. */
+const DEFENDER_MATCH_SECONDS = 900;
+const DEFENDER_VILLAGERS_LOST = 3;
+const DEFENDER_GILDED_LOST = 2;
+const DEFENDER_MOUNTED_LOST = 1;
 
 /**
  * Los objetivos en orden de presentación.
@@ -379,7 +470,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     group: "actividad",
     kind: "competition",
     label: "Loco por ganar",
-    description: "El jugador con más partidas clasificatorias jugadas en el torneo.",
+    description: `El jugador con más partidas clasificatorias jugadas en el torneo. ${TIE_BREAK}`,
     metric: "partidas",
     points: 50,
     parent: null,
@@ -396,12 +487,38 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     parent: null,
     target: IMPARABLE_DAYS,
   },
+  /**
+   * El objetivo de ganar partidas.
+   *
+   * Es el único objetivo **sin tope**: paga los puntos por victoria de la regla
+   * activa por cada victoria clasificatoria, así que su `points` (2) es solo
+   * documental y el valor real es **siempre** `ruleset.pointsPerWin`. El motor lee
+   * la fuente única —`ruleset.pointsPerWin`— e **ignora** un
+   * `ruleset.objectives["victorias"]` si alguien llegara a guardarlo, que es lo que
+   * impide tener dos verdades sobre lo que vale una victoria.
+   *
+   * Por eso tampoco entra en la **suma nominal** del catálogo (ver
+   * `hasFixedPrize`): su reparto dependería de cuántas victorias sume el torneo.
+   */
+  {
+    id: VICTORIAS_ID,
+    group: "actividad",
+    kind: "achievement",
+    label: "Victorias",
+    description:
+      "Cada victoria clasificatoria paga los puntos por victoria de la regla activa, sin tope.",
+    metric: "victorias",
+    points: 2,
+    parent: null,
+    // Sin tope: el objetivo se repite con cada victoria y no se completa nunca.
+    target: null,
+  },
   {
     id: "bienhadado",
     group: "racha",
     kind: "competition",
     label: "Bienhadado",
-    description: "La racha de victorias seguidas más larga del torneo.",
+    description: `La racha de victorias seguidas más larga del torneo. ${TIE_BREAK}`,
     metric: "racha",
     points: 200,
     parent: null,
@@ -417,6 +534,20 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     points: 32,
     parent: null,
     target: IMBATIBLE_STREAK,
+  },
+  {
+    id: ANSIOSO_ID,
+    group: "racha",
+    kind: "achievement",
+    label: "Ansioso",
+    description: `Encadena una racha de ${ANSIOSO_STREAK} partidas clasificatorias seguidas con ${APM_THRESHOLD} APM o más.`,
+    // Racha de **partidas** por encima del umbral de APM, no de victorias: la
+    // métrica `racha` la reservan las rachas de victorias (`bienhadado`,
+    // `imbatible`), y las unidades de la interfaz no pueden mentir aquí.
+    metric: "racha-partidas",
+    points: 6,
+    parent: null,
+    target: ANSIOSO_STREAK,
   },
   {
     id: "agresor",
@@ -441,6 +572,50 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     target: WINS_PER_CIV,
   },
   {
+    id: FAST_FEUDAL_ID,
+    group: "hazanas",
+    kind: "achievement",
+    label: "Avance relámpago: Feudal",
+    description: `Llega a la Edad Feudal antes de ${FAST_FEUDAL_SECONDS / 60} minutos en una partida clasificatoria.`,
+    metric: "partidas",
+    points: 4,
+    parent: null,
+    target: HAZANA_MATCHES,
+  },
+  {
+    id: FAST_CASTLE_ID,
+    group: "hazanas",
+    kind: "achievement",
+    label: "Avance relámpago: Castillos",
+    description: `Llega a la Edad de los Castillos antes de ${FAST_CASTLE_SECONDS / 60} minutos en una partida clasificatoria.`,
+    metric: "partidas",
+    points: 8,
+    parent: null,
+    target: HAZANA_MATCHES,
+  },
+  {
+    id: FAST_IMPERIAL_ID,
+    group: "hazanas",
+    kind: "achievement",
+    label: "Avance relámpago: Imperial",
+    description: `Llega a la Edad Imperial antes de ${FAST_IMPERIAL_SECONDS / 60} minutos en una partida clasificatoria.`,
+    metric: "partidas",
+    points: 12,
+    parent: null,
+    target: HAZANA_MATCHES,
+  },
+  {
+    id: DEFENDER_ID,
+    group: "hazanas",
+    kind: "achievement",
+    label: "Defensor del pueblo",
+    description: `Termina una partida de ${DEFENDER_MATCH_SECONDS / 60} minutos o más perdiendo menos de ${DEFENDER_VILLAGERS_LOST} aldeanos, menos de ${DEFENDER_GILDED_LOST} aldeanos dorados y ningún aldeano montado.`,
+    metric: "partidas",
+    points: 12,
+    parent: null,
+    target: HAZANA_MATCHES,
+  },
+  {
     id: POR_TIERRA_ID,
     group: "hazanas",
     kind: "achievement",
@@ -457,7 +632,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     group: "formato" as const,
     kind: "competition" as const,
     label: `Rey del ${format}`,
-    description: `El jugador con más victorias jugando en formato ${format}.`,
+    description: `El jugador con más victorias jugando en formato ${format}. ${TIE_BREAK}`,
     metric: "victorias" as const,
     points: REY_POINTS,
     parent: null,
@@ -468,7 +643,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     group: "civilizacion" as const,
     kind: "competition" as const,
     label: `Masterizando ${civ.name}`,
-    description: `El jugador con más victorias con ${civ.name}.`,
+    description: `El jugador con más victorias con ${civ.name}. ${TIE_BREAK}`,
     metric: "victorias" as const,
     points: MASTERIZANDO_POINTS,
     parent: null,
@@ -523,16 +698,60 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
 /** Total de objetivos del catálogo. */
 export const OBJECTIVE_COUNT = OBJECTIVE_DEFINITIONS.length;
 
+/**
+ * ¿El objetivo reparte un **premio fijo**, de los que cuenta la suma nominal de
+ * `docs/OBJETIVOS.md`?
+ *
+ * Solo `victorias` no lo es: paga `ruleset.pointsPerWin` por cada victoria y no
+ * tiene tope, así que sumar su `points` del catálogo diría que el torneo reparte una
+ * cifra que no reparte. Los demás logros sí tienen un tope (`imparable`, 14 días;
+ * `por-tierra-y-agua`, uno por mapa) y las competiciones, un único premio.
+ *
+ * `por-tierra-y-agua` se reconoce por su id y no por `target` porque su tope es el
+ * tamaño del pool activo y solo se conoce al calcular. En una `ObjectiveOption` ya
+ * resuelta el mismo criterio se lee en `kind === "achievement" && target === null`.
+ */
+export function hasFixedPrize(definition: ObjectiveDefinition): boolean {
+  return (
+    definition.kind === "competition" ||
+    definition.target !== null ||
+    definition.id === POR_TIERRA_ID
+  );
+}
+
 /** Puntos por defecto de cada objetivo, indexados por id. */
 export const OBJECTIVE_POINTS: Record<string, number> = Object.fromEntries(
   OBJECTIVE_DEFINITIONS.map((definition) => [definition.id, definition.points]),
 );
+
+/**
+ * Lo que un jugador cobra por **un** objetivo: importe real y repeticiones.
+ *
+ * Va junto al id y no en una lista aparte porque las dos cosas definen la misma
+ * fila del resumen (`2 x Imparable +2`), y separarlas obligaría a cruzar dos listas
+ * en cada lector.
+ */
+export type ObjectiveAwardEntry = {
+  /** Puntos cobrados de verdad, ya con el tope o el precio por unidad aplicado. */
+  points: number;
+  /** Veces que se ha conseguido: días, victorias o `1` si no se repite. */
+  count: number;
+};
 
 export type ObjectiveAward = {
   /** Puntos que suma el jugador por objetivos. */
   points: number;
   /** Ids de los objetivos que posee o ha completado, en orden de presentación. */
   earned: string[];
+  /**
+   * El importe real y las repeticiones de cada id de `earned`, indexado por id.
+   *
+   * `earned` da los ids en orden; aquí está lo que hay que pintar de cada uno. Se
+   * guarda en el desglose de `PlayerScore` para que la clasificación publicada no
+   * tenga que reconstruir lo que cobró `imparable` (1 por día, con tope) a partir
+   * del precio del catálogo, que es solo el tope.
+   */
+  awards: Record<string, ObjectiveAwardEntry>;
 };
 
 /**
@@ -576,6 +795,19 @@ type ObjectiveMatchRow = {
   civRandomized: boolean;
   map: string | null;
   durationSeconds: number | null;
+  /**
+   * Métricas del summary de la partida (`src/lib/aoe4world/summary.ts`). `null`
+   * significa "**no hay summary**", no cero: una partida sin summary no puede
+   * contar como una sin aldeanos perdidos ni romper una racha por APM bajo.
+   * `apm` es la marca de que hay summary.
+   */
+  apm: number | null;
+  feudalAgeSeconds: number | null;
+  castleAgeSeconds: number | null;
+  imperialAgeSeconds: number | null;
+  villagersLost: number | null;
+  gildedVillagersLost: number | null;
+  mountedVillagersLost: number | null;
   gameId: string;
   leaderboard: string;
   kind: string | null;
@@ -590,15 +822,22 @@ type ObjectiveMatchRow = {
  * `rankedMatchSql()`, el mismo predicado que aplica el `UPDATE` de `Match.points`
  * y el agregado de la clasificación (`src/lib/ranked-match.ts`). Así los
  * objetivos cuentan exactamente las mismas partidas que las victorias, incluido el
- * **corte de inscripción**, el final de la ventana y la marca de revertida.
+ * **corte de inscripción**, el final de la ventana, la marca de revertida y la
+ * condición de compañeros de las partidas de equipo. Los cortes rating →
+ * subdivisión que esa última necesita los recibe **como argumento**: este módulo no
+ * lee `Setting` (los lee `scoring.ts`, una vez por pasada, igual que el ruleset).
  *
  * `map` y `durationSeconds` entran porque los necesitan `por-tierra-y-agua`,
- * `agresor` y `estratega`; antes no se leían. Los `finishedAt` viajan como
- * milisegundos: es un número, no una fecha, y evita discutir con la zona horaria
- * de la sesión al cruzar los tiempos. `at time zone 'UTC'` hace falta porque
- * Prisma guarda los `DateTime` como timestamp sin zona interpretado en UTC.
+ * `agresor` y `estratega`; antes no se leían. Las columnas del **summary** (`apm`
+ * y compañía) entran porque son la única fuente de `ansioso`, los tres
+ * `avance-relampago-*` y `defensor-del-pueblo`: las rellena
+ * `src/lib/sync-summaries.ts` y sin ellas valen `null` (partida sin summary), que
+ * estos objetivos tratan como "no lo sé" y no como cero. Los `finishedAt` viajan
+ * como milisegundos: es un número, no una fecha, y evita discutir con la zona
+ * horaria de la sesión al cruzar los tiempos. `at time zone 'UTC'` hace falta
+ * porque Prisma guarda los `DateTime` como timestamp sin zona interpretado en UTC.
  */
-function objectiveRowsQuery(ruleset: ScoringRuleset): Prisma.Sql {
+function objectiveRowsQuery(ruleset: ScoringRuleset, cutoffs: LadderCutoffsTable | null): Prisma.Sql {
   return Prisma.sql`
     select p."id" as "playerId",
            p."profileId" as "profileId",
@@ -611,6 +850,13 @@ function objectiveRowsQuery(ruleset: ScoringRuleset): Prisma.Sql {
            m."civRandomized" as "civRandomized",
            m."map" as "map",
            m."durationSeconds" as "durationSeconds",
+           m."apm" as "apm",
+           m."feudalAgeSeconds" as "feudalAgeSeconds",
+           m."castleAgeSeconds" as "castleAgeSeconds",
+           m."imperialAgeSeconds" as "imperialAgeSeconds",
+           m."villagersLost" as "villagersLost",
+           m."gildedVillagersLost" as "gildedVillagersLost",
+           m."mountedVillagersLost" as "mountedVillagersLost",
            m."gameId" as "gameId",
            m."leaderboard" as "leaderboard",
            m."rawJson" ->> 'kind' as "kind",
@@ -618,7 +864,7 @@ function objectiveRowsQuery(ruleset: ScoringRuleset): Prisma.Sql {
     from "Match" m
     join "Player" p on p."id" = m."playerId"
     where p."status" = 'APPROVED'
-      and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window)}
+      and ${rankedMatchSql(Prisma.sql`m`, Prisma.sql`p`, ruleset.modes, ruleset.window, cutoffs)}
     order by p."id", m."finishedAt", m."gameId"
   `;
 }
@@ -666,6 +912,23 @@ export type PlayerAggregate = {
   /** Victorias cortas (`< 10 min`) y largas (`> 20 min`). */
   shortWins: number;
   longWins: number;
+  /**
+   * Racha **más larga** de partidas clasificatorias seguidas con `APM_THRESHOLD`
+   * o más, y cuándo terminó esa racha (para el desempate 3). Una partida sin
+   * summary **rompe** la racha: no se sabe si cumplía el umbral, así que no puede
+   * contarse como parte de ella.
+   */
+  apmStreak: number;
+  apmStreakEndsAt: number;
+  /**
+   * Las cuatro hazañas del summary: partidas clasificatorias en las que se llegó a
+   * cada edad por debajo del umbral y partidas largas con pocas pérdidas de
+   * aldeanos (`defensor-del-pueblo`). Una partida sin summary no cumple ninguna.
+   */
+  fastFeudal: number;
+  fastCastle: number;
+  fastImperial: number;
+  defenderMatches: number;
   /** Días naturales (Europe/Madrid) con al menos una partida clasificatoria. */
   playedDays: Set<string>;
   byFormat: Map<FormatId, FormatRecord>;
@@ -743,6 +1006,12 @@ function emptyPlayer(meta: PlayerMeta): PlayerAggregate {
     currentStreak: null,
     shortWins: 0,
     longWins: 0,
+    apmStreak: 0,
+    apmStreakEndsAt: 0,
+    fastFeudal: 0,
+    fastCastle: 0,
+    fastImperial: 0,
+    defenderMatches: 0,
     playedDays: new Set(),
     byFormat: new Map(),
     byCiv: new Map(),
@@ -782,13 +1051,104 @@ export function currentTournamentStreak(rows: readonly { result: string }[]): nu
 }
 
 /**
+ * Racha **más larga** de partidas seguidas con `APM_THRESHOLD` o más, y cuándo
+ * terminó, a partir de las partidas ya ordenadas cronológicamente.
+ *
+ * Una partida **sin summary** (`apm === null`) corta la racha: no se sabe si
+ * cumplía el umbral, así que darla por buena o por mala sería inventarse el dato.
+ *
+ * Es pura y se prueba aparte, igual que `currentTournamentStreak`, y la aplica
+ * `loadObjectivePlayers` sobre las filas ya ordenadas: la racha es lo único que
+ * depende del orden, y dejarla en el barrido privado la haría incomprobable.
+ */
+export function apmRunStreak(
+  rows: readonly { apm: number | null; finishedAtMs: number }[],
+): { streak: number; endsAt: number } {
+  let run = 0;
+  let best = 0;
+  let endsAt = 0;
+
+  for (const row of rows) {
+    if (row.apm !== null && row.apm >= APM_THRESHOLD) {
+      run += 1;
+
+      if (run > best) {
+        best = run;
+        endsAt = row.finishedAtMs;
+      }
+    } else {
+      run = 0;
+    }
+  }
+
+  return { streak: best, endsAt };
+}
+
+/** Las hazañas del summary que cumple una partida, una a una. */
+export type MatchAchievements = {
+  fastFeudal: boolean;
+  fastCastle: boolean;
+  fastImperial: boolean;
+  defender: boolean;
+};
+
+/**
+ * Qué hazañas del summary cumple **una** partida.
+ *
+ * Pura y por fila, y por eso se prueba sola: las cuatro condiciones llevan umbral
+ * y todas tienen que decir "no" cuando el dato no está, que es el caso de una
+ * partida sin summary. `null` nunca cumple: un umbral sobre un dato que no existe
+ * no se puede afirmar.
+ *
+ * `defender` exige las **tres** pérdidas leídas a la vez: con una sola a `null` no
+ * se puede decir que se defendiera el pueblo.
+ */
+export function matchAchievements(
+  row: Pick<
+    ObjectiveMatchRow,
+    | "durationSeconds"
+    | "feudalAgeSeconds"
+    | "castleAgeSeconds"
+    | "imperialAgeSeconds"
+    | "villagersLost"
+    | "gildedVillagersLost"
+    | "mountedVillagersLost"
+  >,
+): MatchAchievements {
+  return {
+    fastFeudal: row.feudalAgeSeconds !== null && row.feudalAgeSeconds < FAST_FEUDAL_SECONDS,
+    fastCastle: row.castleAgeSeconds !== null && row.castleAgeSeconds < FAST_CASTLE_SECONDS,
+    fastImperial:
+      row.imperialAgeSeconds !== null && row.imperialAgeSeconds < FAST_IMPERIAL_SECONDS,
+    defender:
+      row.durationSeconds !== null &&
+      row.durationSeconds >= DEFENDER_MATCH_SECONDS &&
+      row.villagersLost !== null &&
+      row.villagersLost < DEFENDER_VILLAGERS_LOST &&
+      row.gildedVillagersLost !== null &&
+      row.gildedVillagersLost < DEFENDER_GILDED_LOST &&
+      row.mountedVillagersLost !== null &&
+      row.mountedVillagersLost < DEFENDER_MOUNTED_LOST,
+  };
+}
+
+/**
  * Agrega las partidas de un jugador ya ordenadas por `finishedAt`.
  *
- * La racha se calcula aquí, en el mismo barrido: es el único cálculo que depende
- * del orden, y hacerlo en el cliente de la consulta obligaría a guardar la partida
- * entera en memoria. Los días (`imparable`), las partidas cortas y largas
- * (`agresor`/`estratega`) y los mapas (`por-tierra-y-agua`) salen del mismo
- * recorrido.
+ * La racha de victorias se calcula aquí, en el mismo barrido: es el único cálculo
+ * que depende del orden, y hacerlo en el cliente de la consulta obligaría a guardar
+ * la partida entera en memoria. Los días (`imparable`), las partidas cortas y largas
+ * (`agresor`/`estratega`), los mapas (`por-tierra-y-agua`) y las cuatro hazañas del
+ * summary salen del mismo recorrido. La racha de APM (`ansioso`) es la otra que
+ * depende del orden y se calcula aparte, con `apmRunStreak()`, para que sea
+ * comprobable sin base de datos.
+ *
+ * ## Lo que una partida sin summary no puede decir
+ *
+ * Los cinco objetivos que salen del summary cuentan con los datos presentes: una
+ * partida sin él no cumple ninguna hazaña (ver `matchAchievements()`) y corta la
+ * racha de APM. Es el mismo criterio que el `null` de `historyPublic`: lo que no se
+ * ha podido leer no se escribe.
  */
 function aggregatePlayer(
   aggregate: PlayerAggregate,
@@ -823,6 +1183,24 @@ function aggregatePlayer(
       }
     } else {
       run = 0;
+    }
+
+    const achievements = matchAchievements(row);
+
+    if (achievements.fastFeudal) {
+      aggregate.fastFeudal += 1;
+    }
+
+    if (achievements.fastCastle) {
+      aggregate.fastCastle += 1;
+    }
+
+    if (achievements.fastImperial) {
+      aggregate.fastImperial += 1;
+    }
+
+    if (achievements.defender) {
+      aggregate.defenderMatches += 1;
     }
 
     const format = resolveFormat(row);
@@ -866,17 +1244,20 @@ function aggregatePlayer(
  * Partidas clasificatorias → agregados por jugador, listos para los objetivos.
  *
  * Una sola consulta y ninguna por fila: 1300 partidas hoy y decenas de miles en el
- * peor caso, todo cabe en el mismo barrido.
+ * peor caso, todo cabe en el mismo barrido. Los `cutoffs` son los de la condición
+ * de equipos del predicado y los pasa quien llama (el motor de puntos los ha leído
+ * de `Setting` una sola vez por pasada).
  */
 export async function loadObjectivePlayers(
   client: ObjectiveQueryClient,
   ruleset: ScoringRuleset,
+  cutoffs: LadderCutoffsTable | null,
 ): Promise<PlayerAggregate[]> {
   if (ruleset.modes.length === 0) {
     return [];
   }
 
-  const rows = await client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset));
+  const rows = await client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset, cutoffs));
   const byPlayer = new Map<string, { meta: PlayerMeta; rows: ObjectiveMatchRow[] }>();
 
   for (const row of rows) {
@@ -912,9 +1293,14 @@ export async function loadObjectivePlayers(
 
     const aggregate = emptyPlayer(meta);
     aggregatePlayer(aggregate, ordered, ruleset);
-    // La racha actual sale del mismo orden cronológico; se calcula aparte para
-    // que la parte pura sea comprobable por sí sola.
+    // La racha actual y la de APM salen del mismo orden cronológico; se calculan
+    // aparte para que las partes puras sean comprobables por sí solas.
     aggregate.currentStreak = currentTournamentStreak(ordered);
+
+    const apm = apmRunStreak(ordered);
+    aggregate.apmStreak = apm.streak;
+    aggregate.apmStreakEndsAt = apm.endsAt;
+
     players.push(aggregate);
   }
 
@@ -939,6 +1325,8 @@ type ObjectiveCandidate = {
   /** Cuándo se alcanzó `value`, para el desempate 3. */
   achievedAt: number;
   detail: ObjectiveDetail | null;
+  /** Avance por mapa, solo en `por-tierra-y-agua` (ver `ObjectiveContender.mapGaps`). */
+  mapGaps: ObjectiveMapGap[] | null;
 };
 
 function candidate(
@@ -949,8 +1337,9 @@ function candidate(
   eligible: boolean,
   achievedAt: number,
   detail: ObjectiveDetail | null = null,
+  mapGaps: ObjectiveMapGap[] | null = null,
 ): ObjectiveCandidate {
-  return { player, metric, value, matches, eligible, achievedAt, detail };
+  return { player, metric, value, matches, eligible, achievedAt, detail, mapGaps };
 }
 
 /**
@@ -985,6 +1374,10 @@ function toContender(value: ObjectiveCandidate): ObjectiveContender {
     matches: value.matches,
     eligible: value.eligible,
     detail: value.detail,
+    // Solo donde aplica: en el snapshot de `Setting` hay un contendiente por
+    // objetivo y jugador, y un `null` por contender engordaría el documento sin
+    // decir nada.
+    ...(value.mapGaps === null ? {} : { mapGaps: value.mapGaps }),
   };
 }
 
@@ -1060,6 +1453,32 @@ function countPoolMaps(byMap: ReadonlyMap<string, number>, mapPool: readonly str
   return count;
 }
 
+/**
+ * Los mapas del pool que a un jugador le faltan, con las partidas que le faltan en
+ * cada uno (`missing`, 1..3). Los completos no aparecen.
+ *
+ * Ordenado de menos a más `missing` y, a igualdad, en el orden del pool: el `sort`
+ * de `Array` es estable desde ES2019, así que basta con recorrer el pool en orden y
+ * pedir el orden por `missing`. El umbral (`MATCHES_PER_MAP`) no se publica: el dato
+ * ya va masticado como "cuántas partidas le faltan".
+ */
+function mapGapsFor(
+  byMap: ReadonlyMap<string, number>,
+  mapPool: readonly string[],
+): ObjectiveMapGap[] {
+  const gaps: ObjectiveMapGap[] = [];
+
+  for (const map of mapPool) {
+    const missing = MATCHES_PER_MAP - (byMap.get(map) ?? 0);
+
+    if (missing > 0) {
+      gaps.push({ map, missing });
+    }
+  }
+
+  return gaps.sort((a, b) => a.missing - b.missing);
+}
+
 function candidatesFor(
   definition: ObjectiveDefinition,
   players: readonly PlayerAggregate[],
@@ -1078,6 +1497,16 @@ function candidatesFor(
       .filter((player) => player.playedDays.size >= 1)
       .map((player) =>
         candidate(player, "dias", player.playedDays.size, player.matches, true, player.lastMatchAt),
+      );
+  }
+
+  if (definition.id === VICTORIAS_ID) {
+    // El ranking son todos los que han ganado algo, que es exactamente quien cobra:
+    // el objetivo no tiene umbral, se repite con cada victoria.
+    return players
+      .filter((player) => player.wins >= 1)
+      .map((player) =>
+        candidate(player, "victorias", player.wins, player.matches, true, player.lastWinAt),
       );
   }
 
@@ -1102,6 +1531,79 @@ function candidatesFor(
           player.streakEndsAt,
         ),
       );
+  }
+
+  if (definition.id === ANSIOSO_ID) {
+    // Como `imbatible`, pero con la racha de APM y sin mirar el resultado: el valor
+    // que se pinta es la racha más larga de partidas con el ritmo por encima del
+    // umbral, y quien llega a `ANSIOSO_STREAK` la cobra.
+    return players
+      .filter((player) => player.apmStreak >= 1)
+      .map((player) =>
+        candidate(
+          player,
+          "racha",
+          player.apmStreak,
+          player.matches,
+          player.apmStreak >= ANSIOSO_STREAK,
+          player.apmStreakEndsAt,
+        ),
+      );
+  }
+
+  if (
+    definition.id === FAST_FEUDAL_ID ||
+    definition.id === FAST_CASTLE_ID ||
+    definition.id === FAST_IMPERIAL_ID
+  ) {
+    const field =
+      definition.id === FAST_FEUDAL_ID
+        ? "fastFeudal"
+        : definition.id === FAST_CASTLE_ID
+          ? "fastCastle"
+          : "fastImperial";
+
+    return players.flatMap((player) => {
+      const value = player[field];
+
+      if (value < 1) {
+        return [];
+      }
+
+      return [
+        candidate(
+          player,
+          "partidas",
+          value,
+          player.matches,
+          value >= HAZANA_MATCHES,
+          // El umbral es una sola partida, así que el desempate 3 no llega a
+          // aplicarse: cualquier fecha sirve y se usa la de la última partida.
+          player.lastMatchAt,
+        ),
+      ];
+    });
+  }
+
+  if (definition.id === DEFENDER_ID) {
+    return players.flatMap((player) => {
+      const value = player.defenderMatches;
+
+      if (value < 1) {
+        return [];
+      }
+
+      return [
+        candidate(
+          player,
+          "partidas",
+          value,
+          player.matches,
+          value >= HAZANA_MATCHES,
+          player.lastMatchAt,
+        ),
+      ];
+    });
   }
 
   if (definition.id === "agresor" || definition.id === "estratega") {
@@ -1143,6 +1645,8 @@ function candidatesFor(
           player.matches,
           mapPool.length > 0 && covered === mapPool.length,
           player.lastMatchAt,
+          null,
+          mapGapsFor(player.byMap, mapPool),
         ),
       ];
     });
@@ -1266,6 +1770,13 @@ function targetFor(
     return null;
   }
 
+  // `victorias` no se completa nunca: se repite con cada victoria y no tiene tope,
+  // así que no hay barra de avance que pintar. Es la única excepción del tipo
+  // "sin umbral", y por eso `target: null` en la opción ya identifica el objetivo.
+  if (definition.id === VICTORIAS_ID) {
+    return null;
+  }
+
   return {
     unit: definition.metric,
     value: definition.id === POR_TIERRA_ID ? mapPool.length : (definition.target ?? 0),
@@ -1277,8 +1788,14 @@ function targetFor(
  *
  * Devuelve los puntos por jugador, que es lo que suma el motor a la clasificación:
  * en una competición solo el poseedor recibe sus puntos; en un logro, cada
- * beneficiario los suyos (`imparable` los reparte por día, con tope). Un objetivo
- * sin nadie que lo cumpla no reparte nada.
+ * beneficiario los suyos, con dos repartos variables —`imparable` los da por día,
+ * con tope, y `victorias` paga `ruleset.pointsPerWin` por victoria, sin tope—. Un
+ * objetivo sin nadie que lo cumpla no reparte nada.
+ *
+ * Los objetivos **desactivados** (`ruleset.disabledObjectives`) se saltan antes de
+ * calcular nada: no entran en `options` (así no se publican ni entran en el
+ * snapshot), no reparten puntos y no aparecen en `awarded`, que es lo que hace que
+ * `reconcileObjectiveEvents()` borre sus eventos.
  */
 export function computeObjectives(
   players: readonly PlayerAggregate[],
@@ -1288,26 +1805,40 @@ export function computeObjectives(
   const options: ObjectiveOption[] = [];
   const pointsByPlayer = new Map<string, ObjectiveAward>();
   const awarded: ObjectiveAwarded[] = [];
+  const desactivados = new Set(ruleset.disabledObjectives);
   let holders = 0;
 
-  const addAward = (playerId: string, id: string, points: number): void => {
-    const award = pointsByPlayer.get(playerId) ?? { points: 0, earned: [] };
+  const addAward = (playerId: string, id: string, points: number, count: number): void => {
+    const award = pointsByPlayer.get(playerId) ?? { points: 0, earned: [], awards: {} };
 
     award.points += points;
     award.earned.push(id);
+    award.awards[id] = { points, count };
     pointsByPlayer.set(playerId, award);
   };
 
   for (const definition of OBJECTIVE_DEFINITIONS) {
+    // Un objetivo desactivado no existe para el motor, y por eso se salta antes de
+    // calcular sus candidatos: tampoco es un ranking que se publique.
+    if (desactivados.has(definition.id)) {
+      continue;
+    }
+
     const sorted = candidatesFor(definition, players, mapPool).sort(compareCandidates);
-    const points = ruleset.objectives[definition.id] ?? definition.points;
+    // `victorias` no tiene precio propio: cada victoria vale lo que diga
+    // `ruleset.pointsPerWin`, y un `objectives["victorias"]` guardado se ignora para
+    // que no haya dos verdades sobre lo que vale una victoria.
+    const points =
+      definition.id === VICTORIAS_ID
+        ? ruleset.pointsPerWin
+        : (ruleset.objectives[definition.id] ?? definition.points);
 
     if (definition.kind === "competition") {
       const holder = sorted[0];
       const winner = holder !== undefined && holder.eligible ? holder : null;
 
       if (winner !== null) {
-        addAward(winner.player.playerId, definition.id, points);
+        addAward(winner.player.playerId, definition.id, points, 1);
         awarded.push({ id: definition.id, playerId: winner.player.playerId });
         holders += 1;
       }
@@ -1333,12 +1864,19 @@ export function computeObjectives(
     const beneficiaries = sorted.filter((value) => value.eligible);
 
     for (const beneficiary of beneficiaries) {
-      // En `imparable` los puntos son 1 por día, con el tope que marque el
-      // ruleset; en el resto de logros, los puntos de la tarjeta.
+      // Los tres repartos de un logro, en un solo sitio: `imparable` paga 1 por día
+      // con el tope que marque el ruleset, `victorias` paga por victoria sin tope y
+      // el resto cobra los puntos de la tarjeta una sola vez.
       const earned =
-        definition.id === IMPARABLE_ID ? Math.min(beneficiary.value, points) : points;
+        definition.id === VICTORIAS_ID
+          ? beneficiary.value * ruleset.pointsPerWin
+          : definition.id === IMPARABLE_ID
+            ? Math.min(beneficiary.value, points)
+            : points;
+      const count =
+        definition.id === VICTORIAS_ID || definition.id === IMPARABLE_ID ? beneficiary.value : 1;
 
-      addAward(beneficiary.player.playerId, definition.id, earned);
+      addAward(beneficiary.player.playerId, definition.id, earned, count);
       awarded.push({ id: definition.id, playerId: beneficiary.player.playerId });
     }
 
@@ -1362,7 +1900,14 @@ export function computeObjectives(
         name: value.player.name,
         avatarUrl: value.player.avatarUrl,
         profileUrl: aoe4WorldProfileUrl(value.player.profileId),
-        points: definition.id === IMPARABLE_ID ? Math.min(value.value, points) : points,
+        points:
+          definition.id === VICTORIAS_ID
+            ? value.value * ruleset.pointsPerWin
+            : definition.id === IMPARABLE_ID
+              ? Math.min(value.value, points)
+              : points,
+        count:
+          definition.id === VICTORIAS_ID || definition.id === IMPARABLE_ID ? value.value : 1,
       })),
       target: targetFor(definition, mapPool),
     });

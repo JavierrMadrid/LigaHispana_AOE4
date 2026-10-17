@@ -22,8 +22,8 @@ import {
 } from "@/lib/player-input";
 import { consumePublicFormAttempt } from "@/lib/rate-limit";
 import { checkAoe4WorldProfile } from "@/lib/registration";
-import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
-import { readRegistrationOpen } from "@/lib/settings";
+import { registrationClosedMessage } from "@/lib/registration-open";
+import { readRegistrationState } from "@/lib/settings";
 import { readTurnstileToken, verifyTurnstile } from "@/lib/turnstile";
 
 /**
@@ -95,7 +95,7 @@ export type RegistrationFormState = {
  * el resultado es el mismo: su solicitud vuelve a estar en la cola de revisión.
  *
  * El camino del campo trampa la sigue devolviendo aunque el plazo esté cerrado
- * (ver `readRegistrationOpen()`): el cierre no se le revela a un bot.
+ * (ver `readRegistrationState()`): el cierre no se le revela a un bot.
  */
 const CONFIRMATION =
   "Solicitud recibida. La organización la revisa antes de que entres en la clasificación.";
@@ -492,13 +492,13 @@ async function borrarDiscordLink(): Promise<void> {
  * aplican, y a partir de F12 hay una sexta que no es de abuso sino un **requisito
  * del torneo**:
  *
- * Antes de todas está el **interruptor de plazo** (`readRegistrationOpen()`, que
- * lee `Setting["registration.open"]` y comparte contrato en
- * `src/lib/registration-open.ts` para que el formulario y esta acción lean el
- * mismo dato), que no es una capa de defensa sino una decisión de producto: con
- * el plazo cerrado el envío real se rechaza con un mensaje general y no se aplica
- * ninguna, porque no se va a escribir nada. Sale después del campo trampa para que
- * un bot siga viendo la misma confirmación.
+ * Antes de todas está el **plazo** (`readRegistrationState()`, que lee
+ * `Setting["registration.open"]` y `Setting["registration.closesAt"]` y comparte
+ * contrato en `src/lib/registration-open.ts` para que el formulario y esta acción
+ * lean el mismo dato), que no es una capa de defensa sino una decisión de producto:
+ * con el plazo cerrado —por el interruptor o por la fecha— el envío real se rechaza
+ * con un mensaje general y no se aplica ninguna, porque no se va a escribir nada. Sale
+ * después del campo trampa para que un bot siga viendo la misma confirmación.
  *
  * 1. **Campo trampa** (`website`): no se escribe nada y se devuelve la misma
  *    confirmación que un alta buena, para que un bot no pueda aprender a
@@ -579,24 +579,25 @@ export async function registerPlayer(
   // campo trampa a propósito: un bot tiene que seguir viendo la misma
   // confirmación y no poder deducir de la respuesta que el plazo está cerrado.
   //
-  // El valor vive en `Setting` y se lee aquí, no se hardcodea: la organización lo
-  // abre y lo cierra desde `/admin` sin desplegar. Si la lectura falla no se dice
-  // "cerradas" —eso afirmaría un estado que no se ha podido comprobar— sino que no
-  // se ha podido registrar, y el motivo queda en el log con el prefijo `[db]`.
-  let registrationOpen: boolean;
+  // El estado vive en `Setting` —el interruptor y la fecha de cierre— y se lee aquí,
+  // no se hardcodea: la organización lo abre y lo cierra desde `/admin` sin desplegar,
+  // y la fecha cierra sola. Si la lectura falla no se dice "cerradas" —eso afirmaría un
+  // estado que no se ha podido comprobar— sino que no se ha podido registrar, y el
+  // motivo queda en el log con el prefijo `[db]`.
+  let registration: Awaited<ReturnType<typeof readRegistrationState>>;
 
   try {
-    registrationOpen = await readRegistrationOpen();
+    registration = await readRegistrationState();
   } catch (error) {
     logDatabaseFailure("participar/plazo", error);
 
     return { status: "error", message: DATABASE_UNAVAILABLE_MESSAGE, fieldErrors: {} };
   }
 
-  if (!registrationOpen) {
+  if (!registration.open) {
     return {
       status: "error",
-      message: REGISTRATION_CLOSED_MESSAGE,
+      message: registrationClosedMessage(registration),
       fieldErrors: {},
     };
   }

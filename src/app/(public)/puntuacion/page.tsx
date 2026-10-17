@@ -9,7 +9,8 @@ import {
   type DocSection,
 } from "@/components/section-index";
 import { formatTournamentWindow } from "@/lib/format";
-import { getTournamentWindow } from "@/lib/public";
+import { hasNoCap } from "@/lib/objective-format";
+import { getEditionConfig, getObjectives, getTournamentWindow } from "@/lib/public";
 
 export const metadata: Metadata = {
   title: "Puntuación",
@@ -25,17 +26,49 @@ const SECTIONS: readonly DocSection[] = [
   { id: "desempates", label: "Desempates" },
 ];
 
-// El periodo del torneo se lee de la base de datos en cada petición: la ventana
-// vive en el ruleset y la organización puede fijar o mover el fin sin desplegar,
-// así que una página generada en el `build` enseñaría fechas viejas.
+// El periodo, los puntos por victoria, los objetivos activos y el premio se leen
+// de la base de datos en cada petición: la ventana vive en el ruleset, el premio
+// en la configuración de la edición, y la organización los cambia sin desplegar.
+// Una página generada en el `build` enseñaría las cifras de la edición anterior.
 export const dynamic = "force-dynamic";
 
+/**
+ * Miles con el separador de español, el punto. Con CLDR, `es-ES` no agrupa las
+ * cifras de cuatro dígitos —4721, no 4.721—, así que el total del torneo se lee
+ * entero y solo los millones llevan punto.
+ */
+const countFormat = new Intl.NumberFormat("es-ES");
+
 export default async function ScoringPage() {
-  const windowRead = await getTournamentWindow();
-  // Degradada no se inventan fechas: la lista de condiciones ya dice "dentro de
+  const [windowRead, objectivesRead, editionRead] = await Promise.all([
+    getTournamentWindow(),
+    getObjectives(),
+    getEditionConfig(),
+  ]);
+
+  // Degradada no se inventan cifras: la lista de condiciones ya dice "dentro de
   // las fechas del torneo" y ese texto genérico se queda tal cual. Con `to: null`
   // la ventana sigue siendo válida (abierta) y se enseña como "Desde el …".
   const tournamentWindow = windowRead.status === "ok" ? windowRead.data : null;
+
+  // `getObjectives()` es la lectura que trae el ruleset activo entero: los puntos
+  // por victoria y los objetivos **activos**, cada uno con sus puntos ya
+  // resueltos. De ahí salen el recuento y el total, en vez de escribirlos a mano.
+  const objectives = objectivesRead.status === "ok" ? objectivesRead.data : null;
+  const pointsPerWin = objectives?.pointsPerWin ?? null;
+  const objectiveCount = objectives?.options.length ?? null;
+  // La suma de los objetivos de **premio fijo**: `victorias` queda fuera, porque no
+  // reparte un premio sino que paga por victoria y sin tope. Sumarlo diría que el
+  // torneo reparte una cifra que no reparte (ver `docs/PUNTUACION.md`).
+  const objectivePoints =
+    objectives === null
+      ? null
+      : objectives.options
+          .filter((option) => !hasNoCap(option))
+          .reduce((total, option) => total + option.points, 0);
+
+  const edition = editionRead.status === "ok" ? editionRead.data : null;
+  const prize = edition !== null && edition.prize.amount !== null ? edition.prize : null;
 
   return (
     // Estas dos páginas de contenido conservan el ancho anterior (`max-w-6xl`):
@@ -63,34 +96,38 @@ export default async function ScoringPage() {
           datos van en una sola línea, anclados a los bordes de la banda
           (`justify-between`); si el ancho no da, envuelven a la línea siguiente.
           Solo las victorias van en el oro del acento; el cero y las cifras de
-          objetivos se quedan en el texto. */}
-      <section
-        aria-label="Resumen de la puntuación"
-        className="thread-top relative max-w-[68ch] overflow-hidden rounded-lg border border-line bg-surface px-5 py-4 text-[15px]"
-      >
-        <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3">
-          <div className="flex items-baseline gap-2">
-            <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
-              2
-            </dd>
-            <dt className="text-sm text-muted">puntos por victoria</dt>
-          </div>
-          <div className="flex items-baseline gap-2">
-            <dd className="font-display text-2xl font-semibold tabular-nums text-muted">
-              0
-            </dd>
-            <dt className="text-sm text-muted">por derrota</dt>
-          </div>
-          <div className="flex items-baseline gap-2">
-            <dd className="font-display text-2xl font-semibold tabular-nums text-foreground">
-              82
-            </dd>
-            <dt className="text-sm text-muted">
-              objetivos que reparten 4.679 puntos en total
-            </dt>
-          </div>
-        </dl>
-      </section>
+          objetivos se quedan en el texto. Sin la lectura del ruleset no se pinta:
+          los números no se inventan. */}
+      {pointsPerWin !== null && objectiveCount !== null && objectivePoints !== null ? (
+        <section
+          aria-label="Resumen de la puntuación"
+          className="thread-top relative max-w-[68ch] overflow-hidden rounded-lg border border-line bg-surface px-5 py-4 text-[15px]"
+        >
+          <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3">
+            <div className="flex items-baseline gap-2">
+              <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
+                {pointsPerWin}
+              </dd>
+              <dt className="text-sm text-muted">puntos por victoria, sin tope</dt>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <dd className="font-display text-2xl font-semibold tabular-nums text-muted">
+                0
+              </dd>
+              <dt className="text-sm text-muted">por derrota</dt>
+            </div>
+            <div className="flex items-baseline gap-2">
+              <dd className="font-display text-2xl font-semibold tabular-nums text-foreground">
+                {objectiveCount}
+              </dd>
+              <dt className="text-sm text-muted">
+                objetivos, con {countFormat.format(objectivePoints)} puntos de premio
+                fijo
+              </dt>
+            </div>
+          </dl>
+        </section>
+      ) : null}
 
       <MobileSectionIndex
         sections={SECTIONS}
@@ -121,14 +158,27 @@ export default async function ScoringPage() {
                   aria-hidden="true"
                   className="font-display font-semibold tabular-nums text-accent"
                 >
-                  2
+                  {pointsPerWin ?? "-"}
                 </span>
                 <span>
-                  Cada victoria en una partida clasificatoria vale{" "}
-                  <strong className="font-semibold text-foreground">
-                    2 puntos
-                  </strong>
-                  .
+                  {pointsPerWin !== null ? (
+                    <>
+                      Cada victoria en una partida clasificatoria vale{" "}
+                      <strong className="font-semibold text-foreground">
+                        {pointsPerWin} {pointsPerWin === 1 ? "punto" : "puntos"}
+                      </strong>
+                      , que paga el objetivo{" "}
+                      <Link
+                        href="/objetivos"
+                        className="text-accent underline underline-offset-4 hover:text-accent-strong"
+                      >
+                        Victorias
+                      </Link>
+                      : sin umbral ni tope, suma con cada partida ganada.
+                    </>
+                  ) : (
+                    "Cada victoria en una partida clasificatoria suma puntos."
+                  )}
                 </span>
               </li>
               <li className="flex gap-3">
@@ -157,8 +207,24 @@ export default async function ScoringPage() {
                 Una victoria vale lo mismo en 1vs1 que en partidas por equipos.
               </p>
               <p>
-                El total de un jugador es la suma de sus puntos por victorias más
-                los puntos extra de los objetivos.
+                El total de un jugador es la suma de sus objetivos: los{" "}
+                <strong className="font-semibold text-foreground">permanentes</strong>{" "}
+                (los logros que ya ha conseguido, con Victorias dentro) y los{" "}
+                <strong className="font-semibold text-foreground">temporales</strong>{" "}
+                (las competiciones, que se deciden al cierre).
+              </p>
+              <p>
+                Cada punto queda registrado: el{" "}
+                <Link
+                  href="/historial"
+                  className="text-accent underline underline-offset-4 hover:text-accent-strong"
+                >
+                  historial de puntos
+                </Link>{" "}
+                enseña qué ha sumado cada victoria clasificatoria y cada objetivo
+                cumplido, de lo más reciente a lo más antiguo, con filtros por
+                participante y por fechas. Una ganancia revertida por la organización
+                no cuenta y aparece ahí tachada y marcada.
               </p>
             </div>
           </section>
@@ -224,9 +290,28 @@ export default async function ScoringPage() {
                 >
                   -
                 </span>
+                <span>
+                  En las partidas por equipos, ningún compañero está a dos
+                  escalones o más de división del jugador.
+                </span>
+              </li>
+              <li className="flex gap-3">
+                <span
+                  aria-hidden="true"
+                  className="font-display font-semibold text-accent"
+                >
+                  -
+                </span>
                 <span>El jugador está aprobado.</span>
               </li>
             </ul>
+
+            <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
+              El escalón es la división (bronce, plata, oro, platino, diamante o
+              conquistador), sin el subrango I/II/III. Así, un jugador en oro
+              cuenta con compañeros en plata, oro o platino, y no con uno en
+              bronce ni con uno en diamante.
+            </p>
 
             <div className="mt-6">
               <RankedModesTable />
@@ -237,8 +322,17 @@ export default async function ScoringPage() {
             <SectionHeading title="Objetivos especiales" />
             <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
-                Además de las victorias, el torneo reparte puntos extra entre{" "}
-                <strong className="font-semibold text-foreground">82 objetivos</strong>.
+                El torneo reparte puntos extra entre{" "}
+                {objectiveCount !== null ? (
+                  <strong className="font-semibold text-foreground">
+                    {objectiveCount} objetivos
+                  </strong>
+                ) : (
+                  "los objetivos especiales"
+                )}
+                . Uno de ellos es{" "}
+                <strong className="font-semibold text-foreground">Victorias</strong>:
+                el que paga cada victoria clasificatoria, sin umbral ni tope.
               </p>
               <p>
                 Hay dos formas de cobrarlos: las{" "}
@@ -252,9 +346,10 @@ export default async function ScoringPage() {
                 también respetan la fecha de inscripción.
               </p>
               <p>
-                Cada logro tiene su umbral fijo: 3 victorias o partidas con una
-                civilización, 3 partidas cortas o largas, una racha de 5 victorias,
-                etc.
+                Casi todos los logros tienen su umbral fijo: 3 victorias o partidas
+                con una civilización, 3 partidas cortas o largas, una racha de 5
+                victorias, etc. Los repetibles —Victorias, Imparable— suman una vez
+                por unidad: por victoria y por día.
               </p>
               <p>
                 Todos se resuelven en cada recálculo, así que quién los cobra puede
@@ -265,7 +360,9 @@ export default async function ScoringPage() {
                   href="/objetivos"
                   className="text-accent underline underline-offset-4 hover:text-accent-strong"
                 >
-                  Ver los 82 objetivos y quién los cobra
+                  {objectiveCount !== null
+                    ? `Ver los ${objectiveCount} objetivos y quién los cobra`
+                    : "Ver los objetivos y quién los cobra"}
                 </Link>
               </p>
             </div>
@@ -274,11 +371,21 @@ export default async function ScoringPage() {
           <section id="desempates" className="scroll-mt-24">
             <SectionHeading title="Desempates" />
             <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
-              Si dos jugadores empatan a puntos, va delante quien tenga más
-              victorias. Si el empate continúa, decide el porcentaje de victorias
-              (victorias entre partidas jugadas) y, si aún persiste, el orden lo fija
-              la web de forma estable.
+              Si dos jugadores empatan a puntos, se desempata, por este orden,
+              por la tasa de victorias (victorias entre partidas jugadas), por
+              las partidas ganadas y por las partidas jugadas. Si el empate
+              persiste, comparten posición (por ejemplo, 1, 2, 2, 4) y, si hay
+              premios, se reparten a partes iguales.
             </p>
+            {prize !== null ? (
+              <p className="mt-3 max-w-[68ch] text-[15px] leading-relaxed text-muted">
+                El premio base de esta edición es de{" "}
+                <strong className="font-semibold text-foreground">
+                  {prize.amount} €
+                </strong>
+                {prize.note !== null ? `, ${prize.note}` : ""}.
+              </p>
+            ) : null}
           </section>
         </div>
 

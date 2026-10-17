@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AlertKind, AlertRule } from "@/generated/prisma/enums";
 import { EmptyState } from "@/components/empty-state";
 import { PageSizeSelect } from "@/components/page-size-select";
+import { Pagination } from "@/components/pagination";
 import { SortableHeaderLink } from "@/components/sortable-header";
 import {
   getAdminAlertRules,
@@ -14,7 +15,6 @@ import { requireAdmin } from "@/lib/auth";
 import { aoe4WorldGameUrl, aoe4WorldProfileUrl, formatAbsoluteTime } from "@/lib/format";
 import { AlertFilters } from "./alert-filters";
 import { AlertRulesDialog } from "./alert-rules-dialog";
-import { Pagination } from "../pagination";
 
 export const metadata: Metadata = {
   title: { absolute: "Alertas · Admin" },
@@ -37,7 +37,8 @@ function single(value: string | string[] | undefined): string | undefined {
  * ## Filtros y orden
  *
  * La tabla tiene los mismos filtros que el historial —jugador, rango de fechas— más los
- * dos propios de las alertas: **regla** (las diez del enum) y **tipo** (las cuatro clases
+ * dos propios de las alertas: **regla** (los once valores del enum, dos de ellos de reglas
+ * retiradas que solo existen en filas del histórico) y **tipo** (las cuatro clases
  * de hallazgo). Todos viven en la URL, junto con el orden por columna
  * (`fecha`, `jugador`, `regla`, `sujeto`, `conteo`). No hay filtro por sujeto, partida,
  * detalle ni conteo: el sujeto es un rival que puede no estar en la liga (no hay lista de

@@ -7,10 +7,12 @@ import type { ReactNode } from "react";
 /**
  * Los cinco destinos del sitio público, en el orden en que se leen.
  *
- * `label` es el nombre completo y `tabLabel` el que cabe en la barra inferior de
- * móvil, donde no hay sitio para "Partidas en juego" ni para "Puntuación". El
- * destino es el mismo, así que el `href` y el orden son la única fuente de verdad
- * para las dos formas.
+ * `label` es el rótulo de la navegación y el título de la página de destino —lo
+ * que la pestaña anuncia es lo que su `h1` dice, que es lo que pidió la issue
+ * #97—; `tabLabel` es la forma que cabe en la barra inferior de móvil, donde no
+ * hay sitio para "Partidas en juego" ni para "Puntuación". El destino es el
+ * mismo, así que el `href` y el orden son la única fuente de verdad para las dos
+ * formas.
  */
 const items = [
   { href: "/", label: "Clasificación", tabLabel: "Clasificación", icon: PodiumIcon },
@@ -34,8 +36,20 @@ function isActive(href: string, pathname: string): boolean {
  *
  * Por debajo de `sm` esta versión no se pinta: cinco destinos no caben a lo
  * ancho de un móvil, y en lugar de dejar "Reglas" fuera de vista tras un
- * desplazamiento sin señal, la navegación baja a `SiteTabBar`. A partir de `sm`
- * la fila cabe entera y no hay desplazamiento.
+ * desplazamiento sin señal, la navegación baja a `SiteTabBar`. A partir de `sm` la
+ * fila cabe entera y no hay desplazamiento: los cinco rótulos piden entre 573 y
+ * 584 px —el destino activo va en negrita y ensancha el suyo— y en `sm` la celda
+ * mide 592, así que entran con 8 px de sobra en el peor caso.
+ *
+ * La lista va centrada. Cuando comparte fila con la marca y las acciones —de
+ * `min-[1376px]` en adelante, el ancho máximo del contenedor de la cabecera— el
+ * centrado lo da la rejilla, que reparte el mismo ancho a los dos laterales, y
+ * aquí el `mx-auto` no tiene nada que repartir. Cuando la nav tiene su propia fila,
+ * a ancho completo, es el `mx-auto` quien la centra. En los dos casos se centra con
+ * ancho por contenido y no con `justify-center`: si la fila llegara a no caber,
+ * `justify-center` dejaría lo desbordado por la izquierda fuera del alcance del
+ * desplazamiento horizontal, mientras que con el ancho por contenido la lista se
+ * apoya en el principio y el desplazamiento llega a todo.
  */
 export function SiteNav() {
   const pathname = usePathname();
@@ -47,7 +61,7 @@ export function SiteNav() {
       aria-label="Principal"
       className="-mx-1.5 overflow-x-auto overscroll-x-contain py-1"
     >
-      <ul className="flex items-center gap-1.5 px-1.5">
+      <ul className="mx-auto flex w-fit items-center gap-1.5 px-1.5">
         {items.map((item) => {
           const active = isActive(item.href, pathname);
 

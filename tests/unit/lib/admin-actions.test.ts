@@ -8,8 +8,9 @@ import { adminActionDetails, adminActionSummary, puntos } from "@/lib/admin-acti
  * cual, así que sus formas son un contrato: si la baja de un jugador dijera "y sus N
  * partidas" a secas, el número se leería como las filas de `Match` importadas en vez
  * de como las partidas clasificatorias del torneo. Aquí se fijan las tres formas de
- * `PLAYER_REMOVED` (0, 1 y N), las de las dos direcciones de aprobar/rechazar y las de
- * los tipos que ya existían, para que un cambio de redacción no cuele sin querer.
+ * `PLAYER_REMOVED` (0, 1 y N), las de las dos direcciones de aprobar/rechazar, las de
+ * los tipos que ya existían y las de la gestión de admins y la configuración, para
+ * que un cambio de redacción no cuele sin querer.
  */
 
 function daDeBaja(matchCount: number): string {
@@ -114,6 +115,70 @@ describe("adminActionSummary", () => {
       }),
     ).toBe("Restaurados 0 puntos de la partida G-12345 de BeastWizard");
   });
+
+  it("ADMIN_ADDED con invitación nueva dice que se ha enviado el correo", () => {
+    expect(
+      adminActionSummary({
+        type: AdminActionType.ADMIN_ADDED,
+        email: "pedro@correo.com",
+        mode: "invited",
+      }),
+    ).toBe("Invitación enviada a pedro@correo.com");
+  });
+
+  it("ADMIN_ADDED de una cuenta que ya existía lo dice, porque no se manda correo", () => {
+    expect(
+      adminActionSummary({
+        type: AdminActionType.ADMIN_ADDED,
+        email: "pedro@correo.com",
+        mode: "linked",
+      }),
+    ).toBe("Alta de pedro@correo.com, que ya tenía cuenta en la web");
+  });
+
+  it("ADMIN_DEACTIVATED nombra el correo dado de baja", () => {
+    expect(
+      adminActionSummary({ type: AdminActionType.ADMIN_DEACTIVATED, email: "pedro@correo.com" }),
+    ).toBe("Baja de pedro@correo.com");
+  });
+
+  it("ADMIN_REACTIVATED nombra el correo reactivado", () => {
+    expect(
+      adminActionSummary({ type: AdminActionType.ADMIN_REACTIVATED, email: "pedro@correo.com" }),
+    ).toBe("Reactivación de pedro@correo.com");
+  });
+
+  it("ACTION_REVERTED lleva el resumen de la acción revertida para no cruzar filas", () => {
+    expect(
+      adminActionSummary({
+        type: AdminActionType.ACTION_REVERTED,
+        actionId: "act_123",
+        actionSummary: "Baja de BeastWizard y sus 3 partidas clasificatorias",
+      }),
+    ).toBe("Revertida la acción: Baja de BeastWizard y sus 3 partidas clasificatorias");
+  });
+
+  it("CONFIG_CHANGED enumera los campos que cambiaron", () => {
+    expect(
+      adminActionSummary({
+        type: AdminActionType.CONFIG_CHANGED,
+        cambios: [
+          {
+            campo: "window.from",
+            etiqueta: "inicio del torneo",
+            antes: "2026-01-01",
+            despues: "2026-02-01",
+          },
+          {
+            campo: "objectives",
+            etiqueta: "objetivos activos",
+            antes: "82",
+            despues: "80",
+          },
+        ],
+      }),
+    ).toBe("Cambio de configuración: inicio del torneo, objetivos activos");
+  });
 });
 
 describe("puntos", () => {
@@ -167,6 +232,56 @@ describe("adminActionDetails", () => {
       profileId: 5364911,
       statusBefore: "APPROVED",
       statusAfter: "REJECTED",
+    });
+  });
+
+  it("el alta de admin guarda el modo, para saber si se mandó correo", () => {
+    expect(
+      adminActionDetails({
+        type: AdminActionType.ADMIN_ADDED,
+        email: "pedro@correo.com",
+        mode: "linked",
+      }),
+    ).toEqual({ email: "pedro@correo.com", mode: "linked" });
+  });
+
+  it("la baja y la reactivación de admin guardan el correo", () => {
+    expect(
+      adminActionDetails({ type: AdminActionType.ADMIN_DEACTIVATED, email: "pedro@correo.com" }),
+    ).toEqual({ email: "pedro@correo.com" });
+
+    expect(
+      adminActionDetails({ type: AdminActionType.ADMIN_REACTIVATED, email: "pedro@correo.com" }),
+    ).toEqual({ email: "pedro@correo.com" });
+  });
+
+  it("la reversión de una acción guarda a qué acción apunta", () => {
+    expect(
+      adminActionDetails({
+        type: AdminActionType.ACTION_REVERTED,
+        actionId: "act_123",
+        actionSummary: "Baja de BeastWizard",
+      }),
+    ).toEqual({ actionId: "act_123", actionSummary: "Baja de BeastWizard" });
+  });
+
+  it("el cambio de configuración aplana los campos como la edición de jugador", () => {
+    expect(
+      adminActionDetails({
+        type: AdminActionType.CONFIG_CHANGED,
+        cambios: [
+          {
+            campo: "window.from",
+            etiqueta: "inicio del torneo",
+            antes: "2026-01-01",
+            despues: "2026-02-01",
+          },
+        ],
+      }),
+    ).toEqual({
+      campos: "window.from",
+      "window.from.antes": "2026-01-01",
+      "window.from.despues": "2026-02-01",
     });
   });
 });

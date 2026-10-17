@@ -2,11 +2,18 @@ import "server-only";
 
 import { PlayerStatus } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
-import { countsWithinWindow, rankedMatchWhere } from "@/lib/ranked-match";
+import { readEditionConfig } from "@/lib/edition";
+import { countsWithinWindow, rankedMatchWhere, teammatesWithinTier } from "@/lib/ranked-match";
 import { readRuleset, type ScoringRuleset } from "@/lib/scoring";
 import { computePlayerAlerts, type AlertMatch, type AlertPlayer, type OpenStreak } from "./compute";
 import type { LadderCutoffsTable } from "./division-cutoffs";
-import type { AlertsRuleset, TriggeredAlert } from "./rules";
+import {
+  buildTriggeredAlert,
+  hasStreamChannel,
+  SELF_SUBJECT,
+  type AlertsRuleset,
+  type TriggeredAlert,
+} from "./rules";
 import {
   ensureAlertsRuleset,
   readDivisionCutoffs,
@@ -39,8 +46,21 @@ import {
  * **No sale a la red.** Todo sale de `Match` y de su `rawJson`, con la única
  * excepción de los cortes de división, que no se derivan aquí sino que se leen de
  * `Setting` (ver `derive-cutoffs.ts`): derivarlos son del orden de 130 llamadas
- * por familia de ladder, y esto corre cada 10 minutos. Sin cortes, R5 se omite con
- * un aviso y las otras siete reglas siguen funcionando.
+ * por familia de ladder, y esto corre cada 10 minutos. Esos cortes no son para
+ * ninguna regla de alertas, sino para el **filtro**: el motor de alertas solo
+ * puede mirar las partidas que puntúan, y la condición de equipos de
+ * `ranked-match.ts` es parte de lo que decide eso. Sin cortes, las partidas de
+ * equipo cuentan (como en el motor de puntos) y la evaluación sigue.
+ *
+ * ## La única regla que no mira partidas
+ *
+ * `NO_STREAM_CHANNEL` (un aprobado sin ningún canal de directo) se decide con las
+ * columnas de canal de `Player` y solo si la edición exige retransmisión
+ * (`Setting["edition.config"]`). Va aquí y no en el worker del sincronizador —donde
+ * viven las otras reglas de estado, ver `src/lib/history-checks.ts`— porque este
+ * motor ya lee a todos los aprobados en cada pasada y la condición es una columna
+ * que ya tiene delante; lo que la hace distinta es que solo se evalúa cuando la
+ * edición la pide.
  */
 
 export type EvaluateAlertsOptions = {
@@ -75,10 +95,12 @@ export type EvaluateAlertsResult = {
   warnings: string[];
   globalWarnings: string[];
   alertsRulesetVersion: number;
-  /** Ladders de las que hay cortes cacheados (R5 depende de esto). */
+  /**
+   * Ladders de las que hay cortes cacheados. Son los que usa el filtro de la
+   * condición de equipos, así que sin cortes de una familia sus partidas se miran
+   * como las cuenta el motor de puntos: cuentan.
+   */
   cutoffsLadders: string[];
-  /** Por qué se ha omitido R5 entera, si se ha omitido. */
-  lowDivisionWarning: string | null;
   /** `true` si esta evaluación ha sido la del cierre de torneo. */
   tournamentClose: boolean;
   durationMs: number;
@@ -88,6 +110,13 @@ type EvaluationContext = {
   alertsRuleset: AlertsRuleset;
   scoring: ScoringRuleset;
   cutoffs: LadderCutoffsTable | null;
+  /**
+   * ¿La edición declara la retransmisión obligatoria?
+   *
+   * Es lo que decide si se evalúa `NO_STREAM_CHANNEL`. Se lee **una vez** por pasada
+   * y no por jugador: es configuración, no un dato del torneo.
+   */
+  streamingRequired: boolean;
   now: Date;
 };
 
@@ -153,7 +182,19 @@ async function evaluatePlayers(
     // `registeredAt` viene aquí y no en la consulta de partidas porque el corte de
     // inscripción no se puede escribir en un `where` de Prisma que abarca a todos los
     // jugadores (ver `ranked-match.ts`): se aplica por jugador, en memoria.
-    select: { id: true, profileId: true, name: true, registeredAt: true },
+    //
+    // Las cuatro columnas de canal entran por `NO_STREAM_CHANNEL`, que es la única
+    // regla que se decide con una columna de `Player` en este motor.
+    select: {
+      id: true,
+      profileId: true,
+      name: true,
+      registeredAt: true,
+      twitchChannel: true,
+      youtubeChannel: true,
+      kickChannel: true,
+      twitchUrl: true,
+    },
     orderBy: { profileId: "asc" },
   });
 
@@ -162,6 +203,7 @@ async function evaluatePlayers(
   }
 
   const registeredAtPorJugador = new Map(players.map((row) => [row.id, row.registeredAt]));
+  const profileIdPorJugador = new Map(players.map((row) => [row.id, row.profileId]));
 
   // **El filtro de clasificatorias sale de `rankedMatchWhere()`**, o sea de la única
   // definición que hay: familia del ruleset de puntos, partida resuelta, dentro de
@@ -174,6 +216,12 @@ async function evaluatePlayers(
   // decide es `countsWithinWindow()` con el `registeredAt` de cada uno —la misma
   // comparación en memoria—, así que una alerta no puede acusar a nadie de una
   // partida que tampoco puntúa.
+  //
+  // **Y la condición de equipos tampoco cabe** en un `where` de Prisma (necesita
+  // `rawJson` y los cortes), así que se aplica aquí, con la **misma** función que
+  // aplica el motor de puntos (`teammatesWithinTier()`): el motor de alertas tiene
+  // que ver exactamente las partidas que puntúan, ni una más ni una menos. Sin
+  // cortes cacheados la partida cuenta, que es lo que hace también el motor.
   const rows: MatchRow[] = await db.match.findMany({
     where: {
       playerId: { in: players.map((player) => player.id) },
@@ -196,13 +244,29 @@ async function evaluatePlayers(
     orderBy: [{ startedAt: "asc" }, { gameId: "asc" }],
   });
 
-  const clasificatorias = rows.filter((row) =>
-    countsWithinWindow(
-      row.startedAt,
-      context.scoring.window,
-      registeredAtPorJugador.get(row.playerId) ?? null,
-    ),
-  );
+  const clasificatorias = rows.filter((row) => {
+    if (
+      !countsWithinWindow(
+        row.startedAt,
+        context.scoring.window,
+        registeredAtPorJugador.get(row.playerId) ?? null,
+      )
+    ) {
+      return false;
+    }
+
+    const profileId = profileIdPorJugador.get(row.playerId);
+
+    // Las filas y el mapa salen de la misma lista de jugadores, así que siempre hay
+    // entrada; sin ella la partida contaría, que es la degradación de siempre.
+    return (
+      profileId === undefined ||
+      teammatesWithinTier(row.rawJson, row.mode, {
+        profileId,
+        cutoffs: context.cutoffs,
+      })
+    );
+  });
 
   pass.matchesRead = clasificatorias.length;
 
@@ -240,7 +304,6 @@ async function evaluatePlayers(
       matches: porJugador.get(row.id) ?? [],
       ruleset: context.alertsRuleset,
       scoring: { modes: context.scoring.modes, window: context.scoring.window },
-      cutoffs: context.cutoffs,
       now: context.now,
     });
 
@@ -251,6 +314,32 @@ async function evaluatePlayers(
     pass.unreadableMatches += evaluation.unreadableMatches;
     pass.warnings.push(...evaluation.warnings.map((warning) => `${row.name}: ${warning}`));
     pass.globalWarnings.push(...evaluation.globalWarnings);
+
+    // La regla **condicional** de la edición: un aprobado sin ningún canal de directo.
+    // Se decide aquí y no en `computePlayerAlerts()` porque no mira partidas, sino
+    // columnas de la ficha que este bucle ya tiene delante, y solo cuando la edición
+    // declara la retransmisión obligatoria.
+    //
+    // `count: 0` y `threshold: 1` es "cero canales de los uno que se pide", la misma
+    // forma que usa `HISTORY_NOT_PUBLIC` (partidas sondeadas sin summary frente a las
+    // exigidas). Sin ancla **ni ventana**, como `DISCORD_NOT_IN_GUILD`: no hay partida
+    // que lo sostenga ni un periodo en el que se haya comprobado, y escribir la ventana
+    // del torneo afirmaría un alcance que la comprobación no tiene.
+    if (context.streamingRequired && !hasStreamChannel(row)) {
+      pass.triggered.push(
+        buildTriggeredAlert({
+          rule: "NO_STREAM_CHANNEL",
+          kind: "STATE_DETECTED",
+          playerId: row.id,
+          playerProfileId: row.profileId,
+          subject: SELF_SUBJECT,
+          count: 0,
+          threshold: 1,
+          anchorGameId: null,
+          anchorStartedAt: null,
+        }),
+      );
+    }
   }
 
   if (pass.triggered.length > 0) {
@@ -294,16 +383,28 @@ export async function evaluateAlerts(
 
   // El ruleset de alertas se publica aquí (una sola vez) y el de puntuación se lee:
   // de este salen los `modes` y la `window` que definen qué es clasificatoria. Los
-  // dos se leen fuera de cualquier transacción porque son configuración, no datos
-  // del torneo, y su publicación no debe quedarse esperando al resto.
-  const alertsRuleset = await ensureAlertsRuleset();
-  const scoring = await readRuleset();
-  const cutoffs = await readDivisionCutoffs();
+  // dos, y la configuración de la edición (que decide si se evalúa
+  // `NO_STREAM_CHANNEL`), se leen fuera de cualquier transacción porque son
+  // configuración, no datos del torneo, y su publicación no debe quedarse esperando al
+  // resto. Las cuatro lecturas son independientes entre sí, así que van en paralelo:
+  // son cuatro viajes a `Setting` y no hay razón para encadenarlos.
+  const [alertsRuleset, scoring, edition, cutoffs] = await Promise.all([
+    ensureAlertsRuleset(),
+    readRuleset(),
+    readEditionConfig(),
+    readDivisionCutoffs(),
+  ]);
   const { window } = scoring;
   const to = window.to;
   const tournamentEnded = to !== null && now.getTime() >= Date.parse(to);
 
-  const context: EvaluationContext = { alertsRuleset, scoring, cutoffs, now };
+  const context: EvaluationContext = {
+    alertsRuleset,
+    scoring,
+    cutoffs,
+    streamingRequired: edition.streamingRequired,
+    now,
+  };
 
   // **Cierre de torneo**: una única evaluación completa cuando la ventana ya ha
   // terminado, y se vuelve a hacer si la ventana cambia (por eso la marca guarda
@@ -333,11 +434,6 @@ export async function evaluateAlerts(
     );
   }
 
-  const lowDivisionWarning =
-    cutoffs === null
-      ? "R5 omitida: no hay cortes de división cacheados (derívalos con `npm run alerts:cutoffs`)."
-      : null;
-
   // Los avisos de la evaluación entera son los mismos para todos los jugadores
   // (o no hay cortes para ninguno), así que se registran una vez: treinta líneas
   // iguales no informan de nada. Los de cada jugador sí llevan su nombre.
@@ -345,9 +441,6 @@ export async function evaluateAlerts(
     console.warn(`[alerts] ${warning}`);
   }
 
-  // `lowDivisionWarning` es la **forma legible por máquina** del mismo aviso que el
-  // núcleo puro ya ha puesto en `globalWarnings`, así que no se registra otra vez:
-  // dos líneas con la misma noticia por una regla omitida.
   return {
     scope: full ? "completa" : "jugadores",
     playersEvaluated: pass.playersEvaluated,
@@ -361,7 +454,6 @@ export async function evaluateAlerts(
     globalWarnings: pass.globalWarnings,
     alertsRulesetVersion: alertsRuleset.version,
     cutoffsLadders: cutoffs === null ? [] : Object.keys(cutoffs).sort(),
-    lowDivisionWarning,
     tournamentClose: closePending,
     durationMs: Date.now() - startedAtMs,
   };

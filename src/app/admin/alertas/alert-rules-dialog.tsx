@@ -100,19 +100,6 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
                 a {thresholds.repeatedTeammateTotal} partidas en total con ese mismo
                 compañero, se crea otra alerta, una sola vez.
               </Rule>
-
-              <Rule index={4} title="Diferencia de elo con un compañero" mode="Solo equipos">
-                Se avisa cuando juega con un compañero cuya puntuación en esa partida
-                difiere en {thresholds.teammateEloGap} puntos o más de la suya, por
-                arriba o por abajo.
-              </Rule>
-
-              <Rule index={5} title="Equipos en una división muy distinta" mode="Solo equipos">
-                Se compara el rating del jugador en esa partida de equipo con el rating
-                medio de la partida, los dos de la misma ladder. Si distan{" "}
-                {thresholds.lowDivisionSteps} escalones de división o más, por encima o
-                por debajo, se avisa.
-              </Rule>
             </ol>
 
             <p className="mt-6 border-l-2 border-accent/40 pl-4 text-sm leading-relaxed text-muted">
@@ -120,10 +107,9 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
               partidas que duró; si el torneo acaba con una racha abierta, se emite al
               cierre con el conteo que tenga. Las de total se crean al alcanzar el
               umbral. Solo cuentan las partidas clasificatorias resueltas y no
-              revertidas, y las partidas que no puntúan no rompen las rachas. Cada
-              umbral avisa una sola vez. La regla 5 necesita el rating del jugador en esa
-              partida de equipo y el rating medio de la partida: sin ellos no se puede
-              evaluar.
+              revertidas: las que no puntúan quedan fuera de la racha y no la rompen
+              (por ejemplo, una de equipo con un compañero a dos escalones o más de
+              división). Cada umbral avisa una sola vez.
             </p>
 
             <div className="mt-6 border-t border-line pt-5">

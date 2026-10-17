@@ -163,11 +163,11 @@ está roto?". No hay histórico de pasadas: solo la última y el marcador de la 
 
 Los contadores del rastro son del **torneo**, no de filas tocadas. `newMatches` cuenta las partidas que
 **entran a contar** para el torneo en la pasada: las que se importan ya resueltas y cumplen la regla
-única (`countsAsRanked()`), más las que estaban **en curso** (`finishedAt = null`) y han quedado
-resueltas cumpliéndola. Una partida importada fuera de la ventana o del corte de inscripción, de un modo
-que no puntúa, o que sigue en curso, **no** suma ahí aunque se haya guardado: eso lo dicen
-`updatedMatches` y el detalle por jugador. Es la diferencia entre "499 partidas nuevas" y "partidas
-nuevas que cuentan para el torneo".
+única (`countsAsRanked()`, con la condición de equipo incluida), más las que estaban **en curso**
+(`finishedAt = null`) y han quedado resueltas cumpliéndola. Una partida importada fuera de la ventana
+o del corte de inscripción, de un modo que no puntúa, de un equipo desequilibrado, o que sigue en
+curso, **no** suma ahí aunque se haya guardado: eso lo dicen `updatedMatches` y el detalle por jugador.
+Es la diferencia entre "499 partidas nuevas" y "partidas nuevas que cuentan para el torneo".
 
 La portada pinta **«Actualizado a las …»** con `getLastSyncFinishedAt()` (`src/lib/public.ts`), que
 publica el `finishedAt` de la última pasada **registrada, aunque haya salido a medias** —no
@@ -237,8 +237,170 @@ El resultado se deja **siempre en `PENDING`**: aprobar o rechazar es de la organ
 se reescribe es un envío de un perfil `REJECTED`: actualiza esa misma fila y la devuelve a `PENDING`.
 Un perfil `APPROVED` o `PENDING` bloquea el envío.
 
-La inscripción está **cerrada por defecto**: el estado vive en `Setting["registration.open"]` y lo
-abre o cierra la organización desde el panel.
+La inscripción está **cerrada por defecto**: el estado vive en `Setting`. El interruptor
+`registration.open` la abre o cierra, y `registration.closesAt` es una **fecha de cierre**: si está
+puesta, a esa hora las inscripciones se cierran **solas**. El estado efectivo es la conjunción
+—abiertas ⇔ interruptor encendido **y** (sin fecha o `now < closesAt`)—, así que el interruptor sigue
+pudiendo cerrar antes, y para **reabrir** después de la fecha el superadministrador quita o mueve la
+fecha. Sin fecha configurada todo funciona como antes.
+
+## Administración del panel
+
+El panel (`/admin`) ya no lo abre cualquier usuario de Supabase Auth: hace falta estar en la **lista
+de admins**. Hay dos papeles, con una regla cada uno.
+
+| Papel | Quién | Qué puede |
+|---|---|---|
+| Superadministrador | El correo de `SUPERADMIN_EMAIL`, y solo ese | Todo lo de un admin, más la configuración de la edición y las opciones de inscripción y donaciones, invitar, dar de baja y reactivar admins, deshacer sus acciones y mandar el aviso de prueba del bot |
+| Admin | Una fila **activa** de la tabla `Admin` | El panel entero salvo la gestión de admins, la reversión, la configuración de la edición y las opciones de inscripción y donaciones |
+
+- El superadministrador **no tiene fila**: se reconoce por la variable de entorno. Sin
+  `SUPERADMIN_EMAIL`, **nadie** lo es (la app arranca igual y avisa una vez en el log), y la gestión
+  de admins queda inaccesible hasta que se defina.
+- Un usuario autenticado **sin acceso** no va a `/login` —el Proxy lo devolvería a `/admin`—: va a
+  `/sin-acceso`, que explica la situación y ofrece cerrar sesión.
+- La comprobación se hace en **cada petición** leyendo la fila (`requireAdmin()` en
+  `src/lib/auth.ts`), así que una baja surte efecto en la siguiente navegación, sin esperar a que
+  caduque ningún token.
+
+### Variables
+
+| Variable | Para qué | ¿Obligatoria? |
+|---|---|---|
+| `SUPERADMIN_EMAIL` | Correo del superadministrador único. Se compara en minúsculas y sin espacios | Sí, para gestionar admins |
+| `SUPABASE_SERVICE_ROLE_KEY` | Clave de servicio de Supabase Auth: invitar por correo, buscar cuentas y banear/desbanear | Sí, para invitar |
+
+Las dos van en el panel del Worker **y además** en *Build variables and secrets* ([los dos
+sitios](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel)); la segunda, como secreto, y **nunca** en
+el cliente ni en un log. Sin `SUPABASE_SERVICE_ROLE_KEY`, invitar responde "no configurado", pero dar
+de baja y reactivar siguen funcionando (el ban de Auth se salta con un aviso en el mensaje).
+
+### Alta por invitación
+
+1. El superadministrador escribe el correo en el panel.
+2. Si la cuenta **no existe** en Supabase Auth, se crea con `inviteUserByEmail`: la persona recibe un
+   correo, el enlace pasa por `/auth/confirm`, fija su contraseña en `/login/establecer-contrasena` y
+   entra.
+3. Si la cuenta **ya existe** (los admins anteriores), no se manda correo: se vincula su
+   `authUserId` y se le da acceso; entra con su contraseña de siempre.
+
+- **El destino del correo lo decide el proyecto de Supabase**, no la app. Hacen falta **dos** cosas en
+  Authentication, y sin ellas el enlace no llega a `/auth/confirm`:
+  - **URL Configuration**: *Site URL* = el dominio actual, y `https://laligahispana.es/**` en
+    *Redirect URLs* ([paso del cambio de dominio](./DESPLIEGUE.md#pasos-del-cambio-de-dominio)).
+  - **Email Templates**: las plantillas de *invite* y *recovery* enlazan a la ruta de la app, no a
+    `{{ .ConfirmationURL }}`:
+    `<a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite">Aceptar la invitación</a>`
+    (en la de recuperación, `type=recovery`). El `{{ .ConfirmationURL }}` de serie verifica en
+    `supabase.co` y deja la sesión en el fragmento, que la web no consume: la cuenta se crea pero
+    nadie fija la contraseña.
+  - Las plantillas exigen **SMTP propio**: desde el 3 de junio de 2026, los proyectos Free nuevos con
+    el correo de Supabase no dejan editarlas, y ese servicio además solo entrega a direcciones que
+    sean miembro del equipo de la organización (2 correos/hora, sin garantía). Configurar Resend (u
+    otro SMTP) en Authentication → SMTP Settings desbloquea las plantillas y el envío a cualquier
+    dirección, que es lo que necesitan las invitaciones de admin. El remitente tiene que colgar del
+    dominio verificado en el proveedor (DNS: DKIM `resend._domainkey.<dominio>` y MX/SPF de `send.<dominio>`)
+    y el host va **sin esquema** (`smtp.resend.com`, no `http://smtp.resend.com`): con el esquema el
+    envío falla con un 500 genérico en `/auth/v1/recover` y sin rastro en el proveedor.
+- Si el enlace aterrizó en un host viejo o la cuenta se creó sin que nadie fijara contraseña, a esa
+  persona hay que mandarle un correo de **recuperación** desde Authentication → Users: pasa por el
+  mismo `/auth/confirm`.
+- **Configuración actual del correo**: SMTP propio por Resend (`smtp.resend.com:465`, usuario
+  `resend`), remitente `no-reply@laligahispana.es` (dominio verificado `laligahispana.es`), *Site
+  URL* `https://laligahispana.es` y las plantillas de *invite* y *recovery* enlazando a
+  `/auth/confirm`.
+
+Dar de baja es `active = false` (no se borra la fila) y corta la sesión viva en Auth (best-effort);
+reactivar lo deshace. Todo queda registrado en `/admin/acciones`.
+
+### Transición
+
+La tabla `Admin` **arranca vacía**: al desplegar esto solo entra el superadministrador, y él invita
+al resto. Los admins actuales pierden el acceso hasta que los añada —por el camino 3, sin correo—.
+
+### Deshacer una acción
+
+El superadministrador puede **deshacer** desde `/admin/acciones` lo que hicieron los admins regulares.
+La reversión es **compensatoria**, no un borrado: se deshace el cambio, se marca la acción original
+(`AdminAction.revertedAt` / `revertedByEmail`) y se escribe una fila nueva `ACTION_REVERTED` con el
+resumen de la original. Las tres cosas van en la **misma transacción**; el recálculo de la clasificación
+va después y, si falla, se avisa (la siguiente pasada lo pone al día). El rastro nunca se borra: la
+marca dice que la acción ya no está vigente.
+
+| Tipo | Qué hace deshacerlo | ¿Se puede rehacer? |
+|---|---|---|
+| `PLAYER_APPROVED` / `PLAYER_REJECTED` | Devuelve al jugador el estado que tenía antes | Sí, aprobando o rechazando otra vez |
+| `PLAYER_EDITED` | Devuelve a cada campo el valor anterior, validado otra vez | Sí, editando otra vez |
+| `MATCH_POINTS_REVERTED` / `MATCH_POINTS_RESTORED` | Quita o vuelve a poner la marca de la partida | Sí, con el revert/restore del historial |
+| `PLAYER_CREATED` | **Borra al jugador** y todo lo suyo, con su cursor de sincronización | **No**: es irreversible |
+
+- **Solo los tipos revertibles** (`isRevertibleActionType()`, `src/lib/admin-revert.ts`) y **una acción
+  ya revertida no se revierte dos veces**. `PLAYER_REMOVED` no está: el dato ya no existe. Tampoco
+  `ADMIN_*` (la baja de un admin se deshace reactivándolo), `ACTION_REVERTED` ni `CONFIG_CHANGED` (la
+  configuración se cambia publicando otra).
+- **Si algo ha cambiado después, se dice y no se escribe nada.** Deshacer una aprobación cuando el
+  jugador ya está en otro estado —o una edición cuyos valores ya volvieron— pisaría ese cambio
+  posterior: el panel lo explica en vez de deshacer "todo lo que vino detrás".
+- **Al deshacer una edición se valida otra vez el valor anterior**, con los mismos parsers del
+  formulario. Un `@usuario` que entonces estaba libre y hoy es de otra fila da un error claro y no
+  escribe nada: la reversión es todo o nada.
+- **Deshacer un alta es la excepción irreversible**: borra al jugador, sus partidas y su cursor de
+  sincronización, con el mismo tratamiento que la baja del panel. La interfaz pide confirmación.
+
+## Configurar la edición
+
+La configuración de una edición vive en `Setting` y la cambia **solo el superadministrador** desde el
+panel (`/admin/administracion`): los documentos que describen la edición, sus reglas y a quién admite.
+La sección se organiza en subpestañas —Administradores, Edición, Puntuación, Inscripciones,
+Donaciones y Avisos—, y la **inscripción** y las **donaciones** son opciones solo del
+superadministrador que viven en sus subpestañas (`/admin/administracion/inscripciones` y
+`/admin/administracion/donaciones`), no en ninguna pantalla que vean los admins regulares.
+
+| Clave | Qué toca | Acción |
+|---|---|---|
+| `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento) | `saveEditionConfig` |
+| `scoring.ruleset` | Ventana, familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
+| `registration.countries` | Países admitidos en la inscripción, en el orden del catálogo | `saveCountries` |
+| `registration.open` | El interruptor: si la inscripción está abierta | `setRegistrationOpen` |
+| `registration.closesAt` | La fecha de cierre: pasada, cierra sola la inscripción (ISO-8601 UTC, o quitada) | `setRegistrationClosesAt` |
+| `donations.matcherino` | Campaña de donaciones de Matcherino (banner y URL) | `setMatcherinoDonations` |
+
+- **La validación es del servidor y va antes de escribir**: un nombre vacío, un importe que no es un
+  entero de euros, un emblema que no es `http(s)` ni una ruta del sitio, un color que no es `#rrggbb` o
+  una ventana mal formada se rechazan con su mensaje y no se escribe nada. Las dos funciones de
+  escritura vuelven a validar por su cuenta: un documento que el sistema descartaría al leerlo no se
+  publica.
+- **La ventana del torneo se escribe en hora local de Madrid.** El campo del panel es un
+  `datetime-local`; el servidor lo interpreta en `Europe/Madrid` y guarda el instante ISO-8601 UTC que
+  lee el motor (`parseMadridLocalInstant()` en `src/lib/ranked-match.ts`). Un instante ISO con zona
+  escrito a mano también vale. Ver [`PUNTUACION.md`](./PUNTUACION.md#la-ventana).
+- **La fecha de cierre de inscripciones se escribe como la ventana, y la interpreta el servidor.** El
+  campo `closesAt` de `setRegistrationClosesAt` acepta las dos formas de un formulario: un
+  `datetime-local` (**sin zona**), que el servidor interpreta en `Europe/Madrid` con
+  `parseMadridLocalInstant()` —la misma función que la ventana—, o un instante ISO-8601 **con zona**.
+  En los dos casos se guarda en ISO-8601 UTC. Vacío **quita** la fecha, que es como se reabre después
+  del cierre. La subpestaña la prefila en hora de Madrid y enseña el **estado efectivo** del plazo
+  —abierto, cerrado por el interruptor o cerrado por la fecha— con el motivo al lado, para que con la
+  fecha ya pasada no se lea "abiertas" porque el interruptor siga encendido.
+- **Todo queda en `/admin/acciones`** como `CONFIG_CHANGED`, con qué campos cambiaron y sus dos valores,
+  en la misma transacción que el cambio.
+- **Los países admitidos** solo pueden ser los del catálogo del código (`DEFAULT_COUNTRIES`): la lista no
+  se amplía más allá sin tocar código, porque los ISO de AoE4World que resuelven el país de un perfil
+  viven en `countries.ts`. La selección se guarda en el **orden del catálogo**, no en el del formulario.
+- **Un cambio de reglas que mueva puntos recalcula la clasificación al guardar.** Si el recálculo falla,
+  las reglas **sí** están guardadas y el mensaje lo dice: la clasificación se pone al día en la
+  siguiente pasada del sincronizador.
+- **La retransmisión obligatoria** enciende la alerta `NO_STREAM_CHANNEL` (ver
+  [Alertas de comportamiento](#alertas-de-comportamiento)). Apagarla **no** borra las alertas ya
+  escritas: `Alert` es *append-only*.
+- **Los objetivos desactivados** (`scoring.ruleset.disabledObjectives`) dejan de computarse, de
+  publicarse y de dar puntos, y sus eventos se borran (ver
+  [`OBJETIVOS.md`](./OBJETIVOS.md#desactivar-un-objetivo)).
+- **El premio base** (`amount` a `null` = sin premio anunciado) y la marca son contenido de la web: los
+  pinta la interfaz, y el color de acento se aplica como variable CSS del layout, que no se reescribe
+  desde aquí.
+- **Todo tiene documento por defecto**: sin `edition.config` la edición usa el nombre del sitio, sin
+  premio y sin retransmisión obligatoria, así que la web funciona sin que nadie configure nada.
 
 ## Discord
 
@@ -259,6 +421,9 @@ credenciales el paso no existe** (no falla): el formulario no pinta el botón y 
 | `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord | No (valores por defecto) |
 | `DISCORD_CHECK_MAX_PER_RUN` | Tope de cuentas comprobadas por pasada (10) | No |
 | `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas de la lista de miembros por refresco (20) y horas de caché (12) | No |
+| `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa de los **hitos de la edición** (comienzo, final, recordatorios y cierre de inscripciones) y manda el **informe diario de clasificación** | Sí, para avisar |
+| `DISCORD_PARTICIPANT_ROLE_ID` | Rol que el bot pone a los **participantes aprobados** y quita a quien deja de estarlo | Sí, para el rol |
+| `DISCORD_ROLE_MAX_PER_RUN` | Tope de operaciones con el rol por pasada (10) | No |
 
 Van en el panel del Worker **y además** en *Build variables and secrets* del trigger
 ([los dos sitios](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel)). Los secretos, como secretos.
@@ -270,14 +435,18 @@ Van en el panel del Worker **y además** en *Build variables and secrets* del tr
 2. **OAuth2 → Redirects**: `https://laligahispana.es/api/discord/oauth/callback` (y el del
    `workers.dev` del Preview si se prueba ahí).
 3. **Crear el bot** y copiar su token.
-4. **Invitar el bot al servidor** con el permiso `CREATE_INSTANT_INVITE`. Sin él, el `PUT …/members`
+4. **Invitar el bot al servidor** con los permisos `CREATE_INSTANT_INVITE` (meter a quien se inscribe) y
+   `MANAGE_ROLES` (poner y quitar el rol de participante), y **colocar su rol por encima** del rol de
+   participante (Configuración del servidor → Roles). Sin `CREATE_INSTANT_INVITE`, el `PUT …/members`
    responde 403 y **la inscripción no se bloquea**: se acepta con `joined: false` y se enseña el
-   `DISCORD_INVITE_URL`.
+   `DISCORD_INVITE_URL`. Sin `MANAGE_ROLES` o con el rol por debajo, el paso del rol responde 403 y el
+   rastro lo dice ([ver abajo](#rol-de-participante-en-discord)).
 5. **Activar el intent privilegiado `GUILD_MEMBERS`** (Bot → Privileged Gateway Intents → SERVER
    MEMBERS INTENT). Es manual y no se puede pedir por API; es lo que permite leer la **lista de
    miembros** del servidor, que comprueba a todos de una vez y **enlaza la cuenta de las altas de
    admin** por su `@usuario`. Sin él, el sistema funciona por el camino corto (ver abajo).
-6. Copiar el **id del servidor** a `DISCORD_GUILD_ID`.
+6. Copiar el **id del servidor** a `DISCORD_GUILD_ID` y el **id del rol de participante** a
+   `DISCORD_PARTICIPANT_ROLE_ID`.
 
 Los scopes `identify` y `guilds.join` no se configuran en el portal: los pone el código al construir
 la URL de autorización.
@@ -323,9 +492,10 @@ from "Player" where discordUsername is not null group by 1 having count(*) > 1;
 
 ## Alertas de comportamiento
 
-El motor vigila **11 reglas** sobre las clasificatorias: **8 de patrón** (partidas cortas, rival o
-compañero repetido, brecha de elo con un compañero y equipo en una división muy distinta de la suya) y
-**3 de estado** (historial no público, partidas de ladder que no llegan, y Discord fuera del servidor).
+El motor vigila **10 reglas**: **6 de patrón** sobre las clasificatorias (partidas cortas, rival
+repetido y compañero repetido, cada uno en racha y en total), **3 de estado** (historial no público,
+partidas de ladder que no llegan, y Discord fuera del servidor) y **1 condicional** (participante sin
+canal de directo, solo si la edición exige retransmisión).
 
 ```bash
 npm test                       # el motor, con secuencias sintéticas y SIN base de datos
@@ -339,25 +509,53 @@ npm run alerts:cutoffs -- --show
 - La parte pura está en `tests/unit/lib/alerts/`: `compute.test.ts` (reglas sobre secuencias),
   `rules.test.ts` (umbrales, frases y claves de dedupe) y `division-cutoffs.test.ts`.
 - **Umbrales** en `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo):
-  partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10, compañero repetido 7, brecha de elo
-  500 y 3 escalones de diferencia entre la división del jugador y la de la partida (en cualquiera de los
-  dos sentidos). `window` y `modes` **no** se duplican: se leen del ruleset de puntuación, con el mismo
-  `rankedMatchWhere()` y el corte de inscripción.
+  partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10 y compañero repetido 7. `window` y
+  `modes` **no** se duplican: se leen del ruleset de puntuación, con el mismo `rankedMatchWhere()` y
+  el corte de inscripción.
+- **Qué partidas mira**: exactamente las que puntúan. Además del filtro de `rankedMatchWhere()` aplica
+  en memoria la condición de equipo del motor de puntos, porque no cabe en un `where` de Prisma.
 - **Cuándo se evalúa**: en `syncApprovedPlayers()`, después de `recomputeScores()`, **solo los
   jugadores tocados**; y también al revertir o restaurar una partida, al cerrar el torneo
   (`Setting["alerts.tournamentClose"]` lo marca) y a mano.
+- **`NO_STREAM_CHANNEL`** es la única **condicional**: se evalúa solo si
+  `Setting["edition.config"].streamingRequired` está activo, y avisa de los participantes aprobados
+  **sin ningún canal** (`twitchChannel`, `youtubeChannel`, `kickChannel` y `twitchUrl` vacíos). No mira
+  partidas, así que va sin ancla ni ventana —como la de Discord—, y su clave es de estado: reevaluarla
+  cada pasada no inserta nada. Apagar el interruptor no borra las alertas ya escritas. Al **encenderlo**,
+  los avisos aparecen en la siguiente evaluación que cubra a cada jugador: una pasada sin partidas
+  nuevas evalúa a todos los aprobados, y el informe de alertas fuerza una completa.
 - **Informe**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) es un CSV para Excel con
   alertas disparadas y rachas abiertas, y llama a `evaluateAlerts({ full: true })` antes.
 - **Idempotente**: `createMany({ skipDuplicates: true })` sobre `dedupeKey`; repetirlo no crea nada.
-- **Cortes de división (R5)**: se cachean en `Setting["alerts.divisionCutoffs"]` y se derivan a mano
-  con `alerts:cutoffs` (~150 peticiones) porque la API ignora `rating_min`/`rank_level`. Solo se derivan
-  los de `rm_team` (la única familia que R5 consulta; el `rm_solo` que se derivaba antes ya no lo lee
-  nadie y se poda al reescribir la caché). R5 compara el rating del jugador en la partida de equipo con
-  la media de **rating** de esa partida (`average_rating`), las dos traducidas a subdivisión con los cortes
-  de la familia de la partida (`Match.mode`, `rm_team`), y avisa si distan 3 escalones o más en cualquiera
-  de los dos sentidos. El `mmr` del payload es otra escala y no se usa. Sin cortes, R5 se omite con un
-  aviso y las otras diez reglas siguen.
+- **Dos reglas retiradas**: `TEAMMATE_ELO_GAP` (brecha de elo) y `LOW_DIVISION_TEAM_GAME` (equipo en
+  una división muy distinta) **ya no se calculan**: su caso pasó a ser la condición de equipo de la
+  puntuación (una partida con un compañero a dos escalones o más no cuenta, ver
+  [`PUNTUACION.md`](./PUNTUACION.md)). Sus valores del enum, sus etiquetas y sus frases se quedan
+  porque hay filas históricas de `Alert` que el panel sigue pintando.
 - Un fallo del motor **no** mueve `lastSuccessAt`.
+
+## Cortes de división
+
+Los cortes rating → subdivisión que necesita la **condición de equipo** de la puntuación, y que el
+motor de alertas lee para filtrar con esa misma regla las partidas que evalúa. Se cachean en
+`Setting["alerts.divisionCutoffs"]` y se derivan a mano con `alerts:cutoffs` (~150 peticiones) porque
+la API ignora `rating_min`/`rank_level`: hay que recorrer la ladder y quedarse con el rating más bajo
+de cada bloque.
+
+| Qué | Cuánto |
+|---|---|
+| Familias | Solo `rm_team`, la única que compara compañeros. El `rm_solo` que se derivaba antes se poda al reescribir la caché |
+| Coste | ~130-150 peticiones por familia, con la separación mínima entre peticiones |
+| Cadencia | A mano, cuando cambie el reparto de la temporada. El motor **nunca** los deriva: el sincronizador corre cada 10 minutos |
+
+- **Sin cortes, la condición no se aplica**: las partidas de equipo cuentan (no se puede demostrar la
+  infracción), y el aviso sale en el rastro del recálculo —`Setting["scoring.lastRun"]`, campo
+  `warnings`— y en el log con el prefijo `[scoring]`. Es un hueco de configuración de todo el torneo,
+  no de una partida.
+- `npm run alerts:cutoffs -- --show` enseña lo cacheado con su fecha y su coste, para que nadie los
+  tome por un dato que se recalcula solo.
+- Unos cortes nuevos **no cambian la clasificación por sí solos**: hay que recalcular (`npm run score`,
+  o la siguiente pasada del cron), que es cuando el motor los aplica.
 
 ## Directos (YouTube y Kick)
 
@@ -419,6 +617,38 @@ de `<home-leaderboard>` con el JSON escapado.
 - Dónde mirar: `mapPoolError` en el rastro (`[sync] No se ha podido refrescar el pool de mapas: …`).
   **No** mueve `lastSuccessAt`.
 
+## Resumen de partida
+
+Cinco objetivos —`ansioso`, los tres `avance-relampago-*` y `defensor-del-pueblo`— se cobran con datos
+que **no están en el listado de partidas**: los APM, el minuto al que se pasó de edad y cuántos aldeanos
+se perdieron. Eso solo lo publica el **resumen** de cada partida, una ruta del **sitio** de AoE4World
+(no de su API), y lo rellena el worker en su pasada (`backfillMatchSummaries()`,
+`src/lib/sync-summaries.ts`).
+
+| Qué | Cuánto |
+|---|---|
+| Petición | Una por partida a `…/players/{profileId}/games/{gameId}/summary?camelize=true`, con el `User-Agent` del proyecto |
+| Partidas por pasada | **20** (`SUMMARY_MAX_PER_RUN`); el resto, a la siguiente |
+| Orden | De la partida **más nueva a la más vieja**, con el histórico rellenándose por detrás |
+| Reintento | Un fallo se reintenta pasada la hora; sin resolver, una partida **no** se reintenta después de **24 h** |
+| Columnas | Las ocho del resumen en `Match` (`apm` … `summaryCheckedAt`, ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
+
+- **Qué partidas**: exactamente las que puntúan (el mismo `rankedMatchSql()` que la clasificación) y de
+  un jugador que no tenga el historial cerrado. El filtro `historyPublic is distinct from false` deja
+  pasar el "sin comprobar" y descarta a quien consta que no publica partidas.
+- **Un `404` es concluyente**: la partida no tiene resumen, se apunta en `summaryCheckedAt` y no se
+  vuelve a preguntar. Un fallo de red, un `5xx` o un `200` ilegible **no escriben nada** —ni métricas ni
+  la marca—, así que la partida vuelve a la cola: no saber no es "no hay".
+- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las ocho columnas significa "no hay
+  resumen", nunca "cero". Una partida sin resumen no cumple ninguna hazaña y **corta** la racha de
+  `ansioso` (ver [`OBJETIVOS.md`](./OBJETIVOS.md#logros-cobra-quien-cumple)).
+- Con `AOE4WORLD_MOCK=1` **no sale a la red**: se sirve una fixture determinista por partida, con la
+  misma forma que el resumen de verdad, para que el lector y los objetivos se ejerciten en las
+  simulaciones.
+- Dónde mirar: `summariesError` en el rastro (`[sync] Summaries de partida: …`), con cuántos se han
+  guardado, cuántos no tienen resumen y cuántos quedan para la pasada siguiente. **No** mueve
+  `lastSuccessAt`: un resumen que no llega solo deja unos objetivos a medias.
+
 ## Transparencia del historial
 
 Las dos reglas `HISTORY_NOT_PUBLIC` y `MISSING_LADDER_MATCHES` se comprueban en
@@ -467,12 +697,128 @@ de los directos.
 - El resumen de `discordError` dice cuántas ausencias del roster se confirmaron por cuenta.
 - Dónde mirar: `discordError` (`[sync] Discord: …`). **No** mueve `lastSuccessAt`.
 
+## Rol de participante en Discord
+
+El bot pone el **rol de participante** (`DISCORD_PARTICIPANT_ROLE_ID`) a los participantes aprobados con
+cuenta de Discord y se lo quita a quien deja de estarlo (rechazado o eliminado). La fuente de verdad de
+**quiénes son** es `Player.status`; el rol no sustituye a nada, acompaña. Lo hace el worker en su pasada
+(`syncParticipantRole()`), justo después de la comprobación de pertenencia y con su **misma resolución de
+cuentas**: `discordUserId`, o el `@usuario` resuelto por la lista de miembros.
+
+| Qué | Cuánto |
+|---|---|
+| Poner el rol | `PUT /guilds/{id}/members/{user}/roles/{role}`, uno por cuenta nueva |
+| Quitar el rol | `DELETE` de la misma ruta |
+| Memoria | `Setting["discord.participantRole"]` (ids con el rol puesto por el bot) |
+| Operaciones por pasada | **10** (`DISCORD_ROLE_MAX_PER_RUN`); el resto, a la siguiente |
+
+- **Sin `DISCORD_PARTICIPANT_ROLE_ID` (o sin token o sin servidor) el paso no existe y no es un fallo**:
+  no lee ni una fila y deja el motivo en `discordError`.
+- **La memoria es la del que puso el rol**: sirve para saber a quién quitárselo, porque una fila
+  **borrada** ya no tiene `discordUserId`. Si alguien se quita o se pone el rol a mano desde Discord, el
+  worker no lo corrige.
+- **No se toca a quien consta fuera del servidor** (`discordInGuild = false`): no se le puede poner un rol
+  y, al caerse de la lista, se le vuelve a poner cuando regrese.
+- **Un `403` o un timeout no tumban la pasada**: se resumen en `discordError` y se reintentan. Un `403`
+  suele ser que al bot le falta `MANAGE_ROLES` o su rol no está por encima del de participante.
+- Dónde mirar: `discordError` (`[sync] Rol de participante: …`). **No** mueve `lastSuccessAt`.
+
+## Avisos del torneo en Discord
+
+El bot manda mensajes a un canal (`DISCORD_ANNOUNCE_CHANNEL_ID`). Son de tres clases: los **hitos de la
+edición** (esta sección), el **informe diario de clasificación** y los **avisos de las acciones de
+administración** (las dos subsecciones de abajo). Los hitos los manda el worker en su pasada
+(`announceEditionWindow()`): mira la ventana del ruleset (`Setting["scoring.ruleset"].window`) y la fecha
+de cierre de inscripciones (`Setting["registration.closesAt"]`).
+
+| Hito | Cuándo |
+|---|---|
+| Comienzo / final | al cruzar `window.from` / `window.to` |
+| Recordatorios 7/3/1 días | antes del inicio, antes del final y antes del cierre de inscripciones |
+| Inscripciones cerradas | cuando el plazo pasa a cerrado (por la fecha o por el interruptor), si antes estuvo abierto |
+
+| Qué | Dónde |
+|---|---|
+| Canal | `DISCORD_ANNOUNCE_CHANNEL_ID` (y el token del bot) |
+| Memoria | `Setting["edition.announcements"]` (`startedAt`/`finishedAt`, el mapa `sent` y `registrationWasOpen`) |
+| Texto | `announcementText()`: nombre de la edición, periodo y fecha de cierre publicados |
+| Dónde mirar | `announceError` en `Setting["sync.lastRun"]` (`[sync] …`) |
+
+- **Un hito, un mensaje, y nunca se repite**: la marca de un aviso dado no se quita, aunque la ventana
+  se mueva. Con la ventana **abierta** (`to: null`) el aviso de final no existe.
+- **Nada de ráfagas**: un recordatorio solo sale dentro de **su tramo** (el de 7 días, entre «faltan 7»
+  y «faltan 3»; el de 1, entre «falta 1» y el cierre). Configurar el sistema a mitad de edición no
+  dispara los hitos cuyo momento ya pasó: solo sale el del tramo en el que estamos y los siguientes
+  cuando lleguen.
+- **El cierre de inscripciones no se anuncia si el plazo nunca abrió**: la memoria guarda que estuvo
+  abierto (`registrationWasOpen`) y solo avisa del paso a cerrado cuando eso fue verdad.
+- **Sin `DISCORD_BOT_TOKEN` o sin canal no se envía, y el aviso queda pendiente** (no se anota), así que
+  configurar el canal más tarde sigue dando el aviso que faltaba. El motivo va en `announceError`, que
+  **no** mueve `lastSuccessAt`.
+- Sin nada que anunciar, la pasada solo lee la ventana, la fecha, la memoria y el estado del plazo: es
+  una comparación de fechas, sin leer el nombre de la edición ni crear ningún cliente HTTP.
+- **Aviso de prueba**: el superadministrador puede mandar el texto real con el prefijo `(Prueba)` desde
+  el panel (`sendTestAnnouncement`). No toca la memoria.
+
+### Informe diario de clasificación
+
+Además de los hitos, el bot publica **una vez al día** la clasificación entera y un enlace a la web. Lo
+hace el worker en su pasada (`announceDailyStandings()`, en `src/lib/standings-report.ts`): en la
+**primera pasada a partir de las 21:00 de Madrid** manda el informe del día.
+
+| Qué | Dónde |
+|---|---|
+| Canal | `DISCORD_ANNOUNCE_CHANNEL_ID` (y el token del bot) |
+| Fuente | `getStandings()` (`src/lib/public.ts`), la misma que ve la web |
+| Enlace | `readPublicOrigin()` (`src/lib/site-url.ts`), el mismo dominio que el layout; apunta a la portada (`/`), que es donde está la clasificación. Sin dominio, sin enlace |
+| Memoria | `Setting["discord.standingsReport"]` (`lastDay`, `pendingDay`, `sentChunks`) |
+| Dónde mirar | `announceError` en `Setting["sync.lastRun"]` (`[sync] …`) |
+
+- **Una vez por día de Madrid, y nada de ráfagas**: si la pasada de las 21:00 no ocurre (caída,
+  despliegue), el informe de ese día **no se manda atrasado**; se salta y se informa del siguiente cuando
+  llegue su hora.
+- **La clasificación puede no caber en un mensaje**: se parte en varios de **2000 caracteres** como
+  máximo, **por líneas** (sin cortar ninguna por la mitad). Si un trozo falla, la pasada siguiente retoma
+  desde donde se quedó **sin repetir** lo ya enviado, y el día queda cerrado cuando sale el último.
+- **Sin filas clasificadas no hay informe** (ni un mensaje diciendo que no hay nada), y no es un fallo.
+- **Sin `DISCORD_BOT_TOKEN` o sin canal no se envía nada** y tampoco es un fallo: el aviso lo da el paso
+  de los hitos. El motivo de un fallo va en `announceError`, que **no** mueve `lastSuccessAt`.
+
+### Avisos de las acciones de administración
+
+Cuando la organización quita algo del torneo, el bot lo cuenta: un **privado** a la persona afectada y un
+**mensaje global** al canal de avisos. Lo hace la propia Server Action, después de la transacción
+(`dispatchAdminNotice()`, `src/lib/admin-notice-send.ts`).
+
+| Acción | Cuándo avisa |
+|---|---|
+| **Baja de participante** (`deletePlayer`, `PLAYER_REMOVED`) | siempre |
+| **Invalidar los puntos de una partida** (`revertMatchPoints`, `MATCH_POINTS_REVERTED`) | solo al invalidar; restaurar puntos no avisa |
+
+No avisan **restaurar** puntos, **deshacer** una acción ni aprobar o rechazar: no quitan nada ni son
+noticia.
+
+| Qué | Cómo |
+|---|---|
+| Privado (DM) | `POST /users/@me/channels` + publicar. Necesita `discordUserId`; si solo hay `@usuario`, se resuelve contra el roster cacheado |
+| Global | Al canal de avisos, por `postChannelMessage()`. Corto, sin decir quién lo hizo (eso está en el historial del panel) |
+| Texto de la baja | «Retirado del torneo» solo si estaba `APPROVED`; si era una solicitud (`PENDING`/`REJECTED`), «solicitud descartada» |
+
+- **No bloquea la acción y no puede hacerla fallar**: el aviso se aplaza con `ctx.waitUntil()` (o se deja
+  correr fuera del Worker), va después de la transacción —si el cambio falla no hay nada que avisar— y un
+  fallo de Discord queda en el log con el prefijo `[admin-notice]` **sin** cambiar lo que ve el
+  administrador ni el historial.
+- **Sin cuenta resoluble no hay privado**, y sin canal no hay global; los dos son **independientes** y
+  ninguno es un fallo. Sin `DISCORD_BOT_TOKEN` no se avisa de nada (solo queda el log).
+
 ## Simulaciones
 
 ### Con fixtures (mock de AoE4World)
 
-`AOE4WORLD_MOCK=1` intercepta el único punto de salida HTTP (`performRequest()`) y responde con las
-fixtures de `src/lib/aoe4world/mock/`. Los parsers, el worker y el motor son los de verdad. Con
+`AOE4WORLD_MOCK=1` intercepta el punto de salida HTTP de la API (`performRequest()`) y responde con las
+fixtures de `src/lib/aoe4world/mock/`. El **resumen** de partida, que vive en el sitio y no en la API,
+tiene la suya (`mock/summary.ts`), resuelta por `fetchGameSummary()` sin salir a la red. Los parsers, el
+worker y el motor son los de verdad. Con
 `NODE_ENV=production` el arranque falla: el mock no puede estar activo en producción.
 
 ```bash
@@ -551,6 +897,7 @@ npm run db:push                  # sincroniza el schema
 npm run db:security -- --check   # comprueba RLS; aplica con db:security si sale mal
 npm run countries:seed           # publica la lista de países del formulario
 npm run db:window                # publica la ventana de fechas del torneo (recomendado)
+npm run alerts:cutoffs           # deriva los cortes de división de la condición de equipo
 npm run db:cron                  # programa el reloj cada 10 minutos
 ```
 
@@ -560,6 +907,22 @@ npm run db:cron                  # programa el reloj cada 10 minutos
   formulario no tiene lista de países.
 - `db:window` publica `window` en `scoring.ruleset`. Sin ella la clasificación puntúa con las fechas
   de prueba del código y puede congelarse en silencio al llegar la fecha `to`.
+- `alerts:cutoffs` deriva los cortes de división de la condición de equipo. Sin ellos la condición no
+  se aplica (las partidas de equipo cuentan) y el rastro del recálculo lo avisa: no rompe nada, pero
+  el torneo puntuaría de más.
 - Variables del panel: las `NEXT_PUBLIC_*` y los secretos de servidor en las dos listas de build, y
   `YOUTUBE_API_KEY` y las de Discord en los dos sitios (Worker y build). Detalle en
   [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel).
+- `SUPERADMIN_EMAIL` y `SUPABASE_SERVICE_ROLE_KEY`: sin la primera nadie administra a los admins, y
+  sin la segunda no se puede invitar a ninguno. Ver
+  [Administración del panel](#administración-del-panel).
+- **Configuración de la edición**: no hay que sembrar nada. `edition.config` no existe hasta que el
+  superadministrador guarda por primera vez, y hasta entonces la web usa el documento por defecto.
+- **La versión 4 del ruleset** (`RULESET_VERSION`) deja la clasificación sin recalcular hasta la
+  primera pasada: el `db:push` añade el valor `NO_STREAM_CHANNEL` al enum de `AlertRule`, la
+  migración del documento la hace `ensureRuleset()` al leer, y la pasada del sincronizador (o
+  `npm run score`) vuelve a escribir `PlayerScore`. La web **no** se queda vacía mientras tanto:
+  publica la última clasificación calculada —la de la versión anterior más alta con filas— y quien
+  pinte recibe `pendingRuleSetVersion` para avisar de que la tabla es de otra versión: la home lo dice
+  en una nota sobre la tabla, sin prometer ningún recálculo automático. Si se despliega
+  en medio de un torneo, conviene lanzar el recálculo a mano en cuanto termine el despliegue.

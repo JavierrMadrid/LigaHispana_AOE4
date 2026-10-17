@@ -9,7 +9,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
  */
 const DEFAULT_NEXT = "/login/establecer-contrasena";
 
-/** Clave de error de `/login` (ver README, "Alta de admins por invitación"). */
+/** Clave de error de `/login` (ver README, "Acceso al panel"). */
 const ERROR_LINK = "enlace";
 
 /**

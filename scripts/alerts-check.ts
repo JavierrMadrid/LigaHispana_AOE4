@@ -70,11 +70,6 @@ async function main(): Promise<void> {
   console.log(`Clasificatorias con rawJson ilegible: ${result.unreadableMatches}`);
   console.log(`Duración: ${result.durationMs} ms`);
 
-  if (result.lowDivisionWarning !== null) {
-    console.log("");
-    console.warn(result.lowDivisionWarning);
-  }
-
   if (result.openStreaks.length > 0) {
     console.log("");
     console.log("Rachas abiertas (todavía no avisan de nada):");
@@ -92,7 +87,8 @@ async function main(): Promise<void> {
 
   if (cutoffs === null) {
     console.log("");
-    console.log("Sin cortes cacheados, R5 no se ha evaluado. Se derivan con:");
+    console.log("Sin cortes cacheados, la condición de equipos no se puede comprobar");
+    console.log("(las partidas de equipo cuentan). Se derivan con:");
     console.log("  npm run alerts:cutoffs");
   }
 

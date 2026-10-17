@@ -33,7 +33,12 @@ function buildHref(basePath: string, query: Record<string, string | undefined>, 
 }
 
 /**
- * Paginación de un listado de administración.
+ * Paginación de un listado paginado en servidor: el historial del panel, las
+ * alertas y las acciones, y el historial público de puntos.
+ *
+ * Vive en `src/components/` y no dentro de `/admin` porque el historial público la
+ * monta con el mismo comportamiento: es un control de la casa, no del panel, y una
+ * segunda copia se separaría en cuanto una de las dos cambiara de bordes.
  *
  * El DAL ya acota la página al rango real, así que aquí solo se decide si hay
  * anterior y siguiente. En los extremos el control desaparece en lugar de

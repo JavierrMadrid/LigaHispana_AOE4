@@ -15,10 +15,11 @@ import { SUBDIVISION_RANK_LEVELS } from "@/lib/divisions";
 /**
  * La traducción de rating a subdivisión y la lectura de la caché que la alimenta.
  *
- * Es lo que decide R5, así que lo que se cubren son las dos promesas del docblock: un
- * `rating` se sitúa en el bloque de la ladder que lo contiene (y se recorta por
- * debajo del último corte), y un documento guardado con una fila mala **se pierde
- * esa ladder y solo esa**, sin lanzar y sin tirar el resto de la caché.
+ * Es lo que decide la condición de equipos de la puntuación, así que lo que se
+ * cubren son las dos promesas del docblock: un `rating` se sitúa en el bloque de la
+ * ladder que lo contiene (y se recorta por debajo del último corte), y un documento
+ * guardado con una fila mala **se pierde esa ladder y solo esa**, sin lanzar y sin
+ * tirar el resto de la caché.
  */
 
 const FECHA = "2026-09-15T00:00:00.000Z";
@@ -97,7 +98,7 @@ describe("pruneCutoffsTable — la caché solo guarda lo que se deriva", () => {
 
 describe("readCutoffsTable — lo que se guarda se vuelve a leer igual", () => {
   it("la tabla entera sobrevive al viaje por JSON, campo a campo", () => {
-    // `requests`, `totalCount` y `derivedAt` no deciden nada de R5, pero son lo que
+    // `requests`, `totalCount` y `derivedAt` no deciden nada de la condición, pero son lo que
     // permite comparar el coste de derivar una ladder con el resultado (ver
     // `alerts:cutoffs --show`), así que tampoco pueden perderse por el camino.
     const leidos = desdeJson(guardado(tabla(RM_TEAM, RM_SOLO)));
@@ -124,7 +125,7 @@ describe("readCutoffsTable — lo que se guarda se vuelve a leer igual", () => {
   });
 
   it("sin metadatos la ladder sigue sirviendo, y la fecha dice que no la hay", () => {
-    // Lo que decide R5 son los cortes: un documento escrito por una versión anterior
+    // Lo que decide la condición son los cortes: un documento escrito por una versión anterior
     // que no guardara el coste no puede dejar de servir la ladder entera.
     const leidos = desdeJson({
       ladders: { rm_team: { cutoffs: RM_TEAM.cutoffs } },
@@ -142,8 +143,8 @@ describe("readCutoffsTable — lo que se guarda se vuelve a leer igual", () => {
 describe("readCutoffsTable — una caché vacía no es una caché de cortes", () => {
   it("sin documento o sin ladders devuelve `null`, no un objeto vacío", () => {
     // La diferencia importa: `settings.ts` trata `null` como "aún no hay cortes" y
-    // deja que R5 se omita con aviso, mientras que un `{}` fingiría tener cortes y
-    // callaría el aviso.
+    // deja que el recálculo avise de que la condición de equipos no se ha podido
+    // aplicar, mientras que un `{}` fingiría tener cortes y callaría el aviso.
     for (const vacio of [null, {}, { ladders: {} }, "texto", 42, [], { ladders: [] }]) {
       expect(desdeJson(vacio), JSON.stringify(vacio) ?? "null").toBeNull();
     }
@@ -158,7 +159,7 @@ describe("readCutoffsTable — una caché vacía no es una caché de cortes", ()
 describe("readCutoffsTable — una fila mala tumba su ladder y solo la suya", () => {
   it("una subdivisión fuera del catálogo hace inservible la ladder entera", () => {
     // `plata_1` no existe: `subdivisionForRating` no la encontraría nunca, así que
-    // dejarla en la lista dejaría la cuenta de R5 falseada sin que nada fallara.
+    // dejarla en la lista falsearía la comparación de escalones sin que nada fallara.
     const leidos = desdeJson({
       ladders: {
         rm_team: {
@@ -267,10 +268,11 @@ describe("subdivisionForRating", () => {
     expect(subdivisionForRating(RM_TEAM, 1600)?.rankLevel).toBe("silver_1");
   });
 
-  it("el índice que devuelve es la posición en el catálogo, que es lo que cuenta R5", () => {
-    // R5 no resta `rank_level`: resta índices, así que el `index` que sale de aquí
-    // tiene que ser el mismo que el del catálogo (`conqueror_3` 0, `gold_1` 11,
-    // `bronze_1` 17) o "tres escalones por debajo" significaría otra cosa.
+  it("el índice que devuelve es la posición en el catálogo, que es lo que cuenta el escalón", () => {
+    // La condición de equipos no resta `rank_level`: divide el índice del catálogo
+    // entre tres para sacar el escalón, así que el `index` que sale de aquí tiene
+    // que ser el del catálogo (`conqueror_3` 0, `gold_1` 11, `bronze_1` 17) o "un
+    // escalón" significaría otra cosa.
     expect(subdivisionForRating(RM_TEAM, 3000)?.index).toBe(0);
     expect(subdivisionForRating(RM_TEAM, 1900)?.index).toBe(11);
     expect(subdivisionForRating(RM_TEAM, 1200)?.index).toBe(17);
@@ -285,8 +287,8 @@ describe("subdivisionForRating", () => {
 
   it("por debajo del último corte se recorta a la última subdivisión", () => {
     // Por debajo de bronce 1 la ladder no dice nada. Recortar solo puede **reducir**
-    // la cuenta de escalones en un caso patológico, y no cambia ninguna decisión
-    // cerca del umbral de tres.
+    // la diferencia de escalones en un caso patológico, y no cambia ninguna decisión
+    // cerca del umbral de dos.
     expect(subdivisionForRating(RM_TEAM, 1200)?.rankLevel).toBe("bronze_1");
     expect(subdivisionForRating(RM_TEAM, 0)?.rankLevel).toBe("bronze_1");
     expect(subdivisionForRating(RM_TEAM, -500)?.rankLevel).toBe("bronze_1");
