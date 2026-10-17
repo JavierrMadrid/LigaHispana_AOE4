@@ -651,7 +651,7 @@ export type ScoreBreakdownMode = {
  *
  * `byMode[*].points` y `Match.points` se conservan como **auditoría** (y para el
  * detalle por modo), pero ya no entran en el total. `awards` guarda, por id cobrado,
- * el importe real y las repeticiones: es lo que permite publicar `2×Imparable +2` sin
+ * el importe real y las repeticiones: es lo que permite publicar `2 x Imparable +2` sin
  * rehacer la cuenta desde el catálogo, cuyo precio en `imparable` es solo el tope.
  */
 export type ScoreBreakdown = {

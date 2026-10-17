@@ -12,6 +12,7 @@ import {
   objectiveCloseness,
   objectiveStandingsView,
   objectiveTitle,
+  objectiveTitleParts,
   orderByObjectiveProgress,
   orderByObjectiveRanking,
   prizeLabel,
@@ -271,14 +272,41 @@ describe("prizeLabel: el pie de la placa de premio", () => {
   });
 });
 
+describe("objectiveTitleParts: las dos mitades del rótulo", () => {
+  it("sin repeticiones no hay prefijo", () => {
+    expect(objectiveTitleParts({ label: "Imparable", count: 1 })).toEqual({
+      repetitions: null,
+      label: "Imparable",
+    });
+  });
+
+  it("con repeticiones separa la cuenta de la etiqueta", () => {
+    expect(objectiveTitleParts({ label: "Imparable", count: 2 })).toEqual({
+      repetitions: "2 x",
+      label: "Imparable",
+    });
+    expect(objectiveTitleParts({ label: "Victorias", count: 24 })).toEqual({
+      repetitions: "24 x",
+      label: "Victorias",
+    });
+  });
+});
+
 describe("objectiveTitle: el rótulo con sus repeticiones", () => {
   it("sin repeticiones es la etiqueta a secas", () => {
     expect(objectiveTitle({ label: "Imparable", count: 1 })).toBe("Imparable");
   });
 
   it("con repeticiones, el multiplicador va delante", () => {
-    expect(objectiveTitle({ label: "Imparable", count: 2 })).toBe("2×Imparable");
-    expect(objectiveTitle({ label: "Victorias", count: 24 })).toBe("24×Victorias");
+    expect(objectiveTitle({ label: "Imparable", count: 2 })).toBe("2 x Imparable");
+    expect(objectiveTitle({ label: "Victorias", count: 24 })).toBe("24 x Victorias");
+  });
+
+  it("compone el texto a partir de las partes, sin repetir la regla", () => {
+    const objective = { label: "Imparable", count: 3 };
+    const { repetitions, label } = objectiveTitleParts(objective);
+
+    expect(objectiveTitle(objective)).toBe(`${repetitions} ${label}`);
   });
 });
 

@@ -74,7 +74,7 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
   `Setting` se ignora. Su `points` en el catálogo (2) es documental.
 - En `agresor`/`estratega` las partidas sin duración quedan fuera. Umbrales: `< 600 s` y `> 1200 s`.
 - En `imparable` el valor del ranking es el número real de días; los puntos van con tope (14). Las
-  **repeticiones** que publica la web también son los días reales ("20×Imparable +14").
+  **repeticiones** que publica la web también son los días reales ("20 x Imparable +14").
 - Las partidas con civilización aleatoria no cuentan para los objetivos de civilización.
 
 ### Familias
