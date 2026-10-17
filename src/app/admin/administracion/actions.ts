@@ -447,8 +447,8 @@ function disabledObjectivesText(ids: readonly string[]): string {
 /**
  * Los puntos de objetivos que han cambiado, como un solo campo del rastro.
  *
- * Va junto y no un campo por objetivo a propósito: son hasta 83 valores, y una frase
- * de historial con 83 campos no se lee. Lo que sí se ve es **cuáles** han cambiado y
+ * Va junto y no un campo por objetivo a propósito: son hasta 88 valores, y una frase
+ * de historial con 88 campos no se lee. Lo que sí se ve es **cuáles** han cambiado y
  * de qué valor a qué valor.
  */
 function objectivesChanged(
@@ -484,7 +484,7 @@ function objectivesChanged(
  * El formulario manda los campos que se editan, y lo que no manda se conserva: los
  * puntos por objetivo, si no vienen como `objectivePoints.<id>`, siguen con el valor
  * que tenían. Es lo contrario de "foto completa" de la edición y es deliberado: el
- * catálogo tiene 83 puntos y la pantalla puede no editarlos todos, así que un
+ * catálogo tiene 88 puntos y la pantalla puede no editarlos todos, así que un
  * formulario que no los mencione **no puede borrarlos**.
  *
  * ## Validación

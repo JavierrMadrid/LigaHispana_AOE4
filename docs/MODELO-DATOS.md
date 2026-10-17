@@ -98,6 +98,10 @@ puntúa lo aplica el motor, no el importador.
 | `startedAt` | `DateTime` | Ancla de la ventana de clasificatorias. |
 | `finishedAt` | `DateTime?` | `null` = en curso (es lo que lista `/partidas`). |
 | `durationSeconds` | `Int?` | |
+| `apm` | `Int?` | APM de la partida según su resumen. `null` = **sin resumen** (no es `0`), y es la marca de que la partida tiene resumen. |
+| `feudalAgeSeconds`, `castleAgeSeconds`, `imperialAgeSeconds` | `Int?` | Segundos de partida en que se alcanzó cada edad; gana el **primer** instante. |
+| `villagersLost`, `gildedVillagersLost`, `mountedVillagersLost` | `Int?` | Aldeanos perdidos, por tipo. Los dorados y los montados van aparte porque `defensor-del-pueblo` los exige por separado. |
+| `summaryCheckedAt` | `DateTime?` | Cuándo se pidió el **resumen** por última vez. `null` = nunca. Se escribe también tras un `404` concluyente ("esta partida no lo tiene"). |
 | `points` | `Int` (`0`) | Puntos que aporta según el ruleset: `pointsPerWin` en una victoria clasificatoria, 0 en el resto. Solo lo escribe el motor. |
 | `revertedAt` | `DateTime?` | Marca de "deja de puntuar" (reversible). `null` = puntúa. |
 | `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** De aquí salen los compañeros y su rating para la condición de equipo. |
@@ -108,6 +112,13 @@ puntúa lo aplica el motor, no el importador.
 
 `mode` y `civRandomized` se rellenaron con `npm run backfill:model` en las filas anteriores; a
 partir de ahí las escribe el worker con cada partida.
+
+Las ocho columnas del **resumen de partida** (`apm`…`summaryCheckedAt`) las escribe el worker desde una
+ruta del **sitio** de AoE4World (no de su API) que se pide aparte y solo importa a las partidas que
+puntúan; el detalle está en [`OPERACION.md`](./OPERACION.md#resumen-de-partida). Las leen cinco
+objetivos, y en todas ellas `null` significa "**no hay resumen**", nunca "cero": una partida sin resumen
+no cumple ninguna hazaña y corta la racha de `ansioso`. `apm` es la marca de que la partida tiene
+resumen.
 
 ## `PlayerScore`
 
@@ -138,7 +149,7 @@ siempre presentes, con ceros si no aplican.
 ```json
 {
   "ruleSetVersion": 4,
-  "rule": "2 puntos por victoria clasificatoria más 83 objetivos: 29 competiciones y 54 logros",
+  "rule": "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
@@ -292,7 +303,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
-| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 2) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
+| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 3) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
 | `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |

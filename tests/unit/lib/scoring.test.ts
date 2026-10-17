@@ -84,8 +84,8 @@ describe("reglas v4 (constantes del motor)", () => {
     expect(DEFAULT_RULESET.countRandomizedCivs).toBe(false);
   });
 
-  it("el catálogo sigue siendo el de 83 objetivos de docs/OBJETIVOS.md", () => {
-    expect(OBJECTIVE_COUNT).toBe(83);
+  it("el catálogo sigue siendo el de 88 objetivos de docs/OBJETIVOS.md", () => {
+    expect(OBJECTIVE_COUNT).toBe(88);
     // El desglose de `PlayerScore` y `Setting["scoring.ruleset"].objectives` se
     // indexan por id, así que un objetivo sin puntos o con un id repetido
     // desaparecería de la clasificación sin que nada fallara.
@@ -498,17 +498,18 @@ describe("ruleLabel", () => {
 
   it("cuenta los objetivos activos por forma de cobrar", () => {
     // 29 competiciones (loco-por-ganar, bienhadado, los 4 rey-* y los 23 masterizando-*)
-    // y 54 logros (imparable, victorias, imbatible, agresor, estratega,
-    // por-tierra-y-agua, polifacetico, los 23 lider-*, jugon y los 23 acolito-*): es el
-    // reparto de `docs/OBJETIVOS.md`, y la etiqueta lo dice.
+    // y 59 logros (imparable, victorias, imbatible, ansioso, agresor, estratega, las
+    // cuatro hazañas del summary, por-tierra-y-agua, polifacetico, los 23 lider-*,
+    // jugon y los 23 acolito-*): es el reparto de `docs/OBJETIVOS.md`, y la etiqueta
+    // lo dice.
     expect(ruleLabel(base)).toBe(
-      "2 puntos por victoria clasificatoria más 83 objetivos: 29 competiciones y 54 logros",
+      "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
     );
   });
 
   it("un objetivo desactivado deja de anunciarse", () => {
     expect(ruleLabel({ ...base, disabledObjectives: ["rey-1v1"] })).toBe(
-      "2 puntos por victoria clasificatoria más 82 objetivos: 28 competiciones y 54 logros",
+      "2 puntos por victoria clasificatoria más 87 objetivos: 28 competiciones y 59 logros",
     );
   });
 

@@ -21,6 +21,7 @@ const METRIC_UNITS: Record<ObjectiveMetric, readonly [string, string]> = {
   partidas: ["partida", "partidas"],
   victorias: ["victoria", "victorias"],
   racha: ["victoria seguida", "victorias seguidas"],
+  "racha-partidas": ["partida seguida", "partidas seguidas"],
   dias: ["día", "días"],
   civilizaciones: ["civilización", "civilizaciones"],
   mapas: ["mapa", "mapas"],
@@ -120,12 +121,23 @@ export function prizeLabel(objective: {
  * de puntos aplicado), así que pintar el exceso solo confunde sobre cuánto
  * falta. El valor real del ranking no se toca: la saturación es de formato.
  *
+ * El caso aparte es el **logro binario** (umbral 1: los `avance-relampago-*` y
+ * `defensor-del-pueblo`): la fracción `X/1` no dice nada —la hazaña se cumple o
+ * no—, y su recuento real, cuántas partidas la consiguen, es justo lo que ordena
+ * su ranking. Se enseña ese recuento con su unidad (`3 partidas`, `0 partidas`)
+ * en vez de `1/1 partida`; el «conseguido» ya lo pone el distintivo de la fila.
+ *
  * Un logro **sin tope** (`victorias`) no tiene umbral: se lee por su valor a
  * secas, como una competición (`24 victorias`), que es lo que da la posición.
  */
 export function contenderValue(option: ObjectiveOption, contender: ObjectiveContender): string {
   if (option.kind === "achievement" && option.target !== null) {
     const target = option.target.value;
+
+    if (target === 1) {
+      return `${contender.value} ${metricUnit(option.metric, contender.value)}`;
+    }
+
     const value = Math.min(contender.value, target);
 
     return `${value}/${target} ${metricUnit(option.metric, target)}`;

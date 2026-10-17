@@ -557,11 +557,9 @@ export function ParticipantObjectiveFeatureSummary({
 }) {
   // En la tarjeta grande, la barra del logro ya resume "X de Y": repetir "Tu
   // avance" justo encima es redundante. Solo se conserva cuando la barra no se
-  // pinta —logro sin umbral, sin tope o ya en el umbral—, para no perder la cifra.
-  const showProgressBar =
-    objective.kind === "achievement" &&
-    objective.target !== null &&
-    !hasReachedTarget(objective, objective.value);
+  // pinta —logro sin umbral, sin tope, binario o ya en el umbral—, para no
+  // perder la cifra.
+  const showGauge = showsProgressGauge(objective);
 
   return (
     <ObjectiveFeatureFrame
@@ -590,7 +588,7 @@ export function ParticipantObjectiveFeatureSummary({
       progress={
         <div className="flex flex-col gap-5">
           <dl className="grid grid-cols-2 gap-x-4 gap-y-4">
-            {showProgressBar ? null : (
+            {showGauge ? null : (
               <div className="col-span-2">
                 <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
               </div>
@@ -965,26 +963,47 @@ function PositionBadge({ position }: { position: number | null }) {
 }
 
 /**
+ * Si el logro pinta barra de avance.
+ *
+ * Un logro **binario** (umbral 1: los `avance-relampago-*` y
+ * `defensor-del-pueblo`) no la tiene: solo puede estar vacía —en cuanto se llena,
+ * el logro está conseguido y la barra desaparece—, y una barra que nunca llega a
+ * llenarse no informa de nada. Su avance se lee en las cifras ("Tu avance" y
+ * "Te falta").
+ */
+function showsProgressGauge(objective: ParticipantObjective): boolean {
+  return (
+    objective.kind === "achievement" &&
+    objective.target !== null &&
+    objective.target.value > 1 &&
+    !hasReachedTarget(objective, objective.value)
+  );
+}
+
+/**
  * Barra de avance de un logro: cuánto lleva de su umbral. La barra solo refuerza el
  * dato, que ya va en "Tu avance"; por eso es decorativa. Solo desaparece cuando no hay
- * umbral (una competición no llega aquí, y `victorias` no se completa) o cuando el
- * logro ya ha llegado a él: mientras va **en camino**, la barra es justo lo que dice
- * cuánto le queda, aunque el punto por día ya esté cobrado.
+ * umbral (una competición no llega aquí, y `victorias` no se completa), cuando el
+ * logro ya ha llegado a él —mientras va **en camino**, la barra es justo lo que dice
+ * cuánto le queda, aunque el punto por día ya esté cobrado— o cuando es binario
+ * (`showsProgressGauge`): su umbral no admite medias tintas.
  */
 function AchievementProgress({ objective }: { objective: ParticipantObjective }) {
-  if (objective.target === null || hasReachedTarget(objective, objective.value)) {
+  const target = objective.target;
+
+  if (target === null || !showsProgressGauge(objective)) {
     return null;
   }
 
   const { value } = objective;
-  const { value: target } = objective.target;
-  const percent = target > 0 ? Math.min(100, Math.round((value / target) * 100)) : 0;
+  const goal = target.value;
+  const percent = goal > 0 ? Math.min(100, Math.round((value / goal) * 100)) : 0;
 
   return (
     <div className="mt-3">
       <p className="text-xs text-muted">
         Llevas <span className="font-medium text-foreground tabular-nums">{value}</span> de{" "}
-        <span className="tabular-nums">{target}</span>.
+        <span className="tabular-nums">{goal}</span>.
       </p>
       <div
         aria-hidden="true"
@@ -1060,6 +1079,8 @@ function formatMetricValue(objective: ParticipantObjective): string {
       return value === 1 ? "1 partida" : `${value} partidas`;
     case "racha":
       return value === 1 ? "1 victoria seguida" : `${value} victorias seguidas`;
+    case "racha-partidas":
+      return value === 1 ? "1 partida seguida" : `${value} partidas seguidas`;
     case "victorias":
       return value === 1 ? "1 victoria" : `${value} victorias`;
     case "dias":
@@ -1089,6 +1110,8 @@ function formatDistance(objective: ParticipantObjective): string | null {
       return distance === 1 ? "1 victoria" : `${distance} victorias`;
     case "racha":
       return distance === 1 ? "1 victoria seguida" : `${distance} victorias seguidas`;
+    case "racha-partidas":
+      return distance === 1 ? "1 partida seguida" : `${distance} partidas seguidas`;
     case "dias":
       return distance === 1 ? "1 día" : `${distance} días`;
     case "civilizaciones":
@@ -1118,6 +1141,8 @@ function remainingText(objective: ParticipantObjective): string | null {
       return remaining === 1 ? "1 victoria" : `${remaining} victorias`;
     case "racha":
       return remaining === 1 ? "1 victoria seguida" : `${remaining} victorias seguidas`;
+    case "racha-partidas":
+      return remaining === 1 ? "1 partida seguida" : `${remaining} partidas seguidas`;
     case "dias":
       return remaining === 1 ? "1 día" : `${remaining} días`;
     case "civilizaciones":

@@ -1,6 +1,6 @@
 # Objetivos
 
-Los **83 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
+Los **88 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
 funcional: qué mide cada uno, cuántos puntos da y **quién lo cobra**. La puntuación base está en
 [`docs/PUNTUACION.md`](./PUNTUACION.md); aquí solo están los objetivos. El catálogo es el del código,
 pero el ruleset puede **desactivar** objetivos de una edición a otra (ver
@@ -28,11 +28,11 @@ como **temporales** (puede cambiar de dueño hasta el cierre): ver [`PUNTUACION.
 | Grupo | Competiciones | Logros | Objetivos |
 |---|---|---|---|
 | Actividad | 1 | 2 | 3 |
-| Racha | 1 | 1 | 2 |
-| Hazañas | 0 | 3 | 3 |
+| Racha | 1 | 2 | 3 |
+| Hazañas | 0 | 7 | 7 |
 | Formatos | 4 | 0 | 4 |
 | Civilizaciones | 23 | 48 | 71 |
-| **Total** | **29** | **54** | **83** |
+| **Total** | **29** | **59** | **88** |
 
 El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 
@@ -61,8 +61,13 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 | Imparable | 1 por día, tope 14 | Al menos una partida clasificatoria cada **día natural** (Europe/Madrid). |
 | Victorias | `pointsPerWin` por victoria, sin tope | Cada victoria clasificatoria. Es el objetivo que paga las victorias del torneo. |
 | Imbatible | 32 | Conseguir una racha de 5 victorias seguidas. |
+| Ansioso | 6 | Encadenar 3 partidas clasificatorias seguidas con 120 APM o más. |
 | Agresor | 24 | Ganar al menos 3 partidas de menos de 10 minutos. |
 | Estratega | 24 | Ganar al menos 3 partidas de más de 20 minutos. |
+| Avance relámpago: Feudal | 4 | Llegar a la Edad Feudal antes de 4 minutos en una partida clasificatoria. |
+| Avance relámpago: Castillos | 8 | Llegar a la Edad de los Castillos antes de 9 minutos en una partida clasificatoria. |
+| Avance relámpago: Imperial | 12 | Llegar a la Edad Imperial antes de 16 minutos en una partida clasificatoria. |
+| Defensor del pueblo | 12 | Terminar una partida de 15 minutos o más perdiendo menos de 3 aldeanos, menos de 2 aldeanos dorados y ningún aldeano montado. |
 | Por tierra y agua | 81 | Jugar al menos 3 partidas en **cada** mapa del pool activo. |
 | Polifacético | 96 | Ganar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
 | Líder `<civ>` (×23) | 12 | Ganar al menos 3 partidas con esa civilización. |
@@ -73,6 +78,14 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
   2). Es la única fuente de lo que vale una victoria, así que un `objectives["victorias"]` retocado en
   `Setting` se ignora. Su `points` en el catálogo (2) es documental.
 - En `agresor`/`estratega` las partidas sin duración quedan fuera. Umbrales: `< 600 s` y `> 1200 s`.
+- **`ansioso`, los tres `avance-relampago` y `defensor-del-pueblo`** salen del **resumen de partida**
+  (APM, tiempos de edad y pérdidas), que vive en el sitio de AoE4World —no en su API— y el worker pide
+  aparte y guarda en `Match`. Una partida
+  **sin resumen** no cumple ninguna hazaña y **corta** la racha de `ansioso`: un umbral sobre un dato que
+  no existe no se puede afirmar. `ansioso` publica su racha (métrica `racha-partidas`, la de partidas
+  seguidas por APM) y los cuatro `avance-relampago`/`defensor` el recuento de partidas que consiguen la
+  hazaña (métrica `partidas`): ese recuento es su valor de ranking, con umbral 1. Cómo se consigue, en
+  [`OPERACION.md`](./OPERACION.md#resumen-de-partida).
 - En `imparable` el valor del ranking es el número real de días; los puntos van con tope (14). Las
   **repeticiones** que publica la web también son los días reales ("20×Imparable +14").
 - Las partidas con civilización aleatoria no cuentan para los objetivos de civilización.
@@ -151,7 +164,7 @@ logro (que no decide puntos: todos los que cumplen cobran):
 A diferencia del catálogo anterior, el total en juego **no es un número cerrado**: un logro lo cobra
 cada participante que lo cumple, así que su reparto se multiplica por el número de beneficiarios.
 `imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo de
-premio fijo contado una vez, `imparable` a su tope de 14— es **4.679 puntos**: es la cifra que resume la
+premio fijo contado una vez, `imparable` a su tope de 14— es **4.721 puntos**: es la cifra que resume la
 banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no reparte un premio fijo sino
 `pointsPerWin` por victoria y sin tope: contarlo una vez diría que el catálogo reparte una cifra que no
 reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en
