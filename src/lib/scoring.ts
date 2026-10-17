@@ -717,6 +717,51 @@ export function readObjectiveAwards(
   return parsed;
 }
 
+/**
+ * El importe real y las repeticiones de los objetivos que cobró cada jugador,
+ * indexado por `Player.id`.
+ *
+ * Sale del **desglose** de `PlayerScore` de la versión activa del ruleset: es el
+ * único sitio donde está lo que se cobró de verdad (`ObjectiveEvent` guarda el id, no
+ * los puntos). Una consulta para todos los jugadores del feed, que son unos pocos: el
+ * historial no tiene que pedir el desglose fila a fila.
+ *
+ * Un jugador sin fila de la versión activa (o con un desglose anterior a `awards`) no
+ * aparece en el mapa, y su evento se publica a precio de catálogo con una repetición,
+ * que es lo máximo que se puede afirmar de aquella fila.
+ *
+ * Vive aquí, junto a `readObjectiveAwards()`, y no en la capa de lectura que la llama
+ * (`src/lib/admin.ts` y `src/lib/public.ts`), porque es el lector de la forma del
+ * desglose que escribe este mismo motor: el panel y la web tienen que dar **el mismo**
+ * importe del mismo objetivo, y este es el sitio donde eso se decide una sola vez.
+ */
+export async function playerObjectiveAwards(
+  playerIds: readonly string[],
+): Promise<Map<string, Record<string, ObjectiveAwardEntry>>> {
+  const ids = [...new Set(playerIds)];
+
+  if (ids.length === 0) {
+    return new Map();
+  }
+
+  const scores = await db.playerScore.findMany({
+    where: { ruleSetVersion: RULESET_VERSION, playerId: { in: ids } },
+    select: { playerId: true, breakdown: true },
+  });
+
+  const awards = new Map<string, Record<string, ObjectiveAwardEntry>>();
+
+  for (const score of scores) {
+    const parsed = readObjectiveAwards(score.breakdown);
+
+    if (parsed !== null) {
+      awards.set(score.playerId, parsed);
+    }
+  }
+
+  return awards;
+}
+
 function emptyByMode(ruleset: ScoringRuleset): Record<string, ScoreBreakdownMode> {
   const modes = new Set<string>([...RANKED_MODES, ...ruleset.modes]);
   const byMode: Record<string, ScoreBreakdownMode> = {};

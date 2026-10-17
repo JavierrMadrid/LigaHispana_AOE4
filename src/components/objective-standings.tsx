@@ -197,18 +197,17 @@ function StandingRow({
           {highlight ? <span className="sr-only"> (jugador de esta ficha)</span> : null}
         </span>
 
-        {/* En un logro sin tope no hay distintivo: todo el que sale en la lista ya
-            está sumando, así que marcarlos a todos con el check no diría nada. */}
-        {hasNoCap(option) ? null : completed ? (
+        {/* El distintivo solo se pinta cuando tiene algo que decir: quien ha
+            llegado al umbral (logro) o es el poseedor (competición). Quien no,
+            no lleva nada: el hueco del distintivo era una redonda vacía que no
+            informaba de nada. Y en un logro sin tope tampoco: todo el que sale en
+            la lista ya está sumando, así que marcarlos a todos no diría nada. */}
+        {!hasNoCap(option) && completed ? (
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
             <CheckIcon />
             {option.kind === "competition" ? "Poseedor" : "Conseguido"}
           </span>
-        ) : (
-          <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-line text-muted/50">
-            <span className="sr-only">Sin completar</span>
-          </span>
-        )}
+        ) : null}
       </div>
 
       <span className="shrink-0 text-right text-xs tabular-nums text-foreground/90">

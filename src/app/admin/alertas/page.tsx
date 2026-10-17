@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AlertKind, AlertRule } from "@/generated/prisma/enums";
 import { EmptyState } from "@/components/empty-state";
 import { PageSizeSelect } from "@/components/page-size-select";
+import { Pagination } from "@/components/pagination";
 import { SortableHeaderLink } from "@/components/sortable-header";
 import {
   getAdminAlertRules,
@@ -14,7 +15,6 @@ import { requireAdmin } from "@/lib/auth";
 import { aoe4WorldGameUrl, aoe4WorldProfileUrl, formatAbsoluteTime } from "@/lib/format";
 import { AlertFilters } from "./alert-filters";
 import { AlertRulesDialog } from "./alert-rules-dialog";
-import { Pagination } from "../pagination";
 
 export const metadata: Metadata = {
   title: { absolute: "Alertas · Admin" },

@@ -164,8 +164,9 @@ existiera `awards` no lo traen, y quien las lea cae al precio de catálogo y a u
 ## `ObjectiveEvent`
 
 Un objetivo **cobrado por un jugador** y **cuándo**. Un evento por objetivo y jugador: en una
-competición hay uno (el poseedor) y en un logro puede haber muchos (todos los que lo completan). Lo lee
-el historial del panel (`/admin/historial`); no alimenta la clasificación.
+competición hay uno (el poseedor) y en un logro puede haber muchos (todos los que lo completan). Lo leen
+los dos historiales que mezclan partidas y objetivos (`/admin/historial` y `/historial`); no alimenta la
+clasificación.
 
 | Campo | Tipo | Nota |
 |---|---|---|
@@ -338,6 +339,7 @@ aparece en una consulta, no se crea.**
 | `/objetivos` | `Match` clasificatorias de todos los aprobados, en la ventana | `(mode, startedAt)` |
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |
 | `/admin/historial` | `Match` clasificatorias **y revertidas** + `ObjectiveEvent` | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt` |
+| `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas dos tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt` |
 | `/admin/alertas` | `Alert [por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |

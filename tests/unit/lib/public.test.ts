@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  comparePointHistory,
   earnedObjectives,
   participantObjective,
+  readPointHistoryFilters,
+  readProfileIdFilter,
   resolvePlayerStreams,
   resolveStandingsVersion,
   splitStandingPoints,
   type ObjectiveKind,
   type ObjectiveOption,
   type PlayerStreamSource,
+  type PointHistoryRow,
   type StandingObjective,
   type StandingPoints,
 } from "@/lib/public";
@@ -546,5 +550,191 @@ describe("participantObjective", () => {
     );
 
     expect(proyectado.mapGaps).toBeNull();
+  });
+});
+
+/**
+ * El historial público de ganancias de puntos.
+ *
+ * Lo que se comprueba aquí es lo puro: los filtros de la URL y el orden del feed mezclado,
+ * que es de lo que depende que dos páginas consecutivas no repitan ni pierdan filas. Que las
+ * dos consultas traigan cada mitad ya ordenada como el comparador, y que el `where` deje
+ * fuera lo que no es una ganancia, es Prisma y sale en `npm run verify:sync`.
+ */
+
+/** Una victoria del feed, con lo mínimo que necesita el comparador. */
+function victoria({
+  gameId,
+  profileId = 7,
+  fecha = T1,
+  points = 2,
+  revertedAt = null,
+}: {
+  gameId: string;
+  profileId?: number;
+  fecha?: string;
+  points?: number;
+  revertedAt?: Date | null;
+}): PointHistoryRow {
+  return {
+    id: `match:${gameId}:${profileId}`,
+    startedAt: new Date(fecha),
+    playerName: `Jugador ${profileId}`,
+    playerProfileId: profileId,
+    points,
+    objective: null,
+    gameId,
+    opponentName: null,
+    mode: "rm_solo",
+    leaderboard: "rm_solo",
+    map: null,
+    teamSize: "1vs1",
+    revertedAt,
+  };
+}
+
+/** Un objetivo cumplido del feed, con lo mínimo que necesita el comparador. */
+function hito({
+  objetivo,
+  profileId = 7,
+  fecha = T1,
+}: {
+  objetivo: string;
+  profileId?: number;
+  fecha?: string;
+}): PointHistoryRow {
+  return {
+    id: `objective:${objetivo}:${profileId}`,
+    startedAt: new Date(fecha),
+    playerName: `Jugador ${profileId}`,
+    playerProfileId: profileId,
+    points: 40,
+    objective: {
+      id: objetivo,
+      label: objetivo,
+      group: "actividad",
+      metric: "partidas",
+      points: 40,
+      count: 1,
+    },
+    gameId: null,
+    opponentName: null,
+    mode: null,
+    leaderboard: null,
+    map: null,
+    teamSize: null,
+    revertedAt: null,
+  };
+}
+
+const T1 = "2026-09-01T10:00:00.000Z";
+const T2 = "2026-09-02T10:00:00.000Z";
+
+describe("comparePointHistory", () => {
+  it("ordena de lo más reciente a lo más antiguo", () => {
+    expect(comparePointHistory(victoria({ gameId: "1", fecha: T2 }), victoria({ gameId: "2" }))).toBeLessThan(0);
+    expect(comparePointHistory(victoria({ gameId: "1" }), victoria({ gameId: "2", fecha: T2 }))).toBeGreaterThan(0);
+  });
+
+  it("a igual instante, la victoria va antes que el objetivo", () => {
+    expect(comparePointHistory(victoria({ gameId: "1" }), hito({ objetivo: "imparable" }))).toBeLessThan(0);
+    expect(comparePointHistory(hito({ objetivo: "imparable" }), victoria({ gameId: "1" }))).toBeGreaterThan(0);
+  });
+
+  it("dos victorias del mismo instante desempatan por `gameId`", () => {
+    expect(comparePointHistory(victoria({ gameId: "9000002" }), victoria({ gameId: "9000001" }))).toBeLessThan(0);
+  });
+
+  it("la misma partida para dos jugadores desempata por `profileId`", () => {
+    // El caso que obliga al desempate a mirar al jugador: un 2v2 con dos participantes de la
+    // liga deja dos filas del mismo `gameId` y el mismo instante.
+    expect(
+      comparePointHistory(
+        victoria({ gameId: "9000001", profileId: 8 }),
+        victoria({ gameId: "9000001", profileId: 7 }),
+      ),
+    ).toBeLessThan(0);
+  });
+
+  it("dos beneficiarios del mismo objetivo desempatan por `profileId`", () => {
+    // El día del cierre del torneo todos los eventos comparten instante: es el caso real.
+    expect(
+      comparePointHistory(
+        hito({ objetivo: "imparable", profileId: 8 }),
+        hito({ objetivo: "imparable", profileId: 7 }),
+      ),
+    ).toBeLessThan(0);
+  });
+
+  it("es un orden total: ninguna pareja de filas distintas empata", () => {
+    const filas = [
+      victoria({ gameId: "9000001" }),
+      victoria({ gameId: "9000001", profileId: 8 }),
+      victoria({ gameId: "9000002" }),
+      victoria({ gameId: "9000002", fecha: T2 }),
+      hito({ objetivo: "imparable" }),
+      hito({ objetivo: "imparable", profileId: 8 }),
+      hito({ objetivo: "victorias", fecha: T2 }),
+    ];
+
+    for (const a of filas) {
+      for (const b of filas) {
+        if (a.id === b.id) {
+          continue;
+        }
+
+        expect(comparePointHistory(a, b)).not.toBe(0);
+        expect(comparePointHistory(a, b)).toBe(-comparePointHistory(b, a));
+      }
+    }
+  });
+
+  it("la marca de revert no cambia el sitio de la fila: solo dice que no cuenta", () => {
+    const revertida = victoria({ gameId: "9000002", points: 0, revertedAt: new Date(T2) });
+
+    expect(comparePointHistory(revertida, victoria({ gameId: "9000001" }))).toBeLessThan(0);
+  });
+});
+
+describe("readProfileIdFilter", () => {
+  it("admite un `profileId` de AoE4World", () => {
+    expect(readProfileIdFilter("21050396")).toBe(21050396);
+    expect(readProfileIdFilter(" 21050396 ")).toBe(21050396);
+    expect(readProfileIdFilter(["21050396", "7"])).toBe(21050396);
+  });
+
+  it("lo que no es un perfil es ausencia de filtro, no un filtro sin resultados", () => {
+    expect(readProfileIdFilter("noSoyUnNumero")).toBeNull();
+    expect(readProfileIdFilter("12.5")).toBeNull();
+    expect(readProfileIdFilter("-5")).toBeNull();
+    expect(readProfileIdFilter("0")).toBeNull();
+    expect(readProfileIdFilter("021050396")).toBeNull();
+    expect(readProfileIdFilter("")).toBeNull();
+    expect(readProfileIdFilter(undefined)).toBeNull();
+  });
+});
+
+describe("readPointHistoryFilters", () => {
+  it("sin parámetros no hay ningún filtro", () => {
+    expect(readPointHistoryFilters({})).toEqual({ profileId: null, rango: {} });
+  });
+
+  it("el jugador y las fechas se combinan, con los mismos bordes que el panel", () => {
+    const filtros = readPointHistoryFilters({
+      jugador: "21050396",
+      from: "2026-09-01",
+      to: "2026-09-30",
+    });
+
+    expect(filtros.profileId).toBe(21050396);
+    expect(filtros.rango.gte?.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+    expect(filtros.rango.lt?.toISOString()).toBe("2026-10-01T00:00:00.000Z");
+  });
+
+  it("un jugador que no se entiende se comporta como si no se hubiera filtrado", () => {
+    const filtros = readPointHistoryFilters({ jugador: "inventado", from: "2026-09-01" });
+
+    expect(filtros.profileId).toBeNull();
+    expect(filtros.rango.gte?.toISOString()).toBe("2026-09-01T00:00:00.000Z");
   });
 });

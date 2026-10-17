@@ -213,6 +213,19 @@ export default async function ScoringPage() {
                 <strong className="font-semibold text-foreground">temporales</strong>{" "}
                 (las competiciones, que se deciden al cierre).
               </p>
+              <p>
+                Cada punto queda registrado: el{" "}
+                <Link
+                  href="/historial"
+                  className="text-accent underline underline-offset-4 hover:text-accent-strong"
+                >
+                  historial de puntos
+                </Link>{" "}
+                enseña qué ha sumado cada victoria clasificatoria y cada objetivo
+                cumplido, de lo más reciente a lo más antiguo, con filtros por
+                participante y por fechas. Una ganancia revertida por la organización
+                no cuenta y aparece ahí tachada y marcada.
+              </p>
             </div>
           </section>
 
