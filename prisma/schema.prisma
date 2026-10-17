@@ -416,6 +416,36 @@ model Match {
   startedAt         DateTime
   finishedAt        DateTime?
   durationSeconds   Int?
+  // --- Métricas del *summary* de la partida (ver `src/lib/aoe4world/summary.ts`) ---
+  //
+  // El listado de la API dice quién ganó y con qué, pero no lo que pasó dentro: los
+  // APM, cuándo se pasó de edad y cuántos aldeanos se perdieron. Eso solo está en el
+  // summary de cada partida (una ruta del **sitio** de AoE4World, no de su API) y lo
+  // leen los objetivos `ansioso`, los tres `avance-relampago-*` y
+  // `defensor-del-pueblo` (ver `docs/OBJETIVOS.md`).
+  //
+  // Son columnas **nullable** y `null` significa "**no hay summary**", no "cero": una
+  // partida sin summary no puede pasar por una partida sin aldeanos perdidos ni por
+  // una racha de APM de cero. `apm` es la marca de que hubo summary y llegó a
+  // guardarse; el resto de campos puede faltar legítimamente dentro de un summary (no
+  // se llegó al feudal, no se perdió ningún aldeano).
+  apm                    Int?
+  // Segundos de la partida en que se alcanzó cada edad; gana el **primer** instante
+  // (un jugador puede volver a pasar de edad tras perder el edificio).
+  feudalAgeSeconds       Int?
+  castleAgeSeconds       Int?
+  imperialAgeSeconds     Int?
+  // Aldeanos perdidos, contados de la lista de bajas del summary. Los dorados y los
+  // montados van en su propia columna porque `defensor-del-pueblo` los exige por
+  // separado (son aldeanos con otra entrada de `pbgid`: una civilización por cada uno).
+  villagersLost          Int?
+  gildedVillagersLost    Int?
+  mountedVillagersLost   Int?
+  // Cuándo se pidió el summary por última vez. `null` = nunca. Se escribe también
+  // cuando la respuesta es un 404 ("esta partida no lo tiene"), que es una respuesta
+  // concluyente: así no se vuelve a preguntar por ella. Un fallo de red, un 5xx o un
+  // 200 ilegible **no** la tocan, así que la partida vuelve a la cola más tarde.
+  summaryCheckedAt       DateTime?
   // Puntos que esta partida aporta según el ruleset activo: hoy
   // `DEFAULT_RULESET.pointsPerWin` en cada victoria clasificatoria resuelta y 0 en
   // el resto. El motor es el único que lo escribe, y solo en las filas cuyo valor

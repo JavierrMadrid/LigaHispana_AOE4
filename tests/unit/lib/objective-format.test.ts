@@ -75,6 +75,7 @@ describe("contenderValue: avance de un logro", () => {
     ["victorias", 3, 2, "2/3 victorias"],
     ["partidas", 3, 1, "1/3 partidas"],
     ["racha", 5, 2, "2/5 victorias seguidas"],
+    ["racha-partidas", 3, 2, "2/3 partidas seguidas"],
     ["dias", 14, 7, "7/14 días"],
     ["mapas", 9, 5, "5/9 mapas"],
   ] as const)("%s: %i/%i", (metric, target, value, expected) => {
@@ -83,6 +84,12 @@ describe("contenderValue: avance de un logro", () => {
 
   it("satura el avance en el umbral aunque el valor lo supere", () => {
     expect(contenderValue(option("dias", "achievement", 14), contender(20))).toBe("14/14 días");
+  });
+
+  it("un logro binario (umbral 1) enseña el recuento, sin la fracción X/1", () => {
+    expect(contenderValue(option("partidas", "achievement", 1), contender(3))).toBe("3 partidas");
+    expect(contenderValue(option("partidas", "achievement", 1), contender(1))).toBe("1 partida");
+    expect(contenderValue(option("partidas", "achievement", 1), contender(0))).toBe("0 partidas");
   });
 });
 

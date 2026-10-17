@@ -34,6 +34,11 @@ import {
   type StreamRefreshResult,
 } from "@/lib/streams/refresh";
 import { announceDailyStandings } from "@/lib/standings-report";
+import {
+  backfillMatchSummaries,
+  describeSummaryBackfill,
+  type SummaryBackfillResult,
+} from "@/lib/sync-summaries";
 import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
 import { Aoe4WorldError, Aoe4WorldNotFoundError } from "./http";
@@ -65,6 +70,15 @@ import type { Aoe4WorldGame } from "./types";
  * del objetivo `por-tierra-y-agua` (`src/lib/aoe4world/map-pool.ts`), como mucho una
  * vez al día y desde el homepage de AoE4World, porque la API no lo expone. Un fallo
  * de ese parseo deja `Setting` como estaba y no rompe nada.
+ *
+ * Y **en el mismo sitio**, también antes del recálculo porque el motor de objetivos
+ * es quien lee lo que escribe, se rellena el **summary de las partidas que aún no lo
+ * tienen** (`src/lib/sync-summaries.ts`): los APM, la edad a la que se llegó y los
+ * aldeanos perdidos, que son lo que cobran `ansioso`, los tres
+ * `avance-relampago-*` y `defensor-del-pueblo`. Son peticiones al **sitio** de
+ * AoE4World (su ruta de summary no es la API) con su propio presupuesto por pasada y
+ * su cola de más nueva a más vieja, y un fallo suyo no tumba la pasada: deja esos
+ * objetivos sin datos hasta la siguiente y el motivo en el rastro.
  *
  * Después, y antes de los directos, se comprueba **el historial de partidas en el
  * juego** de los participantes (`src/lib/history-checks.ts`): si alguien tiene el
@@ -199,6 +213,23 @@ export type SyncSummary = {
    * mueve `lastSuccessAt`: el motor sigue con el último pool bueno.
    */
   mapPoolError: string | null;
+  /**
+   * Relleno de las métricas del summary de las partidas que aún no lo tienen
+   * (`src/lib/sync-summaries.ts`): los APM, la edad a la que se llegó y los aldeanos
+   * perdidos de los cinco objetivos que los necesitan.
+   *
+   * **No** es parte de la salud del sincronizador: que no se haya podido leer el
+   * summary de unas partidas solo deja esos objetivos sin datos. El motivo va en
+   * `summariesError` y **no** mueve `lastSuccessAt`.
+   */
+  summaries: SummaryBackfillResult | null;
+  /**
+   * Lo que hay que saber del paso del summary y no es un éxito limpio: summaries
+   * que no se han podido leer, partidas que el sitio no tiene, o partidas que
+   * quedaron para la siguiente pasada por el presupuesto. `null` cuando todo fue
+   * bien o no había nada que pedir.
+   */
+  summariesError: string | null;
   /**
    * Recálculo de la clasificación al final de la pasada. `null` solo si la
    * versión de reglas leída no existe, lo que no debería ocurrir.
@@ -955,10 +986,37 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido refrescar el pool de mapas: ${mapPoolError}`);
   }
 
+  // El summary de las partidas que aún no lo tienen se rellena **también antes del
+  // recálculo**, que es quien lee lo que escribe (los cinco objetivos de APM, edad y
+  // aldeanos perdidos). Es un paso que sale a una ruta **del sitio** de AoE4World, no
+  // de su API, así que lleva su propio presupuesto por pasada y su cola; un fallo
+  // suyo solo deja esos objetivos sin datos hasta la siguiente pasada y el motivo va
+  // al rastro sin mover `lastSuccessAt`.
+  let summaries: SummaryBackfillResult | null = null;
+  let summariesError: string | null = null;
+
+  try {
+    summaries = await backfillMatchSummaries({ signal });
+    summariesError = describeSummaryBackfill(summaries);
+
+    if (summariesError !== null) {
+      console.warn(`[sync] ${summariesError}`);
+    }
+
+    if (summaries.fetched > 0) {
+      console.info(
+        `[sync] Summaries de partida: ${summaries.fetched} guardado(s), ` +
+          `${summaries.missing} sin summary, ${summaries.candidates} candidata(s) pendiente(s).`,
+      );
+    }
+  } catch (error) {
+    summariesError = toErrorMessage(error);
+    console.error(`[sync] No se han podido rellenar los summaries de partida: ${summariesError}`);
+  }
+
   // La clasificación se recalcula al final y en su propia transacción. Si falla,
   // las partidas ya están guardadas: la web serviría la clasificación anterior
   // hasta la próxima pasada, que es preferible a tumbar la sincronización entera.
-
   let scoring: RecomputeScoresResult | null = null;
   let scoringError: string | null = null;
 
@@ -1219,6 +1277,8 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     ladder,
     mapPool,
     mapPoolError,
+    summaries,
+    summariesError,
     scoring,
     scoringError,
     alerts,
@@ -1285,6 +1345,7 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       streamsError: summary.streamsError,
       announceError: summary.announceError,
       mapPoolError: summary.mapPoolError,
+      summariesError: summary.summariesError,
       failures: summary.players
         .filter((result) => result.status !== "ok")
         .map((result) => ({

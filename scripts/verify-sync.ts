@@ -62,7 +62,7 @@ const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
  * `OBJECTIVE_COUNT` para que el número no pueda cambiar en los dos sitios a la vez
  * sin que se note.
  */
-const EXPECTED_OBJECTIVE_COUNT = 83;
+const EXPECTED_OBJECTIVE_COUNT = 88;
 /**
  * Tercer jugador, solo para la ventana: sus partidas se colocan justo en los bordes
  * de `[from, to)` y son las que deciden qué cuenta.
@@ -567,6 +567,7 @@ async function checkNormalization(): Promise<void> {
       discordError: null,
       streamsError: null,
       mapPoolError: null,
+      summariesError: null,
       announceError: null,
       failures: [],
     };
@@ -687,6 +688,7 @@ async function checkNormalization(): Promise<void> {
       discordError: null,
       streamsError: null,
       mapPoolError: null,
+      summariesError: null,
       announceError: null,
       failures: [],
       lastSuccessAt: finishedAt,
@@ -1169,13 +1171,13 @@ async function checkObjectiveCatalogue(): Promise<void> {
     }
 
     assert.equal(porGrupo.get("actividad"), 64, "Actividad");
-    assert.equal(porGrupo.get("racha"), 232, "Racha");
-    assert.equal(porGrupo.get("hazanas"), 129, "Hazañas");
+    assert.equal(porGrupo.get("racha"), 238, "Racha");
+    assert.equal(porGrupo.get("hazanas"), 165, "Hazañas");
     assert.equal(porGrupo.get("formato"), 960, "Formatos");
     assert.equal(porGrupo.get("civilizacion"), 3294, "Civilizaciones");
     assert.equal(
       [...porGrupo.values()].reduce((total, puntos) => total + puntos, 0),
-      4679,
+      4721,
       "Total de puntos (sin el objetivo de victorias, que no es un premio fijo)",
     );
   });

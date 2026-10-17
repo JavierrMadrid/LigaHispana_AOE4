@@ -419,6 +419,21 @@ export type SyncRunTrace = {
    * formato antes de que nadie se diera cuenta por el objetivo.
    */
   mapPoolError: string | null;
+  /**
+   * Por qué no se pudieron rellenar las métricas del summary de unas partidas, o qué
+   * hubo que avisar aunque no fuera un fallo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, igual que
+   * `mapPoolError`: no haber podido leer el summary de unas partidas solo deja sin
+   * datos a los cinco objetivos que los usan; las partidas están sincronizadas y la
+   * clasificación recalculada. Mezclarlo diría "el torneo lleva roto desde las
+   * 10:00" por un 5xx del sitio de AoE4World.
+   *
+   * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que el
+   * relleno avanza (cuántas partidas quedaron para la siguiente pasada por el
+   * presupuesto), igual que el aviso de `YOUTUBE_API_KEY` en `streamsError`.
+   */
+  summariesError: string | null;
   /** Jugadores que no se pudieron sincronizar, con su motivo. */
   failures: SyncRunFailure[];
   /**
@@ -506,6 +521,7 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     announceError: readText(value["announceError"]),
     streamsError: readText(value["streamsError"]),
     mapPoolError: readText(value["mapPoolError"]),
+    summariesError: readText(value["summariesError"]),
     failures: readFailures(value["failures"]),
     lastSuccessAt: readText(value["lastSuccessAt"]),
   };
@@ -550,7 +566,10 @@ export async function writeSyncRunTrace(
   // torneo entero con la comprobación apagada se publicaría como sincronizador roto.
   // Y con `mapPoolError`: no poder refrescar el pool solo deja el objetivo con el
   // último valor bueno, y el formato del homepage puede cambiar cualquier día sin
-  // que eso sea un fallo del sincronizador. Y con `announceError`: no poder avisar del
+  // que eso sea un fallo del sincronizador. Y con `summariesError`: no poder leer el
+  // summary de unas partidas solo deja sin datos a los objetivos que lo usan, y el
+  // sitio de AoE4World puede devolver 404 o 5xx cualquier día sin que eso signifique
+  // que el torneo esté roto. Y con `announceError`: no poder avisar del
   // comienzo o el final del torneo en Discord tampoco ha parado nada, y la falta de
   // `DISCORD_ANNOUNCE_CHANNEL_ID` es tan permanente como la de `DISCORD_BOT_TOKEN`, así
   // que si contara, una edición entera sin canal se publicaría como sincronizador roto.

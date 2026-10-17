@@ -11,7 +11,7 @@ import { StatFigure } from "@/components/stat-figure";
  *
  * Las cuenta el layout —que es quien tiene la ficha leída— y llegan resueltas
  * para que esta cabecera no arrastre el avance entero al navegador: recibe tres
- * números, no las 83 opciones del catálogo con sus rankings.
+ * números, no las 88 opciones del catálogo con sus rankings.
  */
 export type ParticipantFigures = {
   /** Objetivos que ya cobra. Cuenta el catálogo entero: los carruseles también. */

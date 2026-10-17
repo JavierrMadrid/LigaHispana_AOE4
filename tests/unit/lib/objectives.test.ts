@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ANSIOSO_ID,
+  DEFENDER_ID,
+  FAST_CASTLE_ID,
+  FAST_FEUDAL_ID,
+  FAST_IMPERIAL_ID,
   IMPARABLE_ID,
   JUGON_ID,
   OBJECTIVES_SNAPSHOT_VERSION,
@@ -10,9 +15,11 @@ import {
   POLIFACETICO_ID,
   POR_TIERRA_ID,
   VICTORIAS_ID,
+  apmRunStreak,
   computeObjectives,
   currentTournamentStreak,
   hasFixedPrize,
+  matchAchievements,
   objectiveStanding,
   objectivesSnapshotFingerprint,
   readObjectivesSnapshotValue,
@@ -55,6 +62,12 @@ function aggregate(profileId: number, overrides: Partial<PlayerAggregate> = {}):
     currentStreak: null,
     shortWins: 0,
     longWins: 0,
+    apmStreak: 0,
+    apmStreakEndsAt: 0,
+    fastFeudal: 0,
+    fastCastle: 0,
+    fastImperial: 0,
+    defenderMatches: 0,
     playedDays: new Set(),
     byFormat: new Map(),
     byCiv: new Map(),
@@ -377,7 +390,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
     expect(hasFixedPrize(definition(VICTORIAS_ID))).toBe(false);
   });
 
-  it("el catálogo nominal sigue sumando 4.679 puntos", () => {
+  it("el catálogo nominal sigue sumando 4.721 puntos", () => {
     // Es la cifra de `docs/OBJETIVOS.md`, que es la que resume la banda de
     // `/puntuacion`. `victorias` queda fuera porque reparte por victoria y sin tope.
     const total = OBJECTIVE_DEFINITIONS.filter(hasFixedPrize).reduce(
@@ -385,7 +398,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
       0,
     );
 
-    expect(total).toBe(4679);
+    expect(total).toBe(4721);
   });
 });
 
@@ -457,6 +470,154 @@ describe("por tierra y agua: cubre cada mapa del pool", () => {
   });
 });
 
+describe("los objetivos del summary", () => {
+  it("ansioso usa la racha de APM: umbral 3 y el valor es la racha más larga", () => {
+    const players = [
+      aggregate(1, { apmStreak: 3, apmStreakEndsAt: 500, matches: 6, wins: 2 }),
+      // Con 2 seguidas aparece en el ranking pero no cobra.
+      aggregate(2, { apmStreak: 2, apmStreakEndsAt: 400, matches: 5, wins: 4 }),
+    ];
+
+    const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+
+    const ansioso = optionById(options, ANSIOSO_ID);
+
+    expect(ansioso.kind).toBe("achievement");
+    expect(ansioso.group).toBe("racha");
+    expect(ansioso.target).toEqual({ unit: "racha-partidas", value: 3 });
+    expect(ansioso.points).toBe(6);
+    expect(playerIds(ansioso.beneficiaries)).toEqual([1]);
+    expect(ansioso.ranking.find((c) => c.profileId === 2)?.eligible).toBe(false);
+    expect(pointsByPlayer.get("p1")?.awards[ANSIOSO_ID]).toEqual({ points: 6, count: 1 });
+  });
+
+  it("los tres avance-relampago-* se cobran con una sola partida", () => {
+    const players = [
+      aggregate(1, { fastFeudal: 2, fastCastle: 1, fastImperial: 0, matches: 6 }),
+      aggregate(2, { fastFeudal: 0, fastCastle: 0, fastImperial: 0, matches: 3 }),
+    ];
+
+    const { options } = computeObjectives(players, DEFAULT_RULESET, []);
+
+    const esperado = [
+      [FAST_FEUDAL_ID, 4, 2],
+      [FAST_CASTLE_ID, 8, 1],
+    ] as const;
+
+    for (const [id, points, value] of esperado) {
+      const option = optionById(options, id);
+
+      expect(option.group, id).toBe("hazanas");
+      expect(option.target, id).toEqual({ unit: "partidas", value: 1 });
+      expect(option.points, id).toBe(points);
+      expect(option.ranking.find((c) => c.profileId === 1)?.value, id).toBe(value);
+      expect(playerIds(option.beneficiaries), id).toEqual([1]);
+    }
+
+    // Sin imperial rápido, el objetivo existe pero no lo cobra nadie.
+    const imperial = optionById(options, FAST_IMPERIAL_ID);
+    expect(imperial.points).toBe(12);
+    expect(imperial.beneficiaries).toEqual([]);
+    expect(imperial.ranking).toEqual([]);
+  });
+
+  it("defensor-del-pueblo se cobra con una partida larga con pocas bajas", () => {
+    const players = [
+      aggregate(1, { defenderMatches: 1, matches: 4 }),
+      aggregate(2, { defenderMatches: 0, matches: 4 }),
+    ];
+
+    const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+    const defensor = optionById(options, DEFENDER_ID);
+
+    expect(defensor.group).toBe("hazanas");
+    expect(defensor.target).toEqual({ unit: "partidas", value: 1 });
+    expect(defensor.points).toBe(12);
+    expect(playerIds(defensor.beneficiaries)).toEqual([1]);
+    expect(pointsByPlayer.get("p2")?.earned ?? []).not.toContain(DEFENDER_ID);
+  });
+});
+
+describe("apmRunStreak", () => {
+  function games(...apms: (number | null)[]): { apm: number | null; finishedAtMs: number }[] {
+    return apms.map((apm, index) => ({ apm, finishedAtMs: (index + 1) * 100 }));
+  }
+
+  it("sin partidas devuelve racha 0", () => {
+    expect(apmRunStreak([])).toEqual({ streak: 0, endsAt: 0 });
+  });
+
+  it("tres partidas seguidas por encima del umbral son una racha de 3", () => {
+    expect(apmRunStreak(games(120, 130, 200))).toEqual({ streak: 3, endsAt: 300 });
+  });
+
+  it("se queda con la racha más larga, no con la última", () => {
+    expect(apmRunStreak(games(150, 150, 150, 90, 150))).toEqual({ streak: 3, endsAt: 300 });
+  });
+
+  it("una partida sin summary rompe la racha: no se sabe si cumplía", () => {
+    // Las tres primeras van seguidas por encima del umbral, pero la cuarta no tiene
+    // summary: encadenarlas sería inventarse el APM de esa partida.
+    expect(apmRunStreak(games(150, 150, null, 150, 150))).toEqual({ streak: 2, endsAt: 200 });
+  });
+
+  it("justo por debajo del umbral no cuenta", () => {
+    expect(apmRunStreak(games(150, 119, 150))).toEqual({ streak: 1, endsAt: 100 });
+  });
+});
+
+describe("matchAchievements", () => {
+  /** Una fila con los siete campos que mira la función, todo a `null`. */
+  function row(overrides: Partial<Parameters<typeof matchAchievements>[0]> = {}) {
+    return {
+      durationSeconds: null,
+      feudalAgeSeconds: null,
+      castleAgeSeconds: null,
+      imperialAgeSeconds: null,
+      villagersLost: null,
+      gildedVillagersLost: null,
+      mountedVillagersLost: null,
+      ...overrides,
+    };
+  }
+
+  it("una partida sin summary no cumple ninguna hazaña", () => {
+    expect(matchAchievements(row())).toEqual({
+      fastFeudal: false,
+      fastCastle: false,
+      fastImperial: false,
+      defender: false,
+    });
+  });
+
+  it("las edades se comparan en estricto: 4, 9 y 16 minutos son el límite", () => {
+    expect(matchAchievements(row({ feudalAgeSeconds: 239 })).fastFeudal).toBe(true);
+    expect(matchAchievements(row({ feudalAgeSeconds: 240 })).fastFeudal).toBe(false);
+    expect(matchAchievements(row({ castleAgeSeconds: 539 })).fastCastle).toBe(true);
+    expect(matchAchievements(row({ castleAgeSeconds: 540 })).fastCastle).toBe(false);
+    expect(matchAchievements(row({ imperialAgeSeconds: 959 })).fastImperial).toBe(true);
+    expect(matchAchievements(row({ imperialAgeSeconds: 960 })).fastImperial).toBe(false);
+  });
+
+  it("defensor exige partida de 15 minutos o más y las tres cuentas por debajo del tope", () => {
+    const defensiva = row({
+      durationSeconds: 900,
+      villagersLost: 2,
+      gildedVillagersLost: 1,
+      mountedVillagersLost: 0,
+    });
+
+    expect(matchAchievements(defensiva).defender).toBe(true);
+    // Cada condición por separado lo tumba.
+    expect(matchAchievements({ ...defensiva, durationSeconds: 899 }).defender).toBe(false);
+    expect(matchAchievements({ ...defensiva, villagersLost: 3 }).defender).toBe(false);
+    expect(matchAchievements({ ...defensiva, gildedVillagersLost: 2 }).defender).toBe(false);
+    expect(matchAchievements({ ...defensiva, mountedVillagersLost: 1 }).defender).toBe(false);
+    // Y una pérdida sin leer no se puede dar por buena.
+    expect(matchAchievements({ ...defensiva, mountedVillagersLost: null }).defender).toBe(false);
+  });
+});
+
 describe("objectiveStanding", () => {
   function contender(profileId: number, value: number): ObjectiveContender {
     return {
@@ -497,9 +658,9 @@ describe("catálogo de puntos", () => {
     }
   });
 
-  it("el catálogo tiene 83 objetivos", () => {
+  it("el catálogo tiene 88 objetivos", () => {
     expect(OBJECTIVE_COUNT).toBe(OBJECTIVE_DEFINITIONS.length);
-    expect(OBJECTIVE_COUNT).toBe(83);
+    expect(OBJECTIVE_COUNT).toBe(88);
   });
 
   it("las competiciones dicen en su descripción cómo se desempata", () => {
@@ -554,12 +715,16 @@ describe("snapshot de la vista de objetivos", () => {
 
   it("un snapshot de la forma anterior no vale: la vista cambió de forma", () => {
     // La v2 añadió `count` a los beneficiarios y `mapGaps` al contendiente de
-    // `por-tierra-y-agua`: un documento con la forma vieja se rechaza y la vista se
-    // recalcula en vivo, que es lo que evita publicar un reparto a medias.
+    // `por-tierra-y-agua`, y la v3 el catálogo de 88 objetivos (los cinco del
+    // summary): un documento con la forma o el catálogo viejo se rechaza y la vista
+    // se recalcula en vivo, que es lo que evita publicar un reparto a medias.
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: 1 }), RULESET_VERSION),
     ).toBeNull();
-    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(2);
+    expect(
+      readObjectivesSnapshotValue(snapshot({ snapshotVersion: 2 }), RULESET_VERSION),
+    ).toBeNull();
+    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(3);
   });
 
   it("un snapshot de otra versión de las reglas no vale", () => {

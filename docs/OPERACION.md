@@ -617,6 +617,38 @@ de `<home-leaderboard>` con el JSON escapado.
 - Dónde mirar: `mapPoolError` en el rastro (`[sync] No se ha podido refrescar el pool de mapas: …`).
   **No** mueve `lastSuccessAt`.
 
+## Resumen de partida
+
+Cinco objetivos —`ansioso`, los tres `avance-relampago-*` y `defensor-del-pueblo`— se cobran con datos
+que **no están en el listado de partidas**: los APM, el minuto al que se pasó de edad y cuántos aldeanos
+se perdieron. Eso solo lo publica el **resumen** de cada partida, una ruta del **sitio** de AoE4World
+(no de su API), y lo rellena el worker en su pasada (`backfillMatchSummaries()`,
+`src/lib/sync-summaries.ts`).
+
+| Qué | Cuánto |
+|---|---|
+| Petición | Una por partida a `…/players/{profileId}/games/{gameId}/summary?camelize=true`, con el `User-Agent` del proyecto |
+| Partidas por pasada | **20** (`SUMMARY_MAX_PER_RUN`); el resto, a la siguiente |
+| Orden | De la partida **más nueva a la más vieja**, con el histórico rellenándose por detrás |
+| Reintento | Un fallo se reintenta pasada la hora; sin resolver, una partida **no** se reintenta después de **24 h** |
+| Columnas | Las ocho del resumen en `Match` (`apm` … `summaryCheckedAt`, ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
+
+- **Qué partidas**: exactamente las que puntúan (el mismo `rankedMatchSql()` que la clasificación) y de
+  un jugador que no tenga el historial cerrado. El filtro `historyPublic is distinct from false` deja
+  pasar el "sin comprobar" y descarta a quien consta que no publica partidas.
+- **Un `404` es concluyente**: la partida no tiene resumen, se apunta en `summaryCheckedAt` y no se
+  vuelve a preguntar. Un fallo de red, un `5xx` o un `200` ilegible **no escriben nada** —ni métricas ni
+  la marca—, así que la partida vuelve a la cola: no saber no es "no hay".
+- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las ocho columnas significa "no hay
+  resumen", nunca "cero". Una partida sin resumen no cumple ninguna hazaña y **corta** la racha de
+  `ansioso` (ver [`OBJETIVOS.md`](./OBJETIVOS.md#logros-cobra-quien-cumple)).
+- Con `AOE4WORLD_MOCK=1` **no sale a la red**: se sirve una fixture determinista por partida, con la
+  misma forma que el resumen de verdad, para que el lector y los objetivos se ejerciten en las
+  simulaciones.
+- Dónde mirar: `summariesError` en el rastro (`[sync] Summaries de partida: …`), con cuántos se han
+  guardado, cuántos no tienen resumen y cuántos quedan para la pasada siguiente. **No** mueve
+  `lastSuccessAt`: un resumen que no llega solo deja unos objetivos a medias.
+
 ## Transparencia del historial
 
 Las dos reglas `HISTORY_NOT_PUBLIC` y `MISSING_LADDER_MATCHES` se comprueban en
@@ -783,8 +815,10 @@ noticia.
 
 ### Con fixtures (mock de AoE4World)
 
-`AOE4WORLD_MOCK=1` intercepta el único punto de salida HTTP (`performRequest()`) y responde con las
-fixtures de `src/lib/aoe4world/mock/`. Los parsers, el worker y el motor son los de verdad. Con
+`AOE4WORLD_MOCK=1` intercepta el punto de salida HTTP de la API (`performRequest()`) y responde con las
+fixtures de `src/lib/aoe4world/mock/`. El **resumen** de partida, que vive en el sitio y no en la API,
+tiene la suya (`mock/summary.ts`), resuelta por `fetchGameSummary()` sin salir a la red. Los parsers, el
+worker y el motor son los de verdad. Con
 `NODE_ENV=production` el arranque falla: el mock no puede estar activo en producción.
 
 ```bash

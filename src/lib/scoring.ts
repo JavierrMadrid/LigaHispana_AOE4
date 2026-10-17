@@ -628,7 +628,7 @@ export type ScoreBreakdownMode = {
  * ```json
  * {
  *   "ruleSetVersion": 4,
- *   "rule": "2 puntos por victoria clasificatoria más 83 objetivos: 29 competiciones y 54 logros",
+ *   "rule": "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
@@ -852,7 +852,7 @@ async function readObjectivesSnapshot(client: RulesetClient = db): Promise<Objec
  *
  * La comparación es contra la huella y no contra el JSON guardado: `jsonb` normaliza
  * el orden de las claves, así que el documento leído nunca es textualmente igual al
- * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (83
+ * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (88
  * objetivos con sus rankings completos) para dejarlos idénticos.
  */
 async function writeObjectivesSnapshot(view: ObjectiveView, client: RulesetClient): Promise<void> {
