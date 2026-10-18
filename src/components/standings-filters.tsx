@@ -1,12 +1,9 @@
 "use client";
 
-import type { ReactNode } from "react";
 import type { DivisionId } from "@/lib/public";
 import { DIVISION_UI } from "@/components/division-icon";
-import { KickIcon } from "@/components/kick-icon";
+import { FilterPill, LiveFilterPill } from "@/components/filter-pill";
 import { LeagueIcon, leagueFilterRank } from "@/components/league-icon";
-import { TwitchIcon } from "@/components/twitch-icon";
-import { YoutubeIcon } from "@/components/youtube-icon";
 
 /**
  * Controles de la clasificación, desmontados en piezas reutilizables.
@@ -15,7 +12,12 @@ import { YoutubeIcon } from "@/components/youtube-icon";
  * desplegada bajo la tabla; en móvil, dentro del panel de `MobileStandingsControls`,
  * donde solo se enseña al pedirla. Por eso el buscador, los toggles de estado y
  * los botones de división viven aquí como piezas sueltas: cada forma decide qué
- * enseña y dónde, pero el comportamiento no se duplica.
+ * enseña y dónde, pero el comportamiento no se duplica. La píldora en sí, que es
+ * la misma en las dos pantallas que filtran, la trae `filter-pill.tsx`.
+ *
+ * Los botones de división cruzan de pantalla: los monta también la barra de
+ * partidas en juego (`live-matches-filters`), porque el eje es el mismo y el
+ * control también.
  */
 
 /** Buscador por nombre de display, nombre oficial o canal. */
@@ -78,34 +80,26 @@ export function StatusFilterPills({
       >
         En partida
       </FilterPill>
-      {/* El filtro cubre las tres plataformas, así que su marca son los tres
-          iconos (no solo el de Twitch): un directo puede estar en cualquiera de
-          ellas y el icono único diría que solo se busca en esa. */}
-      <FilterPill
-        active={liveOnly}
-        onClick={() => onLiveOnlyChange(!liveOnly)}
-        activeClass="border-live/50 bg-live/10 text-live-soft"
-        mark={
-          <span className="flex items-center gap-0.5">
-            <TwitchIcon className={`size-3 ${liveOnly ? "text-twitch" : "text-muted/60"}`} />
-            <YoutubeIcon className={`size-3 ${liveOnly ? "text-youtube" : "text-muted/60"}`} />
-            <KickIcon className={`size-3 ${liveOnly ? "text-kick" : "text-muted/60"}`} />
-          </span>
-        }
-      >
-        En directo
-      </FilterPill>
+      <LiveFilterPill active={liveOnly} onToggle={onLiveOnlyChange} />
     </div>
   );
 }
 
-/** Selección única de división: "Todas" más los seis emblemas. */
+/**
+ * Selección múltiple de división: "Todas" más los seis emblemas.
+ *
+ * Cada emblema se enciende y se apaga por su cuenta, así que se pueden pedir
+ * varias divisiones a la vez y una fila entra si la suya está entre las
+ * marcadas. Sin ninguna marcada no hay filtro de división —entran todas,
+ * incluidas las que no tienen división resuelta— y "Todas" es el atajo que
+ * limpia la selección.
+ */
 export function DivisionFilterButtons({
-  division,
-  onDivisionChange,
+  divisions,
+  onDivisionsChange,
 }: {
-  division: DivisionId | null;
-  onDivisionChange: (value: DivisionId | null) => void;
+  divisions: readonly DivisionId[];
+  onDivisionsChange: (value: DivisionId[]) => void;
 }) {
   return (
     <div
@@ -115,10 +109,10 @@ export function DivisionFilterButtons({
     >
       <button
         type="button"
-        aria-pressed={division === null}
-        onClick={() => onDivisionChange(null)}
+        aria-pressed={divisions.length === 0}
+        onClick={() => onDivisionsChange([])}
         className={`h-10 rounded-md px-3 text-xs font-semibold active:translate-y-px transition-colors ${
-          division === null
+          divisions.length === 0
             ? "bg-accent text-accent-ink"
             : "bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
         }`}
@@ -127,7 +121,7 @@ export function DivisionFilterButtons({
       </button>
 
       {DIVISION_UI.map((item) => {
-        const active = division === item.id;
+        const active = divisions.includes(item.id);
 
         return (
           <button
@@ -136,7 +130,13 @@ export function DivisionFilterButtons({
             aria-pressed={active}
             aria-label={`Filtrar por división ${item.label}`}
             title={item.label}
-            onClick={() => onDivisionChange(active ? null : item.id)}
+            onClick={() =>
+              onDivisionsChange(
+                active
+                  ? divisions.filter((division) => division !== item.id)
+                  : [...divisions, item.id],
+              )
+            }
             className={`flex size-10 items-center justify-center rounded-md border active:translate-y-px transition-colors ${
               active
                 ? item.activeClass
@@ -167,8 +167,8 @@ export function StandingsFilters({
   onPlayingOnlyChange,
   liveOnly,
   onLiveOnlyChange,
-  division,
-  onDivisionChange,
+  divisions,
+  onDivisionsChange,
 }: {
   query: string;
   onQueryChange: (value: string) => void;
@@ -176,8 +176,8 @@ export function StandingsFilters({
   onPlayingOnlyChange: (value: boolean) => void;
   liveOnly: boolean;
   onLiveOnlyChange: (value: boolean) => void;
-  division: DivisionId | null;
-  onDivisionChange: (value: DivisionId | null) => void;
+  divisions: readonly DivisionId[];
+  onDivisionsChange: (value: DivisionId[]) => void;
 }) {
   return (
     <div className="hidden flex-col gap-3 lg:flex lg:flex-row lg:items-center lg:justify-between">
@@ -196,40 +196,7 @@ export function StandingsFilters({
         />
       </div>
 
-      <DivisionFilterButtons division={division} onDivisionChange={onDivisionChange} />
+      <DivisionFilterButtons divisions={divisions} onDivisionsChange={onDivisionsChange} />
     </div>
-  );
-}
-
-function FilterPill({
-  active,
-  onClick,
-  activeClass,
-  mark,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  activeClass: string;
-  /** Marca de estado a la izquierda del texto; hereda el color del pill. */
-  mark: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-xs font-semibold active:translate-y-px transition-colors ${
-        active
-          ? activeClass
-          : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
-      }`}
-    >
-      <span aria-hidden="true" className="flex h-3.5 shrink-0 items-center justify-center">
-        {mark}
-      </span>
-      {children}
-    </button>
   );
 }

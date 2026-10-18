@@ -53,6 +53,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# agentes locales de opencode: se retocan a mano y no se versionan
+/.opencode/agent/
+
 # prisma-generated agent skills
 /.claude/
 /.windsurf/

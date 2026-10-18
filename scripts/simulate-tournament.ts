@@ -299,7 +299,7 @@ async function runSimulation(argv: string[]): Promise<void> {
 
   // Comprobación de lo que ve la web: si la base no ha podido leer, esto tiene que
   // abortar en vez de "verificar" contra una clasificación vacía.
-  const standings = unwrapRead(standingsRead, "simulate:tournament");
+  const standings = unwrapRead(standingsRead, "simulate:tournament").rows;
   const liveMatches = unwrapRead(liveMatchesRead, "simulate:tournament");
 
   const simulated = standings.filter((row) => profileIds.includes(row.profileId));
@@ -312,8 +312,9 @@ async function runSimulation(argv: string[]): Promise<void> {
 
   for (const row of simulated) {
     console.log(
-      `  ${row.rank}. ${row.name} — ${row.points} puntos (${row.pointsByWins} por victorias, ` +
-        `${row.pointsByObjectives} por objetivos) | ${row.wins}V/${row.losses}D | elo ${row.elo ?? "s/l"} | ` +
+      `  ${row.rank}. ${row.name} — ${row.points} puntos (${row.pointsByAchievements} por logros, ` +
+        `${row.pointsByCompetitions} por competiciones) | ` +
+        `${row.wins}V/${row.losses}D | elo ${row.elo ?? "s/l"} | ` +
         `${row.division ?? "sin división"} (${row.rankLevel ?? "-"}) | ` +
         `objetivos: ${row.objectives.length === 0 ? "ninguno" : row.objectives.map((objective) => objective.id).join(", ")}`,
     );

@@ -3,6 +3,8 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import {
   OBJECTIVE_DEFINITIONS,
+  VICTORIAS_ID,
+  type ObjectiveAwardEntry,
   type ObjectiveAwarded,
   type ObjectiveDefinition,
   type ObjectiveGroup,
@@ -52,7 +54,9 @@ import type { ScoringRuleset } from "@/lib/scoring";
 /** Cliente con la única tabla que necesita esta reconciliación (`db` o una `tx`). */
 export type ObjectiveEventWriter = Pick<Prisma.TransactionClient, "objectiveEvent">;
 
-/** Un objetivo del catálogo, ya resuelto contra el ruleset activo. */
+/**
+ * Un objetivo del catálogo, ya resuelto contra el ruleset activo.
+ */
 export type ResolvedObjective = {
   /** Id estable del objetivo; es la clave de `ObjectiveEvent`. */
   id: string;
@@ -66,8 +70,13 @@ export type ResolvedObjective = {
    * glifo, y quien pinta no puede mirar el catálogo.
    */
   metric: ObjectiveMetric;
-  /** Puntos con el ruleset activo por encima del valor por defecto del catálogo. */
+  /**
+   * Puntos que otorga con el ruleset activo por encima del valor por defecto del
+   * catálogo, o **los que cobró el jugador** si quien llama pasa su desglose.
+   */
   points: number;
+  /** Repeticiones cobradas (días, victorias o 1); ver `resolveObjective`. */
+  count: number;
 };
 
 /**
@@ -86,28 +95,48 @@ const DEFINITIONS: ReadonlyMap<string, ObjectiveDefinition> = new Map(
  * Etiqueta, grupo y puntos de un objetivo, resueltos **al leer**.
  *
  * Es el mismo criterio que `objectiveLookup()` en `src/lib/public.ts`:
- * `ruleset.objectives[id] ?? definition.points`. La tabla `ObjectiveEvent` no guarda
+ * `ruleset.objectives[id] ?? definition.points` —con `victorias` pagando
+ * `pointsPerWin`, que es lo que hace el motor—. La tabla `ObjectiveEvent` no guarda
  * ni la etiqueta ni los puntos a propósito, y esto es el sitio único donde se
  * resuelven, para que el historial y la clasificación no puedan dar dos cifras
  * distintas del mismo objetivo.
+ *
+ * `awards` es el desglose del jugador (`PlayerScore.breakdown.objectives.awards`,
+ * leído con `readObjectiveAwards`), opcional: con él, `points` y `count` son **lo que
+ * ese jugador cobró** —`imparable` por días, `victorias` por victorias—, que es lo
+ * único honesto para una fila del historial. Sin él (o para una fila anterior a
+ * `awards`), se publica el precio del catálogo y una repetición.
  *
  * `null` cuando el id no está en el catálogo: solo puede pasar con una fila escrita
  * a mano (el motor borra las que no corresponden), y quien llame lo trata como
  * "esto no se puede publicar" en vez de inventar una etiqueta.
  */
-export function resolveObjective(id: string, ruleset: ScoringRuleset): ResolvedObjective | null {
+export function resolveObjective(
+  id: string,
+  ruleset: ScoringRuleset,
+  awards: Readonly<Record<string, ObjectiveAwardEntry>> | null = null,
+): ResolvedObjective | null {
   const definition = DEFINITIONS.get(id);
 
   if (definition === undefined) {
     return null;
   }
 
+  const award = awards?.[id];
+  // `victorias` no tiene precio propio: vale lo que diga `pointsPerWin`, igual que
+  // en el motor.
+  const catalogPoints =
+    definition.id === VICTORIAS_ID
+      ? ruleset.pointsPerWin
+      : (ruleset.objectives[definition.id] ?? definition.points);
+
   return {
     id: definition.id,
     label: definition.label,
     group: definition.group,
     metric: definition.metric,
-    points: ruleset.objectives[definition.id] ?? definition.points,
+    points: award?.points ?? catalogPoints,
+    count: award?.count ?? 1,
   };
 }
 

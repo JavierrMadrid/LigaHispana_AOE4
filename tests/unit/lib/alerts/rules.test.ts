@@ -11,6 +11,7 @@ import {
   alertDetails,
   alertSummary,
   buildTriggeredAlert,
+  hasStreamChannel,
   mergeAlertsRuleset,
   partidas,
   type AlertTriggerInput,
@@ -47,15 +48,17 @@ function disparo(overrides: Partial<AlertTriggerInput> = {}): AlertTriggerInput 
 }
 
 describe("etiquetas", () => {
-  it("las once reglas y los cuatro tipos tienen su rótulo en español", () => {
+  it("las doce reglas y los cuatro tipos tienen su rótulo en español", () => {
     // El `satisfies Record<...>` del módulo obliga a decidir la etiqueta al añadir
     // una regla; aquí se comprueba que ninguna se quedó sin él ni con el mismo
-    // texto que otra. Las once reglas son las ocho de comportamiento más las tres de
-    // estado (las dos del historial de partidas y la de Discord), y los cuatro tipos
-    // son las tres rachas/acumulados más `STATE_DETECTED`.
+    // texto que otra. Las doce etiquetas son las **seis** reglas de comportamiento
+    // que se calculan hoy, las **dos retiradas** (R4 y R5, que se quedan por las
+    // filas históricas) y las **cuatro de estado** (historial, ladder, Discord y
+    // canal de directo); los cuatro tipos son las tres rachas/acumulados más
+    // `STATE_DETECTED`.
     const etiquetas = Object.values(ALERT_RULE_LABELS);
 
-    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(11);
+    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(12);
     expect(Object.keys(ALERT_KIND_LABELS)).toHaveLength(4);
     expect(new Set(etiquetas).size).toBe(etiquetas.length);
     for (const etiqueta of [...etiquetas, ...Object.values(ALERT_KIND_LABELS)]) {
@@ -115,27 +118,14 @@ describe("alertSummary", () => {
     ).toContain("el mismo compañero");
   });
 
-  it("R4 dice la brecha cuando la trae y el texto genérico cuando no", () => {
+  it("las dos reglas retiradas conservan su frase genérica, para las filas históricas", () => {
+    // R4 y R5 ya no se calculan, pero sus valores del enum y sus etiquetas siguen
+    // porque hay filas de `Alert` escritas con ellos. Sus frases se quedan en la
+    // forma genérica: ya no hay detalle (`eloGap`, `steps`) que las concrete.
     expect(
-      alertSummary(disparo({ rule: "TEAMMATE_ELO_GAP", count: 1, detail: { eloGap: 500 } })),
-    ).toBe("1 partida de equipo con un compañero a 500 de elo");
-    expect(alertSummary(disparo({ rule: "TEAMMATE_ELO_GAP" }))).toContain(
-      "muy por encima o por debajo",
-    );
-  });
-
-  it("R5 concuerda el número de escalones y conserva el sentido", () => {
-    expect(
-      alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: 1 } })),
-    ).toContain("1 escalón");
-    expect(
-      alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: 3 } })),
-    ).toContain("3 escalones");
-    // `steps` negativo es que la partida está por encima del jugador.
-    expect(
-      alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", detail: { steps: -3 } })),
-    ).toContain("por encima");
-    expect(alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME" }))).toContain(
+      alertSummary(disparo({ rule: "TEAMMATE_ELO_GAP", count: 1 })),
+    ).toContain("muy por encima o por debajo");
+    expect(alertSummary(disparo({ rule: "LOW_DIVISION_TEAM_GAME", count: 1 }))).toContain(
       "en una división muy distinta",
     );
   });
@@ -182,7 +172,11 @@ describe("alertSummary", () => {
   });
 
   it("las frases de estado no llevan el nombre del jugador ni la causa", () => {
-    for (const rule of ["HISTORY_NOT_PUBLIC", "MISSING_LADDER_MATCHES"] as const) {
+    for (const rule of [
+      "HISTORY_NOT_PUBLIC",
+      "MISSING_LADDER_MATCHES",
+      "NO_STREAM_CHANNEL",
+    ] as const) {
       const frase = alertSummary(
         disparo({
           rule,
@@ -233,9 +227,9 @@ describe("alertDetails", () => {
   });
 
   it("el detalle de la partida se mezcla con el resto", () => {
-    const detalles = alertDetails(disparo({ detail: { eloGap: 500, durationSeconds: 1800 } }));
+    const detalles = alertDetails(disparo({ detail: { durationSeconds: 1800, probedCount: 3 } }));
 
-    expect(detalles).toMatchObject({ eloGap: 500, durationSeconds: 1800 });
+    expect(detalles).toMatchObject({ durationSeconds: 1800, probedCount: 3 });
   });
 
   it("una regla que no mira partidas no escribe ventana", () => {
@@ -321,6 +315,82 @@ describe("DISCORD_NOT_IN_GUILD: una regla, dos casos", () => {
     // para encontrar a esa persona en Discord.
     expect(conCuenta.details.discordUsername).toBe("pepito");
     expect(conNombre.details.discordUsername).toBe("pepito");
+  });
+});
+
+describe("NO_STREAM_CHANNEL: la regla condicional de la edición", () => {
+  /** El disparo tal y como lo escribe `evaluateAlerts()`: sin ancla y sin ventana. */
+  function disparoSinCanal(overrides: Partial<AlertTriggerInput> = {}): AlertTriggerInput {
+    return disparo({
+      rule: "NO_STREAM_CHANNEL",
+      kind: "STATE_DETECTED",
+      subject: SELF_SUBJECT,
+      count: 0,
+      threshold: 1,
+      anchorGameId: null,
+      anchorStartedAt: null,
+      window: undefined,
+      ...overrides,
+    });
+  }
+
+  it("dice lo que se ha comprobado, sin causa y sin nombre", () => {
+    expect(alertSummary(disparoSinCanal())).toBe("Su ficha no tiene ningún canal de directo");
+  });
+
+  it("no escribe ni partida ancla ni ventana: no mira partidas", () => {
+    // Es una columna de `Player`, no una partida: escribir la ventana del torneo
+    // afirmaría un alcance que la comprobación no tiene.
+    const detalles = alertDetails(disparoSinCanal());
+
+    expect(detalles).not.toHaveProperty("anchorGameId");
+    expect(detalles).not.toHaveProperty("anchorStartedAt");
+    expect(detalles).not.toHaveProperty("windowFrom");
+    expect(detalles).not.toHaveProperty("windowTo");
+    // "Cero canales de los uno que se pide": la misma forma que la regla del historial.
+    expect(detalles).toMatchObject({ count: 0, threshold: 1 });
+  });
+
+  it("su clave es de estado: da igual cuántas veces se reevalúe", () => {
+    // La propiedad de la que depende que no llene la tabla: el motor la evalúa en
+    // **cada** pasada mientras la edición exija retransmisión.
+    const primera = buildTriggeredAlert(disparoSinCanal()).dedupeKey;
+    const segunda = buildTriggeredAlert(disparoSinCanal({ count: 99, threshold: 99 })).dedupeKey;
+
+    expect(segunda).toBe(primera);
+    expect(primera).toContain("NO_STREAM_CHANNEL|STATE_DETECTED");
+  });
+
+  it("no se confunde con la del historial del mismo jugador", () => {
+    const historial = buildTriggeredAlert(
+      disparo({ rule: "HISTORY_NOT_PUBLIC", kind: "STATE_DETECTED", anchorGameId: null }),
+    );
+
+    expect(buildTriggeredAlert(disparoSinCanal()).dedupeKey).not.toBe(historial.dedupeKey);
+  });
+});
+
+describe("hasStreamChannel", () => {
+  const sinCanales = {
+    twitchChannel: null,
+    youtubeChannel: null,
+    kickChannel: null,
+    twitchUrl: null,
+  };
+
+  it("sin ningún canal no hay canal", () => {
+    expect(hasStreamChannel(sinCanales)).toBe(false);
+  });
+
+  it("un vacío o un espacio no es un canal", () => {
+    expect(hasStreamChannel({ ...sinCanales, kickChannel: "" })).toBe(false);
+    expect(hasStreamChannel({ ...sinCanales, twitchChannel: "   " })).toBe(false);
+  });
+
+  it("cualquiera de los cuatro vale, incluido el de la ladder", () => {
+    for (const campo of ["twitchChannel", "youtubeChannel", "kickChannel", "twitchUrl"] as const) {
+      expect(hasStreamChannel({ ...sinCanales, [campo]: "canal" }), campo).toBe(true);
+    }
   });
 });
 
@@ -487,7 +557,7 @@ describe("mergeAlertsRuleset", () => {
   it("una versión distinta invalida el documento entero", () => {
     const { ruleset, warnings } = mergeAlertsRuleset({
       version: ALERTS_RULESET_VERSION + 1,
-      thresholds: { teammateEloGap: 900 },
+      thresholds: { shortMatchStreak: 9 },
     });
 
     expect(ruleset).toEqual(DEFAULT_ALERTS_RULESET);
@@ -495,17 +565,17 @@ describe("mergeAlertsRuleset", () => {
     expect(warnings[0]).toContain("se ignoran los umbrales guardados");
   });
 
-  it("aplica un umbral suelto sin tocar los otros ocho", () => {
+  it("aplica un umbral suelto sin tocar los demás", () => {
     const { ruleset, warnings } = mergeAlertsRuleset({
       ...VALIDO,
-      thresholds: { teammateEloGap: 900, lowDivisionSteps: 4 },
+      thresholds: { repeatedTeammateTotal: 4, shortMatchSeconds: 240 },
     });
 
     expect(warnings).toEqual([]);
-    expect(ruleset.thresholds.teammateEloGap).toBe(900);
-    expect(ruleset.thresholds.lowDivisionSteps).toBe(4);
-    expect(ruleset.thresholds.shortMatchSeconds).toBe(
-      DEFAULT_ALERTS_RULESET.thresholds.shortMatchSeconds,
+    expect(ruleset.thresholds.repeatedTeammateTotal).toBe(4);
+    expect(ruleset.thresholds.shortMatchSeconds).toBe(240);
+    expect(ruleset.thresholds.shortMatchStreak).toBe(
+      DEFAULT_ALERTS_RULESET.thresholds.shortMatchStreak,
     );
   });
 

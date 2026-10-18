@@ -407,8 +407,9 @@ export async function deriveLadderCutoffs(options: DeriveCutoffsOptions): Promis
  *
  * La caché se reescribe como un **retrato** de esta llamada: se parte de lo que
  * había, se poda a las familias que se van a derivar y se refrescan esas. Así,
- * una entrada de una familia que ya no se deriva —el `rm_solo` que R5 consultaba
- * antes— no sobrevive a la reescritura, en vez de quedarse inerte para siempre.
+ * una entrada de una familia que ya no se deriva —el `rm_solo`, que no lo necesita
+ * ninguna partida de equipo— no sobrevive a la reescritura, en vez de quedarse
+ * inerte para siempre.
  */
 export async function refreshDivisionCutoffs(
   ladders: string[],

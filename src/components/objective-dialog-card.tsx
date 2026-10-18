@@ -80,8 +80,9 @@ export function ObjectiveDialogCard({
           cardLabel={option.label}
           closeLabel="Cerrar la clasificación"
           front={
-            // El componente reserva arriba el aire del botón de cerrar del
-            // `Modal`, que flota sobre la esquina superior derecha de la tarjeta.
+            // La X de cerrar va dentro de la cara, en su esquina superior derecha
+            // (`ObjectiveFlipDialog`), así que el resumen le reserva el aire de arriba
+            // en vez de meterse debajo.
             <div className="h-full overflow-y-auto">
               <ObjectiveFeatureSummary
                 option={option}
@@ -93,7 +94,10 @@ export function ObjectiveDialogCard({
           }
           back={
             <div className="flex h-full flex-col">
-              <header className="flex items-start gap-4 border-b border-line p-6 pt-14 sm:p-8 sm:pt-16">
+              {/* `pt-14`/`sm:pt-16` le dejan sitio a la X de la cara, que vive en la
+                  esquina superior derecha de la tarjeta. El relleno lateral va como
+                  margen para que la línea de debajo no cruce el marco de la tarjeta. */}
+              <header className="mx-6 flex items-start gap-4 border-b border-line pt-14 pb-6 sm:mx-8 sm:pt-16 sm:pb-8">
                 <span className="flex size-12 shrink-0 items-center justify-center rounded-md border border-line bg-surface-raised">
                   <ObjectiveIcon option={option} className="size-7 shrink-0" />
                 </span>
@@ -103,7 +107,7 @@ export function ObjectiveDialogCard({
                   </h2>
                   <p className="mt-1 text-sm leading-relaxed text-muted">{option.description}</p>
                 </div>
-                <PrizePlate points={option.points} />
+                <PrizePlate option={option} />
               </header>
 
               <div className="min-h-0 flex-1 overflow-y-auto">

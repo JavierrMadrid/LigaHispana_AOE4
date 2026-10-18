@@ -18,6 +18,7 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `ObjectiveEvent` | Un objetivo cobrado por un jugador y cuándo. | único `(objectiveId, playerId)` |
 | `Alert` | Un comportamiento anómalo detectado (append-only). | `id`; único `dedupeKey` |
 | `AdminAction` | Una acción del panel (append-only). | `id` |
+| `Admin` | Una cuenta con acceso al panel de administración. | `id`; `email` único |
 | `RateLimitCounter` | Un contador de frecuencia por IP hasheada. | `key` |
 | `Setting` | Configuración y memoria de los procesos. | `key` |
 
@@ -30,12 +31,18 @@ Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent` y `Alert` apuntan a `Player
 |---|---|
 | `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED` |
 | `MatchResult` | `WIN`, `LOSS` |
-| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED` |
-| `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP`, `LOW_DIVISION_TEAM_GAME`, `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD` |
+| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
+| `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión) |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
 
 Los valores nuevos de un enum se añaden **al final**: en Postgres `ALTER TYPE … ADD VALUE` solo
 añade al final, y poner uno en medio obligaría a recrear el tipo.
+
+Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con un compañero) y
+`LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
+caso pasó a ser una condición de **puntuación** (una partida por equipos con un compañero a dos
+escalones o más no cuenta; ver [`PUNTUACION.md`](./PUNTUACION.md)). Se quedan —con su etiqueta y su
+frase— porque hay filas históricas de `Alert` que el panel y el informe siguen leyendo.
 
 ## `Player`
 
@@ -91,9 +98,13 @@ puntúa lo aplica el motor, no el importador.
 | `startedAt` | `DateTime` | Ancla de la ventana de clasificatorias. |
 | `finishedAt` | `DateTime?` | `null` = en curso (es lo que lista `/partidas`). |
 | `durationSeconds` | `Int?` | |
+| `apm` | `Int?` | APM de la partida según su resumen. `null` = **sin resumen** (no es `0`), y es la marca de que la partida tiene resumen. |
+| `feudalAgeSeconds`, `castleAgeSeconds`, `imperialAgeSeconds` | `Int?` | Segundos de partida en que se alcanzó cada edad; gana el **primer** instante. |
+| `villagersLost`, `gildedVillagersLost`, `mountedVillagersLost` | `Int?` | Aldeanos perdidos, por tipo. Los dorados y los montados van aparte porque `defensor-del-pueblo` los exige por separado. |
+| `summaryCheckedAt` | `DateTime?` | Cuándo se pidió el **resumen** por última vez. `null` = nunca. Se escribe también tras un `404` concluyente ("esta partida no lo tiene"). |
 | `points` | `Int` (`0`) | Puntos que aporta según el ruleset: `pointsPerWin` en una victoria clasificatoria, 0 en el resto. Solo lo escribe el motor. |
 | `revertedAt` | `DateTime?` | Marca de "deja de puntuar" (reversible). `null` = puntúa. |
-| `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** |
+| `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** De aquí salen los compañeros y su rating para la condición de equipo. |
 | `createdAt` | `DateTime` | |
 
 Índices: único `(playerId, gameId)` (dedupe del worker); `(playerId, startedAt)`,
@@ -101,6 +112,13 @@ puntúa lo aplica el motor, no el importador.
 
 `mode` y `civRandomized` se rellenaron con `npm run backfill:model` en las filas anteriores; a
 partir de ahí las escribe el worker con cada partida.
+
+Las ocho columnas del **resumen de partida** (`apm`…`summaryCheckedAt`) las escribe el worker desde una
+ruta del **sitio** de AoE4World (no de su API) que se pide aparte y solo importa a las partidas que
+puntúan; el detalle está en [`OPERACION.md`](./OPERACION.md#resumen-de-partida). Las leen cinco
+objetivos, y en todas ellas `null` significa "**no hay resumen**", nunca "cero": una partida sin resumen
+no cumple ninguna hazaña y corta la racha de `ansioso`. `apm` es la marca de que la partida tiene
+resumen.
 
 ## `PlayerScore`
 
@@ -111,15 +129,16 @@ la web; `Match` no se lee para pintar la clasificación.
 |---|---|---|
 | `playerId` | `String` | FK a `Player.id`, cascada. |
 | `ruleSetVersion` | `Int` | Con qué versión de reglas se calculó. Permite convivir dos versiones sin pisarse. |
-| `rank` | `Int` | Puesto con el desempate ya aplicado. **Se guarda** porque el orden no se resuelve en SQL. |
-| `total` | `Int` | `sum(byMode.points) + objectives.points`. |
+| `rank` | `Int` | Puesto de competición con el desempate ya aplicado: dos filas empatadas en total, tasa de victorias, victorias y partidas **comparten** puesto (1, 2, 2, 4). **Se guarda** porque el orden no se resuelve en SQL. |
+| `total` | `Int` | `objectives.points`: la suma de los objetivos del jugador. Todo punto sale de ahí (las victorias son el objetivo `victorias`). |
 | `wins`, `matches` | `Int` | Victorias y partidas clasificatorias. |
 | `streak` | `Int?` | Racha **actual del torneo**: positiva = victorias clasificatorias seguidas, negativa = derrotas seguidas. `null` sin ninguna clasificatoria contada (la web pinta "-"; no es `0`). No es la racha de la ladder: esa vive en `Player.streak`. |
 | `breakdown` | `Json` | Desglose (ver formato abajo). |
 | `computedAt` | `DateTime` | |
 
-Índices: pk `(playerId, ruleSetVersion)` e `(ruleSetVersion, rank)`, que sostiene la clasificación
-sin `sort`. Todo jugador **aprobado** tiene fila, aunque todavía no haya jugado ninguna clasificatoria:
+Índices: pk `(playerId, ruleSetVersion)` e `(ruleSetVersion, rank)`, que sostiene el orden de la
+clasificación; dentro de un puesto compartido el desempate es `Player.profileId` ascendente. Todo jugador
+**aprobado** tiene fila, aunque todavía no haya jugado ninguna clasificatoria:
 sale con `total`, `wins` y `matches` a 0, el `breakdown` con ceros (las familias del ruleset, con 0,
 y `objectives` a 0 y vacío) y `streak` a `null`. Un jugador **no aprobado** (`PENDING`/`REJECTED`) no
 tiene fila y no aparece.
@@ -129,21 +148,36 @@ siempre presentes, con ceros si no aplican.
 
 ```json
 {
-  "ruleSetVersion": 3,
-  "rule": "2 puntos por victoria clasificatoria más 82 objetivos: 29 competiciones y 53 logros",
+  "ruleSetVersion": 4,
+  "rule": "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
-  "objectives": { "points": 125, "earned": ["loco-por-ganar", "rey-1v1", "lider-french"] }
+  "objectives": {
+    "points": 458,
+    "earned": ["victorias", "loco-por-ganar", "rey-1v1"],
+    "awards": {
+      "victorias": { "points": 168, "count": 84 },
+      "loco-por-ganar": { "points": 50, "count": 1 },
+      "rey-1v1": { "points": 240, "count": 1 }
+    }
+  }
 }
 ```
+
+`objectives.points` es el total de la fila. `awards` guarda, por id cobrado, el **importe real** y las
+**repeticiones** (`count`): `imparable` cobra 1 punto por día con tope y `victorias`, `pointsPerWin` por
+victoria, así que el precio del catálogo no es lo que se cobró. Las filas escritas antes de que
+existiera `awards` no lo traen, y quien las lea cae al precio de catálogo y a una repetición. `byMode` y
+`Match.points` son auditoría: no se suman al total.
 
 ## `ObjectiveEvent`
 
 Un objetivo **cobrado por un jugador** y **cuándo**. Un evento por objetivo y jugador: en una
-competición hay uno (el poseedor) y en un logro puede haber muchos (todos los que lo completan). Lo lee
-el historial del panel (`/admin/historial`); no alimenta la clasificación.
+competición hay uno (el poseedor) y en un logro puede haber muchos (todos los que lo completan). Lo leen
+los dos historiales que mezclan partidas y objetivos (`/admin/historial` y `/historial`); no alimenta la
+clasificación.
 
 | Campo | Tipo | Nota |
 |---|---|---|
@@ -167,7 +201,7 @@ fila dice "a la 1 se detectó esto" y no se reescribe.
 | Campo | Tipo | Nota |
 |---|---|---|
 | `id` | `String` (cuid) | |
-| `rule` | `AlertRule` | Qué comportamiento. La lista es fija en código; los umbrales, no (`alerts.ruleset`). |
+| `rule` | `AlertRule` | Qué comportamiento. La lista es fija en código; los umbrales, no (`alerts.ruleset`). Dos de sus valores son legado y ya no se calculan, pero hay filas escritas con ellos. |
 | `kind` | `AlertKind` | Cómo se detectó. |
 | `playerId` | `String` | FK a `Player.id`, cascada. |
 | `subjectProfileId`, `subjectName` | `Int?`, `String?` | El rival (R2) o compañero (R3). No es FK: el sujeto suele ser de fuera de la liga. |
@@ -190,7 +224,12 @@ porque un estado no tiene remate y si no insertaría una fila nueva cada 12 hora
 Una acción del panel, para poder pintar su historial. **Append-only**: quién hizo qué y sobre qué
 fila. `summary` va ya redactado en español. Registra lo que cambia datos que se ven desde fuera:
 altas, bajas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
-jugador en la clasificación y rechazar lo deja fuera) y los revert/restore de puntos de una partida.
+jugador en la clasificación y rechazar lo deja fuera), los revert/restore de puntos de una partida,
+la gestión de admins, los cambios de configuración de la edición y la **reversión** de una acción
+anterior (`ACTION_REVERTED`). La única escritura sobre una fila ya existente es la marca de revertida
+(`revertedAt`/`revertedByEmail`): el rastro de lo hecho sobrevive a que se deshaga, y lo único que
+dice la marca es que ya no está vigente. Qué tipos se pueden deshacer y qué hace cada uno está en
+[`OPERACION.md`](./OPERACION.md#deshacer-una-acción).
 
 | Campo | Tipo | Nota |
 |---|---|---|
@@ -198,11 +237,36 @@ jugador en la clasificación y rechazar lo deja fuera) y los revert/restore de p
 | `type` | `AdminActionType` | |
 | `actorEmail` | `String` | Correo del usuario de Supabase Auth. |
 | `summary` | `String` | Frase ya redactada. |
-| `targetId` | `String?` | `Player.id` o `Match.id` según el `type`. Texto y no FK a propósito. |
+| `targetId` | `String?` | `Player.id`, `Match.id` o `Admin.id` según el `type`. Texto y no FK a propósito. |
 | `details` | `Json?` | Datos de la acción (no se usan para pintar). |
+| `revertedAt` | `DateTime?` | `null` = la acción sigue vigente. Marca de revertida, reversible. La escribe la reversión, que además añade una fila `ACTION_REVERTED`. |
+| `revertedByEmail` | `String?` | Quién la revirtió (no es el `actorEmail`, que es quien la hizo). |
 | `createdAt` | `DateTime` | |
 
 Índices: `(createdAt)` (paginación, lo más reciente primero) y `(type, createdAt)` (filtro por tipo).
+
+## `Admin`
+
+Las cuentas con acceso al panel. Hasta esta tabla, **cualquier** usuario de Supabase Auth era admin
+(los registros públicos están desactivados, así que solo había cuentas de la organización), y eso
+hacía imposible dar de baja a nadie. Con ella, la comprobación de acceso (`requireAdmin()` en
+`src/lib/auth.ts`) deja pasar al correo del superadministrador o a una fila **activa**.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `email` | `String` **único** | Canónico: en minúsculas y sin espacios. Es lo que se compara al entrar. |
+| `authUserId` | `String?` **único** | `auth.users.id`. `null` = aún sin vincular. Los `null` no colisionan. |
+| `active` | `Boolean` (`true`) | `false` = de baja: pierde el acceso sin borrar la fila. |
+| `deactivatedAt` | `DateTime?` | Cuándo se dio de baja. `null` mientras está activa. |
+| `addedByEmail` | `String?` | Correo de quien le dio de alta (también en `AdminAction`). |
+| `createdAt`, `updatedAt` | `DateTime` | |
+
+Índices: `id` (pk), `email` (único) y `authUserId` (único). La **baja es `active = false`**, no un
+borrado: la organización quiere desactivar sin perder la relación con lo que hizo la persona, y el
+rastro de quién hizo qué vive en `AdminAction`, que no depende de esta tabla. **No hay columna de
+rol**: el superadministrador es único y sale de la variable `SUPERADMIN_EMAIL` (ver
+[`OPERACION.md`](./OPERACION.md)), así que la tabla solo dice quién es admin normal.
 
 ## `RateLimitCounter`
 
@@ -235,18 +299,23 @@ Claves vivas en producción, con quién las escribe:
 
 | Clave | Qué es | La escribe |
 |---|---|---|
-| `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana y objetivos). | `ensureRuleset()` en `src/lib/scoring.ts` |
+| `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana, objetivos y objetivos desactivados). Un documento de la versión anterior se migra al leerlo. | `ensureRuleset()` en `src/lib/scoring.ts`; el panel, con `saveScoringRuleset` |
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
-| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
+| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 3) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
-| `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder que necesita la regla R5 (hoy solo `rm_team`). | `npm run alerts:cutoffs` |
+| `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |
-| `registration.countries` | Países que admite el formulario. | `npm run countries:seed` |
-| `registration.open` | Si la inscripción está abierta. | Panel de admin |
-| `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel de admin |
+| `discord.participantRole` | Memoria del rol de participante: los `discordUserId` a los que el bot ha puesto el rol (`granted`) y cuándo se sincronizó (`syncedAt`). Permite quitarle el rol a quien deja de estar aprobado aunque su fila se haya borrado. | Worker (`src/lib/discord/role-sync.ts`) |
+| `discord.standingsReport` | Memoria del informe diario de clasificación: el día de Madrid del último informe completo (`lastDay`), el día a medias (`pendingDay`) y cuántos trozos ya salieron (`sentChunks`). Evita repetir el informe del mismo día y permite reanudarlo sin repetir mensajes. | Worker (`src/lib/standings-report.ts`) |
+| `registration.countries` | Países que admite el formulario, en el orden del catálogo. | `npm run countries:seed` o el panel (**solo el superadministrador**), con `saveCountries` |
+| `registration.open` | Si la inscripción está abierta. | Panel (**solo superadministrador**), con `setRegistrationOpen`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
+| `registration.closesAt` | Fecha de cierre de inscripciones (ISO-8601 UTC). Pasada, el plazo se cierra solo; el interruptor sigue pudiendo cerrar antes. Ausente = sin fecha. | Panel (**solo superadministrador**), con `setRegistrationClosesAt`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
+| `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel (**solo superadministrador**), con `setMatcherinoDonations`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
+| `edition.config` | Configuración de la edición: nombre, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento). Versión 1 fija en código. | Panel de admin (**solo el superadministrador**) |
+| `edition.announcements` | Memoria de los avisos de la edición en Discord: comienzo y final (`startedAt`/`finishedAt`, o `null`), los hitos nuevos ya avisados (`sent`: clave de hito → instante) y si el plazo de inscripción llegó a estar abierto (`registrationWasOpen`). Una marca puesta no se quita nunca. | Worker (`src/lib/edition-announcements.ts`) |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube y su playlist de subidas, ya resueltos (30 días). | Worker |
 | `aoe4world.sync.player.<profileId>` | Cursor de sincronización por jugador. | Worker; la baja de `/admin` lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede un cursor viejo. |
@@ -265,32 +334,37 @@ aparece en una consulta, no se crea.**
 | `Match` | `(playerId, finishedAt)` | Partidas en curso y orden de hitos. |
 | `Match` | `(mode, startedAt)` | Clasificatorias dentro de la ventana (igualdad + rango). |
 | `PlayerScore` | pk `(playerId, ruleSetVersion)` | Ficha del jugador; de paso indexa la FK para el `Cascade`. |
-| `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, sin `sort`. |
+| `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, ordenada por `rank` y, dentro del puesto compartido, por `Player.profileId`. |
 | `ObjectiveEvent` | `(objectiveId, playerId)` (único), `achievedAt`, `playerId` | Reconciliación, feed del historial, filtro por jugador y cascada. |
 | `Alert` | `dedupeKey` (único), `createdAt`, `(playerId, rule)` | Idempotencia, listado, detalle por jugador. |
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
+| `Admin` | `email` (único), `authUserId` (único) | Acceso al panel por correo y vínculo con Auth. |
 | `RateLimitCounter` | `key` (pk) | El `INSERT ... ON CONFLICT`. |
 
 ## Consultas calientes
 
 | Dónde | Consulta | Índice |
 |---|---|---|
-| `/` (clasificación) | `PlayerScore where ruleSetVersion = V order by rank` + `Player` por id | `(ruleSetVersion, rank)` |
+| `/` (clasificación) | `PlayerScore where ruleSetVersion = V order by rank, Player.profileId` + `Player` por id; si sale vacía, `max(ruleSetVersion) < V` y la misma consulta con esa versión (respaldo, ver `docs/OPERACION.md`) | `(ruleSetVersion, rank)` |
 | `/partidas` | `Match where finishedAt is null` y `Player.status = APPROVED`, por `startedAt` | `(playerId, finishedAt)`; sin índice parcial (no se ha necesitado) |
 | `/objetivos` | `Match` clasificatorias de todos los aprobados, en la ventana | `(mode, startedAt)` |
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |
 | `/admin/historial` | `Match` clasificatorias **y revertidas** + `ObjectiveEvent` | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt` |
+| `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas dos tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt` |
 | `/admin/alertas` | `Alert [por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
+| Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
 | Motor (recálculo) | `Match where mode = any(...) and startedAt en ventana and result/finishedAt no nulos` | `(mode, startedAt)` |
 
-El filtro de qué cuenta es **uno solo**: `src/lib/ranked-match.ts` (ventana, corte de inscripción y
-marca de revertida) y lo reparte como `countsAsRanked`, `rankedMatchWhere` y `rankedMatchSql`. El
-panel usa `classificatoryWhere()`, que es lo mismo sin la marca de revertida, para poder listarlas.
+El filtro de qué cuenta es **uno solo**: `src/lib/ranked-match.ts` (ventana, corte de inscripción,
+marca de revertida y la condición de equipo de las partidas por equipos) y lo reparte como
+`countsAsRanked`, `rankedMatchWhere` y `rankedMatchSql` —la condición de equipo solo cabe en las dos
+últimas, así que quien use el `where` de Prisma la filtra después en memoria—. El panel usa
+`classificatoryWhere()`, que es lo mismo sin la marca de revertida, para poder listarlas.
 
 ## RLS y privilegios
 
-Postura **cerrada**, aplicada a las ocho tablas de `public`:
+Postura **cerrada**, aplicada a las nueve tablas de `public`:
 
 | Paso | Qué |
 |---|---|
@@ -299,7 +373,7 @@ Postura **cerrada**, aplicada a las ocho tablas de `public`:
 | 3 | **Ningún `grant`** a `anon` ni a `authenticated`. |
 | 4 | Comprobar con `npm run db:security -- --check`. |
 
-Estado real: RLS activa y 0 políticas en las ocho tablas, y sin permisos para `anon` ni
+Estado real: RLS activa y 0 políticas en las nueve tablas, y sin permisos para `anon` ni
 `authenticated`. `service_role` conserva sus permisos y su `BYPASSRLS`: es un rol de infraestructura
 de Supabase, no un cliente del torneo. Consecuencia en la Data API: **`401 permission denied`** (el
 permiso de tabla se comprueba antes que RLS). No se "arregla" concediendo `SELECT`; si algún día
@@ -310,7 +384,7 @@ hace falta servir una tabla, sería con una vista `security_invoker = true` y un
 - Antes de activar RLS, el script comprueba que el rol de `DATABASE_URL` tenga `BYPASSRLS`; si no,
   se niega a aplicar nada (la web dejaría de ver datos en silencio).
 - La lista de tablas del script es **explícita**: al añadir una tabla hay que añadirla ahí, porque
-  una tabla nueva nace con los permisos por defecto de Supabase.
+  una tabla nueva nace con los permisos por defecto de Supabase. `Admin` ya está en esa lista.
 
 ## Cambios de esquema
 

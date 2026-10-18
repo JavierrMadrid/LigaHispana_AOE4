@@ -9,7 +9,7 @@ import { getLiveMatches } from "@/lib/public";
 export const metadata: Metadata = {
   title: "Partidas en juego",
   description:
-    "Partidas de ladder ranked que se están jugando ahora mismo y en las que participa algún jugador de la Liga Hispana de Age of Empires IV, con el mapa, el tipo de partida y la alineación completa.",
+    "Partidas de ladder ranked que se están jugando ahora mismo y en las que participa algún jugador de la Liga Hispana de Age of Empires IV, con el mapa, el tipo de partida, la alineación completa y quién está emitiendo en directo.",
 };
 
 export const dynamic = "force-dynamic";

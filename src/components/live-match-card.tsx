@@ -1,11 +1,13 @@
 import Image from "next/image";
 import type { DivisionId, LiveMatch, LiveMatchParticipant } from "@/lib/public";
 import { civilizationName } from "@/lib/civs";
+import { ChannelLinks } from "@/components/channel-links";
 import { CivilizationIcon } from "@/components/civilization-icon";
 import { divisionColor, divisionLabel } from "@/components/division-icon";
 import { LeagueIcon, leagueFilterRank } from "@/components/league-icon";
+import { liveChannelValues, matchLiveChannels, participantIsLive } from "@/components/live-channels";
 import { LiveDot } from "@/components/live-dot";
-import { formatAbsoluteTime } from "@/lib/format";
+import { formatAbsoluteTime, multistreamViewerUrl } from "@/lib/format";
 import { mapImage } from "@/lib/maps";
 
 /**
@@ -24,11 +26,18 @@ import { mapImage } from "@/lib/maps";
  * emblema, en un tono un punto por debajo. No se pinta avatar: cada jugador lleva
  * su icono de civilización, que es lo que el ojo busca en una partida, y así la
  * fila queda alineada también para los rivales, que no tienen foto.
+ *
+ * Lo que se puede ir a ver tiene su sitio: el canal de cada participante que está
+ * emitiendo va pegado al final de su fila —es de ese jugador, no de la partida—,
+ * y cuando en la misma partida hay dos canales de Twitch o Kick, el visor
+ * multi-stream ocupa el pie de la tarjeta, que es una acción de la partida entera.
  */
 export function LiveMatchCard({ match }: { match: LiveMatch }) {
   const teams = groupTeams(match.participants);
   const image = mapImage(match.map);
   const mapName = match.map !== null && match.map.trim() !== "" ? match.map : null;
+  const livePlayerCount = match.participants.filter(participantIsLive).length;
+  const multistream = multistreamViewerUrl(matchLiveChannels(match.participants));
 
   return (
     <li className="overflow-hidden rounded-lg border border-line bg-surface">
@@ -40,6 +49,7 @@ export function LiveMatchCard({ match }: { match: LiveMatch }) {
           : match.leaguePlayerCount === 1
             ? ", 1 jugador de la liga"
             : ""}
+        {livePlayerCount > 0 ? `, ${livePlayerCount} en directo` : ""}
       </h2>
 
       <div className="relative aspect-[16/7] w-full overflow-hidden bg-surface-raised">
@@ -113,6 +123,25 @@ export function LiveMatchCard({ match }: { match: LiveMatch }) {
           </ul>
         )}
       </div>
+
+      {/* Acción de la partida, no de un jugador: su sitio es el pie de la
+          tarjeta. `multistreamViewerUrl` devuelve `null` mientras no haya al
+          menos dos canales que meter (los de YouTube van por su cuenta, con su
+          icono), y entonces no se pinta ni el filete. */}
+      {multistream !== null ? (
+        <div className="border-t border-line">
+          <a
+            href={multistream}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Visor multi-stream de StreamsCharts"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-muted underline-offset-4 transition-colors hover:bg-surface-raised hover:text-accent hover:underline"
+          >
+            Ver los directos a la vez
+            <span className="sr-only"> (se abre en una pestaña nueva)</span>
+          </a>
+        </div>
+      ) : null}
     </li>
   );
 }
@@ -212,6 +241,11 @@ function ParticipantRow({
       {participant.division !== null ? (
         <DivisionBadge division={participant.division} />
       ) : null}
+
+      {/* Solo los canales que emiten ahora mismo: es lo que se puede ir a ver.
+          `liveChannelValues` deja fuera los apagados y los que no se han podido
+          comprobar, así que aquí no hay que decidir nada más. */}
+      <ChannelLinks name={label} {...liveChannelValues(participant)} />
     </li>
   );
 }

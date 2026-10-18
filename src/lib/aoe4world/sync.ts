@@ -1,8 +1,13 @@
 import "server-only";
 
+import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { evaluateAlerts, type EvaluateAlertsResult } from "@/lib/alerts/evaluate";
+import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { checkDiscordMembership, describeDiscordChecks, type DiscordChecksResult } from "@/lib/discord/check";
+import { describeParticipantRoleSync } from "@/lib/discord/participant-role";
+import { syncParticipantRole } from "@/lib/discord/role-sync";
 import { db } from "@/lib/db";
+import { announceEditionWindow } from "@/lib/edition-announcements";
 import {
   checkPlayerHistory,
   describeHistoryChecks,
@@ -16,7 +21,7 @@ import {
   writeSyncRunTrace,
   type SyncRunTrace,
 } from "@/lib/settings";
-import { countsAsRanked } from "@/lib/ranked-match";
+import { countsAsRanked, type TeamTierContext } from "@/lib/ranked-match";
 import {
   recomputeScores,
   readRuleset,
@@ -28,6 +33,12 @@ import {
   refreshStreamLiveStatus,
   type StreamRefreshResult,
 } from "@/lib/streams/refresh";
+import { announceDailyStandings } from "@/lib/standings-report";
+import {
+  backfillMatchSummaries,
+  describeSummaryBackfill,
+  type SummaryBackfillResult,
+} from "@/lib/sync-summaries";
 import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
 import { Aoe4WorldError, Aoe4WorldNotFoundError } from "./http";
@@ -60,6 +71,15 @@ import type { Aoe4WorldGame } from "./types";
  * vez al día y desde el homepage de AoE4World, porque la API no lo expone. Un fallo
  * de ese parseo deja `Setting` como estaba y no rompe nada.
  *
+ * Y **en el mismo sitio**, también antes del recálculo porque el motor de objetivos
+ * es quien lee lo que escribe, se rellena el **summary de las partidas que aún no lo
+ * tienen** (`src/lib/sync-summaries.ts`): los APM, la edad a la que se llegó y los
+ * aldeanos perdidos, que son lo que cobran `ansioso`, los tres
+ * `avance-relampago-*` y `defensor-del-pueblo`. Son peticiones al **sitio** de
+ * AoE4World (su ruta de summary no es la API) con su propio presupuesto por pasada y
+ * su cola de más nueva a más vieja, y un fallo suyo no tumba la pasada: deja esos
+ * objetivos sin datos hasta la siguiente y el motivo en el rastro.
+ *
  * Después, y antes de los directos, se comprueba **el historial de partidas en el
  * juego** de los participantes (`src/lib/history-checks.ts`): si alguien tiene el
  * toggle "Share History" cerrado, lo sabemos, y si la ladder registra una partida
@@ -81,6 +101,12 @@ import type { Aoe4WorldGame } from "./types";
  * nada de lo anterior y porque, si falla, lo único que se pierde es un icono. Vive
  * aquí y no en el DAL porque son peticiones salientes a dos APIs externas y en el
  * plan Free de Cloudflare eso solo cabe una vez por pasada.
+ *
+ * Y **lo último de todo** es el aviso del comienzo y el final del torneo en Discord
+ * (`src/lib/edition-announcements.ts`): mira la ventana del ruleset y manda un mensaje
+ * al canal de avisos cuando cruza cada extremo, una sola vez por edición. Sin nada que
+ * anunciar no lee el nombre de la edición ni crea ningún cliente HTTP, y un fallo suyo
+ * va al rastro (`announceError`) sin mover `lastSuccessAt`.
  */
 
 /**
@@ -127,8 +153,9 @@ export type SyncPlayerResult = {
    * (`finishedAt = null`) y esta pasada quedan resueltas cumpliéndola —da igual
    * la vía, el listado o el refetch de pendientes—. No es "filas tocadas": una
    * partida en curso que sigue en curso, una anterior al corte de inscripción o
-   * al inicio de la ventana, o de un modo que no puntúa, se guarda (o se
-   * refresca) pero **no** cuenta aquí. Es lo que suma `SyncSummary.newMatches`.
+   * al inicio de la ventana, de un modo que no puntúa o de un equipo
+   * desequilibrado se guarda (o se refresca) pero **no** cuenta aquí. Es lo que
+   * suma `SyncSummary.newMatches`.
    */
   matchesCounted: number;
   matchesUpdated: number;
@@ -156,9 +183,9 @@ export type SyncSummary = {
    * insertadas: la suma de `SyncPlayerResult.matchesCounted`. Cuenta las que se
    * insertan ya resueltas y cumplen la regla, más las que estaban en curso y han
    * quedado resueltas cumpliéndola. Una partida que se guarda pero no puntúa
-   * (en curso, fuera de la ventana o del corte de inscripción, modo que no
-   * puntúa) **no** suma aquí, aunque sí en `updatedMatches` o en el detalle del
-   * jugador. Ver `docs/OPERACION.md`.
+   * (en curso, fuera de la ventana o del corte de inscripción, de un modo que no
+   * puntúa o de un equipo desequilibrado) **no** suma aquí, aunque sí en
+   * `updatedMatches` o en el detalle del jugador. Ver `docs/OPERACION.md`.
    */
   newMatches: number;
   updatedMatches: number;
@@ -186,6 +213,23 @@ export type SyncSummary = {
    * mueve `lastSuccessAt`: el motor sigue con el último pool bueno.
    */
   mapPoolError: string | null;
+  /**
+   * Relleno de las métricas del summary de las partidas que aún no lo tienen
+   * (`src/lib/sync-summaries.ts`): los APM, la edad a la que se llegó y los aldeanos
+   * perdidos de los cinco objetivos que los necesitan.
+   *
+   * **No** es parte de la salud del sincronizador: que no se haya podido leer el
+   * summary de unas partidas solo deja esos objetivos sin datos. El motivo va en
+   * `summariesError` y **no** mueve `lastSuccessAt`.
+   */
+  summaries: SummaryBackfillResult | null;
+  /**
+   * Lo que hay que saber del paso del summary y no es un éxito limpio: summaries
+   * que no se han podido leer, partidas que el sitio no tiene, o partidas que
+   * quedaron para la siguiente pasada por el presupuesto. `null` cuando todo fue
+   * bien o no había nada que pedir.
+   */
+  summariesError: string | null;
   /**
    * Recálculo de la clasificación al final de la pasada. `null` solo si la
    * versión de reglas leída no existe, lo que no debería ocurrir.
@@ -255,6 +299,17 @@ export type SyncSummary = {
    * sobre un icono, no salud del sincronizador.
    */
   streamsError: string | null;
+  /**
+   * Lo que hay que saber de los **mensajes del bot al canal de avisos**: los hitos de la
+   * edición (`src/lib/edition-announcements.ts`) y el informe diario de clasificación
+   * (`src/lib/standings-report.ts`). Un envío que ha fallado, o la falta de
+   * `DISCORD_BOT_TOKEN` o `DISCORD_ANNOUNCE_CHANNEL_ID`. `null` cuando no tocaba ningún
+   * mensaje o los que tocaban salieron.
+   *
+   * **No** mueve `lastSuccessAt` del rastro, por el mismo motivo que `discordError`: no
+   * poder avisar del torneo no ha parado ni una partida.
+   */
+  announceError: string | null;
   players: SyncPlayerResult[];
 };
 
@@ -401,38 +456,47 @@ async function applyMatchUpdate(playerId: string, match: NormalizedMatch): Promi
  * worker. `NormalizedMatch` no lleva `revertedAt`: una fila que el worker acaba
  * de ver nunca está revertida —la marca la pone el panel sobre la fila guardada—,
  * así que se le pasa `null`. El filtro de familia de ladder es el de la regla
- * (las `RANKED_MODES`), el mismo que aplica el motor al puntuar.
+ * (las `RANKED_MODES`), el mismo que aplica el motor al puntuar, y `rawJson` va
+ * dentro del objeto de la partida porque es lo que necesita la condición de
+ * equipos.
  */
 function countsForTournament(
   match: NormalizedMatch,
   ruleset: Pick<ScoringRuleset, "window">,
   registeredAt: Date | null,
+  context: TeamTierContext,
 ): boolean {
-  return countsAsRanked({ ...match, revertedAt: null }, ruleset.window, registeredAt);
+  return countsAsRanked({ ...match, revertedAt: null }, ruleset.window, registeredAt, context);
 }
 
 /**
  * Cuántas de una lista de partidas **entran a contar para el torneo**.
  *
  * Es `countsForTournament()` fila a fila, y es pura: recibe las partidas
- * normalizadas, la ventana del ruleset y el `registeredAt` del jugador, y no
- * toca ni la base ni la red. Se prueba en
- * `tests/unit/lib/aoe4world/sync.test.ts`.
+ * normalizadas, la ventana del ruleset, el `registeredAt` del jugador y el
+ * contexto de equipos (`profileId` y cortes), y no toca ni la base ni la red. Se
+ * prueba en `tests/unit/lib/aoe4world/sync.test.ts`.
  *
  * Una partida cuenta solo si está **resuelta**, es de una familia rankeada,
- * empezó dentro del corte del jugador (`max(window.from, registeredAt)`) y antes
- * del fin de la ventana. Una fila en curso (`finishedAt === null`) no cuenta
- * todavía: contará en la pasada que la resuelva.
+ * empezó dentro del corte del jugador (`max(window.from, registeredAt)`), antes
+ * del fin de la ventana y —en equipos— con los compañeros a un escalón o menos.
+ * Una fila en curso (`finishedAt === null`) no cuenta todavía: contará en la
+ * pasada que la resuelva.
+ *
+ * Los cortes los lee el worker **una vez por pasada** y los pasa aquí: derivarlos
+ * es un trabajo de un solo día de 130 llamadas por familia, y sin ellos la partida
+ * cuenta (no se puede demostrar que el equipo esté desequilibrado).
  */
 export function countTournamentMatches(
   matches: readonly NormalizedMatch[],
   ruleset: Pick<ScoringRuleset, "window">,
   registeredAt: Date | null,
+  context: TeamTierContext,
 ): number {
   let counted = 0;
 
   for (const match of matches) {
-    if (countsForTournament(match, ruleset, registeredAt)) {
+    if (countsForTournament(match, ruleset, registeredAt, context)) {
       counted += 1;
     }
   }
@@ -456,6 +520,7 @@ async function persistMatches(
   matches: NormalizedMatch[],
   ruleset: Pick<ScoringRuleset, "window">,
   registeredAt: Date | null,
+  context: TeamTierContext,
 ): Promise<{ inserted: number; updated: number; counted: number }> {
   if (matches.length === 0) {
     return { inserted: 0, updated: 0, counted: 0 };
@@ -516,8 +581,8 @@ async function persistMatches(
   // regla estaba en curso (`finishedAt = null`) y ahora está resuelta, así que es
   // una transición a clasificatoria. Las que siguen en curso no cuentan.
   const counted =
-    countTournamentMatches(toCreate, ruleset, registeredAt) +
-    countTournamentMatches(toRefresh, ruleset, registeredAt);
+    countTournamentMatches(toCreate, ruleset, registeredAt, context) +
+    countTournamentMatches(toRefresh, ruleset, registeredAt, context);
 
   return { inserted, updated: toRefresh.length, counted };
 }
@@ -561,6 +626,7 @@ async function reconcileUnfinishedMatches(
   client: Aoe4WorldClient,
   signal: AbortSignal,
   ruleset: Pick<ScoringRuleset, "window">,
+  context: TeamTierContext,
 ): Promise<ReconcileResult> {
   const cutoff = reconciliationCutoff();
 
@@ -625,7 +691,7 @@ async function reconcileUnfinishedMatches(
 
     // La fila estaba en curso y ahora está resuelta: si cumple la regla, entra a
     // contar en esta pasada.
-    if (countTournamentMatches([normalized.match], ruleset, player.registeredAt) > 0) {
+    if (countTournamentMatches([normalized.match], ruleset, player.registeredAt, context) > 0) {
       result.counted += 1;
     }
   }
@@ -687,7 +753,9 @@ async function syncPlayer(
   config: SyncConfig,
   signal: AbortSignal,
   ruleset: Pick<ScoringRuleset, "window">,
+  cutoffs: LadderCutoffsTable | null,
 ): Promise<SyncPlayerResult> {
+  const teamContext: TeamTierContext = { profileId: player.profileId, cutoffs };
   const state = await readPlayerSyncState(player.profileId);
   const storedSince = state === null ? null : new Date(state.since);
   const since = storedSince !== null && !Number.isNaN(storedSince.getTime()) ? storedSince : null;
@@ -732,7 +800,7 @@ async function syncPlayer(
   }
 
   // Antes de paginar: resuelve o abandona lo que ya no puede estar vivo.
-  const reconcile = await reconcileUnfinishedMatches(player, client, signal, ruleset);
+  const reconcile = await reconcileUnfinishedMatches(player, client, signal, ruleset, teamContext);
 
   const fetched = await fetchPlayerGames(client, player.profileId, since, config, signal);
   const now = new Date();
@@ -761,6 +829,7 @@ async function syncPlayer(
     matches,
     ruleset,
     player.registeredAt,
+    teamContext,
   );
 
   // El cursor solo avanza si hemos visto alguna partida, y nunca retrocede.
@@ -857,6 +926,13 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   // importa para puntuar es el ruleset vigente en ese momento.
   const ruleset = await readRuleset();
 
+  // Los cortes de división también se leen **una vez por pasada**: son de la
+  // condición de equipos de la regla (un compañero a dos escalones o más deja la
+  // partida fuera), no salen a la red y los necesitan los dos contadores —el de
+  // las partidas nuevas y el del refetch—. Sin ellos, las partidas de equipo
+  // cuentan, que es la degradación acordada y lo que dice el rastro del recálculo.
+  const cutoffs = await readDivisionCutoffs();
+
   // Una sola llamada a la ladder para todos los aprobados, y antes del bucle:
   // así se ejecuta siempre, aunque el bucle se pase del plazo o algún jugador
   // falle. Si falla, se registra y la pasada continúa con lo que ya había.
@@ -872,7 +948,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     }
 
     try {
-      return await syncPlayer(player, client, config, signal, ruleset);
+      return await syncPlayer(player, client, config, signal, ruleset, cutoffs);
     } catch (error) {
       return emptyPlayerResult(player, { status: "failed", error: toErrorMessage(error) });
     }
@@ -910,10 +986,37 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido refrescar el pool de mapas: ${mapPoolError}`);
   }
 
+  // El summary de las partidas que aún no lo tienen se rellena **también antes del
+  // recálculo**, que es quien lee lo que escribe (los cinco objetivos de APM, edad y
+  // aldeanos perdidos). Es un paso que sale a una ruta **del sitio** de AoE4World, no
+  // de su API, así que lleva su propio presupuesto por pasada y su cola; un fallo
+  // suyo solo deja esos objetivos sin datos hasta la siguiente pasada y el motivo va
+  // al rastro sin mover `lastSuccessAt`.
+  let summaries: SummaryBackfillResult | null = null;
+  let summariesError: string | null = null;
+
+  try {
+    summaries = await backfillMatchSummaries({ signal });
+    summariesError = describeSummaryBackfill(summaries);
+
+    if (summariesError !== null) {
+      console.warn(`[sync] ${summariesError}`);
+    }
+
+    if (summaries.fetched > 0) {
+      console.info(
+        `[sync] Summaries de partida: ${summaries.fetched} guardado(s), ` +
+          `${summaries.missing} sin summary, ${summaries.candidates} candidata(s) pendiente(s).`,
+      );
+    }
+  } catch (error) {
+    summariesError = toErrorMessage(error);
+    console.error(`[sync] No se han podido rellenar los summaries de partida: ${summariesError}`);
+  }
+
   // La clasificación se recalcula al final y en su propia transacción. Si falla,
   // las partidas ya están guardadas: la web serviría la clasificación anterior
   // hasta la próxima pasada, que es preferible a tumbar la sincronización entera.
-
   let scoring: RecomputeScoresResult | null = null;
   let scoringError: string | null = null;
 
@@ -1041,6 +1144,35 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido comprobar la pertenencia a Discord: ${discordError}`);
   }
 
+  // El **rol de participante** (issue 56) va justo después, en el mismo tratamiento
+  // tolerante y con el mismo destino en el rastro: es el adorno del torneo que acompaña
+  // a la pertenencia, y comparte su resolución de cuentas (el roster resuelve los
+  // `@usuario`). Sin `DISCORD_PARTICIPANT_ROLE_ID` el paso no existe y solo deja el
+  // motivo; un 403 o un timeout no tumban la pasada y se reintentan en la siguiente.
+  // El motivo se acumula en `discordError` —es el sitio donde ya se dejan los de
+  // Discord— y **no** mueve `lastSuccessAt`.
+  try {
+    const role = await syncParticipantRole({ signal });
+    const roleError = describeParticipantRoleSync(role);
+
+    if (roleError !== null) {
+      discordError = discordError === null ? roleError : `${discordError} ${roleError}`;
+      console.warn(`[sync] ${roleError}`);
+    }
+
+    if (role.added > 0 || role.removed > 0) {
+      console.info(
+        `[sync] Rol de participante en Discord: ${role.added} puesto(s), ${role.removed} quitado(s).`,
+      );
+    }
+  } catch (error) {
+    const roleError = toErrorMessage(error);
+    discordError = discordError === null ? roleError : `${discordError} ${roleError}`;
+    console.error(
+      `[sync] No se ha podido sincronizar el rol de participante en Discord: ${roleError}`,
+    );
+  }
+
   // El estado de directo de YouTube y Kick va **el último de los tres que salen a la
   // red**, con el mismo tratamiento que las alertas: tolerante a fallos, con el motivo
   // en el rastro, y sin que un fallo suyo pueda parar la pasada. Y por el mismo motivo
@@ -1074,6 +1206,51 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido comprobar el estado de directo: ${streamsError}`);
   }
 
+  // Los avisos al canal de Discord —los hitos de la edición y el informe diario de
+  // clasificación— van **los últimos**, con el mismo tratamiento tolerante que los tres
+  // pasos anteriores: no dependen de nada de lo de antes y un fallo suyo no para la pasada
+  // ni mueve `lastSuccessAt`. Los dos comparten `announceError`, que es el rastro de los
+  // mensajes al canal. `announceEditionWindow()` sale antes de leer el nombre de la
+  // edición cuando no toca ningún aviso, así que en las pasadas normales es una
+  // comparación de fechas; el informe diario, fuera de su hora, también.
+  let announceError: string | null = null;
+
+  try {
+    const announced = await announceEditionWindow();
+
+    announceError = announced.error;
+
+    if (announced.sent.length > 0) {
+      console.info(`[sync] Avisos del torneo enviados a Discord: ${announced.sent.join(", ")}.`);
+    }
+
+    if (announceError !== null) {
+      console.warn(`[sync] ${announceError}`);
+    }
+  } catch (error) {
+    announceError = toErrorMessage(error);
+    console.error(`[sync] No se han podido enviar los avisos del torneo: ${announceError}`);
+  }
+
+  try {
+    const report = await announceDailyStandings();
+
+    if (report.error !== null) {
+      announceError = announceError === null ? report.error : `${announceError} ${report.error}`;
+      console.warn(`[sync] ${report.error}`);
+    }
+
+    if (report.sent > 0) {
+      console.info(`[sync] Informe diario de clasificación enviado a Discord: ${report.sent} mensaje(s).`);
+    }
+  } catch (error) {
+    const reportError = toErrorMessage(error);
+    announceError = announceError === null ? reportError : `${announceError} ${reportError}`;
+    console.error(
+      `[sync] No se ha podido enviar el informe diario de clasificación: ${reportError}`,
+    );
+  }
+
   const finishedAtMs = Date.now();
 
   const summary: SyncSummary = {
@@ -1100,6 +1277,8 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     ladder,
     mapPool,
     mapPoolError,
+    summaries,
+    summariesError,
     scoring,
     scoringError,
     alerts,
@@ -1110,6 +1289,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     discordError,
     streams,
     streamsError,
+    announceError,
     players: settled,
   };
 
@@ -1163,7 +1343,9 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       historyError: summary.historyError,
       discordError: summary.discordError,
       streamsError: summary.streamsError,
+      announceError: summary.announceError,
       mapPoolError: summary.mapPoolError,
+      summariesError: summary.summariesError,
       failures: summary.players
         .filter((result) => result.status !== "ok")
         .map((result) => ({

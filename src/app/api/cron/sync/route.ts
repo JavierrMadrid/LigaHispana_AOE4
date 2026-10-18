@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { readAuthenticatedUser } from "@/lib/auth";
+import { readAdminAccess } from "@/lib/auth";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { readRuntimeEnv } from "@/lib/runtime-env";
 
@@ -47,7 +47,10 @@ async function isAuthorized(request: Request): Promise<boolean> {
     return true;
   }
 
-  return (await readAuthenticatedUser()) !== null;
+  // No basta con tener sesión: `/api/cron/sync` es una operación de la organización,
+  // así que exige **acceso al panel**, no solo estar autenticado. Un usuario de Auth
+  // que no esté en la lista de admins no puede lanzar una pasada.
+  return (await readAdminAccess()) !== "none";
 }
 
 async function handleSync(request: Request): Promise<Response> {

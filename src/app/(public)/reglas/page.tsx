@@ -7,6 +7,7 @@ import {
   SectionIndexAside,
   type DocSection,
 } from "@/components/section-index";
+import { getEditionConfig, getMatcherinoDonations } from "@/lib/public";
 
 export const metadata: Metadata = {
   title: "Reglas",
@@ -21,7 +22,27 @@ const SECTIONS: readonly DocSection[] = [
   { id: "organizacion", label: "Organización" },
 ];
 
-export default function RulesPage() {
+// La retransmisión obligatoria, el premio base y la campaña de donaciones viven en
+// `Setting` y la organización los cambia sin desplegar: una página generada en el
+// `build` seguiría anunciando el premio o la norma de la edición anterior. Por eso
+// se lee en cada petición, como `/puntuacion`.
+export const dynamic = "force-dynamic";
+
+export default async function RulesPage() {
+  // Las dos lecturas son ligeras y van en paralelo. Con la base caída llega
+  // `"degraded"` y no se inventa nada: sin premio no se pinta premio, sin campaña
+  // no se pinta la línea de donaciones y, sin configuración, la retransmisión se
+  // queda como estaba (la norma existe y la controla la organización).
+  const [editionRead, donationsRead] = await Promise.all([
+    getEditionConfig(),
+    getMatcherinoDonations(),
+  ]);
+
+  const edition = editionRead.status === "ok" ? editionRead.data : null;
+  const streamingRequired = edition?.streamingRequired ?? false;
+  const prize = edition !== null && edition.prize.amount !== null ? edition.prize : null;
+  const donationsPublished = donationsRead.status === "ok" && donationsRead.data.enabled;
+
   return (
     // Conserva el ancho anterior (`max-w-6xl`): el contenedor público subió a
     // `max-w-[80rem]` para la clasificación, pero el bloque de lectura no gana
@@ -72,6 +93,16 @@ export default function RulesPage() {
                 , jugadas dentro de las fechas del torneo y después de la
                 inscripción del jugador.
               </p>
+              <p>
+                En las partidas por equipos solo cuentan las que se juegan con{" "}
+                <strong className="font-semibold text-foreground">
+                  equipos equilibrados
+                </strong>
+                : si algún compañero está a dos escalones o más de división del
+                jugador, por encima o por debajo, esa partida no puntúa para él.
+                El escalón es la división (bronce, plata, oro, platino, diamante
+                o conquistador), sin subrango.
+              </p>
             </div>
           </section>
 
@@ -89,7 +120,7 @@ export default function RulesPage() {
               <li>
                 Las inscripciones se deben hacer{" "}
                 <strong className="font-semibold text-foreground">
-                  hasta 1 día antes del inicio del torneo
+                  hasta la fecha de cierre que publica la organización
                 </strong>
                 .
               </li>
@@ -138,13 +169,18 @@ export default function RulesPage() {
                 todo el torneo: es el canal oficial por el que la organización
                 avisa y resuelve dudas.
               </li>
-              <li>
-                <strong className="font-semibold text-foreground">
-                  Retransmisión en directo.
-                </strong>{" "}
-                Las partidas del torneo deben emitirse en directo en Twitch,
-                YouTube o Kick.
-              </li>
+              {/* La retransmisión es la única norma condicional: la edición decide
+                  si existe (`streamingRequired`). Con la norma apagada no se lista,
+                  porque no hay nada que cumplir. */}
+              {streamingRequired ? (
+                <li>
+                  <strong className="font-semibold text-foreground">
+                    Retransmisión en directo.
+                  </strong>{" "}
+                  Las partidas del torneo deben emitirse en directo en Twitch,
+                  YouTube o Kick.
+                </li>
+              ) : null}
               <li id="historial" className="scroll-mt-24">
                 <strong className="font-semibold text-foreground">
                   Historial público.
@@ -157,22 +193,15 @@ export default function RulesPage() {
                 <strong className="font-semibold text-foreground">
                   Jugar hasta el final.
                 </strong>{" "}
-                Está prohibido abandonar o dejarse perder a propósito de forma continuada para
-                manipular el elo: bajar de elo a proposito para después ganar puntos contra rivales por debajo de tu nivel habitual.
+                Está prohibido abandonar o dejarse perder de forma continuada para
+                manipular el elo: bajar de elo para después ganar puntos contra
+                rivales por debajo de tu nivel habitual.
               </li>
               <li>
                 <strong className="font-semibold text-foreground">
                   Sin rivales repetidos.
                 </strong>{" "}
                 No se puede forzar para jugar contra el mismo rival en 1vs1 para acumular victorias de forma intencionada.
-              </li>
-              <li>
-                <strong className="font-semibold text-foreground">
-                  Equipos equilibrados.
-                </strong>{" "}
-                En partidas por equipos no se puede jugar con compañeros de elo
-                muy superior al de uno mismo, ni en una división muy distinta de la
-                propia (por encima o por debajo).
               </li>
             </ol>
 
@@ -181,8 +210,11 @@ export default function RulesPage() {
               con un sistema de alertas: la web revisa las partidas de forma
               automática y deja constancia de los comportamientos sospechosos
               recogidos en este reglamento (manipulación del elo, rivales
-              repetidos, equipos desequilibrados, historial no público, partidas
-              que no llegan o ausencia del Discord). Las alertas son avisos para
+              repetidos, historial no público, partidas que no llegan y{" "}
+              {streamingRequired
+                ? "ausencia del Discord o falta de canal de directo"
+                : "ausencia del Discord"}
+              ). Las alertas son avisos para
               que la organización revise cada caso: no son sanciones automáticas y
               la decisión final es siempre de la organización.
             </p>
@@ -206,6 +238,20 @@ export default function RulesPage() {
                 una partida: deja de contar sin borrarla.
               </li>
               <li>Cada acción de la organización queda registrada.</li>
+              {/* El premio y las donaciones son datos de la edición: solo se
+                  pintan cuando la configuración los publica. */}
+              {prize !== null ? (
+                <li>
+                  El premio base de esta edición es de{" "}
+                  <strong className="font-semibold text-foreground">
+                    {prize.amount} €
+                  </strong>
+                  {prize.note !== null ? `, ${prize.note}` : ""}.
+                </li>
+              ) : null}
+              {donationsPublished ? (
+                <li>Las donaciones de la campaña de la comunidad se suman al premio.</li>
+              ) : null}
             </ul>
           </section>
         </div>

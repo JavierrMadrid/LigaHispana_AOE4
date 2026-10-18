@@ -42,10 +42,10 @@ export function PlayerForm({
         <p className="mb-4 rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm leading-relaxed text-muted">
           El alta está bloqueada porque las inscripciones están cerradas.{" "}
           <Link
-            href="/admin/configuracion"
+            href="/admin/administracion/inscripciones"
             className="text-accent underline underline-offset-4 hover:text-accent-strong"
           >
-            Ábrelas en Configuración
+            Ábrelas en Inscripciones
           </Link>{" "}
           para poder añadir jugadores.
         </p>

@@ -1,7 +1,4 @@
-import { subdivisionForRating } from "@/lib/alerts/division-cutoffs";
-import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
-import { parseGame } from "@/lib/aoe4world/parse";
-import type { Aoe4WorldGamePlayer } from "@/lib/aoe4world/types";
+import { parseTeamView } from "@/lib/aoe4world/parse";
 import type { ScoringWindow } from "@/lib/ranked-match";
 import {
   buildTriggeredAlert,
@@ -20,7 +17,7 @@ import {
  * sale a la red, para que `compute.test.ts` (vía `npm test`) pueda comprobarlo con
  * secuencias sintéticas y sin nada preparado.
  *
- * ## El modelo, que es el mismo para las ocho reglas
+ * ## El modelo, que es el mismo para las seis reglas
  *
  * Para cada regla hay un **flag por partida** sobre la secuencia de
  * clasificatorias del jugador ordenada por `startedAt`. Una **racha** es un
@@ -36,17 +33,22 @@ import {
  * es el comportamiento seguido y no el orden en que llegaron las partidas. Lo
  * que **no** rompe una racha son las partidas no clasificatorias, y eso está
  * resuelto antes de llegar aquí: la secuencia que recibe esta función ya viene
- * filtrada con `rankedMatchWhere()`.
+ * filtrada con `rankedMatchWhere()` **y** con la condición de equipos
+ * (`teammatesWithinTier()`), que no cabe en ese filtro y la aplica quien llama.
  *
- * ## Las ocho reglas
+ * ## Las seis reglas
  *
  * | Regla | Modo | Flag por partida | Racha | Acumulado |
  * |---|---|---|---|---|
  * | R1 `SHORT_MATCH_*` | 1v1 y equipos | `durationSeconds < shortMatchSeconds` | 2 | cada 5 |
  * | R2 `REPEATED_OPPONENT_*` | solo `rm_solo` | la partida tiene rival con `opponentProfileId` | 3 con el mismo rival | cada 10 con el mismo rival |
  * | R3 `REPEATED_TEAMMATE_*` | solo `rm_team` | el mismo compañero está en mi equipo | 3 con ese compañero | 7 con ese compañero, una vez |
- * | R4 `TEAMMATE_ELO_GAP` | solo `rm_team` | algún compañero está a `teammateEloGap` de elo o más | 1 | — |
- * | R5 `LOW_DIVISION_TEAM_GAME` | solo `rm_team` | la división de la partida difiere `lowDivisionSteps` escalones o más (en cualquiera de los dos sentidos) de la del jugador en esa misma partida | 1 | — |
+ *
+ * Fueron ocho: `TEAMMATE_ELO_GAP` (R4) y `LOW_DIVISION_TEAM_GAME` (R5) se
+ * retiraron porque su caso pasó a ser una condición de **puntuación** —una partida
+ * de equipo con un compañero a dos escalones o más no cuenta, ver
+ * `src/lib/ranked-match.ts`—, así que ya no hay nada que avisar. Sus valores del
+ * enum y sus frases siguen, por las filas históricas (ver `rules.ts`).
  *
  * R2 y R3 llevan **sujeto** (el rival, el compañero), así que sus rachas y sus
  * acumulados son *por sujeto*: tres partidas seguidas contra el mismo rival, no
@@ -63,10 +65,7 @@ import {
  *
  * Un `rawJson` ilegible no lanza: esa partida no aporta flags, y se cuenta en
  * `unreadableMatches`. Es la dirección segura, porque una regla que no puede
- * evaluarse no puede acusar a nadie. R5 se omite (sin aviso) en las partidas en
- * las que falte el rating del jugador o la media de rating de la partida, y las
- * partidas cuya
- * familia de ladder no tiene cortes cacheados se saltan sin más.
+ * evaluarse no puede acusar a nadie.
  */
 
 /** Lo mínimo que hace falta de un jugador. */
@@ -80,9 +79,9 @@ export type AlertPlayer = {
  * Lo que se lee de cada partida clasificatoria.
  *
  * `rawJson` entra como `unknown` a propósito: en la base es un `Json` que
- * escribió la API, y lo que el motor necesita de él (los compañeros, el elo de
- * cada uno, la media de la partida) se vuelve a validar con `parseGame()` en
- * cada evaluación en vez de fiarse de que esté intacto.
+ * escribió la API, y lo que el motor necesita de él (los compañeros de la regla
+ * de compañero repetido) se vuelve a validar con `parseGame()` en cada evaluación
+ * en vez de fiarse de que esté intacto.
  */
 export type AlertMatch = {
   gameId: string;
@@ -97,9 +96,10 @@ export type AlertMatch = {
 export type ComputeAlertsInput = {
   player: AlertPlayer;
   /**
-   * **Solo clasificatorias**, ya filtradas con `rankedMatchWhere()` y ordenadas
-   * por `startedAt`. Quien llama decide el filtro, y así las ocho reglas
-   * comparten la única definición de "clasificatoria" que hay en el proyecto.
+   * **Solo clasificatorias**, ya filtradas con `rankedMatchWhere()` —y con la
+   * condición de equipos que ese filtro no puede escribir— y ordenadas por
+   * `startedAt`. Quien llama decide el filtro, y así las seis reglas comparten la
+   * única definición de "clasificatoria" que hay en el proyecto.
    */
   matches: AlertMatch[];
   /** Umbrales activos (`Setting["alerts.ruleset"]`). */
@@ -113,8 +113,6 @@ export type ComputeAlertsInput = {
    * filtrado con ellos, y por eso no se duplican en el ruleset de alertas.
    */
   scoring: { modes: string[]; window: ScoringWindow };
-  /** Cortes rating → subdivisión por familia de ladder, o `null` si no hay ninguno cacheados. */
-  cutoffs: LadderCutoffsTable | null;
   now: Date;
 };
 
@@ -154,65 +152,17 @@ export type PlayerAlertsEvaluation = {
   /** Lo que a este jugador no se le ha podido mirar. El log le pone su nombre. */
   warnings: string[];
   /**
-   * Lo que **a toda la evaluación** no se le ha podido mirar (por ahora, que no
-   * hay cortes de división). No lleva nombre de jugador porque no es culpa de
-   * ninguno, y repetirlo treinta veces en el log no informa de nada.
+   * Lo que **a toda la evaluación** no se le ha podido mirar. No lleva nombre de
+   * jugador porque no es culpa de ninguno, y repetirlo treinta veces en el log no
+   * informa de nada.
+   *
+   * Hoy ningún aviso lo usa: el hueco que sí afecta a toda la evaluación —no tener
+   * los cortes de división— lo dice el rastro del recálculo
+   * (`Setting["scoring.lastRun"]`, ver `recomputeScores()`), que es donde ese dato
+   * falta para toda la puntuación y no solo para las alertas.
    */
   globalWarnings: string[];
 };
-
-/* -------------------------------------------------------------------------- */
-/* Lectura del payload de la partida                                            */
-/* -------------------------------------------------------------------------- */
-
-type TeamView = {
-  /** El jugador de esta fila, con su elo en esa partida. */
-  self: Aoe4WorldGamePlayer | null;
-  /** Los que estaban en su mismo equipo, él excluido. */
-  teammates: Aoe4WorldGamePlayer[];
-  /**
-   * Media de **rating** de la partida (`average_rating`), tal y como la publica
-   * el payload. Es la escala de la ladder, la misma que el `rating` del jugador;
-   * la media de `mmr` es otra y no se usa.
-   */
-  averageRating: number | null;
-};
-
-/**
- * Localiza al jugador dentro de `rawJson.teams` y devuelve su equipo.
- *
- * Pasa por `parseGame()` y no por una lectura propia de `rawJson`, y el motivo
- * es que ese lector **ya existe** y ya acepta las dos formas en que la API
- * manda los equipos (anidada en el listado, plana en el detalle) y ya valida la
- * forma de cada jugador. Reimplementarlo aquí sería una tercera copia de un
- * lector que ya se rompe de una manera conocida.
- *
- * Devuelve `null` cuando el payload no se puede leer, y eso es un resultado
- * normal: la partida no aporta flags a las reglas de equipo.
- */
-function readTeamView(rawJson: unknown, profileId: number): TeamView | null {
-  const game = parseGame(rawJson);
-
-  if (game === null) {
-    return null;
-  }
-
-  for (const team of game.teams) {
-    const index = team.findIndex((player) => player.profileId === profileId);
-
-    if (index === -1) {
-      continue;
-    }
-
-    return {
-      self: team[index] ?? null,
-      teammates: team.filter((_, position) => position !== index),
-      averageRating: game.averageRating,
-    };
-  }
-
-  return null;
-}
 
 /* -------------------------------------------------------------------------- */
 /* Tramos y acumulados                                                          */
@@ -220,6 +170,20 @@ function readTeamView(rawJson: unknown, profileId: number): TeamView | null {
 
 const TEAM_MODE = "rm_team";
 const SOLO_MODE = "rm_solo";
+
+/**
+ * Las reglas de racha que el motor **calcula hoy**: `StreakAlertRule` sin las dos
+ * retiradas (R4 y R5, que siguen en el enum por las filas históricas).
+ *
+ * Es un tipo y no una lista de comprobaciones para que el `switch` de
+ * `ruleBits()` siga siendo exhaustivo: con el tipo ancho habría que dar una rama a
+ * dos reglas que ya no se pueden planificar, y el compilador dejaría de avisar el
+ * día que se añada una de verdad.
+ */
+type ComputedStreakRule =
+  | "SHORT_MATCH_STREAK"
+  | "REPEATED_OPPONENT_STREAK"
+  | "REPEATED_TEAMMATE_STREAK";
 
 /** Un sujeto y las posiciones de la secuencia en las que tiene el flag. */
 type SubjectHits = {
@@ -235,13 +199,11 @@ type SubjectHits = {
  * validación del ruleset.
  */
 type FlagRow = {
-  rule: StreakAlertRule;
+  rule: ComputedStreakRule;
   /** Sujetos con flag, por posición de la secuencia. */
   subjects: AlertSubject[][];
   /** Dato a destacar de la partida, para `details`. */
   details: (AlertAnchorDetail | undefined)[];
-  /** Familia de ladder de la partida (`Match.mode`), para las reglas que la necesitan (R5). */
-  ladders: (string | undefined)[];
 };
 
 /** Un tramo con su remate y la partida que lo ancla. */
@@ -310,9 +272,8 @@ function groupRuns(hits: SubjectHits[]): { subject: AlertSubject; from: number; 
  *
  * Que sea "el último de la secuencia" lo que decide es lo que evita el doble
  * aviso: un tramo que llega hasta el final y que además está cerrado porque el
- * torneo terminó se cuenta una sola vez, como cierre de torneo. Y es también lo que
- * hace que una regla de umbral 1 (R4, R5) **no avise todavía**: su única partida
- * con el flag es el último tramo de la secuencia, así que está abierta. Avisa
+ * torneo terminó se cuenta una sola vez, como cierre de torneo. Y es lo que hace
+ * que un tramo que llega al final de la secuencia **no avise todavía**: avisa
  * cuando llegue la siguiente clasificatoria, que es justo lo que significa "la
  * racha se rompe".
  */
@@ -391,17 +352,15 @@ type RuleContext = {
   player: AlertPlayer;
   matches: AlertMatch[];
   thresholds: AlertsRuleset["thresholds"];
-  cutoffs: LadderCutoffsTable | null;
   unreadable: number;
 };
 
 /** Fila vacía, para las partidas que la regla no mira. */
-function emptyRow(rule: StreakAlertRule, length: number): FlagRow {
+function emptyRow(rule: ComputedStreakRule, length: number): FlagRow {
   return {
     rule,
     subjects: Array.from({ length }, () => []),
     details: Array.from({ length }, () => undefined),
-    ladders: Array.from({ length }, () => undefined),
   };
 }
 
@@ -462,7 +421,7 @@ function repeatedTeammateFlags(context: RuleContext): FlagRow {
       continue;
     }
 
-    const team = readTeamView(match.rawJson, player.profileId);
+    const team = parseTeamView(match.rawJson, player.profileId);
 
     if (team === null) {
       context.unreadable += 1;
@@ -470,8 +429,7 @@ function repeatedTeammateFlags(context: RuleContext): FlagRow {
     }
 
     // Un compañero sin `profile_id` no tiene identidad con la que contar, así que
-    // no puede ser sujeto: se pierde para R3, pero sigue contando para R4 (allí
-    // solo importa su elo).
+    // no puede ser sujeto.
     row.subjects[index] = team.teammates
       .filter((mate) => mate.profileId !== null)
       .map((mate) => ({
@@ -479,151 +437,6 @@ function repeatedTeammateFlags(context: RuleContext): FlagRow {
         profileId: mate.profileId,
         name: mate.name,
       }));
-  }
-
-  return row;
-}
-
-/** R4: de equipo, algún compañero a `teammateEloGap` de elo o más. */
-function teammateEloGapFlags(context: RuleContext): FlagRow {
-  const { matches, player, thresholds } = context;
-  const row = emptyRow("TEAMMATE_ELO_GAP", matches.length);
-
-  for (const [index, match] of matches.entries()) {
-    if (match.mode !== TEAM_MODE) {
-      continue;
-    }
-
-    const team = readTeamView(match.rawJson, player.profileId);
-
-    if (team === null) {
-      context.unreadable += 1;
-      continue;
-    }
-
-    const ratingPropio = team.self?.rating ?? null;
-
-    // Sin rating propio no hay contra qué comparar, y sin rating del compañero
-    // no hay diferencia. En los dos casos la partida no aporta flag, que es
-    // distinto de que la diferencia resultara pequeña.
-    const brecha =
-      ratingPropio === null
-        ? null
-        : team.teammates.reduce<number | null>((mayor, mate) => {
-            if (mate.rating === null) {
-              return mayor;
-            }
-
-            const diferencia = Math.abs(mate.rating - ratingPropio);
-
-            return mayor === null || diferencia > mayor ? diferencia : mayor;
-          }, null);
-
-    if (brecha === null) {
-      continue;
-    }
-
-    row.details[index] = { eloGap: brecha };
-
-    if (brecha >= thresholds.teammateEloGap) {
-      row.subjects[index] = [SELF_SUBJECT];
-    }
-  }
-
-  return row;
-}
-
-/**
- * R5: de equipo, la división de la partida y la del jugador (en esa misma
- * partida) distan `lowDivisionSteps` escalones o más, en cualquiera de los dos
- * sentidos.
- *
- * ## Las dos magnitudes son de la misma escala: **rating**, no `mmr`
- *
- * El lado del jugador es `team.self.rating` y el de la partida es
- * `average_rating`, la media de **rating** de la partida. Los cortes de división
- * se derivan del campo `rating` de la ladder (`derive-cutoffs.ts`) y el
- * `rank_level` que publica la API sale de ese mismo rating, así que
- * rating ↔ rating es la única comparación que se traduce bien con los mismos
- * cortes.
- *
- * **No se usa `average_mmr`**. El `mmr` es la escala interna del MMR de la
- * partida (~1200 en adelante) y el `rating` la de la ladder (~700-900 en la zona
- * baja): son dos escalas distintas y traducir el `mmr` con los cortes de rating
- * sitúa la media de `mmr` uno o más escalones por encima de donde está de
- * verdad. Ese desajuste produjo alertas falsas: una partida de media de rating
- * 851 jugada por un jugador de 727 (dos escalones, por debajo del umbral) salía
- * como si la partida estuviera muy por encima de él al compararla con su
- * `average_mmr` de 1254.
- *
- * La referencia es el **rating del jugador en esa misma partida de equipo**, no
- * su división 1v1: las dos magnitudes son rating de la misma familia de ladder,
- * así que se traducen con los **mismos** cortes y la comparación de escalones es
- * homogénea.
- */
-function lowDivisionFlags(context: RuleContext): FlagRow {
-  const { matches, player, cutoffs, thresholds } = context;
-  const row = emptyRow("LOW_DIVISION_TEAM_GAME", matches.length);
-
-  for (const [index, match] of matches.entries()) {
-    if (match.mode !== TEAM_MODE || cutoffs === null) {
-      continue;
-    }
-
-    const team = readTeamView(match.rawJson, player.profileId);
-
-    if (team === null) {
-      context.unreadable += 1;
-      continue;
-    }
-
-    const propia = team.self?.rating ?? null;
-    const media = team.averageRating;
-
-    // Sin el rating del jugador o sin la media de rating de la partida no hay
-    // contra qué comparar, y la partida se omite sin avisar: es un hueco de
-    // datos, no un comportamiento.
-    if (propia === null || media === null) {
-      continue;
-    }
-
-    // Los cortes se buscan por la **familia** resuelta (`match.mode`, que aquí ya
-    // es `rm_team`), no por el literal `match.leaderboard`: un ranked por equipos
-    // puede venir con `leaderboard: "rm_2v2"`/`"rm_3v3"`/`"rm_4v4"` y los cortes
-    // se guardan por familia, así que indexar por el literal se saltaría la
-    // partida aunque sus cortes estén cacheados.
-    const ladder = cutoffs[match.mode];
-
-    if (ladder === undefined) {
-      continue;
-    }
-
-    const subdivisionPropia = subdivisionForRating(ladder, propia);
-    const subdivisionPartida = subdivisionForRating(ladder, media);
-
-    if (subdivisionPropia === null || subdivisionPartida === null) {
-      continue;
-    }
-
-    // `steps` va de la subdivisión del jugador a la de la partida, y el índice
-    // **crece al bajar**: el escalón 0 es `conqueror_3`. Positivo es que la
-    // partida está por debajo, negativo que está por encima; el flag sale con el
-    // valor absoluto, porque la regla vigila las dos direcciones.
-    const steps = subdivisionPartida.index - subdivisionPropia.index;
-
-    if (Math.abs(steps) < thresholds.lowDivisionSteps) {
-      continue;
-    }
-
-    row.subjects[index] = [SELF_SUBJECT];
-    row.ladders[index] = match.mode;
-    row.details[index] = {
-      steps,
-      averageRating: media,
-      selfRating: propia,
-      gameSubdivision: subdivisionPartida.rankLevel,
-      playerSubdivision: subdivisionPropia.rankLevel,
-    };
   }
 
   return row;
@@ -642,7 +455,7 @@ type TotalSpec = {
 };
 
 type PlannedRule = {
-  rule: StreakAlertRule;
+  rule: ComputedStreakRule;
   min: number;
   total: TotalSpec | null;
 };
@@ -677,8 +490,6 @@ function plannedRules(ruleset: AlertsRuleset): PlannedRule[] {
         oneShot: ruleset.thresholds.repeatedTeammateTotal,
       },
     },
-    { rule: "TEAMMATE_ELO_GAP", min: 1, total: null },
-    { rule: "LOW_DIVISION_TEAM_GAME", min: 1, total: null },
   ];
 }
 
@@ -691,7 +502,7 @@ function plannedRules(ruleset: AlertsRuleset): PlannedRule[] {
  * de torneo, y para eso está `now`.
  */
 export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEvaluation {
-  const { player, matches, ruleset, scoring, cutoffs, now } = input;
+  const { player, matches, ruleset, scoring, now } = input;
   const to = scoring.window.to;
   const tournamentEnded = to !== null && now.getTime() >= Date.parse(to);
 
@@ -699,7 +510,6 @@ export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEval
     player,
     matches,
     thresholds: ruleset.thresholds,
-    cutoffs,
     unreadable: 0,
   };
 
@@ -737,7 +547,9 @@ export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEval
           threshold: plan.min,
           anchorGameId: anchor?.gameId ?? null,
           anchorStartedAt: anchor?.startedAt ?? null,
-          anchorLadder: bits.ladders[run.endIndex] ?? null,
+          // La familia de ladder de la partida ancla: es un dato de la partida, no
+          // de la regla, así que sale de la secuencia y no del flag.
+          anchorLadder: anchor?.mode ?? null,
           window: scoring.window,
           ...(detail === undefined ? {} : { detail }),
         }),
@@ -779,7 +591,7 @@ export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEval
           threshold: plan.total.oneShot ?? crossing.count,
           anchorGameId: anchor?.gameId ?? null,
           anchorStartedAt: anchor?.startedAt ?? null,
-          anchorLadder: bits.ladders[crossing.anchorIndex] ?? null,
+          anchorLadder: anchor?.mode ?? null,
           window: scoring.window,
           ...(detail === undefined ? {} : { detail }),
         }),
@@ -790,15 +602,6 @@ export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEval
   if (context.unreadable > 0) {
     warnings.push(
       `${context.unreadable} clasificatorias con rawJson ilegible no aportan flags a las reglas de equipo`,
-    );
-  }
-
-  if (cutoffs === null) {
-    // Aviso de la evaluación, no del jugador: lo dice aunque no haya ninguna
-    // partida de equipo, porque quien lee el resumen tiene que saber que hay una
-    // regla sin evaluar en vez de deducirlo de que no salió.
-    globalWarnings.push(
-      "R5 omitida: no hay cortes de división cacheados (derívalos con `npm run alerts:cutoffs`)",
     );
   }
 
@@ -813,7 +616,7 @@ export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEval
 }
 
 /** Calcula los flags de la regla indicada, ya sobre la secuencia completa. */
-function ruleBits(rule: StreakAlertRule, context: RuleContext): FlagRow {
+function ruleBits(rule: ComputedStreakRule, context: RuleContext): FlagRow {
   switch (rule) {
     case "SHORT_MATCH_STREAK":
       return shortMatchFlags(context);
@@ -821,9 +624,5 @@ function ruleBits(rule: StreakAlertRule, context: RuleContext): FlagRow {
       return repeatedOpponentFlags(context);
     case "REPEATED_TEAMMATE_STREAK":
       return repeatedTeammateFlags(context);
-    case "TEAMMATE_ELO_GAP":
-      return teammateEloGapFlags(context);
-    case "LOW_DIVISION_TEAM_GAME":
-      return lowDivisionFlags(context);
   }
 }

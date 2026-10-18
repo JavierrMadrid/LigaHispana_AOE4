@@ -67,6 +67,19 @@ const windowDayYear = new Intl.DateTimeFormat("es-ES", {
 });
 
 /**
+ * Un día en UTC, para las fechas de configuración que son instantes.
+ *
+ * Es el mismo formateo que el de la ventana del torneo (`windowDayYear`) y por el
+ * mismo motivo: un instante configurado por la organización —la fecha de cierre de
+ * las inscripciones, por ejemplo— no puede pintarse en la zona del proceso que lo
+ * lee, o el día cambiaría según dónde corra el Worker. Lo usan los avisos del bot
+ * para decir la fecha de cierre, que es un instante y no una fecha de calendario.
+ */
+export function formatUtcDay(date: Date): string {
+  return windowDayYear.format(date);
+}
+
+/**
  * El periodo del torneo en una frase, para `/puntuacion`.
  *
  * `to` es opcional en el ruleset (`null` = ventana abierta), y de ahí las dos
@@ -221,6 +234,86 @@ export function youtubeChannelUrl(handle: string): string {
 /** Enlace al canal de Kick. El `slug` es el canónico, en minúsculas. */
 export function kickChannelUrl(slug: string): string {
   return `https://www.kick.com/${slug}`;
+}
+
+/**
+ * Las plataformas con canal de directo, en el orden en que se presentan.
+ *
+ * El trío coincide con el que resuelve `src/lib/stream-channels.ts` y con el
+ * `PlatformMeta["id"]` de `ChannelLinks`, que es quien pinta cada glifo.
+ */
+export type StreamPlatform = "twitch" | "youtube" | "kick";
+
+/**
+ * Un canal **en directo** de una partida: la plataforma y el canal canónico.
+ *
+ * No lleva `isLive` porque solo se construye con lo que ya está emitiendo: quien
+ * lo llama filtra primero por el `…IsLive` del participante. El canal es el
+ * canónico que devuelven `normalizeTwitchChannel` y `normalizeKickChannel`, no
+ * una URL ni lo que tecleó la persona.
+ */
+export type StreamChannel = {
+  platform: StreamPlatform;
+  channel: string;
+};
+
+/**
+ * Prefijo con el que StreamsCharts identifica cada plataforma en su visor.
+ *
+ * Solo Twitch (`t:`) y Kick (`k:`). El de YouTube **no está verificado** en la
+ * herramienta, así que sus canales en directo se ven con su icono individual y no
+ * entran aquí; tenerlo en la tabla con `null` deja claro que la ausencia es una
+ * decisión y no un olvido.
+ */
+const MULTISTREAM_PREFIX: Record<StreamPlatform, string | null> = {
+  twitch: "t:",
+  youtube: null,
+  kick: "k:",
+};
+
+/**
+ * URL del visor **multi-stream** de StreamsCharts para los canales de una partida,
+ * o `null` si no hay al menos dos que meter.
+ *
+ * El formato es el que documenta la herramienta
+ * (`…/multistream-viewer/t:canal,k:canal`), con `t:` para Twitch y `k:` para Kick.
+ * YouTube se ignora por lo dicho en `MULTISTREAM_PREFIX`: no por falta de canal,
+ * sino porque su prefijo no está verificado.
+ *
+ * El orden es el de la lista de entrada —y esa es la razón de que sea
+ * determinista—, que es el de los participantes de la partida: el mismo enlace
+ * sale idéntico entre dos lecturas. Se quitan los repetidos (dos jugadores
+ * apuntando al mismo canal no son dos canales) y un canal en blanco no cuenta,
+ * porque un `t:` suelto sería un visor roto que parece un visor con canal. Con
+ * menos de dos tokens no hay nada que ver: un "multi-stream" de uno no es nada, y
+ * por eso se devuelve `null` en lugar de la URL de un canal.
+ */
+export function multistreamViewerUrl(channels: readonly StreamChannel[]): string | null {
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+
+  for (const { platform, channel } of channels) {
+    const prefix = MULTISTREAM_PREFIX[platform];
+
+    if (prefix === null || channel.trim() === "") {
+      continue;
+    }
+
+    const token = `${prefix}${channel}`;
+
+    if (seen.has(token)) {
+      continue;
+    }
+
+    seen.add(token);
+    tokens.push(token);
+  }
+
+  if (tokens.length < 2) {
+    return null;
+  }
+
+  return `https://streamscharts.com/tools/multistream-viewer/${tokens.join(",")}`;
 }
 
 const LADDER_SIZE = /^rm_(\d)v(\d)$/i;

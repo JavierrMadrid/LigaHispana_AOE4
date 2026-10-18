@@ -6,11 +6,28 @@ import { ALERT_RULE_LABELS, anchorInstant, readAlertsRuleset, type AlertsThresho
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { describeTeamSize, formatRelativeTime, teamSizesFromRawJson } from "@/lib/format";
+import { compareFeedInstants, historyFeedPage, historyHole } from "@/lib/history-feed";
 import { isRecord } from "@/lib/json";
 import { resolveObjective } from "@/lib/objective-events";
 import type { ObjectiveGroup, ObjectiveMetric } from "@/lib/objectives";
-import { classificatoryWhere, readInstant, type ScoringWindow } from "@/lib/ranked-match";
-import { RULESET_VERSION, readRuleset, type ScoringRuleset } from "@/lib/scoring";
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  dateRangeWhere,
+  hasDateBounds,
+  paginate,
+  readBoundedInt,
+  readSingleParam,
+  type DateRange,
+  type QueryParam,
+} from "@/lib/query-params";
+import { classificatoryWhere, type ScoringWindow } from "@/lib/ranked-match";
+import {
+  RULESET_VERSION,
+  playerObjectiveAwards,
+  readRuleset,
+  type ScoringRuleset,
+} from "@/lib/scoring";
 import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/settings";
 
 /**
@@ -81,11 +98,13 @@ import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/set
 /**
  * Un valor de `searchParams`, tal como lo entrega Next.
  *
- * Es `string | string[] | undefined` porque `?playerId=a&playerId=b` es una URL
- * válida, así que el tipo solo no basta: todo lo que llega de aquí se valida antes
- * de tocar la base de datos.
+ * Es un alias del tipo compartido (`QueryParam` de `src/lib/query-params.ts`), que es
+ * donde vive la validación desde que el historial público necesita los mismos filtros.
+ * Se conserva el nombre del panel porque es el que usan sus tipos de query, y porque
+ * "un parámetro del admin" y "un parámetro de la web" no tienen por qué coincidir el
+ * día que una de las dos admita algo que la otra no.
  */
-export type AdminQueryParam = string | string[] | null | undefined;
+export type AdminQueryParam = QueryParam;
 
 /** Paginación de las lecturas del panel, con los valores aún sin validar. */
 export type AdminPageQuery = {
@@ -145,74 +164,14 @@ export type AdminPage<T, S> = {
   sort: S;
 };
 
-/** Filas por página que se piden por defecto. */
-const DEFAULT_PAGE_SIZE = 25;
-
 /**
- * Tope de `pageSize`.
+ * Resuelve una página de un listado paginado del panel.
  *
- * El parámetro viene de la URL, así que sin tope un `?pageSize=100000` sería una
- * consulta que trae la tabla entera y la manda al navegador dentro del *payload* de
- * RSC. 100 filas dan de sobra para una tabla y dejan el histórico navegable.
- */
-const MAX_PAGE_SIZE = 100;
-
-/** Un día en milisegundos, para resolver el `to` de una fecha suelta. */
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Un parámetro de la URL, reducido a un único texto.
- *
- * Un parámetro repetido (`?playerId=a&playerId=b`) se queda con el primero en vez
- * de fallar la página: es una URL válida y descartar el segundo no cambia lo que
- * quien la escribió quería ver. Un vacío sí es ausencia de filtro.
- */
-function readSingleParam(value: AdminQueryParam): string | null {
-  if (Array.isArray(value)) {
-    return readSingleParam(value[0]);
-  }
-
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const trimmed = value.trim();
-
-  return trimmed === "" ? null : trimmed;
-}
-
-/** Entero de un parámetro, acotado a `[min, max]`; lo que no vale, es `fallback`. */
-function readBoundedInt(
-  value: AdminQueryParam,
-  { min, max, fallback }: { min: number; max: number; fallback: number },
-): number {
-  const raw = readSingleParam(value);
-
-  if (raw === null || !/^\d{1,6}$/.test(raw)) {
-    return fallback;
-  }
-
-  const parsed = Number(raw);
-
-  return Math.min(Math.max(parsed, min), max);
-}
-
-/**
- * Resuelve una página de un listado paginado.
- *
- * `load` hace **las dos** consultas en paralelo (filas y total) y devuelve la
- * `page` que se le pide. Encapsularlo aquí evita repetir el mismo cálculo en las
- * lecturas paginadas, y sobre todo evita el error de contar una página y traer las
- * filas de otra.
- *
- * `sort` viaja tal cual hacia el retorno: es el orden **efectivo** que la carga ha
- * aplicado, y por eso lo pasa quien llama ya validado y no se vuelve a leer de los
- * parámetros aquí.
- *
- * Se ajusta la página al rango real (una URL que pide la 7 con un filtro que solo
- * tiene dos páginas devuelve la última con filas): una tabla vacía con "página 7 de
- * 2" desconcierta más que devolver directamente lo que hay. El ajuste solo repite
- * la consulta cuando hace falta, porque el camino normal es una sola pasada.
+ * El ajuste de la página al rango real —una URL que pide la 7 con un filtro que solo
+ * tiene dos páginas devuelve la última con filas— y el reparto de páginas los hace
+ * `paginate()` (`src/lib/query-params.ts`), que es lo que comparte con el historial
+ * público. Aquí solo se le añade el **orden efectivo**, que es lo que publica cada
+ * lista del panel y lo que el historial público no tiene (su orden es fijo).
  */
 async function adminPage<T, S>(
   load: (page: number) => Promise<{ rows: T[]; total: number }>,
@@ -220,21 +179,11 @@ async function adminPage<T, S>(
   pageSize: number,
   sort: S,
 ): Promise<AdminPage<T, S>> {
-  const first = await load(page);
-  const pageCount = Math.ceil(first.total / pageSize);
-  const current = pageCount === 0 ? 1 : Math.min(page, pageCount);
-
-  if (current !== page) {
-    const last = await load(current);
-
-    return { rows: last.rows, total: last.total, page: current, pageSize, pageCount, sort };
-  }
-
-  return { rows: first.rows, total: first.total, page: current, pageSize, pageCount, sort };
+  return { ...(await paginate(load, { page, pageSize })), sort };
 }
 
 /* -------------------------------------------------------------------------- */
-/* Filtros compartidos de la URL                                               */
+/* Filtro de jugador de la URL                                                 */
 /* -------------------------------------------------------------------------- */
 
 /**
@@ -246,15 +195,21 @@ async function adminPage<T, S>(
  * como un filtro sin resultados: desde la interfaz, un filtro mal escrito se
  * parece más a "sin filtrar" que a "no hay ninguna partida con ese jugador", y lo
  * segundo sería una afirmación falsa sobre una URL manipulada.
+ *
+ * Es lo que queda de los filtros de la URL en este módulo, y es porque es **del
+ * panel**: el `Player.id` interno no sale del admin, y las páginas públicas filtran por
+ * `Player.profileId`. El resto —el rango de fechas, los enteros acotados y el ajuste de
+ * la página— vive en `src/lib/query-params.ts`, que es lo que comparte con el historial
+ * público.
  */
 const PLAYER_ID_PATTERN = /^[a-z0-9]{1,64}$/;
 
 /**
  * El filtro de jugador de la URL, ya validado.
  *
- * Lo comparten el historial y las alertas, que filtran por `Player.id` los dos, y por
- * eso vive aquí y no en la sección de ninguna de las dos listas: dos copias del mismo
- * patrón acabarían discrepando en cuanto una aceptara algo más que la otra.
+ * Lo comparten el historial y las alertas del panel, que filtran por `Player.id` los dos,
+ * y por eso vive aquí y no en la sección de ninguna de las dos listas: dos copias del
+ * mismo patrón acabarían discrepando en cuanto una aceptara algo más que la otra.
  *
  * Exportado para `npm run verify:sync`, que lo comprueba sin base de datos: es una
  * función pura y es justo donde se decide qué hace una URL manipulada.
@@ -265,102 +220,14 @@ export function readPlayerIdFilter(value: AdminQueryParam): string | null {
   return raw !== null && PLAYER_ID_PATTERN.test(raw) ? raw : null;
 }
 
-/** Fecha suelta `YYYY-MM-DD`, que es lo que produce un `<input type="date">`. */
-const DAY_PATTERN = /^(\d{4}-\d{2}-\d{2})$/;
-
 /**
- * Un límite del filtro de fechas, ya resuelto a instante.
+ * El rango de fechas del panel, alias del compartido.
  *
- * Admite las dos formas que la interfaz tiene a mano: un instante con zona
- * explícita —el mismo criterio estricto que el ruleset, `readInstant`, que rechaza
- * `"2026-09-15T00:00:00"` porque se interpretaría en hora local— o una fecha suelta,
- * que se resuelve a medianoche UTC de ese día.
- *
- * La fecha suelta se resuelve distinto en cada borde, y es lo que hace que "del 1
- * al 30" incluya el día 30 entero:
- *
- * - `from`: las `00:00:00.000Z` de ese día, **inclusivo**.
- * - `to`: las `00:00:00.000Z` del día **siguiente**, con un filtro `< to`: el día
- *   que escribió quien filtró queda dentro y el siguiente, fuera.
- *
- * Un instante con zona se usa tal cual, sin desplazarlo. Cualquier otra cosa —un
- * `ayer`, un `2026-13-45`, un instante sin zona— se ignora y ese filtro no se
- * aplica: una URL manipulada se comporta como si el filtro no estuviera, en vez de
- * romper la página con un error que no sabe explicar nadie.
+ * `DateRange` de `src/lib/query-params.ts` es el tipo de verdad —lo usan el historial
+ * público y las alertas—; se conserva el nombre del panel para no reescribir los tipos
+ * de sus filtros, y porque son dos lecturas distintas con derecho a separarse.
  */
-function readDateBound(value: AdminQueryParam, bound: "from" | "to"): Date | null {
-  const raw = readSingleParam(value);
-
-  if (raw === null) {
-    return null;
-  }
-
-  const instant = readInstant(raw);
-
-  if (instant !== null) {
-    return instant;
-  }
-
-  const day = DAY_PATTERN.exec(raw);
-
-  if (day === null) {
-    return null;
-  }
-
-  const inicio = readInstant(`${day[1]}T00:00:00.000Z`);
-
-  // `Date.parse` no rechaza los días que no existen: `"2026-02-31T00:00:00.000Z"`
-  // rueda a `2026-03-03`. La ida y la vuelta es lo que los descarta, y con ello un
-  // filtro escrito a mano con una fecha imposible se trata como ausencia de filtro
-  // en vez de como un rango desplazado tres días.
-  if (inicio === null || inicio.toISOString().slice(0, 10) !== day[1]) {
-    return null;
-  }
-
-  return bound === "from" ? inicio : new Date(inicio.getTime() + DAY_MS);
-}
-
-/**
- * Rango de fechas de un filtro, ya validado y listo para una columna `DateTime`.
- *
- * Es un tipo propio y no el `DateTimeFilter` de Prisma a propósito: lo que sale de
- * aquí son dos comparadores opcionales, y el filtro los mete dentro de la columna
- * concreta (`Match.startedAt`, `ObjectiveEvent.achievedAt` o `Alert.createdAt`) junto
- * con lo que ya traiga el resto de condiciones.
- *
- * Los dos límites son los **mismos** para las dos clases de fila del historial: el
- * filtro de la pantalla es un rango de fechas, no "fechas de partidas". Por eso se
- * resuelve una vez y se reparte.
- */
-export type AdminDateRange = { gte?: Date; lt?: Date };
-
-/**
- * El rango de fechas de un filtro, ya validado.
- *
- * Vive aquí porque lo comparten el historial y las alertas, con los **mismos** bordes
- * inclusivo y exclusivo: un `?to=2026-09-30` tiene que incluir el día 30 entero en
- * las dos tablas, y sería una sorpresa que en una significara algo distinto.
- */
-function dateRangeWhere(from: AdminQueryParam, to: AdminQueryParam): AdminDateRange {
-  const desde = readDateBound(from, "from");
-  const hasta = readDateBound(to, "to");
-
-  return {
-    ...(desde === null ? {} : { gte: desde }),
-    ...(hasta === null ? {} : { lt: hasta }),
-  };
-}
-
-/**
- * ¿Ha quedado algún límite puesto?
- *
- * Para no meter `{ createdAt: {} }` en un `where`: un filtro de rango vacío no filtra
- * nada, pero obligaría a comprobar en cada sitio si un `DateTimeFilter` sin
- * comparadores significa "cualquier fecha" o es un error de Prisma.
- */
-function hasDateBounds(rango: AdminDateRange): boolean {
-  return rango.gte !== undefined || rango.lt !== undefined;
-}
+export type AdminDateRange = DateRange;
 
 /* -------------------------------------------------------------------------- */
 /* Ordenación                                                                  */
@@ -445,12 +312,13 @@ function readSort<K extends string>(
  * ## El detalle de cada columna
  *
  * - `sujeto` usa los **nulos al final en los dos sentidos**, no solo en ascendente: las
- *   reglas sin sujeto (R1, R4 y R5) son `null`, y en descendente mezclarlas con los
- *   nombres sacaría las alertas sin sujeto por delante de todo.
+ *   reglas sin sujeto (R1 y las dos retiradas) son `null`, y en descendente mezclarlas con
+ *   los nombres sacaría las alertas sin sujeto por delante de todo.
  * - `regla` ordena por el **enum**, y en Postgres un enum se ordena por el orden de sus
  *   valores en el esquema, no alfabéticamente por la etiqueta. Aquí eso sale bien: el
- *   esquema los declara en el orden R1, R2, R3, R4 y R5, así que ordenar por regla
- *   agrupa por familia de reglas, que es como se explican.
+ *   esquema los declara en el orden de las reglas de comportamiento —las retiradas entre
+ *   ellas, para agrupar las familias— y luego las de estado, así que ordenar por regla
+ *   agrupa por familia, que es como se explican.
  * - `jugador` ordena por el nombre y con la **intercalación de Postgres**, que puede no
  *   coincidir con cómo se lee el alfabeto español. No hay forma mejor sin arrastrar el
  *   nombre a la tabla de alertas o ordenarlo en memoria.
@@ -872,10 +740,18 @@ export type AdminMatchHistoryQuery = AdminPageQuery &
  *
  * Etiqueta, grupo y métrica salen del **catálogo** (`OBJECTIVE_DEFINITIONS`) y los
  * puntos del **ruleset activo**, con el mismo criterio que `objectiveLookup()` en
- * `src/lib/public.ts` (`ruleset.objectives[id] ?? definition.points`). La tabla
- * `ObjectiveEvent` no los guarda, y a propósito: una copia se quedaría vieja en
- * cuanto se retocara un punto en `Setting`. Es la fila de la interfaz la que tiene
- * todo resuelto, para que pintar un hito no obligue a mirar el catálogo.
+ * `src/lib/public.ts` (`ruleset.objectives[id] ?? definition.points`, con `victorias`
+ * pagando `pointsPerWin`). La tabla `ObjectiveEvent` no los guarda, y a propósito:
+ * una copia se quedaría vieja en cuanto se retocara un punto en `Setting`. Es la fila
+ * de la interfaz la que tiene todo resuelto, para que pintar un hito no obligue a
+ * mirar el catálogo.
+ *
+ * `points` y `count` son, además, **lo que cobró ese jugador** cuando se puede saber:
+ * el importe real de un logro repetible no es el de la tarjeta (`imparable` reparte 1
+ * por día con tope, `victorias` paga por victoria), y publicar el tope como si fuera
+ * lo cobrado sería el mismo error que tenía la clasificación. El detalle sale del
+ * desglose del jugador (ver `playerObjectiveAwards`); sin él, precio de catálogo y
+ * una repetición.
  */
 export type AdminObjectiveEvent = {
   /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`lider-japanese`…). */
@@ -892,8 +768,10 @@ export type AdminObjectiveEvent = {
    * se puede pintar sin mirar el catálogo.
    */
   metric: ObjectiveMetric;
-  /** Puntos que otorga poseerlo con las reglas vigentes. Es el mismo número que `points` de la fila. */
+  /** Puntos que el jugador cobró por este objetivo. Es el mismo número que `points` de la fila. */
   points: number;
+  /** Repeticiones cobradas: días, victorias o 1 (ver el tipo). */
+  count: number;
 };
 
 /**
@@ -929,7 +807,7 @@ export type AdminMatchHistoryRow = {
   playerId: string;
   playerName: string;
   playerProfileId: number;
-  /** Puntos que aporta la fila con el ruleset activo: los de la partida o los del objetivo. */
+  /** Puntos que aporta la fila: los de la partida, o los que el jugador **cobró** por el objetivo. */
   points: number;
   /** El objetivo cumplido, o `null` si la fila es una partida. Ver el tipo. */
   objective: AdminObjectiveEvent | null;
@@ -1029,10 +907,10 @@ const OBJECTIVE_EVENT_SELECT = {
  * El criterio es **de lo mejor a lo peor**, y es una decisión: la columna muestra tres
  * cosas distintas —"Objetivo", "Victoria", "Derrota"— y recorrerla en diagonal tiene que
  * enseñar primero lo que primero se busca. Los hitos son lo raro y lo que más información
- * da (≤ 38 en toda la vida del torneo, frente a decenas de miles de partidas), así que
- * van delante; detrás quedan victorias y derrotas, que ya son el grueso, y donde lo
- * útil es agrupar por signo —"¿cuántas ha perdido?"—, que es justo lo que hace la
- * segunda pulsación de la cabecera.
+ * da (un objetivo por participante y por objetivo del catálogo, frente a decenas de
+ * miles de partidas), así que van delante; detrás quedan victorias y derrotas, que ya
+ * son el grueso, y donde lo útil es agrupar por signo —"¿cuántas ha perdido?"—, que es
+ * justo lo que hace la segunda pulsación de la cabecera.
  *
  * El cuarto rango (3) es para una partida sin resultado, que **no llega nunca** al feed:
  * `classificatoryWhere()` exige `result is not null`. El tipo de la fila lo admite, y un
@@ -1081,6 +959,11 @@ function historyResultRank(row: AdminMatchHistoryRow): number {
  *   total y además el que mejor se lee en el orden por defecto, porque casi siempre la
  *   partida es la fila que explica el hito y así va delante.
  *
+ * Los dos primeros criterios (fecha y clase) son los de `compareFeedInstants()`, que es lo
+ * que comparte con el historial público: allí el eje es el mismo y lo único que cambia es
+ * el desempate final. Aquí ese desempate es la clave de la clase, que es la columna por la
+ * que ordenan las dos consultas.
+ *
  * Exportado para `npm run verify:sync`, que lo comprueba con filas sintéticas: que sea un
  * orden **total**, que `asc` sea el inverso de `desc` y que no reordene las mitadas que
  * llegan ya ordenadas de sus consultas. Son las tres condiciones de las que depende que la
@@ -1104,16 +987,10 @@ export function historyComparator(
       }
     }
 
-    const porFecha = b.startedAt.getTime() - a.startedAt.getTime();
+    const porFechaYClase = compareFeedInstants(a, b);
 
-    if (porFecha !== 0) {
-      return porFecha * signo;
-    }
-
-    const aEsPartida = a.objective === null;
-
-    if (aEsPartida !== (b.objective === null)) {
-      return (aEsPartida ? -1 : 1) * signo;
+    if (porFechaYClase !== 0) {
+      return porFechaYClase * signo;
     }
 
     // La clave de cada clase de fila, con la misma convención que el resto: en
@@ -1196,51 +1073,21 @@ function partidaEnFila(
 }
 
 /**
- * El hueco que hay que traer de partidas para servir una página del feed mezclado.
+ * El hueco del merge del feed mezclado.
  *
- * Con `skip` el desplazamiento de la página **en el feed** y `eventosAntes` los
- * objetivos que pasan el filtro (los que van delante de la página en el peor caso):
- *
- * - `skipPartidas`: de dónde se leen las partidas. En el peor caso, los `eventosAntes`
- *   objetivos van todos antes de la página, así que la primera fila de la página está,
- *   como mucho, en la posición `skip - eventosAntes` de la lista de partidas. Antes de
- *   ese punto no hace falta traer nada.
- * - `takePartidas`: cuántas. `skip + pageSize - skipPartidas`, y **no** `pageSize` a
- *   secas: si la página tiene objetivos intercalados, con `pageSize` saldrían menos
- *   filas de las que la página pide.
- * - `desde`: el índice de la lista combinada que corresponde al inicio de la página. La
- *   combinada empieza en la partida número `skipPartidas`, así que lo que se ha dejado
- *   atrás son `skipPartidas` filas; con `skip < eventosAntes` no se ha saltado ninguna
- *   partida y el índice es `skip` directamente.
- *
- * **No depende del eje del orden**, y por eso el orden por resultado no necesita otro
- * hueco: solo cuenta cuántas filas del otro lado del merge caben en las `skip` posiciones
- * anteriores. Lo que sí necesita el eje nuevo es que el comparador sea un orden total y
- * que las dos mitadas lleguen en ese mismo orden, que es de `historyComparator()`.
- *
- * Exportado para `npm run verify:sync`, que pagina el feed entero con esta aritmética y
- * comprueba que ninguna fila se repite ni se pierde.
+ * La aritmética y su docblock viven en `src/lib/history-feed.ts` desde que el historial
+ * público pagina el mismo feed; se reexporta desde aquí porque es de donde lo importa
+ * `npm run verify:sync`, que pagina el feed entero con esta aritmética y comprueba que
+ * ninguna fila se repite ni se pierde.
  */
-export function historyHole(
-  skip: number,
-  pageSize: number,
-  eventosAntes: number,
-): { skipPartidas: number; takePartidas: number; desde: number } {
-  const skipPartidas = Math.max(0, skip - eventosAntes);
-
-  return {
-    skipPartidas,
-    takePartidas: skip + pageSize - skipPartidas,
-    desde: skip - skipPartidas,
-  };
-}
+export { historyHole };
 
 /**
  * Los objetivos cumplidos que pasan el filtro, ya en filas del historial.
  *
- * Se piden **todos** (no una página): son como mucho 38 filas en toda la vida del
- * torneo, y hace falta el recuento para saber cuántas hay que colar antes de la
- * primera partida de la página.
+ * Se piden **todos** (no una página): son como mucho un objetivo por jugador y por
+ * objetivo del catálogo, y hace falta el recuento para saber cuántas hay que colar
+ * antes de la primera partida de la página.
  *
  * Vienen en el mismo orden que el comparador del merge (`objectiveEventOrderBy()`), que
  * es lo que permite que la mezcla siga siendo correcta cuando el `sort` cambia el eje
@@ -1263,10 +1110,15 @@ async function eventosDeObjetivo(
     select: OBJECTIVE_EVENT_SELECT,
   });
 
+  const awards = await playerObjectiveAwards(filas.map((fila) => fila.playerId));
   const rows: AdminMatchHistoryRow[] = [];
 
   for (const fila of filas) {
-    const objetivo = resolveObjective(fila.objectiveId, ruleset);
+    const objetivo = resolveObjective(
+      fila.objectiveId,
+      ruleset,
+      awards.get(fila.playerId) ?? null,
+    );
 
     if (objetivo === null) {
       console.warn(
@@ -1290,6 +1142,7 @@ async function eventosDeObjetivo(
         group: objetivo.group,
         metric: objetivo.metric,
         points: objetivo.points,
+        count: objetivo.count,
       },
       // Un objetivo no tiene rival, formato, mapa ni resultado: `null` es "no
       // aplica", no "faltan datos".
@@ -1329,7 +1182,7 @@ async function eventosDeObjetivo(
  * ## Los objetivos
  *
  * Los eventos de `ObjectiveEvent`: un objetivo cumplido por jugador, como mucho uno
- * por objetivo del catálogo (38 en total), escritos por el motor de puntuación. Se
+ * por objetivo del catálogo, escritos por el motor de puntuación. Se
  * filtran con el **mismo jugador y las mismas fechas** (sobre `achievedAt`, con los
  * mismos límites), y **no salen si hay filtro de resultado**: un objetivo no es ni
  * una victoria ni una derrota, y quien escribe `?resultado=WIN` está buscando las
@@ -1337,7 +1190,7 @@ async function eventosDeObjetivo(
  *
  * ## El merge, y por qué sale barato
  *
- * Los eventos son ≤ 38, así que se piden enteros (y por el mismo motivo no se pueden
+ * Los eventos son pocos, así que se piden enteros (y por el mismo motivo no se pueden
  * pedir en paralelo con las partidas: el hueco de partidas depende de cuántos son). El
  * hueco que hay que traer y por dónde se recorta la página están en `historyHole()`, que
  * explica la aritmética y que **no depende del eje del orden**: solo cuenta cuántas filas
@@ -1405,8 +1258,7 @@ export async function getAdminMatchHistory(
       // El hueco acotado del docblock de `historyHole()`, y no `pageSize` a secas: una
       // página puede tener eventos delante y, si solo se trajeran `pageSize` partidas,
       // saldrían menos filas de las que la página pide.
-      const eventosAntes = eventos.length;
-      const { skipPartidas, takePartidas, desde } = historyHole(skip, pageSize, eventosAntes);
+      const { skipPartidas, takePartidas } = historyHole(skip, pageSize, eventos.length);
 
       const partidas = await db.match.findMany({
         where,
@@ -1431,15 +1283,16 @@ export async function getAdminMatchHistory(
         },
       });
 
-      const combined = [...partidas.map(partidaEnFila), ...eventos].sort(
-        historyComparator(sort),
-      );
-
-      // `desde` es el índice de `combined` que corresponde a la posición `skip` del
-      // feed, según el mismo docblock de `historyHole()`.
+      // El merge y el recorte de la página los hace `historyFeedPage()`, que es la misma
+      // aritmética que usa el historial público: entre la ventana de partidas y la lista
+      // combinada, el índice de inicio de la página lo vuelve a calcular el mismo hueco.
       return {
-        total: totalPartidas + eventosAntes,
-        rows: combined.slice(desde, desde + pageSize),
+        total: totalPartidas + eventos.length,
+        rows: historyFeedPage(partidas.map(partidaEnFila), eventos, {
+          skip,
+          pageSize,
+          compare: historyComparator(sort),
+        }),
       };
     }, page, pageSize, sort);
   });
@@ -1470,6 +1323,17 @@ export type AdminActionRow = {
    */
   details: Record<string, string | number | boolean> | null;
   createdAt: Date;
+  /**
+   * Cuándo se deshizo la acción, o `null` si sigue vigente.
+   *
+   * Es la marca de la fila **original**, no la de la reversión: la interfaz la usa para
+   * decir "deshecha" y para no ofrecer el botón de deshacer dos veces. Quién la deshizo
+   * va aparte porque el `actorEmail` de la fila es quien hizo la acción, no quien la
+   * revirtió.
+   */
+  revertedAt: Date | null;
+  /** Correo de quien la deshizo, o `null` si sigue vigente. */
+  revertedByEmail: string | null;
 };
 
 /**
@@ -1511,6 +1375,11 @@ export type AdminActionsQuery = AdminPageQuery & AdminSortQuery;
  * Se lee tal cual, `summary` incluido, para que la interfaz no tenga que montar la
  * frase ni hacer un `join` por `targetId` para pintar algo que ya está escrito: el
  * formato lo decide `admin-actions.ts` y esta lectura solo lo publica.
+ *
+ * Publica también la **marca de revertida** (`revertedAt` / `revertedByEmail`), que es
+ * lo que la pestaña necesita para decir que una acción ya no está vigente y para no
+ * ofrecer el botón de deshacer dos veces. No publica la fila `ACTION_REVERTED` como algo
+ * aparte: es una línea más del historial, y su `summary` ya dice qué se deshizo.
  *
  * Paginada en servidor por el mismo motivo que el historial de partidas, y con
  * `id` de desempate del orden por la misma razón: dos acciones del mismo milisegundo
@@ -1554,6 +1423,8 @@ export async function getAdminActions(
             targetId: true,
             details: true,
             createdAt: true,
+            revertedAt: true,
+            revertedByEmail: true,
           },
         }),
         db.adminAction.count({ where }),
@@ -1569,6 +1440,8 @@ export async function getAdminActions(
           targetId: row.targetId,
           details: readDetails(row.details),
           createdAt: row.createdAt,
+          revertedAt: row.revertedAt,
+          revertedByEmail: row.revertedByEmail,
         })),
       };
     }, page, pageSize, sort);
@@ -1669,7 +1542,7 @@ const ALERT_SELECT = {
  * |---|---|---|
  * | `from` / `to` | `Alert.createdAt` | fecha `YYYY-MM-DD` o instante con zona, con los mismos bordes que el historial |
  * | `playerId` | `Alert.playerId` | un `Player.id` con forma de `cuid` |
- * | `regla` | `Alert.rule` | uno de los diez `AlertRule` |
+ * | `regla` | `Alert.rule` | uno de los once `AlertRule` |
  * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
  *
  * Los cuatro se combinan (es una conjunción), y los tres que son una lista usan

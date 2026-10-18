@@ -1,13 +1,16 @@
 import Image from "next/image";
 import Link from "next/link";
 import { AdminTabs } from "@/app/admin/admin-tabs";
-import { requireAdmin } from "@/lib/auth";
+import { getAdminAccess, requireAdmin } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
 
 export default async function AdminLayout({
   children,
 }: LayoutProps<"/admin">) {
   const user = await requireAdmin();
+  // El acceso ya está resuelto y memoizado por `requireAdmin()`; aquí solo se lee
+  // para decidir si la pestaña de administración se pinta.
+  const access = await getAdminAccess();
 
   return (
     <div className="flex min-h-full flex-col">
@@ -54,11 +57,12 @@ export default async function AdminLayout({
           </div>
         </div>
 
-        {/* Las cinco pestañas van en su propia fila: con los nombres completos no
+        {/* Las pestañas van en su propia fila: con los nombres completos no
             caben junto a la marca y el cierre de sesión. En móvil se desplazan en
-            horizontal en lugar de partirse. */}
+            horizontal en lugar de partirse. La de administración solo aparece para
+            el superadministrador. */}
         <div className="mx-auto w-full max-w-5xl px-4">
-          <AdminTabs />
+          <AdminTabs showAdministration={access === "superadmin"} />
         </div>
       </header>
 

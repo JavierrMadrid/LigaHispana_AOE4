@@ -3,8 +3,12 @@ import Link from "next/link";
 import { PageHead } from "@/components/page-head";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { readDiscordStep } from "@/lib/discord/session";
-import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
-import { readRegistrationOpen } from "@/lib/settings";
+import {
+  DEFAULT_REGISTRATION_OPEN,
+  REGISTRATION_CLOSED_MESSAGE,
+  registrationClosedMessage,
+} from "@/lib/registration-open";
+import { readRegistrationState } from "@/lib/settings";
 import { RegistrationForm } from "./registration-form";
 
 export const metadata: Metadata = {
@@ -28,15 +32,25 @@ export default async function ParticipatePage({ searchParams }: PageProps<"/part
   // Los `Promise.all` no son un detalle: la lista de países sale de Postgres, el
   // plazo de las inscripciones también, el paso de Discord sale de la petición y el
   // aviso del OAuth sale de la URL. Leídos en paralelo, la página tarda lo que el más
-  // lento; en serie, lo que suman. El plazo degrada a `DEFAULT_REGISTRATION_OPEN`
-  // (cerrado): si no se puede leer, el formulario se pinta como cerrado en vez de
-  // abrir por accidente, y el servidor vuelve a comprobarlo en cada envío real.
-  const [countries, registrationOpen, discord, params] = await Promise.all([
+  // lento; en serie, lo que suman. El plazo degrada a cerrado
+  // (`DEFAULT_REGISTRATION_OPEN`): si no se puede leer, el formulario se pinta como
+  // cerrado en vez de abrir por accidente, y el servidor vuelve a comprobarlo en cada
+  // envío real.
+  const [countries, registration, discord, params] = await Promise.all([
     readCountries().catch(() => [...DEFAULT_COUNTRIES]),
-    readRegistrationOpen().catch(() => DEFAULT_REGISTRATION_OPEN),
+    readRegistrationState().catch(() => null),
     readDiscordStep(),
     searchParams,
   ]);
+
+  // El motivo del cierre decide el texto que se lee junto al botón: quien se topa con
+  // la fecha de cierre ya pasada no tiene que leer que "la organización las abrirá",
+  // que es lo que sí aplica al interruptor. Sin estado legible —base caída—, el plazo
+  // se pinta cerrado y con el mensaje genérico, que es el estado seguro.
+  const closedMessage =
+    registration === null
+      ? REGISTRATION_CLOSED_MESSAGE
+      : registrationClosedMessage(registration);
 
   const notice = readDiscordNotice(params.discord);
 
@@ -61,7 +75,8 @@ export default async function ParticipatePage({ searchParams }: PageProps<"/part
 
       <RegistrationForm
         countries={countries}
-        registrationOpen={registrationOpen}
+        registrationOpen={registration?.open ?? DEFAULT_REGISTRATION_OPEN}
+        closedMessage={closedMessage}
         discord={discord}
       />
 

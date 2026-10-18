@@ -5,7 +5,7 @@ import { PageHead } from "@/components/page-head";
 import { getObjectives, getStandings, OBJECTIVE_GROUP_LABELS } from "@/lib/public";
 
 export const metadata: Metadata = {
-  title: "Objetivos especiales",
+  title: "Objetivos",
   description:
     "Los objetivos especiales de la Liga Hispana de Age of Empires IV: cuánta puntuación reparte cada uno y quién lo cobra ahora mismo.",
 };
@@ -28,7 +28,7 @@ export default async function ObjectivesPage() {
   const objectives = read.status === "ok" ? read.data : null;
   const standings =
     standingsRead.status === "ok" && standingsRead.data !== null
-      ? standingsRead.data.map((row) => ({
+      ? standingsRead.data.rows.map((row) => ({
           profileId: row.profileId,
           name: row.name,
           avatarUrl: row.avatarUrl,
@@ -38,7 +38,7 @@ export default async function ObjectivesPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <PageHead title="Objetivos especiales" />
+      <PageHead title="Objetivos" />
       {objectives === null ? (
         <EmptyState
           title="No se han podido cargar los objetivos"

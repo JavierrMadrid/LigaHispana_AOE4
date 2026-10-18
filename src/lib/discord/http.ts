@@ -67,7 +67,7 @@ export type DiscordHttpClient = {
    * `DiscordError` si la respuesta no es `2xx` o si la petición falla.
    */
   request(
-    method: "GET" | "POST" | "PUT",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     options?: DiscordRequestOptions,
   ): Promise<unknown>;
@@ -102,7 +102,7 @@ export function createDiscordHttpClient(
   config: DiscordConfig = getDiscordConfig(),
 ): DiscordHttpClient {
   async function request(
-    method: "GET" | "POST" | "PUT",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     options: DiscordRequestOptions = {},
   ): Promise<unknown> {

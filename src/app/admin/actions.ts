@@ -6,48 +6,58 @@ import type { ManualSyncLock } from "@/lib/manual-sync";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
-import type { CampoEditado } from "@/lib/admin-actions";
 import { puntos, recordAdminAction } from "@/lib/admin-actions";
+import { dispatchAdminNotice } from "@/lib/admin-notice-send";
+import {
+  countsWithoutRevertMark,
+  deletePlayerCascade,
+  recomputeWithWarning,
+  type MatchForScoring,
+} from "@/lib/admin-revert";
 import { reevaluatePlayerAlerts } from "@/lib/alerts/evaluate";
+import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requireSuperadmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { logDatabaseFailure, uniqueViolationOn } from "@/lib/db-errors";
-import { parseMatcherinoDonations } from "@/lib/donations";
+import { parseMatcherinoDonations, type MatcherinoDonations } from "@/lib/donations";
+import { formatAbsoluteTime } from "@/lib/format";
 import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
 import {
-  isLegacyYoutubeUrl,
-  parseCountry,
-  parseDiscordUsername,
-  parseEmail,
-  parseKickChannel,
-  parseName,
-  parseProfileId,
-  parseTwitchChannel,
-  parseYoutubeChannel,
-} from "@/lib/player-input";
-import { countsAsRanked, rankedMatchWhere } from "@/lib/ranked-match";
-import { REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration-open";
+  campoSiCambia,
+  camposQueCambian,
+  DISCORD_USERNAME_TAKEN_ERROR,
+  parsePlayerField,
+  parsePlayerFieldsWithoutCountry,
+  type CamposEditables,
+} from "@/lib/player-fields";
+import { parseProfileId } from "@/lib/player-input";
+import { rankedMatchWhere, parseMadridLocalInstant } from "@/lib/ranked-match";
+import { registrationClosedMessage } from "@/lib/registration-open";
 import { readRuleset, recomputeScores } from "@/lib/scoring";
 import {
-  deletePlayerSyncState,
-  readRegistrationOpen,
+  readMatcherinoDonations,
+  readRegistrationState,
   writeMatcherinoDonations,
+  writeRegistrationClosesAt,
   writeRegistrationOpen,
 } from "@/lib/settings";
 
 /**
  * Server Actions del panel de administración.
  *
- * Todas viven bajo `src/app/admin/**` a propósito, y todas empiezan por
- * `requireAdmin()`. Las dos cosas son la misma defensa:
+ * Todas viven bajo `src/app/admin/**` a propósito, y todas empiezan por una
+ * comprobación de permisos en el servidor: `requireAdmin()` las de gestión del panel,
+ * y `requireSuperadmin()` las dos opciones que solo puede tocar el superadministrador
+ * (el plazo de inscripción y la campaña de donaciones). Las dos cosas son la misma
+ * defensa:
  *
  * - El `matcher` del Proxy (`src/proxy.ts`) cubre `/admin/:path*`, y **excluir una
  *   ruta del `matcher` excluye también sus Server Functions**. Una acción fuera de
  *   `/admin` no se saltaría solo la comprobación optimista de la cookie: en el Proxy
- *   no se ejecutaría, así que su `requireAdmin()` ni siquiera llegaría a comprobar
- *   nada.
+ *   no se ejecutaría, así que su comprobación de permisos ni siquiera llegaría a
+ *   hacer nada.
  * - El Proxy solo mira cookies. La comprobación real es esta: una Server Action es
  *   un endpoint público y se puede llamar directamente con su id, sin pasar por
  *   ninguna página.
@@ -152,93 +162,22 @@ const COUNTRIES_UNAVAILABLE_MESSAGE =
 const REGISTRATION_UNAVAILABLE_MESSAGE =
   "No se ha podido leer el estado de las inscripciones. Inténtalo de nuevo en unos minutos.";
 
-const COUNTRY_UNKNOWN_ERROR =
-  "Ese país no está en la lista de los que admite el torneo. Elígelo en el desplegable o déjalo vacío.";
+/**
+ * La fecha de cierre de inscripciones que se ha escrito no vale.
+ *
+ * Se aceptan las dos formas que puede mandar el panel: una fecha y hora de
+ * `datetime-local` (**sin zona**), que el servidor interpreta en `Europe/Madrid` como
+ * la ventana del ruleset, y un instante ISO-8601 **con zona**. Y se dice cómo quitar la
+ * fecha, que es un caso de uso de verdad (reabrir después del cierre).
+ */
+const REGISTRATION_CLOSES_AT_INVALID_MESSAGE =
+  "La fecha de cierre no es válida. Se acepta una fecha y hora (se interpreta en hora de Madrid) o un instante ISO-8601 con zona horaria, por ejemplo 2026-10-01T00:00:00Z. Para quitar la fecha, deja el campo vacío.";
 
 /**
- * Los tres canales de directo se validan con la misma regla: un valor escrito que no
- * se puede guardar es un error, no algo que se ignore en silencio y se guarde como
- * `null`. Guardarlo como `null` diría "no tiene canal" cuando lo que pasó es que lo
- * que escribió no era un canal, y esas dos cosas son distintas para quien después
- * busca a un participante para enlazarlo. Vacío sí es `null`, que es lo que la columna
- * significa.
- *
- * El texto es el que ya usa la inscripción pública, y no uno propio: los tres
- * formularios admiten el mismo conjunto de formas y un canal que uno enseña a escribir
- * y otro acepta en silencio sería un formulario que enseña algo falso. `createPlayer`
- * y `updatePlayer` comparten, además, la misma constante: el alta y la edición del
- * mismo panel no pueden validar el campo de una manera y la otra de otra.
+ * La validación de los campos de un jugador —el criterio y los mensajes— vive en
+ * `src/lib/player-fields.ts`: la comparten el alta, la edición y la reversión de una
+ * edición, y tenerla aquí la habría duplicado en cuanto apareciera la tercera.
  */
-const TWITCH_INVALID_ERROR =
-  "El canal de Twitch solo admite letras, números y guion bajo, de 3 a 25 caracteres.";
-
-const YOUTUBE_INVALID_ERROR =
-  "Ese canal de YouTube no vale. Se puede escribir el @nombre del canal (3 a 30 letras, números, punto, guion o guion bajo) o la dirección del canal.";
-
-const YOUTUBE_LEGACY_URL_ERROR =
-  "Esa dirección no lleva el @nombre del canal. Las URLs /c/ y /user/ no lo tienen, así que escribe el @nombre, que es lo que aparece en youtube.com/@nombre.";
-
-const KICK_INVALID_ERROR =
-  "Ese canal de Kick no vale. Se puede escribir el nombre del canal o la dirección kick.com/nombre.";
-
-/**
- * El correo de contacto, con el mismo criterio que el país y que los tres canales:
- * un vacío es `null` ("no lo sabemos") y un valor escrito que no se puede guardar
- * es un error, no un `null` silencioso. Guardar el `null` en ese caso diría "no
- * tiene correo" cuando lo que pasó es que lo que escribió no era una dirección, y
- * son dos cosas distintas para quien después busca a un participante para
- * escribirle. Vacío sí es `null`, que es lo que la columna significa.
- *
- * **No es el texto de `/participar`**, y a propósito: los dos formularios validan
- * con el mismo `parseEmail`, así que admiten las mismas formas, pero cada uno
- * habla con quien lo rellena y sus textos tienen otro tono —allí se le habla de
- * "te" a quien se inscribe, aquí a quien administra—. Lo que sí se comparte es la
- * constante: el alta y la edición del mismo panel no pueden validar el mismo campo
- * de dos maneras, que es la incoherencia que ya se corrigió una vez con los
- * canales.
- *
- * No hay un texto aparte para el largo: el `maxLength` del campo lo corta antes de
- * enviar, y si aun así llegara uno más largo, "no vale" sigue siendo cierto.
- */
-const EMAIL_INVALID_ERROR =
-  "Ese correo no vale. Se puede escribir una dirección como nombre@correo.com, con algo antes y después de la arroba y el dominio acabando en una extensión de letras.";
-
-/**
- * El usuario de Discord es obligatorio, y se escribe **con la arroba**.
- *
- * Los tres mensajes del `@usuario` los comparten el alta y la edición, por el mismo
- * motivo que los de los canales: los dos formularios del panel validan el mismo campo
- * con las mismas reglas, y uno que enseñara a escribirlo de una manera y el otro
- * aceptara otra sería un panel que enseña algo falso.
- *
- * ## Por qué la arroba es obligatoria
- *
- * Porque en un servidor de Discord hay muchas cuentas con el mismo nombre y **el
- * `@usuario` es lo único único en todo el servicio**. Sin la arroba, lo que se
- * guardaría sería un nombre de display —algo que alguien se ha puesto dentro del
- * servidor y que no prueba nada—, y con él el worker no podría encontrar la cuenta ni
- * el alta podría chocar con otra por un nombre repetido. El parser
- * (`parseDiscordUsername()`) es el que lo exige, y lo que sale de ahí es el nombre
- * **sin** arroba, que es la forma en que se guarda.
- */
-const DISCORD_USERNAME_REQUIRED_ERROR =
-  "El usuario de Discord es obligatorio: se escribe con su arroba, como @pepito.";
-
-const DISCORD_USERNAME_INVALID_ERROR =
-  "Ese usuario de Discord no vale. Se escribe con la arroba y después de 2 a 32 letras, números, puntos o guiones bajos, como @pepito.";
-
-/**
- * Ese `@usuario` ya está en la liga.
- *
- * `Player.discordUsername` es única, así que dos participantes no pueden tener el
- * mismo `@usuario`: si lo tuvieran, serían la misma cuenta escrita de dos maneras —
- * el alta de admin con lo que le dicen a la organización y la inscripción pública con
- * lo que resolvió Discord— y la organización no sabría a cuál de las dos filas
- * hablarle. En el alta y en la edición el mensaje lo pone quien mira la fila y, si lo
- * sabe, **nombra a quien lo tiene**: aquí corregir es inmediato.
- */
-const DISCORD_USERNAME_TAKEN_ERROR =
-  "Ese usuario de Discord ya está en la liga. No puede haber dos participantes con el mismo @usuario.";
 
 /** Junta frases sin que aparezca ni un espacio de más ni un doble espacio. */
 function frase(...partes: string[]): string {
@@ -246,6 +185,18 @@ function frase(...partes: string[]): string {
     .map((parte) => parte.trim())
     .filter((parte) => parte !== "")
     .join(" ");
+}
+
+/**
+ * Un booleano como texto, para el `details` del rastro.
+ *
+ * `campoSiCambia` compara cadenas, y el `details` guarda primitivos: el valor de
+ * un interruptor se registra tal cual —"true" o "false"— y no como un booleano de
+ * verdad, para que la fila del historial se lea igual que la de la edición de un
+ * jugador. Es la misma conversión que `boolText()` en `administracion/actions.ts`.
+ */
+function boolText(value: boolean): string {
+  return value ? "true" : "false";
 }
 
 /**
@@ -324,9 +275,9 @@ function actorEmail(user: User): string {
  * es lo que hace el sincronizador.
  *
  * Los tres canales de directo —Twitch, YouTube y Kick— se validan con **el mismo
- * criterio y los mismos mensajes** que la edición (`updatePlayer`): opcionales, y
- * un valor escrito que no se puede guardar es un error en lugar de un `null`
- * silencioso (ver los mensajes al principio de esta acción). Que no haya respaldo
+ * criterio y los mismos mensajes** que la edición (`updatePlayer`), y los tres están
+ * definidos en `src/lib/player-fields.ts`: opcionales, y un valor escrito que no se
+ * puede guardar es un error en lugar de un `null` silencioso. Que no haya respaldo
  * desde el perfil de AoE4World es justamente lo que hace que un canal mal escrito no
  * se pueda arreglar solo en la siguiente pasada.
  *
@@ -341,45 +292,32 @@ export async function createPlayer(
   const admin = await requireAdmin();
 
   // El cierre de inscripciones bloquea también el alta de admin, no solo el
-  // formulario público: es el mismo interruptor (`Setting["registration.open"]`) y
-  // se comprueba en servidor aunque la acción se llame a mano. Va lo primero,
-  // antes de validar nada, porque con el plazo cerrado no se va a escribir: no
-  // tiene sentido pagar validaciones ni lecturas para un alta descartada.
+  // formulario público: es el mismo estado (`Setting["registration.open"]` y la fecha
+  // `Setting["registration.closesAt"]`) y se comprueba en servidor aunque la acción se
+  // llame a mano. Va lo primero, antes de validar nada, porque con el plazo cerrado no
+  // se va a escribir: no tiene sentido pagar validaciones ni lecturas para un alta
+  // descartada.
   //
   // Aprobar y rechazar solicitudes **no** pasan por aquí y siguen funcionando
-  // siempre: el interruptor cierra el alta, no la gestión de lo ya recibido.
-  let registrationOpen: boolean;
+  // siempre: el cierre cierra el alta, no la gestión de lo ya recibido.
+  let registration;
 
   try {
-    registrationOpen = await readRegistrationOpen();
+    registration = await readRegistrationState();
   } catch (error) {
     logDatabaseFailure("admin/createPlayer/plazo", error);
 
     return { error: REGISTRATION_UNAVAILABLE_MESSAGE, message: null };
   }
 
-  if (!registrationOpen) {
-    return { error: REGISTRATION_CLOSED_MESSAGE, message: null };
+  if (!registration.open) {
+    return { error: registrationClosedMessage(registration), message: null };
   }
 
   // `readField` en todos, como en la edición: `formData.get` también puede
   // devolver un `File`, y el parser recibiría `"[object File]"`, que es un valor
   // escrito mal con otra forma. En el nombre eso además pasaba la validación.
   const profileId = parseProfileId(readField(formData, "profileId"));
-  const name = parseName(readField(formData, "name"));
-  // El correo detrás del nombre y antes de los canales, que es el mismo sitio que en
-  // la inscripción pública: es un dato de la persona, no un canal.
-  const emailRaw = readField(formData, "email");
-  const contactEmail = parseEmail(emailRaw);
-  const twitchRaw = readField(formData, "twitchChannel");
-  const twitchChannel = parseTwitchChannel(twitchRaw);
-  const youtubeRaw = readField(formData, "youtubeChannel");
-  const youtubeChannel = parseYoutubeChannel(youtubeRaw);
-  const kickRaw = readField(formData, "kickChannel");
-  const kickChannel = parseKickChannel(kickRaw);
-  const discordRaw = readField(formData, "discordUsername");
-  const discordUsername = parseDiscordUsername(discordRaw);
-  const countryRaw = readField(formData, "country");
   const statusRaw = readField(formData, "status") || "APPROVED";
   const status =
     statusRaw === "PENDING" || statusRaw === "REJECTED" ? statusRaw : "APPROVED";
@@ -388,45 +326,23 @@ export async function createPlayer(
     return { error: "El profile ID de AoE4World debe ser un número.", message: null };
   }
 
-  if (!name) {
-    return { error: "El nombre es obligatorio (máx. 64 caracteres).", message: null };
+  // Los seis campos que no necesitan leer nada se validan con el criterio compartido
+  // (`src/lib/player-fields.ts`), y **antes** de tocar la base: un envío mal escrito no
+  // tiene por qué pagar la lectura de la lista de países.
+  const campos = parsePlayerFieldsWithoutCountry({
+    name: readField(formData, "name"),
+    contactEmail: readField(formData, "email"),
+    twitchChannel: readField(formData, "twitchChannel"),
+    youtubeChannel: readField(formData, "youtubeChannel"),
+    kickChannel: readField(formData, "kickChannel"),
+    discordUsername: readField(formData, "discordUsername"),
+  });
+
+  if (!campos.ok) {
+    return { error: campos.error, message: null };
   }
 
-  // El `@usuario` es obligatorio en el alta —es el único dato de Discord que la
-  // organización da de alta a mano— y el parser distingue los dos fallos con el valor
-  // crudo: un vacío es "falta", y algo que no vale es "está mal escrito".
-  if (discordUsername === null) {
-    return {
-      error: discordRaw === "" ? DISCORD_USERNAME_REQUIRED_ERROR : DISCORD_USERNAME_INVALID_ERROR,
-      message: null,
-    };
-  }
-
-  // Los tres canales, con el mismo criterio y en el mismo orden que la edición: un
-  // vacío es `null` y un valor escrito que no se puede guardar es un error de su
-  // campo, no un `null` silencioso. Se comprueban antes de leer la lista de países
-  // porque son validaciones gratis.
-  if (twitchChannel === null && twitchRaw !== "") {
-    return { error: TWITCH_INVALID_ERROR, message: null };
-  }
-
-  if (youtubeChannel === null && youtubeRaw !== "") {
-    return {
-      error: isLegacyYoutubeUrl(youtubeRaw) ? YOUTUBE_LEGACY_URL_ERROR : YOUTUBE_INVALID_ERROR,
-      message: null,
-    };
-  }
-
-  if (kickChannel === null && kickRaw !== "") {
-    return { error: KICK_INVALID_ERROR, message: null };
-  }
-
-  // El correo, con el mismo criterio que los canales y que el país, y por el mismo
-  // motivo de sitio: es una validación gratuita, así que va antes de leer la lista
-  // de países.
-  if (contactEmail === null && emailRaw !== "") {
-    return { error: EMAIL_INVALID_ERROR, message: null };
-  }
+  const countryRaw = readField(formData, "country");
 
   // La lista se lee solo si el resto de lo obligatorio ya vale: es una lectura de
   // `Setting` y no tiene sentido pagarla en un envío que ya está descartado (ver el
@@ -441,13 +357,17 @@ export async function createPlayer(
     return { error: COUNTRIES_UNAVAILABLE_MESSAGE, message: null };
   }
 
-  const country = parseCountry(countryRaw, countries);
-
   // Vacío es `null` (el campo es opcional aquí); un valor que no está en la lista
   // es un error, no algo que se guarde como si no se hubiera escrito.
-  if (country === null && countryRaw !== "") {
-    return { error: COUNTRY_UNKNOWN_ERROR, message: null };
+  const parsedCountry = parsePlayerField("country", countryRaw, countries);
+
+  if (!parsedCountry.ok) {
+    return { error: parsedCountry.error, message: null };
   }
+
+  const { name, contactEmail, twitchChannel, youtubeChannel, kickChannel, discordUsername } =
+    campos.campos;
+  const country = parsedCountry.value;
 
   // El `try` cubre **solo** la base de datos. Un fallo de validación tiene que
   // seguir siendo un error de aplicación, y por eso el bloque va aquí y no
@@ -555,104 +475,10 @@ export async function createPlayer(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Los siete campos que la edición puede cambiar, tal y como están en la fila.
- *
- * El orden es el del formulario, no el de las columnas: el correo va detrás del
- * nombre porque es un dato de la persona y no un canal, igual que en el alta, y el
- * `@usuario` de Discord se queda al final por el motivo que dice `camposQueCambian()`.
+ * Los siete campos editables y su comparación viven en `src/lib/player-fields.ts`,
+ * junto con su validación: la edición y la reversión de una edición tienen que
+ * comparar y validar exactamente lo mismo.
  */
-type CamposEditables = {
-  name: string;
-  /**
-   * Correo de contacto, que es `null` cuando no se sabe.
-   *
-   * A diferencia de `discordUsername`, aquí sí admite `null` y el vacío lo escribe:
-   * el correo es un dato de contacto que se puede no tener, y "no lo sabemos" es una
-   * información, no una fila a medias. Es el mismo criterio que el país.
-   */
-  contactEmail: string | null;
-  twitchChannel: string | null;
-  youtubeChannel: string | null;
-  kickChannel: string | null;
-  country: string | null;
-  /**
-   * `@usuario` de Discord en su forma canónica (**sin arroba**).
-   *
-   * Nunca `null`: a diferencia de los canales y del país, aquí no hay un campo
-   * opcional, porque una fila sin `@usuario` no se puede comprobar ni buscar en el
-   * servidor. Las filas anteriores a F12 sí lo tienen a `null`, y ese `null` no es
-   * editable: es un dato que no se sabe, y esta acción no inventa datos. Para esas
-   * filas hay que dar de alta a la persona en Discord otra vez, que es lo que hace
-   * quien pulse el botón.
-   */
-  discordUsername: string | null;
-};
-
-/**
- * Qué campo editable ha cambiado de valor, con su rótulo y sus dos valores.
- *
- * Va en el mensaje de vuelta porque "se han guardado los cambios" no dice **qué** se
- * ha cambiado, y en una fila con siete campos editables la diferencia entre "ha
- * guardado" y "no había nada que guardar" es justo lo que no se ve. Además decide
- * si hace falta escribir: si la lista sale vacía, los valores ya eran estos y no hay
- * nada que hacer.
- *
- * Devuelve el campo de la columna además del rótulo porque el rastro de
- * `AdminAction` los necesita los dos: la frase lleva el rótulo y el `details` lleva
- * el nombre de la columna con el valor de antes y el de después.
- */
-function camposQueCambian(antes: CamposEditables, despues: CamposEditables): CampoEditado[] {
-  const cambios: CampoEditado[] = [
-    ...campoSiCambia(antes.name, despues.name, "name", "nombre"),
-    ...campoSiCambia(
-      antes.contactEmail,
-      despues.contactEmail,
-      "contactEmail",
-      "correo de contacto",
-    ),
-    ...campoSiCambia(
-      antes.twitchChannel,
-      despues.twitchChannel,
-      "twitchChannel",
-      "canal de Twitch",
-    ),
-    ...campoSiCambia(
-      antes.youtubeChannel,
-      despues.youtubeChannel,
-      "youtubeChannel",
-      "canal de YouTube",
-    ),
-    ...campoSiCambia(antes.kickChannel, despues.kickChannel, "kickChannel", "canal de Kick"),
-    ...campoSiCambia(antes.country, despues.country, "country", "país"),
-    // El `@usuario` va al final porque es el campo que más se toca por una regla (dar
-    // de alta, corregir un nombre mal escrito) y el mensaje tiene que leerlo en ese
-    // orden: primero lo que es el jugador y después su identidad en Discord.
-    ...campoSiCambia(
-      antes.discordUsername,
-      despues.discordUsername,
-      "discordUsername",
-      "usuario de Discord",
-    ),
-  ];
-
-  return cambios;
-}
-
-/**
- * Un cambio, o nada.
- *
- * Va en un array porque el orden de la comparación es el del formulario y no el
- * alfabético: es el orden en el que se leen los campos en el mensaje y en la frase
- * del historial.
- */
-function campoSiCambia(
-  antes: string | null,
-  despues: string | null,
-  campo: string,
-  etiqueta: string,
-): CampoEditado[] {
-  return antes === despues ? [] : [{ campo, etiqueta, antes, despues }];
-}
 
 /**
  * ¿El fallo es que la fila ya no está?
@@ -790,59 +616,22 @@ export async function updatePlayer(
 
   // `readField` en todos: `FormData.get` también puede devolver un `File`, y el
   // parser recibiría `"[object File]"`, que es un valor escrito mal con otra forma.
-  const name = parseName(readField(formData, "name"));
-  // El correo detrás del nombre y antes de los canales, como en el alta y en la
-  // inscripción pública: es un dato de la persona, no un canal.
-  const emailRaw = readField(formData, "email");
-  const contactEmail = parseEmail(emailRaw);
-  const twitchRaw = readField(formData, "twitchChannel");
-  const twitchChannel = parseTwitchChannel(twitchRaw);
-  const youtubeRaw = readField(formData, "youtubeChannel");
-  const youtubeChannel = parseYoutubeChannel(youtubeRaw);
-  const kickRaw = readField(formData, "kickChannel");
-  const kickChannel = parseKickChannel(kickRaw);
-  const discordRaw = readField(formData, "discordUsername");
-  const discordUsername = parseDiscordUsername(discordRaw);
+  const campos = parsePlayerFieldsWithoutCountry({
+    name: readField(formData, "name"),
+    contactEmail: readField(formData, "email"),
+    twitchChannel: readField(formData, "twitchChannel"),
+    youtubeChannel: readField(formData, "youtubeChannel"),
+    kickChannel: readField(formData, "kickChannel"),
+    discordUsername: readField(formData, "discordUsername"),
+  });
+
+  if (!campos.ok) {
+    return { error: campos.error, message: null };
+  }
+
+  const { name, contactEmail, twitchChannel, youtubeChannel, kickChannel, discordUsername } =
+    campos.campos;
   const countryRaw = readField(formData, "country");
-
-  if (!name) {
-    return { error: "El nombre es obligatorio (máx. 64 caracteres).", message: null };
-  }
-
-  // El `@usuario` es obligatorio y a diferencia de los canales y del país **un vacío
-  // es un error**, no un `null`: `null` aquí significaría una fila que no se puede
-  // buscar en el servidor. Ver el docblock de la acción.
-  if (discordUsername === null) {
-    return {
-      error: discordRaw === "" ? DISCORD_USERNAME_REQUIRED_ERROR : DISCORD_USERNAME_INVALID_ERROR,
-      message: null,
-    };
-  }
-
-  // Los tres canales, con el criterio del alta: vacíos son `null` y un valor escrito
-  // que no se puede guardar es un error de su campo. Se comprueban antes de leer la
-  // lista de países porque son validaciones gratis.
-  if (twitchChannel === null && twitchRaw !== "") {
-    return { error: TWITCH_INVALID_ERROR, message: null };
-  }
-
-  if (youtubeChannel === null && youtubeRaw !== "") {
-    return {
-      error: isLegacyYoutubeUrl(youtubeRaw) ? YOUTUBE_LEGACY_URL_ERROR : YOUTUBE_INVALID_ERROR,
-      message: null,
-    };
-  }
-
-  if (kickChannel === null && kickRaw !== "") {
-    return { error: KICK_INVALID_ERROR, message: null };
-  }
-
-  // El correo, con el mismo criterio y el mismo texto que el alta: vacío es `null` y
-  // un valor escrito que no se puede guardar es un error de su campo. También es una
-  // validación gratuita, así que va antes de leer la lista de países.
-  if (contactEmail === null && emailRaw !== "") {
-    return { error: EMAIL_INVALID_ERROR, message: null };
-  }
 
   /**
    * El país, que es el único campo cuya validación necesita **leer** algo.
@@ -866,11 +655,13 @@ export async function updatePlayer(
       return { error: COUNTRIES_UNAVAILABLE_MESSAGE, message: null };
     }
 
-    country = parseCountry(countryRaw, countries);
+    const parsedCountry = parsePlayerField("country", countryRaw, countries);
 
-    if (country === null) {
-      return { error: COUNTRY_UNKNOWN_ERROR, message: null };
+    if (!parsedCountry.ok) {
+      return { error: parsedCountry.error, message: null };
     }
+
+    country = parsedCountry.value;
   }
 
   let actual: ({ id: string; profileId: number } & CamposEditables) | null;
@@ -1128,9 +919,20 @@ export async function rejectPlayer(formData: FormData) {
  *
  * Es el interruptor manual del plazo: escribe `Setting["registration.open"]`, que
  * es lo que comprueban `registerPlayer` (formulario público) y `createPlayer`
- * (alta de admin). **No** se registra en `AdminAction` —igual que los cambios de
- * `scoring.ruleset`—: la fila de `Setting` ya lleva su `updatedAt` como rastro, y
- * el enum de acciones es corto a propósito.
+ * (alta de admin). Es una opción **solo del superadministrador**
+ * (`requireSuperadmin()`): el plazo decide quién puede inscribirse y no se deja al
+ * criterio de quien llame a la acción, que es un endpoint público.
+ *
+ * ## Deja rastro, y solo si cambia algo
+ *
+ * El `upsert` y la fila de `AdminAction` (`CONFIG_CHANGED`) van en la **misma
+ * transacción**: o se ve el cambio de plazo y su línea en el historial, o no se ve
+ * ninguno. El rastro lleva el campo con su valor de antes y el de después, igual
+ * que la edición de un jugador y que los demás cambios de configuración.
+ *
+ * Abrir el formulario y cerrarlo sin tocar nada no escribe ni el `upsert` ni la
+ * fila: se lee el estado actual antes de escribir y, si ya era el pedido, se sale
+ * sin dejar rastro.
  *
  * Lee el valor deseado de un campo `open` con `"true"`/`"false"`. Cualquier otra
  * cosa —incluido el campo ausente— se interpreta como `false`, que es el estado
@@ -1141,24 +943,164 @@ export async function rejectPlayer(formData: FormData) {
  * se ve que no ha cambiado.
  */
 export async function setRegistrationOpen(formData: FormData): Promise<void> {
-  await requireAdmin();
+  const admin = await requireSuperadmin();
 
   const open = readField(formData, "open") === "true";
 
+  let antes: Awaited<ReturnType<typeof readRegistrationState>>;
+
   try {
-    await writeRegistrationOpen(open);
+    antes = await readRegistrationState();
+  } catch (error) {
+    logDatabaseFailure("admin/setRegistrationOpen/leer", error);
+
+    return;
+  }
+
+  // Se compara el **interruptor**, no el estado efectivo: con la fecha de cierre ya
+  // pasada el plazo está cerrado aunque el interruptor siga encendido, y comparar el
+  // efectivo haría creer que hay un cambio cuando no lo hay.
+  const cambios = campoSiCambia(
+    boolText(antes.switchOpen),
+    boolText(open),
+    "registration.open",
+    "plazo de inscripción",
+  );
+
+  // El estado ya era este: no se escribe ni se deja rastro, que es lo mismo que
+  // hace `updatePlayer()` cuando el formulario se envía sin tocar nada.
+  if (cambios.length === 0) {
+    return;
+  }
+
+  try {
+    await db.$transaction(async (tx) => {
+      await writeRegistrationOpen(open, tx);
+
+      await recordAdminAction(tx, {
+        type: AdminActionType.CONFIG_CHANGED,
+        actorEmail: actorEmail(admin),
+        cambios,
+      });
+    });
   } catch (error) {
     logDatabaseFailure("admin/setRegistrationOpen", error);
 
     return;
   }
 
-  // El valor del interruptor se lee en tres sitios: la Configuración donde se
+  // El valor del interruptor se lee en tres sitios: la Administración donde se
   // cambia, el alta de `/admin`, que se deshabilita con el plazo cerrado, y el
   // formulario público.
-  revalidatePath("/admin/configuracion");
+  revalidatePath("/admin/administracion/inscripciones");
   revalidatePath("/admin");
   revalidatePath("/participar");
+}
+
+/**
+ * Fija la fecha de cierre de las inscripciones, o la quita.
+ *
+ * Escribe (o borra) `Setting["registration.closesAt"]`, que es lo que comparten
+ * `registerPlayer` y `createPlayer` a través de `readRegistrationState()`. Pasada esa
+ * fecha, el plazo se cierra solo; el interruptor manual (`setRegistrationOpen`) sigue
+ * pudiendo cerrar antes, y para **reabrir** después de la fecha el superadministrador
+ * quita o mueve la fecha. Va **detrás de `requireSuperadmin()`**, como el interruptor:
+ * decide quién puede inscribirse y no se deja al criterio de quien llame a la acción.
+ *
+ * ## Qué espera y qué devuelve
+ *
+ * Lee un campo `closesAt` del `FormData` y acepta las **dos formas** que puede mandar un
+ * formulario, con la misma función que usa la ventana del ruleset
+ * (`parseMadridLocalInstant()`):
+ *
+ * - una fecha y hora de `<input type="datetime-local">` (`YYYY-MM-DDTHH:mm`, con
+ *   segundos opcionales) **sin zona**, que el **servidor** interpreta en
+ *   `Europe/Madrid`; y
+ * - un instante ISO-8601 **con zona** (`2026-10-01T00:00:00Z` o con desplazamiento),
+ *   que se normaliza tal cual.
+ *
+ * En los dos casos se guarda en `Setting["registration.closesAt"]` como ISO-8601 UTC.
+ * Vacío quita la fecha. Un campo vacío y una fecha mal escrita no son lo mismo: vacío es
+ * una intención válida y mal escrita es un error que hay que corregir, así que se
+ * distinguen y la segunda devuelve un `AdminActionResult` de error.
+ *
+ * ## Deja rastro, y solo si cambia algo
+ *
+ * El `upsert` (o el `deleteMany`) y la fila de `AdminAction` (`CONFIG_CHANGED`) van en
+ * la **misma transacción**: o se ve la fecha nueva y su línea en el historial, o no se
+ * ve ninguna. Se lee la fecha actual —normalizada— antes de escribir y, si ya era la
+ * pedida, se sale sin escribir y sin rastro: abrir el formulario y cerrarlo sin tocar
+ * nada no puede dejar huella.
+ *
+ * ## Qué revalida
+ *
+ * Las mismas tres rutas que el interruptor, porque la fecha cambia el mismo estado:
+ * la Administración donde se configura, el alta de `/admin` y el formulario público.
+ */
+export async function setRegistrationClosesAt(
+  _prevState: AdminActionResult,
+  formData: FormData,
+): Promise<AdminActionResult> {
+  const admin = await requireSuperadmin();
+
+  const raw = readField(formData, "closesAt");
+  const closesAt = raw === "" ? null : parseMadridLocalInstant(raw);
+
+  if (raw !== "" && closesAt === null) {
+    return { status: "error", message: REGISTRATION_CLOSES_AT_INVALID_MESSAGE };
+  }
+
+  let antes: Awaited<ReturnType<typeof readRegistrationState>>;
+
+  try {
+    antes = await readRegistrationState();
+  } catch (error) {
+    logDatabaseFailure("admin/setRegistrationClosesAt/leer", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  const cambios = campoSiCambia(
+    antes.closesAt,
+    closesAt,
+    "registration.closesAt",
+    "fecha de cierre de inscripciones",
+  );
+
+  // La fecha ya era esta: no se escribe, no se deja rastro y no se dice nada. La
+  // línea de estado vacía es la misma respuesta que da el interruptor cuando el valor
+  // ya era el pedido; decir "quitada" con el campo vacío sería contar algo que no ha
+  // pasado.
+  if (cambios.length === 0) {
+    return { status: "success", message: null };
+  }
+
+  const message =
+    closesAt === null
+      ? "Fecha de cierre de las inscripciones quitada."
+      : `Cierre de las inscripciones fijado para el ${formatAbsoluteTime(new Date(closesAt))}.`;
+
+  try {
+    await db.$transaction(async (tx) => {
+      await writeRegistrationClosesAt(closesAt, tx);
+
+      await recordAdminAction(tx, {
+        type: AdminActionType.CONFIG_CHANGED,
+        actorEmail: actorEmail(admin),
+        cambios,
+      });
+    });
+  } catch (error) {
+    logDatabaseFailure("admin/setRegistrationClosesAt", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  revalidatePath("/admin/administracion/inscripciones");
+  revalidatePath("/admin");
+  revalidatePath("/participar");
+
+  return { status: "success", message };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1184,9 +1126,9 @@ const DONATIONS_ENABLED_WITHOUT_URL_ERROR =
  * Activa o desactiva el banner de donaciones y guarda la URL de la campaña.
  *
  * Escribe `Setting["donations.matcherino"]`, que es lo que lee el layout público
- * para pintar el banner. Va **detrás de `requireAdmin()`**, como todas las de este
- * archivo: es un cambio de cara al público y no se puede dejar al criterio de quien
- * llame a la acción directamente.
+ * para pintar el banner. Va **detrás de `requireSuperadmin()`**: es un cambio de
+ * cara al público y no se deja al criterio de quien llame a la acción
+ * directamente.
  *
  * ## Un solo formulario, una foto completa
  *
@@ -1204,18 +1146,30 @@ const DONATIONS_ENABLED_WITHOUT_URL_ERROR =
  * `AdminActionResult` para que el panel pueda enseñar el motivo; el `try` cubre
  * **solo** la escritura, como manda el patrón de este archivo.
  *
+ * ## Deja rastro, y solo si cambia algo
+ *
+ * El `upsert` y la fila de `AdminAction` (`CONFIG_CHANGED`) van en la **misma
+ * transacción**: o se ve el cambio de la campaña y su línea en el historial, o no
+ * se ve ninguno. El rastro lleva los dos campos —el banner y la dirección— con su
+ * valor de antes y el de después, igual que los demás cambios de configuración.
+ *
+ * Se lee la campaña actual antes de escribir y, si ya era la pedida, se sale sin
+ * escribir y sin rastro: abrir el formulario y cerrarlo sin tocar nada no puede
+ * dejar huella.
+ *
  * ## Qué revalida
  *
- * `/admin/configuracion`, donde está el formulario, y el layout de `(public)`, que es
- * quien pinta el banner: apagarlo o cambiarle la URL tiene que verse en la siguiente
- * visita sin desplegar. Las páginas públicas son `force-dynamic` y releen igualmente,
- * pero revalidar el layout es lo que invalida lo que envuelve.
+ * `/admin/administracion/donaciones`, donde está el formulario, y el layout de
+ * `(public)`, que es quien pinta el banner: apagarlo o cambiarle la URL tiene que
+ * verse en la siguiente visita sin desplegar. Las páginas públicas son
+ * `force-dynamic` y releen igualmente, pero revalidar el layout es lo que invalida
+ * lo que envuelve.
  */
 export async function setMatcherinoDonations(
   _prevState: AdminActionResult,
   formData: FormData,
 ): Promise<AdminActionResult> {
-  await requireAdmin();
+  const admin = await requireSuperadmin();
 
   const urlRaw = readField(formData, "url");
   const enabled = readField(formData, "enabled") === "true";
@@ -1235,25 +1189,62 @@ export async function setMatcherinoDonations(
     return { status: "error", message: DONATIONS_ENABLED_WITHOUT_URL_ERROR };
   }
 
+  let antes: MatcherinoDonations;
+
   try {
-    await writeMatcherinoDonations(donations);
+    antes = await readMatcherinoDonations();
+  } catch (error) {
+    logDatabaseFailure("admin/setMatcherinoDonations/leer", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  const cambios = [
+    ...campoSiCambia(
+      boolText(antes.enabled),
+      boolText(donations.enabled),
+      "donations.matcherino.enabled",
+      "banner de donaciones",
+    ),
+    ...campoSiCambia(
+      antes.url,
+      donations.url,
+      "donations.matcherino.url",
+      "dirección de la campaña",
+    ),
+  ];
+
+  const message = donations.enabled
+    ? "Banner de donaciones activado."
+    : donations.url === ""
+      ? "Banner de donaciones desactivado."
+      : "Banner de donaciones desactivado. La dirección queda guardada por si la vuelves a activar.";
+
+  // La campaña ya era esta: sale como un acierto y no se escribe ni se deja rastro.
+  if (cambios.length === 0) {
+    return { status: "success", message };
+  }
+
+  try {
+    await db.$transaction(async (tx) => {
+      await writeMatcherinoDonations(donations, tx);
+
+      await recordAdminAction(tx, {
+        type: AdminActionType.CONFIG_CHANGED,
+        actorEmail: actorEmail(admin),
+        cambios,
+      });
+    });
   } catch (error) {
     logDatabaseFailure("admin/setMatcherinoDonations", error);
 
     return { status: "error", message: SAVE_FAILED_MESSAGE };
   }
 
-  revalidatePath("/admin/configuracion");
+  revalidatePath("/admin/administracion/donaciones");
   revalidatePath("/(public)", "layout");
 
-  return {
-    status: "success",
-    message: donations.enabled
-      ? "Banner de donaciones activado."
-      : donations.url === ""
-        ? "Banner de donaciones desactivado."
-        : "Banner de donaciones desactivado. La dirección queda guardada por si la vuelves a activar.",
-  };
+  return { status: "success", message };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1315,6 +1306,10 @@ export async function deletePlayer(
     name: string;
     profileId: number;
     matchCount: number;
+    /** Columnas capturadas antes del borrado: la fila desaparece en la transacción. */
+    status: PlayerStatus;
+    discordUserId: string | null;
+    discordUsername: string | null;
   } | null;
 
   try {
@@ -1325,6 +1320,9 @@ export async function deletePlayer(
         name: true,
         profileId: true,
         registeredAt: true,
+        status: true,
+        discordUserId: true,
+        discordUsername: true,
       },
     });
 
@@ -1344,6 +1342,9 @@ export async function deletePlayer(
         name: row.name,
         profileId: row.profileId,
         matchCount,
+        status: row.status,
+        discordUserId: row.discordUserId,
+        discordUsername: row.discordUsername,
       };
     }
   } catch (error) {
@@ -1362,14 +1363,10 @@ export async function deletePlayer(
 
   try {
     await db.$transaction(async (tx) => {
-      await tx.player.delete({ where: { id: player.id } });
-
-      // El cursor de sincronización vive en `Setting`, sin FK al jugador, así que
-      // no cae con la cascada. Se borra **en la misma transacción** para que no
-      // quede un cursor sin jugador: si el mismo perfil se vuelve a dar de alta,
-      // un cursor viejo haría que el worker pidiera partidas solo desde ahí e
-      // importara cero, dejando al recién aprobado fuera de la clasificación.
-      await deletePlayerSyncState(player.profileId, tx);
+      // El borrado en cascada y el cursor de sincronización viven en
+      // `deletePlayerCascade()` (`src/lib/admin-revert.ts`), que es lo mismo que hace
+      // la reversión de un alta: las dos tienen que borrar exactamente lo mismo.
+      await deletePlayerCascade(player, tx);
 
       await recordAdminAction(tx, {
         type: AdminActionType.PLAYER_REMOVED,
@@ -1388,6 +1385,20 @@ export async function deletePlayer(
 
   revalidatePath("/admin");
 
+  // El aviso va **después** de la transacción —si hubiera fallado no habría nada que
+  // avisar—, no bloquea ni puede cambiar lo que ve el administrador (ver
+  // `dispatchAdminNotice()`), y las columnas de Discord se capturaron antes del borrado.
+  dispatchAdminNotice({
+    kind: "player-removed",
+    player: {
+      name: player.name,
+      status: player.status,
+      discordUserId: player.discordUserId,
+      discordUsername: player.discordUsername,
+    },
+    matchCount: player.matchCount,
+  });
+
   const partidas =
     player.matchCount === 0
       ? "No tenía partidas clasificatorias."
@@ -1398,7 +1409,7 @@ export async function deletePlayer(
     message: frase(
       `Se ha eliminado a ${player.name} (AoE4World ${player.profileId}).`,
       partidas,
-      await avisoDeRecalculo("admin/deletePlayer"),
+      await recomputeWithWarning("admin/deletePlayer"),
     ),
   };
 }
@@ -1406,48 +1417,6 @@ export async function deletePlayer(
 /* -------------------------------------------------------------------------- */
 /* Puntos de una partida                                                       */
 /* -------------------------------------------------------------------------- */
-
-/** La partida tal y como la necesitan estas dos acciones. */
-type MatchForScoring = {
-  id: string;
-  gameId: string;
-  points: number;
-  revertedAt: Date | null;
-  /** `Player.id` de la fila afectada: las alertas se reevalúan por id, no por `profileId`. */
-  playerId: string;
-  /** Lo que `countsAsRanked()` necesita para decidir si la partida cuenta. */
-  mode: string | null;
-  result: MatchResult | null;
-  startedAt: Date;
-  finishedAt: Date | null;
-  /**
-   * `Player.registeredAt` del dueño, o `null` si no lo tiene: es la otra mitad del
-   * corte de la regla. Sin él, una partida anterior a la inscripción parecería
-   * clasificatoria y se podría marcar para siempre.
-   */
-  registeredAt: Date | null;
-  playerName: string;
-  playerProfileId: number;
-};
-
-/**
- * Recalcula la clasificación y devuelve el aviso si no lo ha conseguido.
- *
- * No lanza, porque en `deletePlayer` el cambio **ya está escrito** y propagar el
- * error dejaría a quien lo pidió creyendo que no se aplicó nada cuando sí. El texto
- * va vacío cuando todo fue bien.
- */
-async function avisoDeRecalculo(scope: string): Promise<string> {
-  try {
-    await recomputeScores();
-
-    return "";
-  } catch (error) {
-    logDatabaseFailure(`${scope}/recompute`, error);
-
-    return "La clasificación se recalculará sola en la próxima pasada del sincronizador.";
-  }
-}
 
 /**
  * Vuelve a dejar la partida como estaba y borra la fila de `AdminAction` que esta
@@ -1524,7 +1493,12 @@ async function setMatchReverted(
     return { status: "error", message: "No se ha podido saber qué partida hay que cambiar." };
   }
 
-  let encontrada: MatchForScoring | null;
+  let encontrada:
+    | (MatchForScoring & {
+        /** Columnas de Discord del jugador, capturadas para el aviso de la acción. */
+        playerDiscord: { discordUserId: string | null; discordUsername: string | null };
+      })
+    | null;
 
   try {
     const row = await db.match.findUnique({
@@ -1539,7 +1513,16 @@ async function setMatchReverted(
         result: true,
         startedAt: true,
         finishedAt: true,
-        player: { select: { name: true, profileId: true, registeredAt: true } },
+        rawJson: true,
+        player: {
+          select: {
+            name: true,
+            profileId: true,
+            registeredAt: true,
+            discordUserId: true,
+            discordUsername: true,
+          },
+        },
       },
     });
 
@@ -1560,8 +1543,13 @@ async function setMatchReverted(
             // `countsAsRanked()` lo toma como un dato más de la partida y no como
             // una relación.
             registeredAt: row.player.registeredAt,
+            rawJson: row.rawJson,
             playerName: row.player.name,
             playerProfileId: row.player.profileId,
+            playerDiscord: {
+              discordUserId: row.player.discordUserId,
+              discordUsername: row.player.discordUsername,
+            },
           };
   } catch (error) {
     logDatabaseFailure(scope, error);
@@ -1586,30 +1574,20 @@ async function setMatchReverted(
   const match = encontrada;
 
   /**
-   * La misma pregunta que se hace el motor, con la misma función, y **la misma
-   * respuesta en los dos sentidos**: solo tiene sentido tocar una partida que cuenta.
-   * Al revertir, porque es lo que se le quita; al restaurar, porque es lo que vuelve.
-   * Se pregunta siempre con `revertedAt: null`, que es lo que deja la decisión en las
-   * otras cuatro condiciones de la regla.
+   * La guarda: solo tiene sentido tocar la marca de una partida que **cuenta**. Al
+   * revertir, porque es lo que se le quita; al restaurar, porque es lo que vuelve. La
+   * pregunta y su porqué viven en `countsWithoutRevertMark()`
+   * (`src/lib/admin-revert.ts`), que es la misma que usa la reversión de una acción de
+   * puntos: las dos tienen que decidir igual.
    *
-   * Sin esta guarda, un `FormData` hecho a mano podría dejar marcada para siempre una
-   * partida que nunca llegó a puntuar, y el admin vería "revertida" en el histórico de
-   * algo que en realidad nunca contó. Y al revés: una partida anterior al alta del
-   * jugador tiene `points = 0` porque no llegó a contar, así que marcarla sería
-   * inventar un estado que el torneo nunca tuvo.
-   *
-   * Que el criterio sea el mismo en ambos sentidos es deliberado. Con la guarda
-   * invertida al restaurar, ninguna partida clasificatoria se podía devolver: se
-   * exigía que no contara. El revert quedaba sin vuelta desde el panel.
+   * Los cortes y el ruleset se leen **una vez por clic** y se le pasan: la guarda es la
+   * regla entera, condición de equipos incluida, y sin los cortes la partida cuenta
+   * (como en el motor), así que la guarda no puede bloquear un revert que sí toca.
    */
   const ruleset = await readRuleset();
-  const contariaSinMarca = countsAsRanked(
-    { ...match, revertedAt: null },
-    ruleset.window,
-    match.registeredAt,
-  );
+  const cutoffs = await readDivisionCutoffs();
 
-  if (!contariaSinMarca) {
+  if (!countsWithoutRevertMark(match, ruleset, cutoffs)) {
     return {
       status: "error",
       message: revert
@@ -1684,6 +1662,22 @@ async function setMatchReverted(
   await reevaluatePlayerAlerts(match.playerId);
 
   revalidatePath("/admin");
+
+  // Solo la **invalidación** avisa: restaurar los puntos devuelve lo que se quitó y no es
+  // noticia. Va después del recálculo (si hubiera fallado, se habría deshecho el cambio)
+  // y sin bloquear, como el resto de avisos de administración.
+  if (revert) {
+    dispatchAdminNotice({
+      kind: "match-points-reverted",
+      player: {
+        name: match.playerName,
+        discordUserId: match.playerDiscord.discordUserId,
+        discordUsername: match.playerDiscord.discordUsername,
+      },
+      gameId: match.gameId,
+      points: puntosDeLaPartida,
+    });
+  }
 
   return {
     status: "success",

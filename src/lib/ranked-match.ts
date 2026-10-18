@@ -2,6 +2,9 @@ import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
 import { MatchResult } from "@/generated/prisma/enums";
+import { subdivisionForRating, type LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
+import { parseTeamView } from "@/lib/aoe4world/parse";
+import { SUBDIVISIONS_PER_DIVISION, divisionTier, subdivisionIndex } from "@/lib/divisions";
 import { isRecord } from "@/lib/json";
 
 /**
@@ -21,7 +24,7 @@ import { isRecord } from "@/lib/json";
  * sin que uno tenga que importar al otro. Aquí no se importa nada del motor, y los
  * tres caminos (y `verify:sync`) consumen estas funciones.
  *
- * ## Las cinco condiciones
+ * ## Las seis condiciones
  *
  * 1. La familia de ladder viene en el ruleset (`rm_solo` / `rm_team` por defecto).
  * 2. La partida está **resuelta** (`result` y `finishedAt` informados): una
@@ -32,13 +35,37 @@ import { isRecord } from "@/lib/json";
  *    solo existe si la ventana tiene fin).
  * 5. La partida **no está revertida** (`Match.revertedAt IS NULL`), que es la
  *    marca que pone el panel de admin para que una partida deje de puntuar.
+ * 6. En una partida **por equipos**, ningún compañero está a **dos escalones o
+ *    más** del jugador (`teammatesWithinTier()`): la partida cuenta solo si el
+ *    equipo está equilibrado, y se compara cada compañero con el jugador, nunca
+ *    los compañeros entre sí.
  *
  * La **ventana de fechas** no está replicada: sus límites y su semántica salen
  * siempre de `windowBounds()` y `scoringCutoff()`, que es lo que usan
  * `countsWithinWindow()`, `windowWhere()` y `windowMatchSql()`. Lo único que se
- * repite es la lista de condiciones, y las tres traducciones la tienen escrita en
- * su sitio: **si alguna vez se toca una, hay que tocar las otras dos**.
+ * repite es la lista de condiciones, y cada traducción la tiene escrita en su
+ * sitio: **si alguna vez se toca una, hay que tocar las demás**.
  * `verify:sync` lo contrasta contra datos de verdad.
+ *
+ * ## La sexta condición solo cabe en dos de las tres traducciones
+ *
+ * Necesita `Match.rawJson` (los compañeros y su rating) y los cortes rating →
+ * subdivisión (`Setting["alerts.divisionCutoffs"]`), y un `where` de Prisma no lee
+ * ni un JSON ni un `Setting`: compara campos con valores. Por eso **no está** en
+ * `rankedMatchWhere()`, que la documenta como lo que es, y sus consumidores
+ * filtran después en memoria con `teammatesWithinTier()` —es lo que hacen
+ * `alerts/evaluate.ts` y `sync.ts`—. Las otras dos traducciones la llevan
+ * completas: el SQL la resuelve sobre el propio `jsonb` (`teammatesWithinTierSql()`)
+ * y `countsAsRanked()` con el lector de payload de `aoe4world/parse.ts`.
+ *
+ * ## La condición de equipos degrada hacia "cuenta"
+ *
+ * Todo lo que impida demostrar que el equipo está desequilibrado —un payload que
+ * no se puede leer, un rating ausente o no numérico, el jugador fuera de `teams`,
+ * o no tener los cortes de esa familia— deja la partida **contando**: no se puede
+ * acusar a nadie con un dato que no existe. La ausencia de cortes se avisa, además,
+ * en el rastro del recálculo (`Setting["scoring.lastRun"]`, ver `recomputeScores()`),
+ * porque ahí es un hueco de configuración de todo el torneo, no de una partida.
  *
  * ## Por qué hay dos maneras de decir el corte
  *
@@ -59,7 +86,11 @@ import { isRecord } from "@/lib/json";
  * el historial del panel tiene que enseñar las revertidas para poder deshacerlas;
  * y el historial del panel le pasa además `registeredAt = null`, porque enseña el
  * recorrido entero de cada participante —con sus 0 puntos a la vista— y no solo lo
- * que le suma. Lo que puntúa lo dicen `Match.points` y la clasificación.
+ * que le suma. Lo que puntúa lo dicen `Match.points` y la clasificación. La
+ * **sexta** sigue la misma regla de producto: una partida de equipo con un
+ * compañero a dos escalones **se queda listada** con 0 puntos en
+ * `/admin/historial` (`classificatoryWhere()` no puede expresarla, así que ahí
+ * tampoco se filtra), porque es el recorrido del jugador igual que una revertida.
  *
  * Y hay un caso al revés, en `rankedModesWhere()`: una consulta que no puede
  * aplicar la regla entera porque su partida **todavía no está resuelta**
@@ -306,6 +337,409 @@ export function parseWindow(value: unknown, fallback: ScoringWindow): ParsedWind
 }
 
 /* -------------------------------------------------------------------------- */
+/* Ventana escrita a mano en el panel                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * La zona con la que la organización lee el torneo.
+ *
+ * Es la misma que usan `objectives.ts` (el día natural de una partida) y
+ * `alerts/report.ts` (las fechas del informe), y la única que aparece en el panel.
+ */
+const MADRID_TIME_ZONE = "Europe/Madrid";
+
+/**
+ * Un valor de un `<input type="datetime-local">`: `YYYY-MM-DDTHH:mm`, con segundos
+ * opcionales. **Sin zona**, que es justo lo que manda el control del navegador.
+ */
+const LOCAL_INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/** Las partes del calendario de Madrid que se leen de un instante. */
+type MadridPart = "year" | "month" | "day" | "hour" | "minute" | "second";
+
+/**
+ * El instante, descompuesto en el reloj de pared de Madrid.
+ *
+ * `hourCycle: "h23"` evita el `24` de medianoche que algunos entornos dan con
+ * `hour12: false`; `en-CA` numera con dos dígitos en todos los campos.
+ */
+const MADRID_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: MADRID_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+/** Las partes de Madrid de un instante, ya como números. */
+function madridParts(utcMs: number): Record<MadridPart, number> {
+  const parts = MADRID_PARTS.formatToParts(new Date(utcMs));
+  const part = (type: MadridPart): number =>
+    Number(parts.find((entry) => entry.type === type)?.value);
+
+  return {
+    year: part("year"),
+    month: part("month"),
+    day: part("day"),
+    hour: part("hour"),
+    minute: part("minute"),
+    second: part("second"),
+  };
+}
+
+/**
+ * El desfase de Madrid respecto a UTC en un instante dado, en milisegundos.
+ *
+ * El proyecto no arrastra ninguna dependencia de zonas horarias, así que el
+ * desfase sale de `Intl`: se formatea el instante en el calendario de Madrid, se
+ * reconstruye ese reloj de pared como si fuera UTC y la diferencia es el desfase.
+ * Cambia dos veces al año, en los cambios de hora, y por eso se calcula **por
+ * instante** en vez de una sola vez.
+ */
+function madridOffsetMs(utcMs: number): number {
+  const { year, month, day, hour, minute, second } = madridParts(utcMs);
+
+  return Date.UTC(year, month - 1, day, hour, minute, second) - utcMs;
+}
+
+/**
+ * Un reloj de pared de Madrid, en milisegundos "ingenuos" (como si fuera UTC), a
+ * instante UTC.
+ *
+ * El desfase de Madrid depende del instante, así que se resuelve en dos pasadas:
+ * la primera con el desfase del propio reloj de pared, y la segunda con el del
+ * instante que sale de la primera. La segunda pasada es la que acierta en los dos
+ * cambios de hora, donde el desfase de partida no es el definitivo.
+ *
+ * **Criterio en las horas del cambio de hora**, que es lo único que esta función
+ * tiene que decidir por su cuenta:
+ *
+ * - **Ambiguas** (el domingo de octubre, la franja de 02:00 a 03:00 ocurre dos
+ *   veces): se toma la **segunda**, la del horario de invierno. La primera pasada
+ *   ya cae ahí.
+ * - **Inexistentes** (el domingo de marzo, la franja de 02:00 a 03:00 no ocurre):
+ *   se toma el instante **justo después del salto**, una hora más tarde de lo
+ *   escrito. La segunda pasada es la que lo desplaza.
+ *
+ * Los dos casos son deterministas y están probados. Un `datetime-local` que caiga
+ * en el hueco no se puede rechazar sin inventarse una regla, y esta es la que
+ * menos sorprende al mirar el reloj de Madrid.
+ */
+function madridLocalToUtc(naiveMs: number): number {
+  const firstOffset = madridOffsetMs(naiveMs);
+  const firstGuess = naiveMs - firstOffset;
+  const secondOffset = madridOffsetMs(firstGuess);
+
+  return secondOffset === firstOffset ? firstGuess : naiveMs - secondOffset;
+}
+
+/**
+ * Un instante escrito a mano para la ventana, normalizado a ISO-8601 UTC.
+ *
+ * Es la puerta de entrada del panel, y acepta las dos formas que puede haber en
+ * un formulario:
+ *
+ * - Un instante ISO-8601 **con zona** (lo que hoy guarda `Setting`): se valida con
+ *   `readInstant()` y se normaliza, sin reinterpretar nada.
+ * - Un `datetime-local` (`YYYY-MM-DDTHH:mm`, con segundos opcionales), que es lo
+ *   que manda un `<input type="datetime-local">` y **no lleva zona**: se interpreta
+ *   en `Europe/Madrid`, la zona con la que la organización lee el torneo (ver
+ *   `madridLocalToUtc()` para las horas del cambio de hora).
+ *
+ * Devuelve `null` si el texto no es ninguna de las dos cosas o no es una fecha real
+ * (mes 13, 31 de febrero, hora 25): el llamante decide qué mensaje enseñar. El
+ * resultado es siempre ISO-8601 UTC, así que sigue siendo válido para
+ * `parseWindow()` y para `Setting`.
+ */
+export function parseMadridLocalInstant(value: string): string | null {
+  const instant = readInstant(value);
+
+  if (instant !== null) {
+    return instant.toISOString();
+  }
+
+  const match = LOCAL_INSTANT_PATTERN.exec(value);
+
+  if (match === null) {
+    return null;
+  }
+
+  const [, year, month, day, hour, minute, second] = match;
+  const naive = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    second === undefined ? 0 : Number(second),
+  );
+  const check = new Date(naive);
+
+  // Un componente fuera de rango (mes 13, 31 de febrero, hora 25) hace que
+  // `Date.UTC` ruede al siguiente campo: si algo rodó, no era una fecha.
+  if (
+    check.getUTCFullYear() !== Number(year) ||
+    check.getUTCMonth() !== Number(month) - 1 ||
+    check.getUTCDate() !== Number(day) ||
+    check.getUTCHours() !== Number(hour) ||
+    check.getUTCMinutes() !== Number(minute)
+  ) {
+    return null;
+  }
+
+  return new Date(madridLocalToUtc(naive)).toISOString();
+}
+
+/**
+ * El inverso de `parseMadridLocalInstant()`: un instante, al `datetime-local` de
+ * Madrid.
+ *
+ * Es lo que prefila el campo del panel, y por eso devuelve `YYYY-MM-DDTHH:mm`
+ * **sin zona** y **sin segundos**: el valor exacto que espera un
+ * `<input type="datetime-local">`. Solo acepta un instante ISO-8601 con zona (lo
+ * que hay guardado); cualquier otra cosa devuelve `null` para que el campo se
+ * pinte vacío en vez de con un texto inventado.
+ */
+export function formatMadridLocalInstant(iso: string): string | null {
+  const instant = readInstant(iso);
+
+  if (instant === null) {
+    return null;
+  }
+
+  const { year, month, day, hour, minute } = madridParts(instant.getTime());
+  const two = (value: number): string => String(value).padStart(2, "0");
+
+  return `${year}-${two(month)}-${two(day)}T${two(hour)}:${two(minute)}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* La condición de equipos                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * El escalón máximo que puede separar al jugador de cada compañero.
+ *
+ * `1` significa "un escalón o menos": dos o más (en cualquiera de los dos
+ * sentidos) dejan la partida fuera. Es la única magnitud de la condición que no
+ * sale de configuración, y por eso vive en una constante que usan **las dos**
+ * traducciones que pueden aplicarla, en vez de repetirse en el SQL y en el JS.
+ */
+const MAX_TEAMMATE_TIER_DISTANCE = 1;
+
+/**
+ * Lo que hace falta para aplicar la condición de equipos a las partidas de **un**
+ * jugador: quién es (para localizarlo dentro de `Match.rawJson`) y los cortes
+ * rating → subdivisión de la familia de la partida.
+ *
+ * Va en un objeto y no en dos parámetros sueltos porque las dos cosas viajan
+ * juntas desde el mismo sitio (el jugador del que se está hablando y lo que hay
+ * cacheado) y porque el sitio donde se olvida una es justo donde se olvidaría la
+ * otra.
+ */
+export type TeamTierContext = {
+  /** `Player.profileId` del dueño de la partida. */
+  profileId: number;
+  /**
+   * Cortes rating → subdivisión por familia de ladder, o `null` si no hay ninguno
+   * cacheado. `null` **no** es un error: la partida cuenta (ver el docblock del
+   * módulo) y el aviso de esa falta lo da el recálculo.
+   */
+  cutoffs: LadderCutoffsTable | null;
+};
+
+/**
+ * ¿Ningún compañero está a dos escalones o más del jugador?
+ *
+ * Es la condición de equipos en memoria, y la comparten `countsAsRanked()` (la
+ * comprobación de una partida suelta) y el filtro del motor de alertas
+ * (`alerts/evaluate.ts`), que tiene que ver exactamente las partidas que puntúan.
+ * Por eso está exportada y no enterrada en `countsAsRanked()`: el motor de alertas
+ * no puede reimplementarla sin arriesgarse a discrepar del de puntos.
+ *
+ * | Qué falta | Qué hace |
+ * |---|---|
+ * | Sin cortes cacheados, o sin los de esta familia | `true`: no se puede demostrar la infracción |
+ * | `rawJson` ilegible, o el jugador no está en ningún equipo | `true` |
+ * | Sin rating del jugador, o sin rating del compañero | `true` |
+ *
+ * Se compara **cada compañero con el jugador** y nunca los compañeros entre sí, y
+ * el escalón ignora el subrango: `gold_3` y `gold_1` son el mismo escalón, así que
+ * un compañero en oro siempre está a cero escalones sea cual sea su subrango.
+ *
+ * La familia se busca por `mode` (`Match.mode` ya viene resuelto a `rm_team` para
+ * 2v2/3v3/4v4) y no por el literal de `leaderboard`: los cortes se cachean por
+ * familia, así que un `rm_3v3` indexado por su literal se quedaría sin cortes.
+ *
+ * Una partida de 1v1 no tiene compañeros, así que la condición se cumple sola sin
+ * necesidad de comprobar el modo.
+ */
+export function teammatesWithinTier(
+  rawJson: unknown,
+  mode: string | null,
+  context: TeamTierContext,
+): boolean {
+  const ladder = context.cutoffs === null || mode === null ? undefined : context.cutoffs[mode];
+
+  if (ladder === undefined) {
+    return true;
+  }
+
+  const team = parseTeamView(rawJson, context.profileId);
+
+  if (team === null || team.self === null || team.self.rating === null) {
+    return true;
+  }
+
+  const propia = subdivisionForRating(ladder, team.self.rating);
+
+  if (propia === null) {
+    return true;
+  }
+
+  const escalonPropio = divisionTier(propia.index);
+
+  return team.teammates.every((mate) => {
+    if (mate.rating === null) {
+      return true;
+    }
+
+    const suya = subdivisionForRating(ladder, mate.rating);
+
+    return (
+      suya === null ||
+      Math.abs(divisionTier(suya.index) - escalonPropio) <= MAX_TEAMMATE_TIER_DISTANCE
+    );
+  });
+}
+
+/** Un corte de una familia, ya reducido a lo que el predicado SQL necesita. */
+type SqlCutoff = {
+  /** Índice del catálogo de subdivisiones (`subdivisionIndex()`), 0 = `conqueror_3`. */
+  index: number;
+  minRating: number;
+};
+
+/**
+ * Los cortes cacheados, resueltos a `{ index, minRating }` por familia.
+ *
+ * El `index` es el del catálogo (`subdivisionIndex()`), **no** la posición en la
+ * lista: así el SQL y `subdivisionForRating()` cuentan el mismo escalón aunque el
+ * documento guardado viniera con huecos. Las filas cuyo `rankLevel` no resuelve
+ * —que `readCutoffsTable()` ya descarta al leer, así que aquí no debería haber
+ * ninguna— se caen; con menos cortes, el peor caso es que la partida cuente.
+ */
+function sqlCutoffs(cutoffs: LadderCutoffsTable): Record<string, SqlCutoff[]> {
+  const byLadder: Record<string, SqlCutoff[]> = {};
+
+  for (const [ladder, entry] of Object.entries(cutoffs)) {
+    const rows = entry.cutoffs.flatMap((cutoff) => {
+      const index = subdivisionIndex(cutoff.rankLevel);
+
+      return index === null ? [] : [{ index, minRating: cutoff.minRating }];
+    });
+
+    if (rows.length > 0) {
+      byLadder[ladder] = rows;
+    }
+  }
+
+  return byLadder;
+}
+
+/** El objeto `jsonb` de `rawJson` del jugador de la fila `alias`, con las dos formas que acepta `parse.ts`. */
+function gamePlayerSql(alias: string): Prisma.Sql {
+  return Prisma.sql`coalesce(${Prisma.raw(alias)} -> 'player', ${Prisma.raw(alias)})`;
+}
+
+/** El escalón al que cae `rating` con los cortes `ladder`, como expresión SQL. */
+function tierSql(rating: Prisma.Sql, ladder: Prisma.Sql): Prisma.Sql {
+  // Réplica de `subdivisionForRating()` + `divisionTier()`: el corte **más fuerte**
+  // cuyo `minRating` no supera el rating y, si ninguno lo alcanza (un rating por
+  // debajo del último corte), el más débil. El `coalesce` es ese recorte.
+  return Prisma.sql`(
+    coalesce(
+      (select min((c ->> 'index')::int) from jsonb_array_elements(${ladder}) as c
+        where (c ->> 'minRating')::numeric <= ${rating}),
+      (select max((c ->> 'index')::int) from jsonb_array_elements(${ladder}) as c)
+    ) / ${SUBDIVISIONS_PER_DIVISION}
+  )`;
+}
+
+/**
+ * La condición de equipos como predicado SQL, sobre `Match.rawJson`.
+ *
+ * Localiza el equipo que contiene a `playerTable."profileId"`, compara el escalón
+ * de **cada** compañero con el del jugador y devuelve el predicado que los excluye
+ * si alguno dista más de `MAX_TEAMMATE_TIER_DISTANCE`.
+ *
+ * Todo está escrito para que lo que no se puede leer **no excluya**:
+ *
+ * - `jsonb_typeof(...) = 'array'` en los dos niveles de `teams` (un payload con
+ *   `teams: "esto no es una lista"` no puede reventar la consulta) y `coalesce(f,
+ *   '[]'::jsonb)` para que un equipo que no es una lista no aporte jugadores.
+ * - La forma de cada jugador se acepta envuelta en `player` o plana, igual que
+ *   `parse.ts`; un elemento que no sea objeto deja `->>` en `null` sin error.
+ * - Solo se compara un rating con `jsonb_typeof(...) = 'number'`, así que un
+ *   `rating: null`, ausente o de texto **no** participa en la comparación.
+ * - El propio jugador se identifica por `profile_id` como texto (nunca se castea a
+ *   número, que reventaría con un payload raro) y los elementos sin `profile_id`
+ *   cuentan como compañeros: no saber quién es no es motivo para excluir.
+ * - La caché se busca por la familia de la partida (`mode`); si esa familia no está
+ *   o la partida no tiene familia, **cuenta**: el `or` del principio del predicado
+ *   es la degradación, y por eso no puede escribirse al revés.
+ * - Si el jugador no está en ningún equipo, o no tiene rating, tampoco se excluye.
+ * - Sin cortes cacheados (o sin los de la familia de esta partida) el predicado es
+ *   `null` (no se añade nada a la consulta) y la partida cuenta.
+ *
+ * Un partido de 1v1 tiene un jugador por equipo, así que no tiene compañeros y la
+ * condición se cumple sola: no hace falta comprobar el modo.
+ */
+function teammatesWithinTierSql(
+  matchTable: Prisma.Sql,
+  playerTable: Prisma.Sql,
+  cutoffs: LadderCutoffsTable | null,
+): Prisma.Sql | null {
+  const byLadder = cutoffs === null ? {} : sqlCutoffs(cutoffs);
+
+  if (Object.keys(byLadder).length === 0) {
+    return null;
+  }
+
+  const ladder = Prisma.sql`(${JSON.stringify(byLadder)}::jsonb -> ${matchTable}."mode")`;
+  const teams = Prisma.sql`case when jsonb_typeof(${matchTable}."rawJson" -> 'teams') = 'array' then ${matchTable}."rawJson" -> 'teams' else '[]'::jsonb end`;
+  const team = Prisma.sql`case when jsonb_typeof(team) = 'array' then team else '[]'::jsonb end`;
+  const profileId = Prisma.sql`${playerTable}."profileId"::text`;
+
+  return Prisma.sql`(
+    ${ladder} is null or not exists (
+      select 1
+      from jsonb_array_elements(${teams}) as team
+      cross join lateral (
+        select (${gamePlayerSql("j")} ->> 'rating')::numeric as "selfRating"
+        from jsonb_array_elements(${team}) as j
+        where jsonb_typeof(${gamePlayerSql("j")} -> 'rating') = 'number'
+          and ${gamePlayerSql("j")} ->> 'profile_id' = ${profileId}
+        limit 1
+      ) as self
+      where self."selfRating" is not null and exists (
+        select 1
+        from jsonb_array_elements(${team}) as j
+        where jsonb_typeof(${gamePlayerSql("j")} -> 'rating') = 'number'
+          and ${gamePlayerSql("j")} ->> 'profile_id' is distinct from ${profileId}
+          and abs(
+            ${tierSql(Prisma.sql`(${gamePlayerSql("j")} ->> 'rating')::numeric`, ladder)}
+            - ${tierSql(Prisma.sql`self."selfRating"`, ladder)}
+          ) > ${MAX_TEAMMATE_TIER_DISTANCE}
+      )
+    )
+  )`;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Traducciones a la base de datos                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -422,6 +856,11 @@ export function rankedModesWhere(modes: readonly string[]): Prisma.MatchWhereInp
  *
  * No incluye el estado del jugador: eso lo pone quien consulta, porque la carga de
  * objetivos filtra por el `join` con `Player` y el agregado por un `player.status`.
+ *
+ * Tampoco incluye la condición de equipos, por lo mismo que `rankedMatchWhere()`:
+ * no cabe en un `where` de Prisma. Su único consumidor es el historial del panel,
+ * que **debe** listarlas con 0 puntos (es el recorrido del jugador, ver el
+ * docblock del módulo), así que aquí no falta nada.
  */
 export function classificatoryWhere(
   modes: readonly string[],
@@ -447,6 +886,23 @@ export function classificatoryWhere(
  * obligatorio: un `where` de Prisma no compara dos columnas, así que una consulta
  * que abarque a todos los jugadores no puede aplicar el corte aquí y tiene que
  * usar `rankedMatchSql()`, que lleva la fila de `Player` delante.
+ *
+ * ## Y tampoco puede expresar la condición de equipos
+ *
+ * Es el filtro de las cinco condiciones que un `where` **sí** puede escribir. La
+ * sexta necesita leer `Match.rawJson` (los compañeros y su rating) y
+ * `Setting["alerts.divisionCutoffs"]` (los cortes rating → subdivisión), y un
+ * `where` de Prisma compara campos con valores: no abre un `Json` ni conoce un
+ * `Setting`. Por eso no está aquí, y quien la necesita —el motor de puntos, que va
+ * por SQL, y sus consumidores de Prisma— la aplica **después**, en memoria, con
+ * `teammatesWithinTier()`. Es el caso de `alerts/evaluate.ts` (filtra las
+ * candidatas antes de dárselas al motor de alertas) y de `sync.ts` (cuenta las que
+ * entran a contar).
+ *
+ * El sitio donde este `where` **cuenta** en vez de listar es la baja de un
+ * jugador (`admin/actions.ts`), y ahí la cuenta sale de más en una partida de
+ * equipo desequilibrada. Es asumido: es un dato informativo del rastro, no lo que
+ * puntúa (`Match.points`) ni lo que publica la clasificación.
  */
 export function rankedMatchWhere(
   modes: readonly string[],
@@ -469,19 +925,31 @@ export function rankedMatchWhere(
  * `join` con `Player`, y como la clave foránea no admite nulos, un `join`
  * interior no pierde ni una partida.
  *
- * Contraparte exacta de `rankedMatchWhere()` (familia del ruleset, partida resuelta,
- * desde el corte del jugador, antes del final de la ventana y **no revertida**); si
- * se añade una condición, tiene que ir en las dos (y en `countsAsRanked()`).
+ * `cutoffs` son los cortes rating → subdivisión por familia y hacen falta para la
+ * **sexta** condición (`teammatesWithinTierSql()`), que se resuelve sobre el
+ * propio `jsonb`. Con `null` esa condición no se añade a la consulta y la partida
+ * cuenta: no se puede demostrar la infracción (ver el docblock del módulo).
+ *
+ * Contraparte exacta de `rankedMatchWhere()` **salvo por la sexta condición**, que
+ * el `where` de Prisma no puede escribir: aquí van familia del ruleset, partida
+ * resuelta, corte de inscripción, final de la ventana, marca de revertida y los
+ * compañeros del escalón. Si se añade una condición, tiene que ir en las dos (y en
+ * `countsAsRanked()`).
  */
 export function rankedMatchSql(
   matchTable: Prisma.Sql,
   playerTable: Prisma.Sql,
   modes: readonly string[],
   window: ScoringWindow,
+  cutoffs: LadderCutoffsTable | null,
 ): Prisma.Sql {
   const modeList = Prisma.join(modes.map((mode) => Prisma.sql`${mode}`));
+  const base = Prisma.sql`${matchTable}."mode" in (${modeList}) and ${matchTable}."result" is not null and ${matchTable}."finishedAt" is not null and ${matchTable}."revertedAt" is null and ${windowMatchSql(matchTable, playerTable, window)}`;
+  const tiers = teammatesWithinTierSql(matchTable, playerTable, cutoffs);
 
-  return Prisma.sql`${matchTable}."mode" in (${modeList}) and ${matchTable}."result" is not null and ${matchTable}."finishedAt" is not null and ${matchTable}."revertedAt" is null and ${windowMatchSql(matchTable, playerTable, window)}`;
+  // Sin cortes no se añade nada: la consulta sale exactamente como salía antes de
+  // que existiera la condición de equipos, en vez de con un `and true` decorativo.
+  return tiers === null ? base : Prisma.sql`${base} and ${tiers}`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -492,8 +960,9 @@ export function rankedMatchSql(
  * ¿Cuenta esta partida?
  *
  * Solo si está **resuelta**, es de una familia rankeada, **empezó después del
- * corte** del jugador, **terminó antes de que acabara la ventana** y **no está
- * revertida**. Las cinco condiciones son necesarias:
+ * corte** del jugador, **terminó antes de que acabara la ventana**, **no está
+ * revertida** y, en una partida por equipos, **ningún compañero está a dos
+ * escalones o más** del jugador. Las seis condiciones son necesarias:
  *
  * - El modo tiene que ser de una familia rankeada: una custom, un `ew_*` o un
  *   `ffa_*` sirven para practicar, no puntúan.
@@ -506,6 +975,8 @@ export function rankedMatchSql(
  * - `revertedAt !== null` significa que el panel de admin la ha marcado: la fila
  *   sigue ahí (por eso el worker la puede reimportar y por eso se puede
  *   deshacer), pero para el torneo no cuenta ni a favor ni en contra.
+ * - En equipos, la condición es la de `teammatesWithinTier()`: si no se puede
+ *   demostrar que el equipo está desequilibrado, la partida **cuenta**.
  *
  * ## Por qué `registeredAt` es un parámetro y no parte de `match`
  *
@@ -517,8 +988,18 @@ export function rankedMatchSql(
  * tienen a mano —`setMatchReverted()` carga `player.registeredAt` en el mismo
  * `findUnique` que trae el nombre, y `verify-sync` lo lee del jugador de muestra—.
  *
+ * ## Por qué el contexto de equipos también es obligatorio
+ *
+ * `rawJson` va dentro de `match` porque es una columna suya, pero se acepta
+ * ausente: una partida sin payload es una partida que cuenta, que es la
+ * degradación acordada. `context` (el `profileId` del dueño y los cortes) va en su
+ * propio objeto y sin valor por defecto por el mismo motivo que `registeredAt`: un
+ * "se me olvidó" tiene que ser imposible de escribir, y los tres consumidores
+ * reales (`sync.ts`, `admin/actions.ts` y `verify-sync`) lo tienen delante.
+ *
  * Es la traducción en memoria de `rankedMatchWhere()` / `rankedMatchSql()`; las
- * tres leen las mismas condiciones y `verify:sync` las contrasta contra la base
+ * tres leen las mismas condiciones **salvo la de equipos**, que `rankedMatchWhere()`
+ * no puede escribir (ver su docblock), y `verify:sync` las contrasta contra la base
  * de datos.
  */
 export function countsAsRanked(
@@ -529,10 +1010,18 @@ export function countsAsRanked(
     finishedAt: Date | null;
     /** Instante del revert, o `null` si la partida cuenta. */
     revertedAt: Date | null;
+    /**
+     * El payload con el que llegó la partida (`Match.rawJson`), del que sale el
+     * equipo del jugador. Se acepta ausente a propósito: sin payload no se puede
+     * demostrar que el equipo esté desequilibrado y la partida cuenta.
+     */
+    rawJson?: unknown;
   },
   window: ScoringWindow,
   /** `Player.registeredAt` del dueño de la partida, o `null` si no lo tiene. */
   registeredAt: Date | null,
+  /** Quién es el jugador y qué cortes hay cacheados para la condición de equipos. */
+  context: TeamTierContext,
 ): boolean {
   if (
     match.finishedAt === null ||
@@ -543,5 +1032,9 @@ export function countsAsRanked(
     return false;
   }
 
-  return countsWithinWindow(match.startedAt, window, registeredAt);
+  if (!countsWithinWindow(match.startedAt, window, registeredAt)) {
+    return false;
+  }
+
+  return teammatesWithinTier(match.rawJson, match.mode, context);
 }

@@ -9,6 +9,7 @@ import {
   parseLadderPage,
   parseLeaderboard,
   parsePlayer,
+  parseTeamView,
 } from "@/lib/aoe4world/parse";
 
 /**
@@ -117,7 +118,8 @@ describe("parseGamePlayer", () => {
 
   it("un rating no numérico es `null`, no `0`", () => {
     // `0` diría "no tenía rating"; `null` dice "no se ha podido leer", que es lo
-    // que R4 necesita para no acusar a nadie de una brecha inventada.
+    // que la condición de equipos necesita para no excluir una partida por una
+    // comparación inventada.
     expect(parseGamePlayer({ profile_id: 1, rating: "alto" })?.rating).toBeNull();
     expect(parseGamePlayer({ profile_id: 1, rating: 0 })?.rating).toBe(0);
   });
@@ -168,11 +170,12 @@ describe("parseGame", () => {
     expect(parseGame({ ...MINIMO, duration: null })?.durationSeconds).toBeNull();
   });
 
-  it("lee la media de rating de la partida (`average_rating`), que es la que compara R5", () => {
+  it("lee la media de rating de la partida (`average_rating`), que es la que compara la condición de equipos", () => {
     expect(parseGame({ ...MINIMO, average_rating: 1_610 })?.averageRating).toBe(1_610);
     expect(parseGame({ ...MINIMO, average_rating: "1610" })?.averageRating).toBe(1_610);
     // Sin el campo o con algo ilegible queda `null`, que es un hueco de datos y no
-    // un cero: R5 omite la partida en vez de contar un escalón inventado.
+    // un cero: `0` sería un rating real y con él se podrían contar escalones
+    // inventados.
     expect(parseGame({ ...MINIMO, average_rating: null })?.averageRating).toBeNull();
     expect(parseGame({ ...MINIMO, average_rating: "alto" })?.averageRating).toBeNull();
     expect(parseGame(MINIMO)?.averageRating).toBeNull();
@@ -223,6 +226,57 @@ describe("isProcessedState", () => {
     for (const estado of ["running", "ended", "", null]) {
       expect(isProcessedState(estado), String(estado)).toBe(false);
     }
+  });
+});
+
+describe("parseTeamView", () => {
+  /** Un 2v2 con este jugador como segundo de su equipo. */
+  const EQUIPOS = {
+    game_id: 5_000_002,
+    started_at: "2026-09-20T18:00:00.000Z",
+    teams: [
+      [
+        { player: { profile_id: 2, name: "Compañero", rating: 1_600 } },
+        { player: { profile_id: 1, name: "Jugador", rating: 1_500 } },
+      ],
+      [{ player: { profile_id: 3, name: "Rival", rating: 1_550 } }],
+    ],
+  };
+
+  it("devuelve al jugador y a sus compañeros, sin el rival", () => {
+    const vista = parseTeamView(EQUIPOS, 1);
+
+    expect(vista?.self?.profileId).toBe(1);
+    expect(vista?.self?.rating).toBe(1_500);
+    expect(vista?.teammates.map((mate) => mate.profileId)).toEqual([2]);
+  });
+
+  it("acepta las entradas planas del endpoint de detalle", () => {
+    // En `/players/:id/games/:game_id` las entradas no van envueltas en `player`.
+    const plano = {
+      ...EQUIPOS,
+      teams: [
+        [
+          { profile_id: 2, name: "Compañero", rating: 1_600 },
+          { profile_id: 1, name: "Jugador", rating: 1_500 },
+        ],
+      ],
+    };
+
+    expect(parseTeamView(plano, 1)?.teammates.map((mate) => mate.profileId)).toEqual([2]);
+  });
+
+  it("sin el jugador en ningún equipo devuelve `null`", () => {
+    expect(parseTeamView(EQUIPOS, 99)).toBeNull();
+  });
+
+  it("un payload ilegible o unos equipos que no son listas tampoco revientan", () => {
+    expect(parseTeamView(null, 1)).toBeNull();
+    expect(parseTeamView("no es un payload", 1)).toBeNull();
+    expect(parseTeamView({ ...EQUIPOS, teams: "esto no es una lista" }, 1)).toBeNull();
+    // Y sin `game_id`/`started_at` la partida no se puede leer: es la validación
+    // que hereda de `parseGame()`.
+    expect(parseTeamView({ teams: EQUIPOS.teams }, 1)).toBeNull();
   });
 });
 

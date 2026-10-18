@@ -15,7 +15,14 @@ import {
   parseMatcherinoDonations,
   type MatcherinoDonations,
 } from "@/lib/donations";
-import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration-open";
+import {
+  parseRegistrationClosesAt,
+  parseRegistrationOpen,
+  resolveRegistrationState,
+  REGISTRATION_CLOSES_AT_KEY,
+  REGISTRATION_OPEN_KEY,
+  type RegistrationState,
+} from "@/lib/registration-open";
 
 /**
  * Lectura y escritura de la tabla `Setting`.
@@ -35,6 +42,10 @@ import { parseRegistrationOpen, REGISTRATION_OPEN_KEY } from "@/lib/registration
  *
  * Clave que introduce el cierre manual de inscripciones:
  * - `registration.open`: booleano; si falta o no es legible, el plazo está cerrado.
+ *
+ * Clave que introduce la fecha de cierre de inscripciones (issue 56):
+ * - `registration.closesAt`: instante ISO-8601 UTC, o ausente para no tener fecha.
+ *   El plazo se cierra solo cuando pasa; el interruptor sigue pudiendo cerrar antes.
  *
  * Clave que introduce el banner de donaciones:
  * - `donations.matcherino`: campaña de Matcherino (si está activa y su URL); apagada
@@ -369,6 +380,20 @@ export type SyncRunTrace = {
    */
   discordError: string | null;
   /**
+   * Por qué no se pudo mandar un mensaje del bot al canal de avisos, o qué hubo que
+   * avisar aunque no fuera un fallo. Cubre los **hitos de la edición** y el **informe
+   * diario de clasificación**.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, por el mismo motivo que
+   * `discordError`: no haber podido avisar al canal **no ha parado ni una partida**.
+   * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que sin
+   * `DISCORD_BOT_TOKEN` o sin `DISCORD_ANNOUNCE_CHANNEL_ID` los avisos están apagados
+   * (y que el aviso queda pendiente, no perdido).
+   *
+   * Ver `src/lib/edition-announcements.ts` y `src/lib/standings-report.ts`.
+   */
+  announceError: string | null;
+  /**
    * Por qué no se pudo comprobar el estado de directo de YouTube o de Kick, si no se
    * pudo.
    *
@@ -394,6 +419,21 @@ export type SyncRunTrace = {
    * formato antes de que nadie se diera cuenta por el objetivo.
    */
   mapPoolError: string | null;
+  /**
+   * Por qué no se pudieron rellenar las métricas del summary de unas partidas, o qué
+   * hubo que avisar aunque no fuera un fallo.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, igual que
+   * `mapPoolError`: no haber podido leer el summary de unas partidas solo deja sin
+   * datos a los cinco objetivos que los usan; las partidas están sincronizadas y la
+   * clasificación recalculada. Mezclarlo diría "el torneo lleva roto desde las
+   * 10:00" por un 5xx del sitio de AoE4World.
+   *
+   * Y con el texto aunque no haya fallo, porque es el único sitio donde se ve que el
+   * relleno avanza (cuántas partidas quedaron para la siguiente pasada por el
+   * presupuesto), igual que el aviso de `YOUTUBE_API_KEY` en `streamsError`.
+   */
+  summariesError: string | null;
   /** Jugadores que no se pudieron sincronizar, con su motivo. */
   failures: SyncRunFailure[];
   /**
@@ -478,8 +518,10 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     alertsError: readText(value["alertsError"]),
     historyError: readText(value["historyError"]),
     discordError: readText(value["discordError"]),
+    announceError: readText(value["announceError"]),
     streamsError: readText(value["streamsError"]),
     mapPoolError: readText(value["mapPoolError"]),
+    summariesError: readText(value["summariesError"]),
     failures: readFailures(value["failures"]),
     lastSuccessAt: readText(value["lastSuccessAt"]),
   };
@@ -524,7 +566,13 @@ export async function writeSyncRunTrace(
   // torneo entero con la comprobación apagada se publicaría como sincronizador roto.
   // Y con `mapPoolError`: no poder refrescar el pool solo deja el objetivo con el
   // último valor bueno, y el formato del homepage puede cambiar cualquier día sin
-  // que eso sea un fallo del sincronizador.
+  // que eso sea un fallo del sincronizador. Y con `summariesError`: no poder leer el
+  // summary de unas partidas solo deja sin datos a los objetivos que lo usan, y el
+  // sitio de AoE4World puede devolver 404 o 5xx cualquier día sin que eso signifique
+  // que el torneo esté roto. Y con `announceError`: no poder avisar del
+  // comienzo o el final del torneo en Discord tampoco ha parado nada, y la falta de
+  // `DISCORD_ANNOUNCE_CHANNEL_ID` es tan permanente como la de `DISCORD_BOT_TOKEN`, así
+  // que si contara, una edición entera sin canal se publicaría como sincronizador roto.
 
   const value = {
     ...trace,
@@ -564,32 +612,103 @@ export function isSyncTraceStale(trace: SyncRunTrace | null, now: Date = new Dat
 /* -------------------------------------------------------------------------- */
 
 /**
- * ¿Están abiertas las inscripciones ahora mismo?
+ * El estado efectivo del plazo de inscripción ahora mismo.
  *
- * Lee `Setting["registration.open"]` y aplica el parser puro de
- * `src/lib/registration-open.ts`, que cae al valor por defecto (cerrada) cuando
- * la clave no existe o el valor no es un booleano. Un **fallo de la base sí se
- * propaga**, como en `readCountries()`: "no hay nada publicado" tiene su valor
- * por defecto y "no se ha podido leer" no, y quien comprueba un envío tiene que
- * poder distinguir la segunda para no validar contra un estado inventado.
+ * Lee las **dos** claves de una sola consulta (`findMany` por `key in`) y deja
+ * que `resolveRegistrationState()` decida: abiertas ⇔ interruptor encendido **y**
+ * (sin fecha o `now < closesAt`). Es el único sitio donde se combinan, para que
+ * la acción pública, el alta de admin, el formulario y el bot no tengan cada uno
+ * su idea de "abierta o cerrada".
+ *
+ * Se usa `findMany` y no dos `findUnique` para no pagar dos viajes a la base por
+ * un dato que se lee en cada envío; con la tabla `Setting` (unas pocas filas) el
+ * `in` sobre la pk sale igual de barato.
+ *
+ * Un **fallo de la base sí se propaga**, como en `readCountries()`: "no hay nada
+ * publicado" tiene su valor por defecto y "no se ha podido leer" no, y quien
+ * comprueba un envío tiene que poder distinguir la segunda para no validar contra
+ * un estado inventado.
  */
-export async function readRegistrationOpen(): Promise<boolean> {
-  const setting = await db.setting.findUnique({ where: { key: REGISTRATION_OPEN_KEY } });
+export async function readRegistrationState(): Promise<RegistrationState> {
+  const settings = await db.setting.findMany({
+    where: { key: { in: [REGISTRATION_OPEN_KEY, REGISTRATION_CLOSES_AT_KEY] } },
+    select: { key: true, value: true },
+  });
 
-  return parseRegistrationOpen(setting?.value);
+  const byKey = new Map(settings.map((setting) => [setting.key, setting.value]));
+
+  return resolveRegistrationState({
+    open: parseRegistrationOpen(byKey.get(REGISTRATION_OPEN_KEY)),
+    closesAt: parseRegistrationClosesAt(byKey.get(REGISTRATION_CLOSES_AT_KEY)),
+    now: new Date(),
+  });
 }
 
 /**
- * Publica el plazo. La usa el interruptor de `/admin`.
+ * ¿Se puede inscribir ahora mismo?
+ *
+ * Es el estado efectivo, no el interruptor: con la fecha de cierre pasada
+ * devuelve `false` aunque el interruptor siga encendido. Lo llaman los sitios que
+ * solo necesitan el sí o el no —el formulario público, el alta de admin y las
+ * páginas que pintan el aviso—; quien tenga que decir **por qué** está cerrado
+ * (para elegir el texto al rechazar) usa `readRegistrationState()`.
+ *
+ * Aplica el parser puro de `src/lib/registration-open.ts`, que cae al valor por
+ * defecto (cerrada) cuando la clave no existe o el valor no es un booleano. Un
+ * **fallo de la base sí se propaga**, como en `readRegistrationState()`.
+ */
+export async function readRegistrationOpen(): Promise<boolean> {
+  return (await readRegistrationState()).open;
+}
+
+/**
+ * Publica el interruptor manual del plazo. La usa el interruptor del panel.
  *
  * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
- * `Setting.updatedAt`, que es justo el rastro que deja el cambio.
+ * `Setting.updatedAt`.
+ *
+ * Acepta el cliente porque la acción la llama **dentro** de la transacción que
+ * escribe su rastro: el cambio de plazo y la fila de `AdminAction` (`CONFIG_CHANGED`)
+ * se confirman juntos, y no puede quedar un cambio sin su línea en el historial.
  */
-export async function writeRegistrationOpen(open: boolean): Promise<void> {
-  await db.setting.upsert({
+export async function writeRegistrationOpen(
+  open: boolean,
+  client: SettingWriter = db,
+): Promise<void> {
+  await client.setting.upsert({
     where: { key: REGISTRATION_OPEN_KEY },
     create: { key: REGISTRATION_OPEN_KEY, value: open },
     update: { value: open },
+  });
+}
+
+/**
+ * Publica la **fecha de cierre** de las inscripciones, o la quita.
+ *
+ * `closesAt` es un instante ISO-8601 UTC ya normalizado por
+ * `normalizeRegistrationClosesAt()`, o `null` para dejar el plazo sin fecha.
+ *
+ * **Quitar la fecha borra la fila**, no la deja a `null`: una clave ausente y una
+ * clave con un valor que no se entiende son lo mismo para el parser, y borrar es
+ * lo que hace idempotente "quitar la fecha" sobre una fila que quizá no existía.
+ *
+ * Acepta el cliente porque la acción la llama **dentro** de la transacción de su
+ * rastro, igual que `writeRegistrationOpen()`.
+ */
+export async function writeRegistrationClosesAt(
+  closesAt: string | null,
+  client: SettingWriter = db,
+): Promise<void> {
+  if (closesAt === null) {
+    await client.setting.deleteMany({ where: { key: REGISTRATION_CLOSES_AT_KEY } });
+
+    return;
+  }
+
+  await client.setting.upsert({
+    where: { key: REGISTRATION_CLOSES_AT_KEY },
+    create: { key: REGISTRATION_CLOSES_AT_KEY, value: closesAt },
+    update: { value: closesAt },
   });
 }
 
@@ -613,15 +732,22 @@ export async function readMatcherinoDonations(): Promise<MatcherinoDonations> {
 }
 
 /**
- * Publica la campaña de donaciones. La usa el formulario de `/admin`.
+ * Publica la campaña de donaciones. La usa el formulario del panel.
  *
  * El `upsert` la hace idempotente: repetir el mismo valor no cambia nada salvo
- * `Setting.updatedAt`, que es justo el rastro que deja el cambio. Se escribe el
- * objeto entero (activación y URL juntos) porque el formulario del panel es una
- * foto completa de la campaña, igual que la edición de un jugador.
+ * `Setting.updatedAt`. Se escribe el objeto entero (activación y URL juntos) porque
+ * el formulario del panel es una foto completa de la campaña, igual que la edición
+ * de un jugador.
+ *
+ * Acepta el cliente porque la acción la llama **dentro** de la transacción que
+ * escribe su rastro: la campaña y la fila de `AdminAction` (`CONFIG_CHANGED`) se
+ * confirman juntas, y no puede quedar un cambio sin su línea en el historial.
  */
-export async function writeMatcherinoDonations(value: MatcherinoDonations): Promise<void> {
-  await db.setting.upsert({
+export async function writeMatcherinoDonations(
+  value: MatcherinoDonations,
+  client: SettingWriter = db,
+): Promise<void> {
+  await client.setting.upsert({
     where: { key: MATCHERINO_DONATIONS_KEY },
     create: { key: MATCHERINO_DONATIONS_KEY, value },
     update: { value },

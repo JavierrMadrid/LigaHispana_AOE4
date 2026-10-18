@@ -66,7 +66,9 @@ export default function NotFound() {
         </div>
       </main>
 
-      <SiteFooter />
+      {/* El 404 vive fuera del layout público y no lee la configuración de la
+          edición: se queda con la marca de la casa, igual que su cabecera. */}
+      <SiteFooter name={null} emblemUrl={null} />
     </div>
   );
 }

@@ -25,8 +25,9 @@ import {
 /**
  * Tarjeta volteable: dos caras (frontal y posterior) sobre un eje, con clic,
  * arrastre/flick, inclinación, brillo especular y realce al pasar el ratón.
- * Al arrastrar, además de girar, la tarjeta sigue al puntero (acotada) y vuelve
- * a su sitio con un muelle al soltarla.
+ * Al arrastrar, además de girar, la tarjeta sigue al puntero **en el eje del
+ * giro** —acotada— y vuelve a su sitio con un muelle al soltarla; el otro eje no
+ * se toca, así que la tarjeta no se sale del plano en el que gira.
  *
  * Adaptación del componente de ejemplo a los tokens de la casa: superficie
  * `--surface`, tinta `--foreground`, radio de 8px (`rounded-lg`) y sin sombra,
@@ -302,9 +303,15 @@ const FlipCard: React.FC<FlipCardProps> = ({
       }
       // Mientras se arrastra, la tarjeta sigue al puntero desde donde estuviera
       // (por si se agarra en plena vuelta), acotada para que no pueda salir de la
-      // ventana; al soltar, `settleOffset` la devuelve con un muelle.
-      offsetX.set(clamp(g.baseX + dx * OFFSET_DAMPING, -OFFSET_LIMIT, OFFSET_LIMIT));
-      offsetY.set(clamp(g.baseY + dy * OFFSET_DAMPING, -OFFSET_LIMIT, OFFSET_LIMIT));
+      // ventana; al soltar, `settleOffset` la devuelve con un muelle. El
+      // desplazamiento se queda en el eje del giro: la tarjeta se ladea de lado a
+      // lado, no se levanta ni se hunde, así que el recorrido vertical del puntero
+      // no la mueve de su sitio.
+      if (axis === "x") {
+        offsetY.set(clamp(g.baseY + dy * OFFSET_DAMPING, -OFFSET_LIMIT, OFFSET_LIMIT));
+      } else {
+        offsetX.set(clamp(g.baseX + dx * OFFSET_DAMPING, -OFFSET_LIMIT, OFFSET_LIMIT));
+      }
       const span = dragDistance > 0 ? dragDistance : axis === "x" ? dragSpan(height, 420) : dragSpan(width, 320);
       const deg = g.base + (axis === "x" ? -1 : 1) * (d / span) * 180;
       turn.set(deg);

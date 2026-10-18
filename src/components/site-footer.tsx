@@ -1,7 +1,18 @@
 import Image from "next/image";
-import Link from "next/link";
+import { SPONSOR_NAME, SponsorLogo } from "@/components/sponsor";
 
-export function SiteFooter() {
+type SiteFooterProps = {
+  /**
+   * Nombre de la edición activa (`EditionConfig.name`), o `null` si la
+   * configuración no se ha podido leer: en ese caso el pie se queda con el nombre
+   * de la casa en vez de inventarse uno.
+   */
+  name: string | null;
+  /** Emblema de la edición (`branding.emblemUrl`), o `null` para el de la casa. */
+  emblemUrl: string | null;
+};
+
+export function SiteFooter({ name, emblemUrl }: SiteFooterProps) {
   return (
     <footer className="thread-top relative border-t border-line bg-surface/40">
       <div className="mx-auto flex w-full max-w-[80rem] flex-col gap-10 px-4 py-10 sm:px-6 md:flex-row md:items-start md:justify-between">
@@ -10,16 +21,30 @@ export function SiteFooter() {
             {/* Decorativo: el nombre completo va justo al lado como texto. El
                 emblema del pie se queda un escalón por debajo del de la
                 cabecera; la caja intrínseca coincide con el tamaño pintado
-                para que el candidato 2x del `srcset` no se amplíe. */}
-            <Image
-              src="/imagenes/marca/emblema-128.png"
-              alt=""
-              width={44}
-              height={44}
-              className="size-11 shrink-0"
-            />
+                para que el candidato 2x del `srcset` no se amplíe.
+                Con emblema de la edición se pinta ese, `unoptimized` porque la
+                URL puede ser externa y no está declarada en
+                `images.remotePatterns` (el porqué, en la cabecera pública). */}
+            {emblemUrl !== null ? (
+              <Image
+                src={emblemUrl}
+                alt=""
+                width={44}
+                height={44}
+                unoptimized
+                className="size-11 shrink-0"
+              />
+            ) : (
+              <Image
+                src="/imagenes/marca/emblema-128.png"
+                alt=""
+                width={44}
+                height={44}
+                className="size-11 shrink-0"
+              />
+            )}
             <p className="font-display text-lg font-semibold text-foreground">
-              Liga Hispana de Age of Empires IV
+              {name ?? "Liga Hispana de Age of Empires IV"}
             </p>
           </div>
           <p className="mt-2 text-sm leading-relaxed text-muted">
@@ -28,45 +53,24 @@ export function SiteFooter() {
           </p>
         </div>
 
-        {/* Cada enlace lleva su propia fila (`flex-col`) en lugar de un `gap` del
-            grupo, y `py-3` para que el área de pulsación llegue a los 44 px del
-            mínimo táctil: con solo el interlineado, un `text-sm` mide 18 px. */}
-        <nav aria-label="Enlaces del pie" className="shrink-0">
-          <ul className="-my-3 flex flex-col text-sm">
-            <li>
-              <Link
-                href="/objetivos"
-                className="block py-3 text-muted transition-colors hover:text-accent"
-              >
-                Objetivos especiales
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/puntuacion"
-                className="block py-3 text-muted transition-colors hover:text-accent"
-              >
-                Cómo se puntúa
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/reglas"
-                className="block py-3 text-muted transition-colors hover:text-accent"
-              >
-                Reglas del torneo
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/login"
-                className="block py-3 text-muted transition-colors hover:text-foreground"
-              >
-                Acceso de la organización
-              </Link>
-            </li>
-          </ul>
-        </nav>
+        {/* Agradecimiento al patrocinador, donde antes colgaba el índice de
+            enlaces del pie. Se queda a la derecha para conservar el reparto del
+            pie en dos bloques desde `md` —la liga a la izquierda, quien la
+            sostiene a la derecha— y se lee como una insignia: el escudo preside
+            y el nombre lo firma debajo. Sin filete ni relleno: un agradecimiento
+            se lee, no se pulsa.
+            El `-mb-6` del escudo cancela el margen transparente que el PNG trae
+            de fábrica por abajo, para que el nombre quede pegado a la insignia y
+            no flote a media distancia. */}
+        <div className="flex flex-col items-center gap-1 md:shrink-0">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">
+            Patrocinadores:
+          </p>
+          <SponsorLogo size={128} className="-mb-6" />
+          <p className="font-display text-base font-semibold text-foreground">
+            {SPONSOR_NAME}
+          </p>
+        </div>
       </div>
 
       {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`. */}

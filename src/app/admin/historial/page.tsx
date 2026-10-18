@@ -5,6 +5,7 @@ import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PageSizeSelect } from "@/components/page-size-select";
+import { Pagination } from "@/components/pagination";
 import { SortableHeaderLink } from "@/components/sortable-header";
 import {
   getAdminMatchHistory,
@@ -14,9 +15,9 @@ import {
 } from "@/lib/admin";
 import { requireAdmin } from "@/lib/auth";
 import { describeMode, formatAbsoluteTime } from "@/lib/format";
+import { objectiveTitle } from "@/lib/objective-format";
 import { OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
 import { MatchHistoryFilters } from "./match-history-filters";
-import { Pagination } from "../pagination";
 
 export const metadata: Metadata = {
   title: { absolute: "Historial de partidas · Admin" },
@@ -72,9 +73,14 @@ function formatLabel(row: AdminMatchHistoryRow): string {
  * El verbo va en pasado y sin gritar: el hito ya ocurrió en la fecha de la fila, no
  * es una celebración. No repite los puntos ni el grupo porque los pinta la línea
  * secundaria, y decirlos dos veces en la misma celda sobraría.
+ *
+ * Un objetivo repetible enseña sus repeticiones pegadas al rótulo
+ * (`20 x Imparable`), el mismo formato que la clasificación: la tabla apunta una sola
+ * fila por jugador y objetivo, así que el multiplicador es lo que cuenta que
+ * `imparable` ya va por veinte días o `victorias` por veinticuatro victorias.
  */
 function describeObjective(playerName: string, objective: AdminObjectiveEvent): string {
-  return `${playerName} cumplió «${objective.label}»`;
+  return `${playerName} cumplió «${objectiveTitle(objective)}»`;
 }
 
 /**
