@@ -13,7 +13,7 @@ import { unwrapRead } from "@/lib/db-errors";
 import { SUBDIVISION_RANK_LEVELS } from "@/lib/divisions";
 import { describeMode, describeTeamSize, teamSizesFromRawJson } from "@/lib/format";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
-import { AlertKind, AlertRule } from "@/generated/prisma/enums";
+import { AlertKind, AlertRule, ObjectiveLeadKind } from "@/generated/prisma/enums";
 import type { TeamTierContext } from "@/lib/ranked-match";
 import {
   historyComparator,
@@ -3880,42 +3880,47 @@ async function checkAdminQueryParams(): Promise<void> {
 /**
  * Una fila del feed mezclado del historial, con lo mínimo para poder compararla.
  *
- * Solo el `resultado` o el `objetivo` la convierten en una cosa u otra: el feed real ya
- * viene de `partidaEnFila()` y de `eventosDeObjetivo()`, y aquí solo hace falta que el
- * comparador tenga filas de las dos clases con instantes repetidos, que es donde se
- * comprueba que el orden es total.
+ * Solo el `resultado`, el `objetivo` o el `lead` la convierten en una cosa u otra: el feed
+ * real ya viene de `partidaEnFila()`, de `eventosDeObjetivo()` y de `liderazgosDeObjetivo()`,
+ * y aquí solo hace falta que el comparador tenga filas de las tres clases con instantes
+ * repetidos, que es donde se comprueba que el orden es total.
  */
 function filaHistorial(row: {
   id: string;
   fecha: string;
   resultado?: "WIN" | "LOSS" | null;
   objetivo?: string;
+  lead?: ObjectiveLeadKind;
+  profileId?: number;
 }): AdminMatchHistoryRow {
+  const esPartida = row.objetivo === undefined && row.lead === undefined;
+
   return {
     id: row.id,
     startedAt: new Date(row.fecha),
     playerId: "clx1",
     playerName: "Jugador",
-    playerProfileId: 9_000_001,
+    playerProfileId: row.profileId ?? 9_000_001,
     points: 0,
     objective:
-      row.objetivo === undefined
+      row.objetivo === undefined && row.lead === undefined
         ? null
         : {
-            id: row.objetivo,
-            label: row.objetivo,
+            id: row.objetivo ?? "loco-por-ganar",
+            label: row.objetivo ?? "Competición",
             group: "actividad",
             metric: "partidas",
             points: 40,
             count: 1,
+            lead: row.lead ?? null,
           },
-    gameId: row.objetivo === undefined ? "9000001" : null,
+    gameId: esPartida ? "9000001" : null,
     opponentName: null,
     opponentProfileId: null,
-    result: row.objetivo === undefined ? (row.resultado ?? "WIN") : null,
-    teamSize: row.objetivo === undefined ? "1vs1" : null,
-    mode: row.objetivo === undefined ? "rm_solo" : null,
-    leaderboard: row.objetivo === undefined ? "rm_solo" : null,
+    result: esPartida ? (row.resultado ?? "WIN") : null,
+    teamSize: esPartida ? "1vs1" : null,
+    mode: esPartida ? "rm_solo" : null,
+    leaderboard: esPartida ? "rm_solo" : null,
     map: null,
     revertedAt: null,
   };
@@ -3948,8 +3953,9 @@ const H3 = "2026-09-03T10:00:00.000Z";
  * vería con solo cambiar `sort`.
  */
 async function checkHistoryPaging(): Promise<void> {
-  // Doce partidas y cinco objetivos repartidos por tres días, con empates de fecha y con
-  // hitos intercalados, que es la forma de que el hueco tenga que trabajar de verdad.
+  // Doce partidas, cinco logros y tres cambios de poseedor repartidos por tres días, con
+  // empates de fecha y con hitos intercalados, que es la forma de que el hueco tenga que
+  // trabajar de verdad.
   const instantes = [
     "2026-09-01T09:00:00.000Z",
     "2026-09-01T15:00:00.000Z",
@@ -3964,13 +3970,41 @@ async function checkHistoryPaging(): Promise<void> {
     filaHistorial({ id: `m${i}b`, fecha, resultado: i % 3 === 0 ? "WIN" : "LOSS" }),
   ]);
 
-  const objetivos = [0, 1, 2, 3, 4].map((i) =>
+  const objetivosLogro = [0, 1, 2, 3, 4].map((i) =>
     filaHistorial({
       id: `o${i}`,
       fecha: instantes[i % instantes.length],
       objetivo: `objetivo-${i}`,
     }),
   );
+
+  // Y tres cambios de poseedor, con la pareja de un mismo cambio —misma competición y mismo
+  // instante— para que el hueco cuente también las filas del log de liderazgos.
+  const liderazgos = [
+    filaHistorial({
+      id: "lead:rey-1v1:GAINED:11",
+      fecha: instantes[0],
+      objetivo: "rey-1v1",
+      lead: ObjectiveLeadKind.GAINED,
+      profileId: 11,
+    }),
+    filaHistorial({
+      id: "lead:rey-1v1:LOST:12",
+      fecha: instantes[0],
+      objetivo: "rey-1v1",
+      lead: ObjectiveLeadKind.LOST,
+      profileId: 12,
+    }),
+    filaHistorial({
+      id: "lead:loco-por-ganar:GAINED:13",
+      fecha: instantes[2],
+      objetivo: "loco-por-ganar",
+      lead: ObjectiveLeadKind.GAINED,
+      profileId: 13,
+    }),
+  ];
+
+  const objetivos = [...objetivosLogro, ...liderazgos];
 
   const total = partidas.length + objetivos.length;
 
@@ -4053,7 +4087,7 @@ async function checkHistoryOrder(): Promise<void> {
 
   await checkHistoryPaging();
 
-  // Dos días con empates de fecha, las dos clases de fila y los tres rangos de resultado,
+  // Dos días con empates de fecha, las clases de fila y los tres rangos de resultado,
   // que es la peor combinación posible para el comparador.
   const partidas = [
     filaHistorial({ id: "m1", fecha: H3, resultado: "WIN" }),
@@ -4130,6 +4164,50 @@ async function checkHistoryOrder(): Promise<void> {
     assert.deepEqual(
       asc.map((row) => row.id),
       ["o2", "o1", "m4", "m1", "m3", "m2"],
+    );
+  });
+
+  await check("las dos filas de un cambio desempatan por signo, y asc las invierte", () => {
+    // Es el caso que no existía antes: dos filas de la misma competición y el mismo instante
+    // que solo se separan por el `lead` (la ganancia delante en descendente). Sin ese
+    // desempate, el comparador devolvería 0 y la paginación podría repetir una y perder la
+    // otra. El ganador tiene el `profileId` **mayor** para que se vea que manda el signo y no
+    // el jugador.
+    const ganancia = filaHistorial({
+      id: "lead:rey-1v1:GAINED:9",
+      fecha: H3,
+      objetivo: "rey-1v1",
+      lead: ObjectiveLeadKind.GAINED,
+      profileId: 9,
+    });
+    const perdida = filaHistorial({
+      id: "lead:rey-1v1:LOST:1",
+      fecha: H3,
+      objetivo: "rey-1v1",
+      lead: ObjectiveLeadKind.LOST,
+      profileId: 1,
+    });
+    const cambio = [ganancia, perdida];
+
+    const comparar = historyComparator({ key: "fecha", dir: "desc" });
+
+    assert.notEqual(comparar(ganancia, perdida), 0, "las dos filas del cambio empatan");
+    assert.equal(comparar(ganancia, perdida), -comparar(perdida, ganancia), "no son simétricas");
+
+    assert.deepEqual(
+      orden({ key: "fecha", dir: "desc" }, cambio).map((row) => row.id),
+      ["lead:rey-1v1:GAINED:9", "lead:rey-1v1:LOST:1"],
+    );
+    assert.deepEqual(
+      orden({ key: "fecha", dir: "asc" }, cambio).map((row) => row.id),
+      ["lead:rey-1v1:LOST:1", "lead:rey-1v1:GAINED:9"],
+    );
+
+    // Un cambio de poseedor es rango 0 en la columna de resultado, así que ese eje no lo
+    // mueve: sale igual que por fecha en el mismo sentido.
+    assert.deepEqual(
+      orden({ key: "resultado", dir: "desc" }, cambio).map((row) => row.id),
+      ["lead:rey-1v1:GAINED:9", "lead:rey-1v1:LOST:1"],
     );
   });
 

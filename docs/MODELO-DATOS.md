@@ -15,15 +15,16 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `Player` | Un participante, por identidad de AoE4World. | `id`; `profileId` único |
 | `Match` | Una fila por (jugador, partida). | `id`; único `(playerId, gameId)` |
 | `PlayerScore` | La clasificación agregada, por version de reglas. | pk `(playerId, ruleSetVersion)` |
-| `ObjectiveEvent` | Un objetivo cobrado por un jugador y cuándo. | único `(objectiveId, playerId)` |
+| `ObjectiveEvent` | Un **logro** cobrado por un jugador y cuándo. | único `(objectiveId, playerId)` |
+| `ObjectiveLeadEvent` | Un cambio de poseedor de una **competición** (append-only). | `id` |
 | `Alert` | Un comportamiento anómalo detectado (append-only). | `id`; único `dedupeKey` |
 | `AdminAction` | Una acción del panel (append-only). | `id` |
 | `Admin` | Una cuenta con acceso al panel de administración. | `id`; `email` único |
 | `RateLimitCounter` | Un contador de frecuencia por IP hasheada. | `key` |
 | `Setting` | Configuración y memoria de los procesos. | `key` |
 
-Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent` y `Alert` apuntan a `Player` con
-`onDelete: Cascade`. El resto de tablas son independientes.
+Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent`, `ObjectiveLeadEvent` y `Alert` apuntan a
+`Player` con `onDelete: Cascade`. El resto de tablas son independientes.
 
 ## Enums
 
@@ -31,12 +32,19 @@ Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent` y `Alert` apuntan a `Player
 |---|---|
 | `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED` |
 | `MatchResult` | `WIN`, `LOSS` |
+| `ObjectiveLeadKind` | `LOST`, `GAINED` (en ese orden, y no es decorativo: ver abajo) |
 | `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
 | `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión) |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
 
 Los valores nuevos de un enum se añaden **al final**: en Postgres `ALTER TYPE … ADD VALUE` solo
 añade al final, y poner uno en medio obligaría a recrear el tipo.
+
+`ObjectiveLeadKind` es además el **orden de desempate** de las dos filas de un cambio de poseedor de
+una competición: `LOST` va declarado antes que `GAINED` a propósito, porque Postgres ordena un enum
+por su orden de declaración y así un `orderBy` de `kind` con el **mismo sentido** que el resto de la
+consulta deja la ganancia delante en descendente (el estado que queda: el nuevo poseedor). No hay
+que reordenarlo; el que se añada va al final.
 
 Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con un compañero) y
 `LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
@@ -174,24 +182,68 @@ existiera `awards` no lo traen, y quien las lea cae al precio de catálogo y a u
 
 ## `ObjectiveEvent`
 
-Un objetivo **cobrado por un jugador** y **cuándo**. Un evento por objetivo y jugador: en una
-competición hay uno (el poseedor) y en un logro puede haber muchos (todos los que lo completan). Lo leen
-los dos historiales que mezclan partidas y objetivos (`/admin/historial` y `/historial`); no alimenta la
-clasificación.
+Un **logro** cobrado por un jugador y **cuándo**. Un evento por objetivo y jugador: en un logro
+puede haber muchos (todos los que lo completan). Las **competiciones** no viven aquí sino en
+`ObjectiveLeadEvent`. Lo leen los dos historiales que mezclan partidas y objetivos
+(`/admin/historial` y `/historial`); no alimenta la clasificación.
 
 | Campo | Tipo | Nota |
 |---|---|---|
-| `objectiveId` | `String` | Id del catálogo (`loco-por-ganar`, `lider-japanese`…). |
+| `objectiveId` | `String` | Id del catálogo (`imparable`, `lider-japanese`…). Solo logros. |
 | `playerId` | `String` | FK a `Player.id`, cascada. |
-| `achievedAt` | `DateTime` | Fin de la ventana del torneo (todos los objetivos se resuelven en caliente). |
+| `achievedAt` | `DateTime` | Fin de la ventana del torneo (los logros se resuelven en caliente). |
 | `recordedAt` | `DateTime` | Cuándo lo registró el motor. |
 
 Índices: `(objectiveId, playerId)` (único, para la reconciliación), `achievedAt` y `playerId` (feed y
 cascada).
 
-Es un **espejo del cómputo, no un log**: si cambia el poseedor de una competición, o quien completa un
-logro, la fila se actualiza o se borra. Todo el catálogo se registra al cerrar la ventana; mientras está
-abierta no se escribe nada.
+Es un **espejo del cómputo, no un log**: si cambia quien completa un logro, la fila se actualiza o se
+borra. Todo el catálogo de logros se registra al cerrar la ventana; mientras está abierta no se
+escribe nada. Un objetivo apagado (`disabledObjectives`) no llega al cómputo y su fila se borra.
+
+## `ObjectiveLeadEvent`
+
+Un **cambio de poseedor de una competición**: quién pasa a poseerla (`GAINED`) o deja de poseerla
+(`LOST`), y **cuándo**. Es lo que permite contar "ahora lidera" y "ya no lidera" en los dos
+historiales, en vivo y tantas veces como una competición cambie de manos.
+
+Es un registro **append-only**, al revés que `ObjectiveEvent`: describe un hecho de un instante —el
+jugador pasó a liderar «Rey del 1v1»— y eso no deja de ser cierto porque después cambie el poseedor.
+Lo escribe `reconcileObjectiveLeadEvents()` (`src/lib/objective-leads.ts`) dentro de la transacción de
+`recomputeScores()`, derivando el poseedor actual de `awarded` y comparándolo con el último estado
+anotado; no escribe nada mientras no cambie ningún poseedor (el worker pasa 288 veces al día).
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `objectiveId` | `String` | Id del catálogo de una **competición** (`loco-por-ganar`, `rey-1v1`, `masterizando-…`). |
+| `playerId` | `String` | FK a `Player.id`, cascada. El que pasa a poseerla o el que la suelta. |
+| `kind` | `ObjectiveLeadKind` | `GAINED` o `LOST`. |
+| `at` | `DateTime` | Instante del recálculo que lo detectó. **El mismo en las dos filas** de un cambio de poseedor. |
+| `editionFrom` | `DateTime` | `window.from` de la ventana **con la que se escribió** la fila; sella la cohorte (ver abajo). |
+| `recordedAt` | `DateTime` | Cuándo lo registró el motor. |
+
+Índices: `(editionFrom, at)` y `playerId` (feed y cascada). **No hay índice único**: la única clave
+única posible sería `(objectiveId, playerId, kind, at)` y no impediría el caso real que hay que
+evitar (una repetición con otro instante), así que la idempotencia la sostiene la comparación, no una
+restricción.
+
+Un cambio de poseedor escribe **dos filas con el mismo `at`**: la `LOST` del anterior y la `GAINED`
+del nuevo. Un poseedor que desaparece (objetivo apagado, ventana reabierta, una partida revertida que
+cambia el ranking) deja una sola `LOST`, y una competición sin filas previas y con poseedor, una sola
+`GAINED` (siembra, sin reconstruir el pasado: el primer estado se anota con el instante del pase que
+lo descubre). Las dos filas de un cambio solo se separan por el `kind`, que es el desempate del enum
+(ver arriba).
+
+**Cohortes.** `editionFrom` es la cohorte de la fila. Los dos feeds publican solo las de la edición
+activa (igualdad con el `from` de la ventana en uso), así que una edición nueva arranca su registro
+sin arrastrar los liderazgos de la anterior; y como el filtro es por ventana y no por la fecha de la
+fila, **sí se ven** las correcciones posteriores al cierre de la edición en curso.
+
+No guarda la etiqueta ni los puntos: se resuelven **al leer** (`resolveObjective()` y el ruleset
+activo), como en `ObjectiveEvent`. En una competición el importe es el mismo para la pérdida y para
+la ganancia (premio fijo), así que las dos filas de un cambio llevan la misma cifra y el signo lo
+decide quien pinta.
 
 ## `Alert`
 
@@ -336,6 +388,7 @@ aparece en una consulta, no se crea.**
 | `PlayerScore` | pk `(playerId, ruleSetVersion)` | Ficha del jugador; de paso indexa la FK para el `Cascade`. |
 | `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, ordenada por `rank` y, dentro del puesto compartido, por `Player.profileId`. |
 | `ObjectiveEvent` | `(objectiveId, playerId)` (único), `achievedAt`, `playerId` | Reconciliación, feed del historial, filtro por jugador y cascada. |
+| `ObjectiveLeadEvent` | `(editionFrom, at)`, `playerId` | Feed del historial (cohorte + fecha), filtro por jugador y cascada. |
 | `Alert` | `dedupeKey` (único), `createdAt`, `(playerId, rule)` | Idempotencia, listado, detalle por jugador. |
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
 | `Admin` | `email` (único), `authUserId` (único) | Acceso al panel por correo y vínculo con Auth. |
@@ -349,8 +402,8 @@ aparece en una consulta, no se crea.**
 | `/partidas` | `Match where finishedAt is null` y `Player.status = APPROVED`, por `startedAt` | `(playerId, finishedAt)`; sin índice parcial (no se ha necesitado) |
 | `/objetivos` | `Match` clasificatorias de todos los aprobados, en la ventana | `(mode, startedAt)` |
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |
-| `/admin/historial` | `Match` clasificatorias **y revertidas** + `ObjectiveEvent` | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt` |
-| `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas dos tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt` |
+| `/admin/historial` | `Match` clasificatorias **y revertidas** + `ObjectiveEvent` + `ObjectiveLeadEvent` (estos, filtrados por `editionFrom` y `at`) | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt`, `(editionFrom, at)` |
+| `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados, más los `ObjectiveLeadEvent` de la edición activa | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt`, `(editionFrom, at)` |
 | `/admin/alertas` | `Alert [por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
@@ -364,7 +417,7 @@ marca de revertida y la condición de equipo de las partidas por equipos) y lo r
 
 ## RLS y privilegios
 
-Postura **cerrada**, aplicada a las nueve tablas de `public`:
+Postura **cerrada**, aplicada a las diez tablas de `public`:
 
 | Paso | Qué |
 |---|---|
@@ -373,7 +426,7 @@ Postura **cerrada**, aplicada a las nueve tablas de `public`:
 | 3 | **Ningún `grant`** a `anon` ni a `authenticated`. |
 | 4 | Comprobar con `npm run db:security -- --check`. |
 
-Estado real: RLS activa y 0 políticas en las nueve tablas, y sin permisos para `anon` ni
+Estado real: RLS activa y 0 políticas en las diez tablas, y sin permisos para `anon` ni
 `authenticated`. `service_role` conserva sus permisos y su `BYPASSRLS`: es un rol de infraestructura
 de Supabase, no un cliente del torneo. Consecuencia en la Data API: **`401 permission denied`** (el
 permiso de tabla se comprueba antes que RLS). No se "arregla" concediendo `SELECT`; si algún día

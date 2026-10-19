@@ -4,6 +4,7 @@ import { Prisma } from "@/generated/prisma/client";
 import {
   OBJECTIVE_DEFINITIONS,
   VICTORIAS_ID,
+  objectiveKind,
   type ObjectiveAwardEntry,
   type ObjectiveAwarded,
   type ObjectiveDefinition,
@@ -14,7 +15,7 @@ import { readInstant } from "@/lib/ranked-match";
 import type { ScoringRuleset } from "@/lib/scoring";
 
 /**
- * Registro de hitos: cuándo se cumplió cada objetivo del torneo.
+ * Registro de hitos: cuándo se cumplió cada **logro** del torneo.
  *
  * Son dos cosas que live en un solo sitio porque vienen del mismo cálculo:
  *
@@ -24,28 +25,42 @@ import type { ScoringRuleset } from "@/lib/scoring";
  *   objetivo contra el catálogo y el ruleset activo, que es lo que el historial del
  *   panel publica para que la interfaz no tenga que mirar el catálogo.
  *
+ * `resolveObjective()` vale para los 88 objetivos del catálogo (competiciones
+ * incluidas), porque resolver una etiqueta y un precio no depende de cómo se
+ * registre el objetivo. Lo que sí depende es el **espejo** de abajo.
+ *
+ * ## Solo los logros: las competiciones tienen su propio registro
+ *
+ * `ObjectiveEvent` es el espejo de los **logros** (`kind: "achievement"`), que es
+ * para lo que da su forma: un logro se cumple, y mientras se cumpla hay una fila.
+ * Una competición no se cumple: se **posee**, y se puede perder y recuperar, así que
+ * su historial no cabe en una fila que se reconcilia —lo que hay que contar son los
+ * cambios de poseedor, con su instante—. Eso vive en `ObjectiveLeadEvent`
+ * (`src/lib/objective-leads.ts`), que sí es un log *append-only*.
+ *
+ * La división la decide el catálogo (`objectiveKind()`), y las dos reconciliaciones
+ * se reparten el mismo `awarded` dentro de la misma transacción: lo que aquí se
+ * salta porque es una competición es justo lo que allí se anota.
+ *
  * ## Por qué esto es un espejo y no un log
  *
  * `AdminAction` y `Alert` son registros **append-only**: describen que alguien hizo
  * algo, y aunque después se deshaga, el rastro sigue siendo cierto. Aquí es al
  * revés: la fila describe **quién cobra el objetivo ahora mismo**, y en eso no puede
- * haber pasado. El caso que lo obliga: si el panel revierte la partida que cerró una
- * competición, o la que completó un logro, los puntos se mueven, y un evento que
- * nombrara al beneficiario antiguo estaría mintiendo en la pantalla que la
- * organización usa para revisar el torneo. Por eso la reconciliación **borra** lo
- * que deja de cumplirse, y por eso `ObjectiveEvent` es un espejo y no un historial
- * de repeticiones.
+ * haber pasado. El caso que lo obliga: si el panel revierte la partida que completó
+ * un logro, los puntos se mueven, y un evento que nombrara al beneficiario antiguo
+ * estaría mintiendo en la pantalla que la organización usa para revisar el torneo.
+ * Por eso la reconciliación **borra** lo que deja de cumplirse, y por eso
+ * `ObjectiveEvent` es un espejo y no un historial de repeticiones.
  *
  * ## Por qué el reparto entre "ahora" y "al final" es el del documento de objetivos
  *
- * El catálogo nuevo **no tiene carreras**: tanto las competiciones como los logros
- * se resuelven en caliente y su poseedor o sus beneficiarios pueden cambiar en
- * cada recálculo (una competición porque cambia el líder, un logro porque se
- * revierte la partida que lo cerró). Por eso **todos** los objetivos se registran
- * igual: solo cuando el torneo ha terminado —ventana con `to` informado y ya
- * pasado—, con `achievedAt` = ese `to`. Con la ventana abierta no se registra
- * nada todavía, que es lo que significa "solo se añaden una vez termina el
- * torneo".
+ * El catálogo **no tiene carreras**: los logros se resuelven en caliente y sus
+ * beneficiarios pueden cambiar en cada recálculo (basta con revertir la partida que
+ * los cerró). Por eso se registran solo cuando el torneo ha terminado —ventana con
+ * `to` informado y ya pasado—, con `achievedAt` = ese `to`. Con la ventana abierta
+ * no se registra nada todavía, que es lo que significa "solo se añaden una vez
+ * termina el torneo".
  *
  * Un logro tiene **varios beneficiarios**, así que hay un evento por objetivo y
  * jugador (`@@unique([objectiveId, playerId])`), no uno por objetivo.
@@ -163,12 +178,19 @@ function finDelTorneo(ruleset: ScoringRuleset): Date | null {
 }
 
 /**
- * El estado esperado: un evento por objetivo cobrado y jugador, con el instante en
+ * El estado esperado: un evento por **logro** cobrado y jugador, con el instante en
  * que se cumple.
  *
- * Como ningún objetivo del catálogo es una carrera, todos se registran con el fin
- * del torneo: mientras la ventana esté abierta el mapa se queda vacío y la
- * reconciliación de abajo borra lo que hubiera.
+ * Los objetivos que no son logros —las competiciones, que van al registro de
+ * `src/lib/objective-leads.ts`— y los ids que no están en el catálogo se quedan
+ * fuera, y por eso la reconciliación de abajo borra sus filas si existieran: el
+ * espejo no tiene nada que espejar de una competición, ni de un id que ya no está en
+ * el catálogo. Las competiciones del catálogo anterior ya escritas aquí se limpian
+ * solas en la primera pasada después de este cambio.
+ *
+ * Como ningún logro es una carrera, todos se registran con el fin del torneo:
+ * mientras la ventana esté abierta el mapa se queda vacío y la reconciliación de
+ * abajo borra lo que hubiera.
  */
 function eventosEsperados(
   ruleset: ScoringRuleset,
@@ -182,6 +204,10 @@ function eventosEsperados(
   }
 
   for (const objetivo of awarded) {
+    if (objectiveKind(objetivo.id) !== "achievement") {
+      continue;
+    }
+
     esperados.set(eventKey(objetivo.id, objetivo.playerId), {
       objectiveId: objetivo.id,
       playerId: objetivo.playerId,
@@ -202,7 +228,7 @@ export type ObjectiveEventsResult = {
 };
 
 /**
- * Deja `ObjectiveEvent` igual que el cómputo de objetivos que se acaba de hacer.
+ * Deja `ObjectiveEvent` igual que el cómputo de **logros** que se acaba de hacer.
  *
  * Es idempotente y se ejecuta **dentro de la transacción de `recomputeScores()`**,
  * con el cerrojo de la clasificación ya tomado: o el registro y la clasificación
@@ -210,6 +236,9 @@ export type ObjectiveEventsResult = {
  * recalculan lo dejan al día —el worker, `npm run score`, revertir o restaurar los
  * puntos de una partida, aprobar o dar de alta a un jugador— sin tener que acordarse
  * de llamarlo.
+ *
+ * Las competiciones **no** se escriben aquí: su registro es `ObjectiveLeadEvent`
+ * (`reconcileObjectiveLeadEvents()`), que se llama en la misma transacción.
  *
  * ## Por qué lee antes de escribir
  *

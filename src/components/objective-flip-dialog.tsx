@@ -30,7 +30,12 @@ type ObjectiveFlipDialogProps = {
  * solo se monta la tarjeta —su marco y la X— y se le pasan las dos caras. Se abre
  * mostrando la clasificación —la cara posterior—, igual que la ventana anterior, y
  * al girarla aparece el resumen. En móvil ocupa la pantalla completa; a partir de
- * `sm` es una tarjeta centrada. El nombre accesible del diálogo es fijo (`ariaLabel`)
+ * `sm` es una tarjeta centrada que mide `100dvh` con tope de `44rem`: el tope la
+ * deja centrada en pantallas altas y, cuando el viewport baja de `44rem` —un portátil
+ * de 768px con barra del navegador deja ~650px de alto útil—, crece hasta llenar el
+ * alto en vez de recogerse a un porcentaje, que era lo que empujaba a desplazar la cara
+ * de los objetivos más cargados (`ObjectiveFeatureFrame` cuenta las medidas). El
+ * nombre accesible del diálogo es fijo (`ariaLabel`)
  * y no apunta al título visible, que se oculta al girar la tarjeta.
  *
  * ## El marco
@@ -115,7 +120,7 @@ export function ObjectiveFlipDialog({
       open
       onClose={onClose}
       ariaLabel={ariaLabel}
-      className="m-auto h-[100dvh] max-h-[100dvh] w-full max-w-none overflow-hidden border-0 bg-transparent p-0 sm:h-[85vh] sm:max-h-[44rem] sm:max-w-3xl"
+      className="m-auto h-[100dvh] max-h-[100dvh] w-full max-w-none overflow-hidden border-0 bg-transparent p-0 sm:max-h-[44rem] sm:max-w-3xl"
     >
       <div className="animate-dialog-in flex h-full w-full motion-reduce:animate-none">
         {/* El radio de la tarjeta lo cuenta el marco: el filete exterior va a 10px con

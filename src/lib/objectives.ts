@@ -725,6 +725,34 @@ export const OBJECTIVE_POINTS: Record<string, number> = Object.fromEntries(
 );
 
 /**
+ * La forma de cobrar de cada id del catálogo, indexada por id.
+ *
+ * Es un `Map` a nivel de módulo (el catálogo es una constante del código) y tiene
+ * que ir **después** de `OBJECTIVE_DEFINITIONS`: se construye al cargar el módulo.
+ */
+const KINDS_BY_ID: ReadonlyMap<string, ObjectiveKind> = new Map(
+  OBJECTIVE_DEFINITIONS.map((definition) => [definition.id, definition.kind]),
+);
+
+/**
+ * La forma de cobrar de un id del catálogo: competición, logro, o `null` si el id
+ * no está en el catálogo.
+ *
+ * Se pregunta **por id** y no por definición porque quien pregunta lo tiene por id:
+ * el motor reparte los objetivos cobrados como `ObjectiveAwarded` (id y jugador, sin
+ * la definición delante), y los dos registros que se reparten ese `awarded` —el
+ * espejo de logros (`ObjectiveEvent`) y el registro de poseedores de competiciones
+ * (`ObjectiveLeadEvent`)— tienen que decidir cuál les toca sin volver a recorrer el
+ * catálogo.
+ *
+ * Un id que no está en el catálogo (solo puede venir de una fila escrita a mano) no
+ * pertenece a ninguno de los dos y no se anota en ninguno.
+ */
+export function objectiveKind(id: string): ObjectiveKind | null {
+  return KINDS_BY_ID.get(id) ?? null;
+}
+
+/**
  * Lo que un jugador cobra por **un** objetivo: importe real y repeticiones.
  *
  * Va junto al id y no en una lista aparte porque las dos cosas definen la misma
@@ -757,11 +785,12 @@ export type ObjectiveAward = {
 /**
  * Un objetivo cobrado por un jugador, visto desde el motor.
  *
- * Va en `awarded` y no en `ObjectiveOption` a propósito: es lo que consume el
- * registro de hitos (`ObjectiveEvent`, escrito por `reconcileObjectiveEvents()`
- * en `scoring.ts`), y `/objetivos` no tiene por qué enterarse de que existe una
- * tabla de hitos. En una competición hay una entrada; en un logro, una por
- * beneficiario.
+ * Va en `awarded` y no en `ObjectiveOption` a propósito: es lo que consumen los dos
+ * registros del historial —el espejo de logros (`ObjectiveEvent`, escrito por
+ * `reconcileObjectiveEvents()`) y el log de poseedores de competiciones
+ * (`ObjectiveLeadEvent`, escrito por `reconcileObjectiveLeadEvents()`), los dos en
+ * `scoring.ts`— y `/objetivos` no tiene por qué enterarse de que existen esas
+ * tablas. En una competición hay una entrada; en un logro, una por beneficiario.
  */
 export type ObjectiveAwarded = {
   /** Id estable del objetivo (`loco-por-ganar`, `lider-japanese`…). */
@@ -1795,7 +1824,8 @@ function targetFor(
  * Los objetivos **desactivados** (`ruleset.disabledObjectives`) se saltan antes de
  * calcular nada: no entran en `options` (así no se publican ni entran en el
  * snapshot), no reparten puntos y no aparecen en `awarded`, que es lo que hace que
- * `reconcileObjectiveEvents()` borre sus eventos.
+ * `reconcileObjectiveEvents()` borre sus eventos y que
+ * `reconcileObjectiveLeadEvents()` anote la pérdida de su poseedor.
  */
 export function computeObjectives(
   players: readonly PlayerAggregate[],
