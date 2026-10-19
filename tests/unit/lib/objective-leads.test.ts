@@ -41,6 +41,7 @@ function fila(
 
 const T1 = "2026-09-01T10:00:00.000Z";
 const T2 = "2026-09-02T10:00:00.000Z";
+const T3 = "2026-09-03T10:00:00.000Z";
 
 describe("ObjectiveLeadKind", () => {
   it("se declara LOST antes que GAINED, que es el orden que aplica Postgres", () => {
@@ -223,6 +224,38 @@ describe("leadChanges", () => {
       { objectiveId: LOCO, kind: ObjectiveLeadKind.LOST, playerId: "p3" },
       { objectiveId: LOCO, kind: ObjectiveLeadKind.GAINED, playerId: "p4" },
     ]);
+  });
+
+  it("un jugador que pierde el liderazgo y lo recupera deja las cuatro filas", () => {
+    // Es el ciclo que la issue pide poder leer en el historial: ganó, perdió y volvió a
+    // ganar. La pérdida y la recuperación se anotan como dos cambios distintos, con su
+    // instante, y la segunda ganancia no se funde con la primera.
+    const anotadas: LeadEventRow[] = [fila(REY, "p1", ObjectiveLeadKind.GAINED, T1)];
+
+    const perdido = leadChanges(leadHolders(anotadas), new Map([[REY, "p2"]]));
+
+    expect(perdido).toEqual([
+      { objectiveId: REY, kind: ObjectiveLeadKind.LOST, playerId: "p1" },
+      { objectiveId: REY, kind: ObjectiveLeadKind.GAINED, playerId: "p2" },
+    ]);
+
+    for (const cambio of perdido) {
+      anotadas.push(fila(cambio.objectiveId, cambio.playerId, cambio.kind, T2));
+    }
+
+    const recuperado = leadChanges(leadHolders(anotadas), new Map([[REY, "p1"]]));
+
+    expect(recuperado).toEqual([
+      { objectiveId: REY, kind: ObjectiveLeadKind.LOST, playerId: "p2" },
+      { objectiveId: REY, kind: ObjectiveLeadKind.GAINED, playerId: "p1" },
+    ]);
+
+    for (const cambio of recuperado) {
+      anotadas.push(fila(cambio.objectiveId, cambio.playerId, cambio.kind, T3));
+    }
+
+    expect(leadHolders(anotadas).get(REY)).toBe("p1");
+    expect(leadChanges(leadHolders(anotadas), new Map([[REY, "p1"]]))).toEqual([]);
   });
 
   it("la reconciliación es idempotente: aplicar los cambios y volver a comparar no anota nada", () => {

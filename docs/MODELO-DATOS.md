@@ -205,7 +205,9 @@ escribe nada. Un objetivo apagado (`disabledObjectives`) no llega al cómputo y 
 
 Un **cambio de poseedor de una competición**: quién pasa a poseerla (`GAINED`) o deja de poseerla
 (`LOST`), y **cuándo**. Es lo que permite contar "ahora lidera" y "ya no lidera" en los dos
-historiales, en vivo y tantas veces como una competición cambie de manos.
+historiales, en vivo y tantas veces como una competición cambie de manos. Si la edición ya se jugó
+antes de activar el registro, `npm run backfill:objective-leads` reconstruye la secuencia desde las
+partidas contadas.
 
 Es un registro **append-only**, al revés que `ObjectiveEvent`: describe un hecho de un instante —el
 jugador pasó a liderar «Rey del 1v1»— y eso no deja de ser cierto porque después cambie el poseedor.
@@ -219,7 +221,7 @@ anotado; no escribe nada mientras no cambie ningún poseedor (el worker pasa 288
 | `objectiveId` | `String` | Id del catálogo de una **competición** (`loco-por-ganar`, `rey-1v1`, `masterizando-…`). |
 | `playerId` | `String` | FK a `Player.id`, cascada. El que pasa a poseerla o el que la suelta. |
 | `kind` | `ObjectiveLeadKind` | `GAINED` o `LOST`. |
-| `at` | `DateTime` | Instante del recálculo que lo detectó. **El mismo en las dos filas** de un cambio de poseedor. |
+| `at` | `DateTime` | Instante del recálculo que lo detectó; en el backfill, el `finishedAt` de la partida que cambió el poseedor. **El mismo en las dos filas** de un cambio. |
 | `editionFrom` | `DateTime` | `window.from` de la ventana **con la que se escribió** la fila; sella la cohorte (ver abajo). |
 | `recordedAt` | `DateTime` | Cuándo lo registró el motor. |
 
@@ -402,7 +404,7 @@ aparece en una consulta, no se crea.**
 | `/partidas` | `Match where finishedAt is null` y `Player.status = APPROVED`, por `startedAt` | `(playerId, finishedAt)`; sin índice parcial (no se ha necesitado) |
 | `/objetivos` | `Match` clasificatorias de todos los aprobados, en la ventana | `(mode, startedAt)` |
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |
-| `/admin/historial` | `Match` clasificatorias **y revertidas** + `ObjectiveEvent` + `ObjectiveLeadEvent` (estos, filtrados por `editionFrom` y `at`) | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt`, `(editionFrom, at)` |
+| `/admin/historial` | Las mismas filas que `/historial`, de todos los aprobados: `Match` victorias clasificatorias con puntos (o revertidas) + `ObjectiveEvent` + `ObjectiveLeadEvent` (estos, filtrados por `editionFrom` y `at`) | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt`, `(editionFrom, at)` |
 | `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados, más los `ObjectiveLeadEvent` de la edición activa | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt`, `(editionFrom, at)` |
 | `/admin/alertas` | `Alert [por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |

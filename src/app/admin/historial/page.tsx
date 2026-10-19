@@ -187,40 +187,36 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
 
   const players =
     playersRead.status === "ok"
-      ? playersRead.data.map((player) => ({ id: player.id, name: player.name }))
+      ? playersRead.data
+          // El historial enseña las ganancias de los aprobados, las mismas que la web;
+          // ofrecer en el filtro a quien no está en el torneo solo llevaría a una lista
+          // vacía.
+          .filter((player) => player.status === "APPROVED")
+          .map((player) => ({ id: player.id, name: player.name }))
       : [];
 
   const query = {
     playerId: single(params.playerId),
     from: single(params.from),
     to: single(params.to),
-    resultado: single(params.resultado),
     sort: single(params.sort),
     dir: single(params.dir),
     pageSize: single(params.pageSize),
   };
   const hasFilters =
-    query.playerId !== undefined ||
-    query.from !== undefined ||
-    query.to !== undefined ||
-    query.resultado !== undefined;
-
-  // El filtro de resultado solo excluye los objetivos si es un valor real: el DAL
-  // trata cualquier otra cosa como si no filtrara, y el mensaje de la tabla no puede
-  // decir que se dejaron fuera los hitos cuando no se dejó fuera nada.
-  const resultFilter = query.resultado === "WIN" || query.resultado === "LOSS";
+    query.playerId !== undefined || query.from !== undefined || query.to !== undefined;
 
   return (
     <div className="flex flex-col gap-6">
       <section>
         <h1 className="text-2xl font-semibold">Historial de puntos</h1>
         <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Partidas clasificatorias, logros cumplidos y cambios de poseedor de las
-          competiciones, de lo más reciente a lo más antiguo. Los logros se
-          resuelven en caliente y se apuntan cuando termina el torneo; los cambios
-          de poseedor salen en cuanto la sincronización los detecta. Revertir los
-          puntos de una partida no la borra: la marca como no puntuable y se puede
-          restaurar.
+          Las mismas ganancias que el historial público —victorias que suman, logros
+          cumplidos y cambios de poseedor de las competiciones—, de todos los
+          participantes y de lo más reciente a lo más antiguo. Los logros se apuntan
+          cuando termina el torneo; los cambios de poseedor salen en cuanto la
+          sincronización los detecta. Revertir los puntos de una partida no la borra:
+          la marca como no puntuable y se puede restaurar.
         </p>
       </section>
 
@@ -234,32 +230,17 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
           <div className="flex flex-col gap-4">
             <MatchHistoryFilters players={players} />
 
-            {/* El filtro de resultado excluye los objetivos a propósito: una
-                competición o un logro no tienen resultado de partida. Sin esta
-                nota, filtrar por victoria o derrota parecería un filtro roto. */}
-            {resultFilter ? (
-              <p className="max-w-[70ch] text-xs text-muted">
-                El filtro de resultado solo enseña partidas: los logros y los
-                cambios de poseedor de las competiciones no tienen resultado y
-                quedan fuera.
-              </p>
-            ) : null}
-
             {history.data.rows.length === 0 ? (
               <EmptyState
                 title={
                   hasFilters
-                    ? resultFilter
-                      ? "Ninguna partida coincide con los filtros"
-                      : "Ni partidas ni objetivos coinciden con los filtros"
-                    : "Todavía no hay partidas ni objetivos"
+                    ? "Ninguna ganancia coincide con los filtros"
+                    : "Todavía no hay ganancias"
                 }
                 body={
                   hasFilters
-                    ? resultFilter
-                      ? "Prueba con otro jugador o amplía el rango de fechas. El filtro de fechas incluye el día final completo."
-                      : "Prueba con otro jugador o amplía el rango de fechas. Los objetivos y los cambios de poseedor se filtran por su fecha, y el día final entra completo."
-                    : "Aquí aparecerán las partidas que cuentan para la clasificación, los logros cumplidos y los cambios de poseedor de las competiciones, de lo más reciente a lo más antiguo."
+                    ? "Prueba con otro jugador o amplía el rango de fechas. El filtro incluye el día final completo."
+                    : "Aquí aparecerán las victorias que suman, los logros cumplidos y los cambios de poseedor de las competiciones, de lo más reciente a lo más antiguo."
                 }
               />
             ) : (
@@ -267,10 +248,10 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                 <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
                   <table className="w-full text-left text-sm">
                     <caption className="sr-only">
-                      Partidas clasificatorias, logros cumplidos y cambios de
-                      poseedor de las competiciones: fecha, resultado o marca de
-                      objetivo, descripción con sus puntos —de cambio de poseedor
-                      son informativos— y, en las partidas, la acción de revertir o
+                      Victorias que suman, logros cumplidos y cambios de poseedor
+                      de las competiciones: fecha, resultado o marca de objetivo,
+                      descripción con sus puntos —de cambio de poseedor son
+                      informativos— y, en las partidas, la acción de revertir o
                       restaurar sus puntos. Por debajo de la pantalla mediana la
                       fecha se lee dentro de la descripción.
                     </caption>
@@ -284,14 +265,12 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                           query={query}
                           className="hidden w-44 px-4 py-3 font-medium md:table-cell"
                         />
-                        <SortableHeaderLink
-                          column="resultado"
-                          label="Resultado"
-                          sort={history.data.sort}
-                          basePath="/admin/historial"
-                          query={query}
-                          className="w-28 px-4 py-3 font-medium"
-                        />
+                        <th
+                          scope="col"
+                          className="w-28 bg-surface px-4 py-3 font-medium"
+                        >
+                          Resultado
+                        </th>
                         {/* La descripción es una frase montada en la interfaz y las
                             acciones no son un dato ordenable. */}
                         <th

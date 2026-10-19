@@ -42,6 +42,15 @@ describe("formatRelativeTime", () => {
     expect(formatRelativeTime(hace(3 * 3_600), AHORA)).toContain("3");
   });
 
+  it("a partir de un día desglosa días y horas", () => {
+    // Decir "hace 53 h" obliga a dividir mentalmente; el día y la hora se leen de un
+    // vistazo.
+    expect(formatRelativeTime(hace(24 * 3_600), AHORA)).toBe("hace 1 día");
+    expect(formatRelativeTime(hace(25 * 3_600), AHORA)).toBe("hace 1 día y 1 hora");
+    expect(formatRelativeTime(hace(49 * 3_600), AHORA)).toBe("hace 2 días y 1 hora");
+    expect(formatRelativeTime(hace(47 * 3_600), AHORA)).toBe("hace 1 día y 23 horas");
+  });
+
   it("a partir de una semana da la fecha, que es lo único situable", () => {
     // De aquí en adelante la distancia deja de importar para quien lee.
     const resultado = formatRelativeTime(hace(14 * 24 * 3_600), AHORA);

@@ -50,8 +50,8 @@ cero escalones tanto si es `gold_3` como si es `gold_1`.
 - Los cortes rating → división se derivan a mano con `npm run alerts:cutoffs` y se cachean en
   `Setting["alerts.divisionCutoffs"]`. Sin ellos la comprobación no se aplica (ver arriba), así que
   conviene derivarlos antes de que el torneo empiece a puntuar en serio.
-- En el historial del panel (`/admin/historial`) estas partidas **se siguen listando**, con 0 puntos:
-  es el recorrido del jugador, igual que las revertidas.
+- Estas partidas **no salen en el historial**: no son una ganancia y no hay puntos que revertir. El
+  historial del panel enseña las mismas ganancias que el público.
 
 ### La ventana
 

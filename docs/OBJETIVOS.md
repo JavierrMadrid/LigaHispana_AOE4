@@ -170,6 +170,10 @@ logro (que no decide puntos: todos los que cumplen cobran):
   instante —`LOST` para el que la suelta y `GAINED` para el que la agarra—, y la primera vez que se
   ve un poseedor se siembra con una sola `GAINED`. Es lo que permite contar en `/historial` "ahora
   lidera" y "ya no lidera" durante el torneo. Una competición que no cambia de dueño no escribe nada.
+- Si la edición ya se jugó antes de activar ese registro, `npm run backfill:objective-leads`
+  reconstruye la secuencia desde las partidas contadas: borra y reescribe las filas de la edición,
+  con el `finishedAt` de la partida que cambió el poseedor. Es idempotente, toma el cerrojo del
+  recálculo y `-- --dry-run` lo enseña sin escribir.
 
 ## Total de puntos
 

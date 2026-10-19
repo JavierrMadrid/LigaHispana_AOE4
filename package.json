@@ -20,6 +20,7 @@
     "sync": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/sync.ts",
     "score": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/score.ts",
     "backfill:model": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/backfill-model.ts",
+    "backfill:objective-leads": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/backfill-objective-leads.ts",
     "verify:sync": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/verify-sync.ts",
     "alerts:check": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/alerts-check.ts",
     "alerts:cutoffs": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/alerts-cutoffs.ts",
