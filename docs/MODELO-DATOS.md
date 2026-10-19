@@ -194,8 +194,8 @@ puede haber muchos (todos los que lo completan). Las **competiciones** no viven 
 | `achievedAt` | `DateTime` | Fin de la ventana del torneo (los logros se resuelven en caliente). |
 | `recordedAt` | `DateTime` | Cuándo lo registró el motor. |
 
-Índices: `(objectiveId, playerId)` (único, para la reconciliación), `achievedAt` y `playerId` (feed y
-cascada).
+Índices: `(objectiveId, playerId)` (único, para la reconciliación), `(achievedAt, objectiveId)` (feed:
+fecha y desempate) y `(playerId, achievedAt)` (filtro por jugador y cascada desde su primera columna).
 
 Es un **espejo del cómputo, no un log**: si cambia quien completa un logro, la fila se actualiza o se
 borra. Todo el catálogo de logros se registra al cerrar la ventana; mientras está abierta no se
@@ -225,10 +225,11 @@ anotado; no escribe nada mientras no cambie ningún poseedor (el worker pasa 288
 | `editionFrom` | `DateTime` | `window.from` de la ventana **con la que se escribió** la fila; sella la cohorte (ver abajo). |
 | `recordedAt` | `DateTime` | Cuándo lo registró el motor. |
 
-Índices: `(editionFrom, at)` y `playerId` (feed y cascada). **No hay índice único**: la única clave
-única posible sería `(objectiveId, playerId, kind, at)` y no impediría el caso real que hay que
-evitar (una repetición con otro instante), así que la idempotencia la sostiene la comparación, no una
-restricción.
+Índices: `(editionFrom, at, objectiveId, kind)` (feed: cohorte, rango de fecha y orden del merge) y
+`(playerId, editionFrom, at)` (filtro por jugador y cascada desde su primera columna). **No hay índice
+único**: la única clave posible sería `(objectiveId, playerId, kind, at)` y no impediría el caso real que
+hay que evitar (una repetición con otro instante), así que la idempotencia la sostiene la comparación, no
+una restricción.
 
 Un cambio de poseedor escribe **dos filas con el mismo `at`**: la `LOST` del anterior y la `GAINED`
 del nuevo. Un poseedor que desaparece (objetivo apagado, ventana reabierta, una partida revertida que
@@ -389,8 +390,8 @@ aparece en una consulta, no se crea.**
 | `Match` | `(mode, startedAt)` | Clasificatorias dentro de la ventana (igualdad + rango). |
 | `PlayerScore` | pk `(playerId, ruleSetVersion)` | Ficha del jugador; de paso indexa la FK para el `Cascade`. |
 | `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, ordenada por `rank` y, dentro del puesto compartido, por `Player.profileId`. |
-| `ObjectiveEvent` | `(objectiveId, playerId)` (único), `achievedAt`, `playerId` | Reconciliación, feed del historial, filtro por jugador y cascada. |
-| `ObjectiveLeadEvent` | `(editionFrom, at)`, `playerId` | Feed del historial (cohorte + fecha), filtro por jugador y cascada. |
+| `ObjectiveEvent` | `(objectiveId, playerId)` (único), `(achievedAt, objectiveId)`, `(playerId, achievedAt)` | Reconciliación; feed paginado por ventanas (fecha y desempate por objetivo); filtro por jugador y cascada. |
+| `ObjectiveLeadEvent` | `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` | Feed paginado por ventanas (cohorte, rango de fecha y orden del merge); filtro por jugador y cascada. |
 | `Alert` | `dedupeKey` (único), `createdAt`, `(playerId, rule)` | Idempotencia, listado, detalle por jugador. |
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
 | `Admin` | `email` (único), `authUserId` (único) | Acceso al panel por correo y vínculo con Auth. |
@@ -404,8 +405,8 @@ aparece en una consulta, no se crea.**
 | `/partidas` | `Match where finishedAt is null` y `Player.status = APPROVED`, por `startedAt` | `(playerId, finishedAt)`; sin índice parcial (no se ha necesitado) |
 | `/objetivos` | `Match` clasificatorias de todos los aprobados, en la ventana | `(mode, startedAt)` |
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |
-| `/admin/historial` | Las mismas filas que `/historial`, de todos los aprobados: `Match` victorias clasificatorias con puntos (o revertidas) + `ObjectiveEvent` + `ObjectiveLeadEvent` (estos, filtrados por `editionFrom` y `at`) | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt`, `(editionFrom, at)` |
-| `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados, más los `ObjectiveLeadEvent` de la edición activa | `(mode, startedAt)`, `(playerId, startedAt)`, `achievedAt`, `(editionFrom, at)` |
+| `/admin/historial` | Las mismas filas que `/historial`, de todos los aprobados: `Match` victorias clasificatorias con puntos (o revertidas) + `ObjectiveEvent` + `ObjectiveLeadEvent` (estos, filtrados por `editionFrom`), paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
+| `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados, más los `ObjectiveLeadEvent` de la edición activa; paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
 | `/admin/alertas` | `Alert [por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
