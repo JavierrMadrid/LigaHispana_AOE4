@@ -995,7 +995,7 @@ type AggregatedMatchRow = {
  * que un proceso que revienta no deja el torneo bloqueado hasta que alguien
  * reinicie la base.
  */
-const SCORING_LOCK_NAME = "ligahispana.recomputeScores";
+export const SCORING_LOCK_NAME = "ligahispana.recomputeScores";
 
 /**
  * Los números que deciden el puesto. Si dos filas los comparten, comparten puesto.

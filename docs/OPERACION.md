@@ -898,6 +898,7 @@ npm run db:security -- --check   # comprueba RLS; aplica con db:security si sale
 npm run countries:seed           # publica la lista de países del formulario
 npm run db:window                # publica la ventana de fechas del torneo (recomendado)
 npm run alerts:cutoffs           # deriva los cortes de división de la condición de equipo
+npm run backfill:objective-leads # reconstruye el historial de liderazgos de la edición
 npm run db:cron                  # programa el reloj cada 10 minutos
 ```
 
@@ -910,6 +911,10 @@ npm run db:cron                  # programa el reloj cada 10 minutos
 - `alerts:cutoffs` deriva los cortes de división de la condición de equipo. Sin ellos la condición no
   se aplica (las partidas de equipo cuentan) y el rastro del recálculo lo avisa: no rompe nada, pero
   el torneo puntuaría de más.
+- `backfill:objective-leads` solo hace falta al desplegar el registro de liderazgos (`ObjectiveLeadEvent`)
+  con una edición ya jugada: reconstruye la secuencia de pérdidas y ganancias desde las partidas
+  contadas, con el `finishedAt` de cada partida. Es idempotente, toma el cerrojo del recálculo y
+  `-- --dry-run` lo enseña sin escribir. Si la edición empieza después del despliegue, no hace falta.
 - Variables del panel: las `NEXT_PUBLIC_*` y los secretos de servidor en las dos listas de build, y
   `YOUTUBE_API_KEY` y las de Discord en los dos sitios (Worker y build). Detalle en
   [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel).

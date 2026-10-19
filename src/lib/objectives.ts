@@ -812,7 +812,7 @@ export type ObjectivesComputation = {
 /** Cliente con la única consulta que necesita este módulo (`db` o una `tx`). */
 export type ObjectiveQueryClient = Pick<Prisma.TransactionClient, "$queryRaw">;
 
-type ObjectiveMatchRow = {
+export type ObjectiveMatchRow = {
   playerId: string;
   profileId: number;
   name: string;
@@ -898,7 +898,7 @@ function objectiveRowsQuery(ruleset: ScoringRuleset, cutoffs: LadderCutoffsTable
   `;
 }
 
-type PlayerMeta = {
+export type PlayerMeta = {
   playerId: string;
   profileId: number;
   name: string;
@@ -1019,7 +1019,7 @@ function resolveFormat(row: ObjectiveMatchRow): FormatId | null {
   return null;
 }
 
-function emptyPlayer(meta: PlayerMeta): PlayerAggregate {
+export function emptyObjectiveAggregate(meta: PlayerMeta): PlayerAggregate {
   return {
     playerId: meta.playerId,
     profileId: meta.profileId,
@@ -1179,6 +1179,92 @@ export function matchAchievements(
  * racha de APM. Es el mismo criterio que el `null` de `historyPublic`: lo que no se
  * ha podido leer no se escribe.
  */
+export function applyObjectiveMatch(
+  aggregate: PlayerAggregate,
+  row: ObjectiveMatchRow,
+  ruleset: ScoringRuleset,
+): void {
+  const won = row.result === "WIN";
+
+  aggregate.matches += 1;
+  aggregate.lastMatchAt = row.finishedAtMs;
+  aggregate.playedDays.add(naturalDay(row.finishedAtMs));
+
+  if (won) {
+    aggregate.wins += 1;
+    aggregate.lastWinAt = row.finishedAtMs;
+
+    if (row.durationSeconds !== null) {
+      if (row.durationSeconds < SHORT_MATCH_SECONDS) {
+        aggregate.shortWins += 1;
+      } else if (row.durationSeconds > LONG_MATCH_SECONDS) {
+        aggregate.longWins += 1;
+      }
+    }
+  }
+
+  const achievements = matchAchievements(row);
+
+  if (achievements.fastFeudal) {
+    aggregate.fastFeudal += 1;
+  }
+
+  if (achievements.fastCastle) {
+    aggregate.fastCastle += 1;
+  }
+
+  if (achievements.fastImperial) {
+    aggregate.fastImperial += 1;
+  }
+
+  if (achievements.defender) {
+    aggregate.defenderMatches += 1;
+  }
+
+  const format = resolveFormat(row);
+
+  if (format !== null) {
+    const record = aggregate.byFormat.get(format) ?? { matches: 0, wins: 0, lastWinAt: 0 };
+    record.matches += 1;
+
+    if (won) {
+      record.wins += 1;
+      record.lastWinAt = row.finishedAtMs;
+    }
+
+    aggregate.byFormat.set(format, record);
+  }
+
+  if (row.map !== null) {
+    aggregate.byMap.set(row.map, (aggregate.byMap.get(row.map) ?? 0) + 1);
+  }
+
+  // Las partidas con civ aleatoria no dicen nada de la civilización de nadie: se
+  // excluyen de todos los objetivos de civilización. No afectan a los demás.
+  if (row.civ === null || (!ruleset.countRandomizedCivs && row.civRandomized)) {
+    return;
+  }
+
+  const civ = aggregate.byCiv.get(row.civ) ?? { matches: 0, wins: 0, lastWinAt: 0 };
+
+  civ.matches += 1;
+
+  if (won) {
+    civ.wins += 1;
+    civ.lastWinAt = row.finishedAtMs;
+  }
+
+  aggregate.byCiv.set(row.civ, civ);
+}
+
+/**
+ * Agrega las partidas de un jugador **en orden cronológico** y cierra la racha
+ * más larga de victorias.
+ *
+ * La racha vive fuera de `applyObjectiveMatch()` a propósito: es la única parte que
+ * depende del orden y del estado anterior, y el backfill de liderazgos la mantiene a
+ * mano con su propio contador, sin duplicar el resto de la agregación.
+ */
 function aggregatePlayer(
   aggregate: PlayerAggregate,
   rows: ObjectiveMatchRow[],
@@ -1187,85 +1273,18 @@ function aggregatePlayer(
   let run = 0;
 
   for (const row of rows) {
-    const won = row.result === "WIN";
+    applyObjectiveMatch(aggregate, row, ruleset);
 
-    aggregate.matches += 1;
-    aggregate.lastMatchAt = row.finishedAtMs;
-    aggregate.playedDays.add(naturalDay(row.finishedAtMs));
-
-    if (won) {
-      aggregate.wins += 1;
-      aggregate.lastWinAt = row.finishedAtMs;
+    if (row.result === "WIN") {
       run += 1;
 
       if (run > aggregate.streak) {
         aggregate.streak = run;
         aggregate.streakEndsAt = row.finishedAtMs;
       }
-
-      if (row.durationSeconds !== null) {
-        if (row.durationSeconds < SHORT_MATCH_SECONDS) {
-          aggregate.shortWins += 1;
-        } else if (row.durationSeconds > LONG_MATCH_SECONDS) {
-          aggregate.longWins += 1;
-        }
-      }
     } else {
       run = 0;
     }
-
-    const achievements = matchAchievements(row);
-
-    if (achievements.fastFeudal) {
-      aggregate.fastFeudal += 1;
-    }
-
-    if (achievements.fastCastle) {
-      aggregate.fastCastle += 1;
-    }
-
-    if (achievements.fastImperial) {
-      aggregate.fastImperial += 1;
-    }
-
-    if (achievements.defender) {
-      aggregate.defenderMatches += 1;
-    }
-
-    const format = resolveFormat(row);
-
-    if (format !== null) {
-      const record = aggregate.byFormat.get(format) ?? { matches: 0, wins: 0, lastWinAt: 0 };
-      record.matches += 1;
-
-      if (won) {
-        record.wins += 1;
-        record.lastWinAt = row.finishedAtMs;
-      }
-
-      aggregate.byFormat.set(format, record);
-    }
-
-    if (row.map !== null) {
-      aggregate.byMap.set(row.map, (aggregate.byMap.get(row.map) ?? 0) + 1);
-    }
-
-    // Las partidas con civ aleatoria no dicen nada de la civilización de nadie: se
-    // excluyen de todos los objetivos de civilización. No afectan a los demás.
-    if (row.civ === null || (!ruleset.countRandomizedCivs && row.civRandomized)) {
-      continue;
-    }
-
-    const civ = aggregate.byCiv.get(row.civ) ?? { matches: 0, wins: 0, lastWinAt: 0 };
-
-    civ.matches += 1;
-
-    if (won) {
-      civ.wins += 1;
-      civ.lastWinAt = row.finishedAtMs;
-    }
-
-    aggregate.byCiv.set(row.civ, civ);
   }
 }
 
@@ -1277,16 +1296,24 @@ function aggregatePlayer(
  * de equipos del predicado y los pasa quien llama (el motor de puntos los ha leído
  * de `Setting` una sola vez por pasada).
  */
+export async function loadObjectiveMatchRows(
+  client: ObjectiveQueryClient,
+  ruleset: ScoringRuleset,
+  cutoffs: LadderCutoffsTable | null,
+): Promise<ObjectiveMatchRow[]> {
+  if (ruleset.modes.length === 0) {
+    return [];
+  }
+
+  return client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset, cutoffs));
+}
+
 export async function loadObjectivePlayers(
   client: ObjectiveQueryClient,
   ruleset: ScoringRuleset,
   cutoffs: LadderCutoffsTable | null,
 ): Promise<PlayerAggregate[]> {
-  if (ruleset.modes.length === 0) {
-    return [];
-  }
-
-  const rows = await client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset, cutoffs));
+  const rows = await loadObjectiveMatchRows(client, ruleset, cutoffs);
   const byPlayer = new Map<string, { meta: PlayerMeta; rows: ObjectiveMatchRow[] }>();
 
   for (const row of rows) {
@@ -1320,7 +1347,7 @@ export async function loadObjectivePlayers(
         (a.gameId < b.gameId ? -1 : a.gameId > b.gameId ? 1 : 0),
     );
 
-    const aggregate = emptyPlayer(meta);
+    const aggregate = emptyObjectiveAggregate(meta);
     aggregatePlayer(aggregate, ordered, ruleset);
     // La racha actual y la de APM salen del mismo orden cronológico; se calculan
     // aparte para que las partes puras sean comprobables por sí solas.

@@ -3721,10 +3721,11 @@ async function checkAdminQueryParams(): Promise<void> {
       assert.deepEqual(readAlertsSort({ sort: key, dir: "desc" }), { key, dir: "desc" });
     }
 
-    for (const key of ["fecha", "resultado"] as const) {
-      assert.deepEqual(readHistorySort({ sort: key, dir: "asc" }), { key, dir: "asc" });
-      assert.deepEqual(readHistorySort({ sort: key, dir: "desc" }), { key, dir: "desc" });
-    }
+    assert.deepEqual(readHistorySort({ sort: "fecha", dir: "asc" }), { key: "fecha", dir: "asc" });
+    assert.deepEqual(readHistorySort({ sort: "fecha", dir: "desc" }), {
+      key: "fecha",
+      dir: "desc",
+    });
 
     for (const key of ["fecha", "tipo", "admin"] as const) {
       assert.deepEqual(readActionsSort({ sort: key, dir: "asc" }), { key, dir: "asc" });
@@ -3739,6 +3740,7 @@ async function checkAdminQueryParams(): Promise<void> {
     assert.deepEqual(readAlertsSort({ sort: "admin" }), { key: "fecha", dir: "desc" });
     assert.deepEqual(readHistorySort({ sort: "conteo" }), { key: "fecha", dir: "desc" });
     assert.deepEqual(readHistorySort({ sort: "jugador" }), { key: "fecha", dir: "desc" });
+    assert.deepEqual(readHistorySort({ sort: "resultado" }), { key: "fecha", dir: "desc" });
     assert.deepEqual(readActionsSort({ sort: "jugador" }), { key: "fecha", dir: "desc" });
     assert.deepEqual(readAlertsSort({ sort: "" }), { key: "fecha", dir: "desc" });
   });
@@ -3777,8 +3779,8 @@ async function checkAdminQueryParams(): Promise<void> {
       key: "conteo",
       dir: "asc",
     });
-    assert.deepEqual(readHistorySort({ sort: ["resultado", "inventada"] }), {
-      key: "resultado",
+    assert.deepEqual(readHistorySort({ sort: ["resultado", "fecha"] }), {
+      key: "fecha",
       dir: "desc",
     });
   });
@@ -3854,26 +3856,22 @@ async function checkAdminQueryParams(): Promise<void> {
     assert.equal(filtros.kind, "STREAK_CLOSED");
   });
 
-  await check("el filtro de resultado del historial y su orden no se pisan", () => {
-    // `?resultado=WIN` recorta filas (y deja fuera los objetivos) y `?sort=resultado`
-    // las ordena: dos parámetros distintos que pueden ir a la vez.
-    assert.equal(readHistoryFilters({ resultado: "WIN" }).resultado, "WIN");
-    assert.deepEqual(readHistorySort({ sort: "resultado", dir: "asc" }), {
-      key: "resultado",
+  await check("el orden y los filtros del historial se resuelven por separado", () => {
+    // El historial solo se ordena por fecha; el jugador y las fechas recortan. Un
+    // `sort` que no sea `fecha` se comporta como si no estuviera.
+    assert.deepEqual(readHistorySort({ sort: "fecha", dir: "asc" }), {
+      key: "fecha",
       dir: "asc",
     });
-    assert.equal(readHistoryFilters({ resultado: "WIN", sort: "resultado" }).resultado, "WIN");
+    assert.deepEqual(readHistorySort({ sort: "resultado", dir: "asc" }), {
+      key: "fecha",
+      dir: "asc",
+    });
 
-    assert.equal(readHistoryFilters({ resultado: "VICTORIA" }).resultado, null);
-    assert.equal(readHistoryFilters({ resultado: "win" }).resultado, null);
-    assert.equal(readHistoryFilters({}).resultado, null);
-
-    // Y los otros filtros del historial son los mismos criterios, con los mismos bordes.
-    const conTodo = readHistoryFilters({ playerId: "clx1", from: "2026-09-01", resultado: "LOSS" });
+    const conTodo = readHistoryFilters({ playerId: "clx1", from: "2026-09-01" });
 
     assert.equal(conTodo.playerId, "clx1");
     assert.equal(conTodo.rango.gte?.toISOString(), "2026-09-01T00:00:00.000Z");
-    assert.equal(conTodo.resultado, "LOSS");
   });
 }
 
@@ -4014,8 +4012,6 @@ async function checkHistoryPaging(): Promise<void> {
       for (const sort of [
         { key: "fecha", dir: "desc" },
         { key: "fecha", dir: "asc" },
-        { key: "resultado", dir: "desc" },
-        { key: "resultado", dir: "asc" },
       ] satisfies AdminHistorySort[]) {
         for (const pageSize of [1, 2, 5, 25]) {
           // El feed entero, que es contra lo que se compara lo que sale de paginar.
@@ -4040,15 +4036,6 @@ async function checkHistoryPaging(): Promise<void> {
             // por el hueco y todos los objetivos.
             const ventanaPartidas = [...partidas]
               .sort((a, b) => {
-                if (sort.key === "resultado") {
-                  const rango = (row: AdminMatchHistoryRow) => (row.result === "WIN" ? 1 : 2);
-                  const diferencia = rango(a) - rango(b);
-
-                  if (diferencia !== 0) {
-                    return diferencia * signo;
-                  }
-                }
-
                 const porFecha = (a.startedAt.getTime() - b.startedAt.getTime()) * signo;
 
                 return porFecha !== 0 ? porFecha : (a.id < b.id ? -1 : 1) * signo;
@@ -4087,8 +4074,8 @@ async function checkHistoryOrder(): Promise<void> {
 
   await checkHistoryPaging();
 
-  // Dos días con empates de fecha, las clases de fila y los tres rangos de resultado,
-  // que es la peor combinación posible para el comparador.
+  // Dos días con empates de fecha y las dos clases de fila, que es la peor combinación
+  // posible para el comparador.
   const partidas = [
     filaHistorial({ id: "m1", fecha: H3, resultado: "WIN" }),
     filaHistorial({ id: "m2", fecha: H3, resultado: "LOSS" }),
@@ -4107,7 +4094,7 @@ async function checkHistoryOrder(): Promise<void> {
     [...filas].sort(historyComparator(sort));
 
   await check("el comparador no deja dos filas empatadas", () => {
-    for (const key of ["fecha", "resultado"] as const) {
+    for (const key of ["fecha"] as const) {
       for (const dir of ["asc", "desc"] as const) {
         const comparar = historyComparator({ key, dir });
 
@@ -4134,7 +4121,7 @@ async function checkHistoryOrder(): Promise<void> {
   });
 
   await check("asc es el inverso exacto de desc", () => {
-    for (const key of ["fecha", "resultado"] as const) {
+    for (const key of ["fecha"] as const) {
       const asc = orden({ key, dir: "asc" }, todas).map((row) => row.id);
       const desc = orden({ key, dir: "desc" }, todas).map((row) => row.id);
 
@@ -4148,22 +4135,6 @@ async function checkHistoryOrder(): Promise<void> {
     assert.deepEqual(
       orden({ key: "fecha", dir: "desc" }, todas).map((row) => row.id),
       ["m2", "m1", "o1", "m3", "o2", "m4"],
-    );
-  });
-
-  await check("por resultado, los objetivos van delante de victorias y derrotas", () => {
-    const asc = orden({ key: "resultado", dir: "asc" }, todas);
-    const rangos = asc.map((row) => (row.objective !== null ? 0 : row.result === "WIN" ? 1 : 2));
-
-    assert.deepEqual(rangos, [...rangos].sort((a, b) => a - b), "los rangos no salen agrupados");
-    assert.equal(rangos[0], 0, "el primer rango de ascendente es el de objetivo");
-    assert.equal(rangos[rangos.length - 1], 2, "el último rango de ascendente es el de derrota");
-
-    // Dentro de cada rango se ordena por fecha **en el sentido del orden**, y `asc` es el
-    // inverso entero de `desc`: o2 (2-sep) antes que o1 (3-sep), y al revés en `desc`.
-    assert.deepEqual(
-      asc.map((row) => row.id),
-      ["o2", "o1", "m4", "m1", "m3", "m2"],
     );
   });
 
@@ -4202,13 +4173,6 @@ async function checkHistoryOrder(): Promise<void> {
       orden({ key: "fecha", dir: "asc" }, cambio).map((row) => row.id),
       ["lead:rey-1v1:LOST:1", "lead:rey-1v1:GAINED:9"],
     );
-
-    // Un cambio de poseedor es rango 0 en la columna de resultado, así que ese eje no lo
-    // mueve: sale igual que por fecha en el mismo sentido.
-    assert.deepEqual(
-      orden({ key: "resultado", dir: "desc" }, cambio).map((row) => row.id),
-      ["lead:rey-1v1:GAINED:9", "lead:rey-1v1:LOST:1"],
-    );
   });
 
   await check("comparar no reordena las mitadas que ya llegan ordenadas", () => {
@@ -4219,27 +4183,15 @@ async function checkHistoryOrder(): Promise<void> {
     for (const sort of [
       { key: "fecha", dir: "desc" },
       { key: "fecha", dir: "asc" },
-      { key: "resultado", dir: "desc" },
-      { key: "resultado", dir: "asc" },
     ] satisfies AdminHistorySort[]) {
       // Cada mitad, ordenada como su consulta. Es una copia de los `orderBy` de
       // `admin.ts` a propósito, porque es lo que hay que comprobar que no se contradiga:
-      // en `resultado` el `result` va primero, y las dos mitadas terminan en su clave,
-      // ambas en el sentido del orden.
+      // las dos mitades terminan en su clave, ambas en el sentido del orden.
       // `signo` aquí es el del `orderBy` escrito al revés: estas diferencias van en
       // ascendente, así que `desc` es el que multiplica por `-1`.
       const signo = sort.dir === "desc" ? -1 : 1;
 
       const mitadPartidas = [...partidas].sort((a, b) => {
-        if (sort.key === "resultado") {
-          const rango = (row: AdminMatchHistoryRow) => (row.result === "WIN" ? 1 : 2);
-          const diferencia = rango(a) - rango(b);
-
-          if (diferencia !== 0) {
-            return diferencia * signo;
-          }
-        }
-
         const porFecha = (a.startedAt.getTime() - b.startedAt.getTime()) * signo;
 
         return porFecha !== 0 ? porFecha : (a.id < b.id ? -1 : 1) * signo;

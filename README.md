@@ -166,6 +166,7 @@ npm run dev          # http://localhost:3000
 | `npm run lint` / `npm test` | ESLint y tests (Vitest). |
 | `npm run sync` | Sincroniza partidas de AoE4World. |
 | `npm run score` | Recalcula la clasificación. |
+| `npm run backfill:objective-leads` | Reconstruye el historial de liderazgos de la edición desde las partidas ya jugadas (`-- --dry-run` no escribe). |
 | `npm run db:push` / `npm run db:security` | Sincroniza el schema y aplica la postura de RLS. |
 | `npm run db:cron` | Programa el reloj del torneo (Supabase Cron). |
 | `npm run mock:tournament` | Simula el torneo con fixtures locales. |

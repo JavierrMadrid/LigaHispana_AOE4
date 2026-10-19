@@ -1,8 +1,3 @@
-const relative = new Intl.RelativeTimeFormat("es-ES", {
-  style: "narrow",
-  numeric: "auto",
-});
-
 const absoluteTime = new Intl.DateTimeFormat("es-ES", {
   dateStyle: "medium",
   timeStyle: "short",
@@ -15,31 +10,51 @@ const absoluteDay = new Intl.DateTimeFormat("es-ES", {
 
 /**
  * Cuánto pasó desde `date`, en castellano y en corto: "ahora mismo",
- * "hace 12 min", "ayer", "hace 3 días".
+ * "hace 12 min", "hace 3 h", "hace 2 días y 5 horas".
  *
- * A partir de una semana la distancia deja de importar y se da la fecha, que es
- * lo único que el lector puede situar. La referencia es el momento de la
- * respuesta del servidor, así que el resultado cambia con cada `force-dynamic`.
+ * A partir de un día se desglosan **días y horas**: decir "hace 53 h" obliga a
+ * dividir mentalmente y esconde cuánto falta para el día siguiente. A partir de
+ * una semana la distancia deja de importar y se da la fecha, que es lo único que
+ * el lector puede situar. La referencia es el momento de la respuesta del
+ * servidor, así que el resultado cambia con cada `force-dynamic`.
  */
 export function formatRelativeTime(date: Date, now: Date = new Date()): string {
   // Positivo hacia el pasado. Si `date` está en el futuro por un desajuste de
   // reloj sale negativo y cae en "ahora mismo", que es lo que hay que mostrar.
-  const elapsedSeconds = Math.round((now.getTime() - date.getTime()) / 1000);
+  const elapsedSeconds = Math.max(
+    0,
+    Math.round((now.getTime() - date.getTime()) / 1000),
+  );
 
   if (elapsedSeconds < 60) {
     return "ahora mismo";
   }
 
-  const minutes = Math.round(elapsedSeconds / 60);
-  const hours = Math.round(minutes / 60);
-  const days = Math.round(hours / 24);
+  const minutes = Math.floor(elapsedSeconds / 60);
 
-  if (hours < 1) {
-    return relative.format(-minutes, "minute");
+  if (minutes < 60) {
+    return `hace ${minutes} min`;
   }
 
+  const hours = Math.floor(minutes / 60);
+
+  if (hours < 24) {
+    return `hace ${hours} h`;
+  }
+
+  const days = Math.floor(hours / 24);
+
   if (days < 7) {
-    return relative.format(-hours, "hour");
+    const restoHoras = hours % 24;
+    const dias = days === 1 ? "día" : "días";
+
+    if (restoHoras === 0) {
+      return `hace ${days} ${dias}`;
+    }
+
+    const horas = restoHoras === 1 ? "hora" : "horas";
+
+    return `hace ${days} ${dias} y ${restoHoras} ${horas}`;
   }
 
   return absoluteDay.format(date);
