@@ -17,7 +17,6 @@ import { AlertKind, AlertRule, ObjectiveLeadKind } from "@/generated/prisma/enum
 import type { TeamTierContext } from "@/lib/ranked-match";
 import {
   historyComparator,
-  historyHole,
   readActionsSort,
   readAlertsFilters,
   readAlertsSort,
@@ -27,6 +26,7 @@ import {
   type AdminHistorySort,
   type AdminMatchHistoryRow,
 } from "@/lib/admin";
+import { historyFeedPage, historyFeedWindows } from "@/lib/history-feed";
 import {
   countsAsRanked,
   DEFAULT_RULESET,
@@ -3937,23 +3937,23 @@ const H3 = "2026-09-03T10:00:00.000Z";
  * sintéticas. Son exactamente las que seonthrow: **totalidad** (sin desempate, dos filas
  * del mismo instante podrían salir en cualquier orden entre sí y una página podría
  * repetir o perder filas), **inversión** (`asc` es el reverso exacto de `desc`) y
- * **consistencia con las consultas** (el merge solo es correcto si las dos mitadas
- * llegan ya ordenadas como el comparador las ordena).
+ * **consistencia con las consultas** (el merge solo es correcto si las fuentes llegan ya
+ * ordenadas como el comparador las ordena).
  */
 /**
- * Paginar el feed mezclado con la aritmética de `historyHole()`, sin base de datos.
+ * Paginar el feed mezclado con la aritmética de `historyFeedWindows()`, sin base de datos.
  *
- * Reproduce lo que hace `getAdminMatchHistory()` —traer los objetivos enteros, acotar las
- * partidas con el hueco, mezclar con el comparador y recortar la página— y comprueba que
- * recorriendo **todas** las páginas salen exactamente las filas del feed, en su orden y
- * sin repeticiones. Es la comprobación que respalda que el orden por resultado puede
- * reutilizar el hueco del orden por fecha: si la aritmética dependiera del eje, aquí se
- * vería con solo cambiar `sort`.
+ * Reproduce lo que hacen `getAdminMatchHistory()` y `loadPointHistory()` —contar las tres
+ * fuentes (partidas, logros y liderazgos), calcular la ventana de cada una, pedirlas,
+ * mezclar con el comparador y recortar la página— y comprueba que recorriendo **todas** las
+ * páginas salen exactamente las filas del feed, en su orden y sin repeticiones. Es la
+ * comprobación que respalda que la aritmética es independiente del sentido del orden: si
+ * dependiera del eje, aquí se vería con solo cambiar `sort`.
  */
 async function checkHistoryPaging(): Promise<void> {
   // Doce partidas, cinco logros y tres cambios de poseedor repartidos por tres días, con
-  // empates de fecha y con hitos intercalados, que es la forma de que el hueco tenga que
-  // trabajar de verdad.
+  // empates de fecha y con hitos intercalados, que es la forma de que las ventanas tengan
+  // que trabajar de verdad.
   const instantes = [
     "2026-09-01T09:00:00.000Z",
     "2026-09-01T15:00:00.000Z",
@@ -3977,7 +3977,8 @@ async function checkHistoryPaging(): Promise<void> {
   );
 
   // Y tres cambios de poseedor, con la pareja de un mismo cambio —misma competición y mismo
-  // instante— para que el hueco cuente también las filas del log de liderazgos.
+  // instante— para que las ventanas cuenten también las filas del log de liderazgos. Van en
+  // su propia fuente, como en las consultas reales.
   const liderazgos = [
     filaHistorial({
       id: "lead:rey-1v1:GAINED:11",
@@ -4002,9 +4003,8 @@ async function checkHistoryPaging(): Promise<void> {
     }),
   ];
 
-  const objetivos = [...objetivosLogro, ...liderazgos];
-
-  const total = partidas.length + objetivos.length;
+  const fuentes = [partidas, objetivosLogro, liderazgos];
+  const total = fuentes.reduce((sum, fuente) => sum + fuente.length, 0);
 
   await check(
     "paginar el feed no repite ni pierde filas, en los dos ejes de orden",
@@ -4015,37 +4015,32 @@ async function checkHistoryPaging(): Promise<void> {
       ] satisfies AdminHistorySort[]) {
         for (const pageSize of [1, 2, 5, 25]) {
           // El feed entero, que es contra lo que se compara lo que sale de paginar.
-          const feed = [...partidas, ...objetivos]
-            .sort(historyComparator(sort))
-            .map((row) => row.id);
+          const feed = fuentes.flat().sort(historyComparator(sort)).map((row) => row.id);
 
           const recorrido: string[] = [];
           const pageCount = Math.ceil(total / pageSize);
-          const signo = sort.dir === "desc" ? -1 : 1;
 
           for (let page = 1; page <= pageCount; page += 1) {
             const skip = (page - 1) * pageSize;
-            const eventos = [...objetivos].sort(historyComparator(sort));
-            const { skipPartidas, takePartidas, desde } = historyHole(
+            const { windows, offset } = historyFeedWindows(
               skip,
               pageSize,
-              eventos.length,
+              fuentes.map((fuente) => fuente.length),
             );
 
-            // Lo que devolverían las dos consultas con ese `orderBy`: las partidas acotadas
-            // por el hueco y todos los objetivos.
-            const ventanaPartidas = [...partidas]
-              .sort((a, b) => {
-                const porFecha = (a.startedAt.getTime() - b.startedAt.getTime()) * signo;
+            // Lo que devolverían las tres consultas con ese `orderBy`: cada fuente ordenada
+            // como el comparador y recortada a su ventana.
+            const ventanas = fuentes.map((fuente, i) =>
+              [...fuente]
+                .sort(historyComparator(sort))
+                .slice(windows[i].skip, windows[i].skip + windows[i].take),
+            );
 
-                return porFecha !== 0 ? porFecha : (a.id < b.id ? -1 : 1) * signo;
-              })
-              .slice(skipPartidas, skipPartidas + takePartidas);
-
-            const pagina = [...ventanaPartidas, ...eventos]
-              .sort(historyComparator(sort))
-              .slice(desde, desde + pageSize)
-              .map((row) => row.id);
+            const pagina = historyFeedPage(ventanas, {
+              offset,
+              pageSize,
+              compare: historyComparator(sort),
+            }).map((row) => row.id);
 
             const etiqueta = `sort=${sort.key}&dir=${sort.dir}&pageSize=${pageSize}&pagina=${page}`;
 
@@ -4175,9 +4170,40 @@ async function checkHistoryOrder(): Promise<void> {
     );
   });
 
-  await check("comparar no reordena las mitadas que ya llegan ordenadas", () => {
+  await check("dos logros del mismo objetivo desempatan por profileId numérico", () => {
+    // La consulta ordena por `profileId`, no por el texto del id de la fila: con un id
+    // lexicográfico, `999999` iría antes que `1000000` y la ventana dejaría de coincidir
+    // con el orden del comparador.
+    const mayor = filaHistorial({
+      id: "objective:rey-1v1:1000000",
+      fecha: H3,
+      objetivo: "rey-1v1",
+      profileId: 1_000_000,
+    });
+    const menor = filaHistorial({
+      id: "objective:rey-1v1:999999",
+      fecha: H3,
+      objetivo: "rey-1v1",
+      profileId: 999_999,
+    });
+    const logros = [mayor, menor];
+    const comparar = historyComparator({ key: "fecha", dir: "desc" });
+
+    assert.notEqual(comparar(mayor, menor), 0, "los dos logros empatan");
+    assert.equal(comparar(mayor, menor), -comparar(menor, mayor), "no son simétricos");
+    assert.deepEqual(
+      orden({ key: "fecha", dir: "desc" }, logros).map((row) => row.id),
+      [mayor.id, menor.id],
+    );
+    assert.deepEqual(
+      orden({ key: "fecha", dir: "asc" }, logros).map((row) => row.id),
+      [menor.id, mayor.id],
+    );
+  });
+
+  await check("comparar no reordena las fuentes que ya llegan ordenadas", () => {
     // Es la condición del merge: las dos consultas traen sus filas en el orden del
-    // comparador, así que mezclar las dos mitadas solo puede **intercalar** filas, nunca
+    // comparador, así que mezclar las fuentes solo puede **intercalar** filas, nunca
     // cambiar el orden dentro de una de ellas. Si el comparador contradijera al `orderBy`
     // de alguna consulta, la página dejaría de ser una ventana del feed real.
     for (const sort of [

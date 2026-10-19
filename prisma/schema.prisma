@@ -595,9 +595,9 @@ model PlayerScore {
 /// ## El borrado en cascada
 ///
 /// El de `Match` y `PlayerScore`: si se borra un participante, sus hitos no pueden
-/// quedarse sin dueño. El `playerId` además lleva índice porque Postgres no indexa
-/// las FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra los
-/// hitos por jugador).
+/// quedarse sin dueño. El `playerId` abre un índice compuesto porque Postgres no indexa
+/// las FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra los hitos
+/// por jugador).
 model ObjectiveEvent {
   /// Id estable del catálogo (`loco-por-ganar`, `lider-japanese`…).
   objectiveId String
@@ -613,11 +613,12 @@ model ObjectiveEvent {
 
   // Un evento por objetivo y jugador: un logro tiene varios beneficiarios.
   @@unique([objectiveId, playerId])
-  // El feed del historial ordena y filtra por `achievedAt`.
-  @@index([achievedAt])
-  // Índice de la FK: el panel filtra los hitos por jugador y el `Cascade` al borrar
-  // un participante los recorre (Postgres no indexa las FK por su cuenta).
-  @@index([playerId])
+  // El feed del historial filtra y ordena por `achievedAt` y desempata por `objectiveId`.
+  // Sustituye al índice simple de `achievedAt`, que era su prefijo.
+  @@index([achievedAt, objectiveId])
+  // Filtro por jugador y cascada; el `achievedAt` de detrás sostiene el feed de un jugador.
+  // Sustituye al índice simple de `playerId`, que era su prefijo.
+  @@index([playerId, achievedAt])
 }
 
 /// Un cambio de poseedor de una **competición**: quién pasa a poseerla o deja de
@@ -677,8 +678,8 @@ model ObjectiveEvent {
 /// ## El borrado en cascada
 ///
 /// Igual que en `ObjectiveEvent`: si se borra un participante, sus liderazgos no
-/// pueden quedarse sin dueño. `playerId` lleva índice porque Postgres no indexa las
-/// FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra por
+/// pueden quedarse sin dueño. `playerId` abre un índice compuesto porque Postgres no
+/// indexa las FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra por
 /// jugador).
 model ObjectiveLeadEvent {
   id String @id @default(cuid())
@@ -704,12 +705,13 @@ model ObjectiveLeadEvent {
   /// de que el motor lo registró (corre cada 5 minutos).
   recordedAt DateTime @default(now())
 
-  // El feed ordena y filtra por edición e instante, y la reconciliación lee el
-  // estado de la edición en curso por esta misma pareja.
-  @@index([editionFrom, at])
-  // Índice de la FK: el panel filtra por jugador y el `Cascade` al borrar un
-  // participante recorre el índice (Postgres no indexa las FK por su cuenta).
-  @@index([playerId])
+  // Feed: la cohorte y el rango de `at` de la consulta, con el orden del merge
+  // (`at`, `objectiveId`, `kind`) detrás. Sustituye al índice `(editionFrom, at)`, que
+  // era su prefijo.
+  @@index([editionFrom, at, objectiveId, kind])
+  // Filtro por jugador y cascada; la cohorte y la fecha de detrás sostienen su historial.
+  // Sustituye al índice simple de `playerId`, que era su prefijo.
+  @@index([playerId, editionFrom, at])
 }
 
 model Setting {

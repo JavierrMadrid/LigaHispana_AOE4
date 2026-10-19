@@ -699,6 +699,17 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
 export const OBJECTIVE_COUNT = OBJECTIVE_DEFINITIONS.length;
 
 /**
+ * Los ids del catálogo.
+ *
+ * Lo usan los historiales para filtrar en la consulta las filas cuyo `objectiveId` ya no
+ * existe en el catálogo —solo puede pasar si alguien insertó a mano—, de modo que el
+ * recuento que decide la ventana y las filas que se publican cuenten lo mismo.
+ */
+export const OBJECTIVE_IDS: readonly string[] = OBJECTIVE_DEFINITIONS.map(
+  (definition) => definition.id,
+);
+
+/**
  * ¿El objetivo reparte un **premio fijo**, de los que cuenta la suma nominal de
  * `docs/OBJETIVOS.md`?
  *
