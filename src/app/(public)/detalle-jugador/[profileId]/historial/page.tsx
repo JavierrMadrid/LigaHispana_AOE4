@@ -14,7 +14,7 @@ import { readParticipant, readProfileId } from "../data";
 const GENERIC_METADATA: Metadata = {
   title: "Historial de puntos del participante",
   description:
-    "Las ganancias de puntos de un participante de la Liga Hispana de Age of Empires IV: cada victoria clasificatoria y cada objetivo cumplido, de lo más reciente a lo más antiguo.",
+    "Las ganancias de puntos de un participante de la Liga Hispana de Age of Empires IV: cada victoria clasificatoria, cada logro cumplido y cada cambio de poseedor de las competiciones, de lo más reciente a lo más antiguo.",
 };
 
 /**
@@ -38,7 +38,7 @@ export async function generateMetadata({
 
   return {
     title: `Historial de puntos de ${name}`,
-    description: `Las ganancias de puntos de ${name} en la Liga Hispana de Age of Empires IV: cada victoria clasificatoria y cada objetivo cumplido, de lo más reciente a lo más antiguo.`,
+    description: `Las ganancias de puntos de ${name} en la Liga Hispana de Age of Empires IV: cada victoria clasificatoria, cada logro cumplido y cada cambio de poseedor de las competiciones, de lo más reciente a lo más antiguo.`,
   };
 }
 
@@ -112,10 +112,10 @@ export default async function ParticipantPointHistoryTab({
 
       <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">
         Las ganancias de puntos de {name ?? "este participante"}, de lo más reciente a
-        lo más antiguo: cada victoria clasificatoria y cada objetivo cumplido, con lo
-        que aporta cada uno. Los objetivos que se resuelven en caliente se apuntan
-        cuando termina el torneo, así que durante la competición esta lista solo
-        enseña victorias. Cómo se puntúa está en{" "}
+        lo más antiguo: cada victoria clasificatoria, cada logro cumplido y cada cambio
+        de poseedor de las competiciones. Los logros se resuelven en caliente y se
+        apuntan cuando termina el torneo; los cambios de poseedor salen en cuanto la
+        sincronización los detecta. Cómo se puntúa está en{" "}
         <Link
           href="/puntuacion"
           className="text-accent underline underline-offset-4 hover:text-accent-strong"
@@ -160,7 +160,7 @@ export default async function ParticipantPointHistoryTab({
               body={
                 hasFilters
                   ? "Prueba a ampliar el rango de fechas: el filtro incluye el día final completo."
-                  : `${subject} todavía no tiene ninguna victoria clasificatoria ni ningún objetivo cumplido apuntados. En cuanto la sincronización registre el primero, aparecerá aquí con lo que aporta; los objetivos que se resuelven en caliente se apuntan cuando termina el torneo.`
+                  : `${subject} todavía no tiene ninguna victoria clasificatoria, ningún logro cumplido ni ningún cambio de poseedor apuntados. Los logros se resuelven en caliente y se apuntan cuando termina el torneo; el resto sale en cuanto la sincronización lo registra.`
               }
             />
           ) : (

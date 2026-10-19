@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { logDatabaseFailure, readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { isRecord } from "@/lib/json";
 import { reconcileObjectiveEvents } from "@/lib/objective-events";
+import { reconcileObjectiveLeadEvents } from "@/lib/objective-leads";
 import {
   OBJECTIVES_SNAPSHOT_VERSION,
   OBJECTIVE_DEFINITIONS,
@@ -188,8 +189,11 @@ export type ScoringRuleset = {
    * Ids del catálogo de objetivos **desactivados** por la organización.
    *
    * Un objetivo desactivado no se computa, no se publica en la vista de objetivos,
-   * no reparte puntos y sus eventos de `ObjectiveEvent` se borran en la siguiente
-   * reconciliación. Vacío (lo normal) significa el catálogo entero activo.
+   * no reparte puntos y no llega a `awarded`, así que las reconciliaciones lo dan
+   * por desaparecido: sus eventos de `ObjectiveEvent` (si es un logro) se borran en
+   * la siguiente pasada, y su poseedor (si es una competición) queda registrado como
+   * una pérdida en `ObjectiveLeadEvent`. Vacío (lo normal) significa el catálogo
+   * entero activo.
    */
   disabledObjectives: string[];
 };
@@ -1235,7 +1239,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
 
       // Registro de hitos, en esta misma transacción y a continuación del cómputo:
       // el feed del historial de `/admin/historial` mezcla partidas y objetivos, y
-      // un objetivo sin evento se contaría como un objetivo que nadie cumplió.
+      // un logro sin evento se contaría como un logro que nadie cumplió.
       //
       // Va aquí y no al final, y no en un segundo paso, por dos motivos que son los
       // mismos que los del resto del motor: dentro de la transacción, con el cerrojo
@@ -1246,6 +1250,17 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       // `reconcileObjectiveEvents` es idempotente y solo escribe lo que difiere de
       // lo que ya había.
       await reconcileObjectiveEvents(tx, ruleset, objectives.awarded);
+
+      // Y el registro de **poseedores de competiciones**, con el mismo `awarded` y
+      // en la misma transacción: las dos reconciliaciones se reparten el catálogo
+      // (los logros son el espejo de arriba y las competiciones este log), así que
+      // ninguna fila del cómputo se queda sin registrar ni se registra dos veces.
+      //
+      // A diferencia del espejo, este registro **se escribe en vivo**: los cambios
+      // de poseedor se anotan en cada recálculo, con el instante del pase, porque lo
+      // que cuenta no es quién la posee al final sino cuándo la ganó y cuándo la
+      // perdió cada uno. Y no escribe nada mientras no cambie ningún poseedor.
+      await reconcileObjectiveLeadEvents(tx, ruleset, objectives.awarded);
 
       // La vista pública, en la misma transacción que el cómputo del que sale: así
       // las páginas de objetivos leen el snapshot en vez de repetir el barrido, y el

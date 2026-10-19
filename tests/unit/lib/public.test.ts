@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { ObjectiveLeadKind } from "@/generated/prisma/enums";
 import {
   comparePointHistory,
   earnedObjectives,
@@ -558,8 +559,8 @@ describe("participantObjective", () => {
  *
  * Lo que se comprueba aquí es lo puro: los filtros de la URL y el orden del feed mezclado,
  * que es de lo que depende que dos páginas consecutivas no repitan ni pierdan filas. Que las
- * dos consultas traigan cada mitad ya ordenada como el comparador, y que el `where` deje
- * fuera lo que no es una ganancia, es Prisma y sale en `npm run verify:sync`.
+ * consultas traigan cada clase ya ordenada como el comparador, y que el `where` deje fuera
+ * lo que no es una ganancia, es Prisma y sale en `npm run verify:sync`.
  */
 
 /** Una victoria del feed, con lo mínimo que necesita el comparador. */
@@ -616,6 +617,47 @@ function hito({
       metric: "partidas",
       points: 40,
       count: 1,
+      // Un logro no se posee.
+      lead: null,
+    },
+    gameId: null,
+    opponentName: null,
+    mode: null,
+    leaderboard: null,
+    map: null,
+    teamSize: null,
+    revertedAt: null,
+  };
+}
+
+/** Un cambio de poseedor del feed: la `GAINED` o la `LOST` de una competición. */
+function liderazgo({
+  objetivo,
+  lead,
+  profileId = 7,
+  fecha = T1,
+  points = 240,
+}: {
+  objetivo: string;
+  lead: ObjectiveLeadKind;
+  profileId?: number;
+  fecha?: string;
+  points?: number;
+}): PointHistoryRow {
+  return {
+    id: `lead:${objetivo}:${lead}:${profileId}:${new Date(fecha).getTime()}`,
+    startedAt: new Date(fecha),
+    playerName: `Jugador ${profileId}`,
+    playerProfileId: profileId,
+    points,
+    objective: {
+      id: objetivo,
+      label: objetivo,
+      group: "formato",
+      metric: "victorias",
+      points,
+      count: 1,
+      lead,
     },
     gameId: null,
     opponentName: null,
@@ -639,6 +681,12 @@ describe("comparePointHistory", () => {
   it("a igual instante, la victoria va antes que el objetivo", () => {
     expect(comparePointHistory(victoria({ gameId: "1" }), hito({ objetivo: "imparable" }))).toBeLessThan(0);
     expect(comparePointHistory(hito({ objetivo: "imparable" }), victoria({ gameId: "1" }))).toBeGreaterThan(0);
+  });
+
+  it("a igual instante, la victoria va antes que un cambio de poseedor", () => {
+    expect(
+      comparePointHistory(victoria({ gameId: "1" }), liderazgo({ objetivo: "rey-1v1", lead: "GAINED" })),
+    ).toBeLessThan(0);
   });
 
   it("dos victorias del mismo instante desempatan por `gameId`", () => {
@@ -666,6 +714,24 @@ describe("comparePointHistory", () => {
     ).toBeLessThan(0);
   });
 
+  it("las dos filas de un cambio salen con la ganancia delante", () => {
+    // Las dos comparten objetivo e instante y solo las separa el `lead`: es el desempate que
+    // impide que una página repita una y pierda la otra.
+    const ganancia = liderazgo({ objetivo: "rey-1v1", lead: "GAINED", profileId: 7 });
+    const perdida = liderazgo({ objetivo: "rey-1v1", lead: "LOST", profileId: 8 });
+
+    expect(comparePointHistory(ganancia, perdida)).toBeLessThan(0);
+    expect(comparePointHistory(perdida, ganancia)).toBeGreaterThan(0);
+  });
+
+  it("el orden de las dos filas de un cambio no depende del jugador, sino del signo", () => {
+    // Aunque el que gana tenga un `profileId` mayor que el que pierde, la ganancia va delante.
+    const ganancia = liderazgo({ objetivo: "rey-1v1", lead: "GAINED", profileId: 9 });
+    const perdida = liderazgo({ objetivo: "rey-1v1", lead: "LOST", profileId: 1 });
+
+    expect(comparePointHistory(ganancia, perdida)).toBeLessThan(0);
+  });
+
   it("es un orden total: ninguna pareja de filas distintas empata", () => {
     const filas = [
       victoria({ gameId: "9000001" }),
@@ -675,6 +741,9 @@ describe("comparePointHistory", () => {
       hito({ objetivo: "imparable" }),
       hito({ objetivo: "imparable", profileId: 8 }),
       hito({ objetivo: "victorias", fecha: T2 }),
+      liderazgo({ objetivo: "rey-1v1", lead: "GAINED", profileId: 7 }),
+      liderazgo({ objetivo: "rey-1v1", lead: "LOST", profileId: 8 }),
+      liderazgo({ objetivo: "rey-2v2", lead: "GAINED", fecha: T2 }),
     ];
 
     for (const a of filas) {

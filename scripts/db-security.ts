@@ -82,8 +82,8 @@ type GrantRow = { granted: boolean };
  * permisos por defecto de Supabase en `public`, es decir, **legible con la clave
  * publicable** a través de la Data API. Es el motivo de que el script exista.
  *
- * Se ha comprobado que las dos últimas (`Alert` y `ObjectiveEvent`) nacieron
- * exactamente así: con RLS desactivada y `SELECT` para `anon` y `authenticated`.
+ * Se ha comprobado que las últimas (`Alert`, `ObjectiveEvent` y `ObjectiveLeadEvent`)
+ * nacieron exactamente así: con RLS desactivada y `SELECT` para `anon` y `authenticated`.
  * Por eso `Admin`, que entra con la gestión de cuentas, se añade a la lista a mano:
  * sin ella nacería legible con la clave publicable antes del primer `db:security`.
  */
@@ -96,6 +96,7 @@ const TABLES = [
   "AdminAction",
   "Alert",
   "ObjectiveEvent",
+  "ObjectiveLeadEvent",
   "Admin",
 ] as const;
 

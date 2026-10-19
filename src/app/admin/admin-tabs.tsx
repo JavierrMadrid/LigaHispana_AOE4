@@ -12,7 +12,7 @@ type AdminTab = {
 
 const TABS: readonly AdminTab[] = [
   { href: "/admin", label: "Participantes", exact: true },
-  { href: "/admin/historial", label: "Historial de partidas" },
+  { href: "/admin/historial", label: "Historial de puntos" },
   { href: "/admin/alertas", label: "Alertas" },
   { href: "/admin/acciones", label: "Historial de acciones" },
 ];

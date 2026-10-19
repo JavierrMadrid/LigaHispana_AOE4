@@ -1,7 +1,7 @@
 import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
-import { AdminActionType, AlertKind, AlertRule, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
+import { AdminActionType, AlertKind, AlertRule, MatchResult, ObjectiveLeadKind, PlayerStatus } from "@/generated/prisma/enums";
 import { ALERT_RULE_LABELS, anchorInstant, readAlertsRuleset, type AlertsThresholds } from "@/lib/alerts";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
@@ -9,6 +9,7 @@ import { describeTeamSize, formatRelativeTime, teamSizesFromRawJson } from "@/li
 import { compareFeedInstants, historyFeedPage, historyHole } from "@/lib/history-feed";
 import { isRecord } from "@/lib/json";
 import { resolveObjective } from "@/lib/objective-events";
+import { OBJECTIVE_LEAD_RANK } from "@/lib/objective-leads";
 import type { ObjectiveGroup, ObjectiveMetric } from "@/lib/objectives";
 import {
   DEFAULT_PAGE_SIZE,
@@ -21,7 +22,7 @@ import {
   type DateRange,
   type QueryParam,
 } from "@/lib/query-params";
-import { classificatoryWhere, type ScoringWindow } from "@/lib/ranked-match";
+import { classificatoryWhere, windowBounds, type ScoringWindow } from "@/lib/ranked-match";
 import {
   RULESET_VERSION,
   playerObjectiveAwards,
@@ -373,7 +374,7 @@ const ALERT_ORDER_BY: Record<
 };
 
 /**
- * Orden del historial de partidas: por fecha o por resultado.
+ * Orden del historial de puntos: por fecha o por resultado.
  *
  * | `key` | Orden |
  * |---|---|
@@ -713,11 +714,11 @@ function syncHeadline(trace: SyncRunTrace | null, stale: boolean): string {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Historial de partidas y objetivos                                            */
+/* Historial de puntos y objetivos                                              */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Parámetros del historial de partidas, tal como llegan de la URL.
+ * Parámetros del historial de puntos, tal como llegan de la URL.
  *
  * Filtros y orden son parámetros **distintos** y con nombres distintos, aunque uno de
  * los dos se llame `resultado`: `?resultado=WIN` recorta las filas y `?sort=resultado`
@@ -752,6 +753,10 @@ export type AdminMatchHistoryQuery = AdminPageQuery &
  * lo cobrado sería el mismo error que tenía la clasificación. El detalle sale del
  * desglose del jugador (ver `playerObjectiveAwards`); sin él, precio de catálogo y
  * una repetición.
+ *
+ * En una **competición** el importe es el de la tarjeta con una repetición, siempre: un
+ * premio *winner-takes-all* no depende de lo que sume el jugador, así que la ganancia y
+ * la pérdida de un mismo cambio llevan la misma cifra y no se consulta el desglose.
  */
 export type AdminObjectiveEvent = {
   /** `ObjectiveEvent.objectiveId`: id estable del objetivo (`lider-japanese`…). */
@@ -772,16 +777,30 @@ export type AdminObjectiveEvent = {
   points: number;
   /** Repeticiones cobradas: días, victorias o 1 (ver el tipo). */
   count: number;
+  /**
+   * `null` cuando la fila es un **objetivo cumplido** (un logro). En un **cambio de
+   * poseedor de una competición**, qué le ha pasado a ese jugador: `GAINED` pasa a
+   * poseerla, `LOST` deja de poseerla.
+   *
+   * Es el discriminante que la interfaz necesita para elegir el verbo y el signo
+   * (`+points` con `GAINED`, `-points` con `LOST`). Los puntos de la fila son
+   * **informativos** —una pérdida no resta nada de la clasificación—, así que el signo
+   * es una decisión de quien pinta, no un dato que venga resuelto.
+   */
+  lead: ObjectiveLeadKind | null;
 };
 
 /**
- * Una fila del historial de `/admin/historial`: **una partida o un objetivo cumplido**.
+ * Una fila del historial de `/admin/historial`: **una partida, un objetivo cumplido o un
+ * cambio de poseedor de una competición**.
  *
  * ## Cómo se distinguen
  *
- * Por `objective`: `null` = fila de partida, no `null` = se cumplió un objetivo. No
- * hay un `kind` aparte a propósito: un segundo discriminante que nadie mantiene en
- * sincronía con el primero es una forma de que las dos clases de fila se contradigan.
+ * Por `objective`: `null` = fila de partida; no `null` con `objective.lead` a `null` = se
+ * cumplió un logro; no `null` con `objective.lead` informado = alguien pasó a poseer una
+ * competición (`GAINED`) o dejó de poseerla (`LOST`). No hay un `kind` aparte a propósito:
+ * un segundo discriminante que nadie mantiene en sincronía con el primero es una forma de
+ * que las clases de fila se contradigan.
  *
  * Los campos de partida (`gameId`, `opponentName`, `result`, `teamSize`, `mode`,
  * `leaderboard`, `map`, `revertedAt`) son `null` en una fila de objetivo porque no
@@ -792,16 +811,22 @@ export type AdminObjectiveEvent = {
 export type AdminMatchHistoryRow = {
   /**
    * `Match.id` en una fila de partida —es lo que viajan los formularios de revert y
-   * restore— y `ObjectiveEvent.objectiveId` en una fila de objetivo, que también es
-   * única. En los dos casos sirve como clave de la fila.
+   * restore— y `ObjectiveEvent.objectiveId` en una fila de objetivo. En los dos casos
+   * sirve como clave de la fila (`key` de React y desempate del orden).
+   *
+   * En un **cambio de poseedor** es `lead:<objetivo>:<lead>:<profileId>:<at>` y no el
+   * `objectiveId` a secas: las dos filas de un mismo cambio comparten objetivo e instante
+   * —solo las separa el `lead`— y un mismo jugador puede ganar y perder la misma
+   * competición en momentos distintos, así que sin el `kind`, el jugador y el instante las
+   * filas chocarían y el feed las trataría como una sola.
    */
   id: string;
   /**
    * La fecha de la fila, y por lo que se ordena y por lo que se filtra:
-   * `Match.startedAt` en una partida y `ObjectiveEvent.achievedAt` en un objetivo
-   * cumplido. En un objetivo es el instante de la hazaña en las carreras de
-   * civilización y el **fin del torneo** en los que se resuelven en caliente (que no
-   * se registran hasta que el torneo ha terminado).
+   * `Match.startedAt` en una partida, `ObjectiveEvent.achievedAt` en un logro (el instante
+   * de la hazaña en las carreras de civilización y el **fin del torneo** en los que se
+   * resuelven en caliente) y `ObjectiveLeadEvent.at` en un cambio de poseedor (el instante
+   * del recálculo que lo detectó).
    */
   startedAt: Date;
   playerId: string;
@@ -952,8 +977,8 @@ function historyResultRank(row: AdminMatchHistoryRow): number {
  *
  * - **`resultado`**: el rango de resultado (objetivo, victoria, derrota), luego la fecha,
  *   luego la clase y la clave. El criterio de clase no decide nada aquí, porque dentro de
- *   un rango las dos clases de fila ya son la misma: el rango 0 es solo de objetivos y los
- *   otros dos, solo de partidas.
+ *   un rango las clases de fila ya son la misma: el rango 0 es solo de objetivos —logros y
+ *   cambios de poseedor— y los otros dos, solo de partidas.
  * - **`fecha`** (por defecto): la fecha, luego **la partida antes que el objetivo** si
  *   comparten instante, luego la clave. Ese criterio de clase es el que completa el orden
  *   total y además el que mejor se lee en el orden por defecto, porque casi siempre la
@@ -961,8 +986,14 @@ function historyResultRank(row: AdminMatchHistoryRow): number {
  *
  * Los dos primeros criterios (fecha y clase) son los de `compareFeedInstants()`, que es lo
  * que comparte con el historial público: allí el eje es el mismo y lo único que cambia es
- * el desempate final. Aquí ese desempate es la clave de la clase, que es la columna por la
- * que ordenan las dos consultas.
+ * el desempate final.
+ *
+ * ## El desempate final, que separa las dos filas de un cambio
+ *
+ * Lo calcula `historyTiebreak()`. Se limita al id de la clase en las partidas y en los
+ * logros; en un **cambio de poseedor** añade el `lead` y el jugador, porque las dos filas
+ * de un mismo cambio comparten instante y objetivo y solo se separan por ahí (ver su
+ * docblock). Es el mismo desempate por el que ordena el `orderBy` de los liderazgos.
  *
  * Exportado para `npm run verify:sync`, que lo comprueba con filas sintéticas: que sea un
  * orden **total**, que `asc` sea el inverso de `desc` y que no reordene las mitadas que
@@ -993,12 +1024,62 @@ export function historyComparator(
       return porFechaYClase * signo;
     }
 
-    // La clave de cada clase de fila, con la misma convención que el resto: en
-    // descendente va la mayor primero, que es lo que hacen los dos `orderBy`.
-    const porClave = a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-
-    return porClave * signo;
+    return historyTiebreak(a, b) * signo;
   };
+}
+
+/**
+ * El desempate final del comparador, con dos filas que comparten instante y clase.
+ *
+ * ## Una partida
+ *
+ * Basta con su `id` (`Match.id`), que es único dentro de la lista, y es la última columna
+ * del `orderBy` de las partidas.
+ *
+ * ## Un objetivo
+ *
+ * Primero se compara el **objetivo** (`a.objective.id`), que es la columna por la que
+ * ordenan las dos consultas de objetivos: en un logro coincide con el `id` de la fila, y
+ * en un cambio de poseedor está dentro del `id` compuesto. Si los dos ids de objetivo
+ * difieren, el desempate ya está decidido y no hace falta mirar más.
+ *
+ * Si son **el mismo** objetivo, las dos filas solo pueden ser las dos caras de un cambio
+ * de poseedor —un logro no tiene dos filas del mismo objetivo y jugador, y una competición
+ * sí tiene dos jugadores en su cambio—, así que las separa el **signo** (la ganancia
+ * delante, el mismo orden que `OBJECTIVE_LEAD_RANK` y que el `orderBy`) y, si el signo
+ * coincidiera, el **jugador**. Es exactamente el desempate del `orderBy` de los
+ * liderazgos, y sin él las dos filas de un cambio —que comparten instante y objetivo—
+ * podrían salir en cualquier orden y una página repetiría o perdería una.
+ *
+ * La convención es la del comparador descendente: un número negativo significa "a va
+ * antes". Exportado para `npm run verify:sync`, como `historyComparator()`.
+ */
+export function historyTiebreak(a: AdminMatchHistoryRow, b: AdminMatchHistoryRow): number {
+  if (a.objective !== null && b.objective !== null) {
+    const porObjetivo =
+      a.objective.id < b.objective.id ? 1 : a.objective.id > b.objective.id ? -1 : 0;
+
+    if (porObjetivo !== 0) {
+      return porObjetivo;
+    }
+
+    if (a.objective.lead !== null && b.objective.lead !== null) {
+      const porSigno =
+        OBJECTIVE_LEAD_RANK[b.objective.lead] - OBJECTIVE_LEAD_RANK[a.objective.lead];
+
+      if (porSigno !== 0) {
+        return porSigno;
+      }
+
+      const porJugador = b.playerProfileId - a.playerProfileId;
+
+      if (porJugador !== 0) {
+        return porJugador;
+      }
+    }
+  }
+
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 }
 
 /**
@@ -1029,6 +1110,31 @@ const MATCH_HISTORY_ORDER_BY: Record<
  */
 function objectiveEventOrderBy(dir: AdminSortDir): Prisma.ObjectiveEventOrderByWithRelationInput[] {
   return [{ achievedAt: dir }, { objectiveId: dir }];
+}
+
+/**
+ * Campos de `ObjectiveLeadEvent` que se leen. Los mismos que los de un logro, con `at`
+ * de fecha y `kind` para saber si es una ganancia o una pérdida.
+ */
+const OBJECTIVE_LEAD_SELECT = {
+  objectiveId: true,
+  at: true,
+  kind: true,
+  playerId: true,
+  player: { select: { name: true, profileId: true } },
+} satisfies Prisma.ObjectiveLeadEventSelect;
+
+/**
+ * Orden de los **cambios de poseedor** del feed, en `orderBy` de Prisma.
+ *
+ * Es el mismo en los dos órdenes, por el mismo motivo que los logros (una competición es
+ * siempre rango 0). El `kind` va antes que el jugador y no es decorativo: las dos filas de
+ * un cambio comparten `at` y `objectiveId`, así que el signo es lo que las separa, y su
+ * enum está declarado para que `desc` deje la ganancia delante (ver
+ * `ObjectiveLeadKind`). Tiene que decir lo mismo que `historyTiebreak()`.
+ */
+function leadEventOrderBy(dir: AdminSortDir): Prisma.ObjectiveLeadEventOrderByWithRelationInput[] {
+  return [{ at: dir }, { objectiveId: dir }, { kind: dir }, { player: { profileId: dir } }];
 }
 
 /** Una fila de `Match`, con los datos de partida resueltos y los de objetivo a `null`. */
@@ -1143,6 +1249,8 @@ async function eventosDeObjetivo(
         metric: objetivo.metric,
         points: objetivo.points,
         count: objetivo.count,
+        // Un logro no se posee: no hay cambio de poseedor que contar.
+        lead: null,
       },
       // Un objetivo no tiene rival, formato, mapa ni resultado: `null` es "no
       // aplica", no "faltan datos".
@@ -1156,6 +1264,75 @@ async function eventosDeObjetivo(
       map: null,
       // Y no tiene acción: revertir o restaurar son de `Match`, no hay nada que
       // deshacer en un hito.
+      revertedAt: null,
+    });
+  }
+
+  return rows;
+}
+
+/**
+ * Los cambios de poseedor que pasan el filtro, ya en filas del historial.
+ *
+ * Se piden **todos** por el mismo motivo que los logros (ver `eventosDeObjetivo`), y los
+ * puntos son el **premio del catálogo**, sin desglose de jugador: en una competición el
+ * importe no depende de lo que sume el jugador, así que la ganancia y la pérdida del mismo
+ * cambio llevan la misma cifra y no hace falta la consulta de `awards`.
+ *
+ * Una fila cuyo `objectiveId` no está en el catálogo se descarta con un aviso en el log,
+ * igual que en los logros.
+ */
+async function liderazgosDeObjetivo(
+  where: Prisma.ObjectiveLeadEventWhereInput,
+  ruleset: ScoringRuleset,
+  dir: AdminSortDir,
+): Promise<AdminMatchHistoryRow[]> {
+  const filas = await db.objectiveLeadEvent.findMany({
+    where,
+    orderBy: leadEventOrderBy(dir),
+    select: OBJECTIVE_LEAD_SELECT,
+  });
+
+  const rows: AdminMatchHistoryRow[] = [];
+
+  for (const fila of filas) {
+    const objetivo = resolveObjective(fila.objectiveId, ruleset);
+
+    if (objetivo === null) {
+      console.warn(
+        `[admin] Objetivo "${fila.objectiveId}": no está en el catálogo, su liderazgo no se muestra.`,
+      );
+      continue;
+    }
+
+    rows.push({
+      // El `kind`, el jugador y el instante entran en la clave: las dos filas de un cambio
+      // comparten objetivo y solo se separan por ahí (ver `AdminMatchHistoryRow.id`).
+      id: `lead:${objetivo.id}:${fila.kind}:${fila.player.profileId}:${fila.at.getTime()}`,
+      startedAt: fila.at,
+      playerId: fila.playerId,
+      playerName: fila.player.name,
+      playerProfileId: fila.player.profileId,
+      points: objetivo.points,
+      objective: {
+        id: objetivo.id,
+        label: objetivo.label,
+        group: objetivo.group,
+        metric: objetivo.metric,
+        points: objetivo.points,
+        count: objetivo.count,
+        lead: fila.kind,
+      },
+      // Igual que en un logro: una competición no tiene rival, formato, mapa ni resultado.
+      gameId: null,
+      opponentName: null,
+      opponentProfileId: null,
+      result: null,
+      teamSize: null,
+      mode: null,
+      leaderboard: null,
+      map: null,
+      // Y no tiene acción: revertir o restaurar son de `Match`.
       revertedAt: null,
     });
   }
@@ -1181,21 +1358,26 @@ async function eventosDeObjetivo(
  *
  * ## Los objetivos
  *
- * Los eventos de `ObjectiveEvent`: un objetivo cumplido por jugador, como mucho uno
- * por objetivo del catálogo, escritos por el motor de puntuación. Se
- * filtran con el **mismo jugador y las mismas fechas** (sobre `achievedAt`, con los
- * mismos límites), y **no salen si hay filtro de resultado**: un objetivo no es ni
- * una victoria ni una derrota, y quien escribe `?resultado=WIN` está buscando las
- * victorias de alguien, no sus hitos.
+ * Los eventos de `ObjectiveEvent` —un logro cumplido por jugador, como mucho uno por
+ * objetivo del catálogo— y los de `ObjectiveLeadEvent` —un cambio de poseedor de una
+ * competición, con sus dos filas por cambio—, escritos los dos por el motor de puntuación.
+ * Se filtran con el **mismo jugador y las mismas fechas** (sobre `achievedAt` y sobre `at`,
+ * con los mismos límites), y **no salen si hay filtro de resultado**: un objetivo no es ni
+ * una victoria ni una derrota, y quien escribe `?resultado=WIN` está buscando las victorias
+ * de alguien, no sus hitos.
+ *
+ * Los cambios de poseedor llevan además el filtro de **cohorte**: solo los de la edición
+ * activa (`editionFrom` = `window.from` de la ventana que se está usando), para que una
+ * edición nueva no arrastre los liderazgos de la anterior (ver `ObjectiveLeadEvent`).
  *
  * ## El merge, y por qué sale barato
  *
- * Los eventos son pocos, así que se piden enteros (y por el mismo motivo no se pueden
+ * Los objetivos son pocos, así que se piden enteros (y por el mismo motivo no se pueden
  * pedir en paralelo con las partidas: el hueco de partidas depende de cuántos son). El
  * hueco que hay que traer y por dónde se recorta la página están en `historyHole()`, que
  * explica la aritmética y que **no depende del eje del orden**: solo cuenta cuántas filas
  * del otro lado del merge caben en las posiciones anteriores. Por eso el
- * `?sort=resultado` reutiliza el mismo hueco y lo único que cambia son los dos `orderBy`.
+ * `?sort=resultado` reutiliza el mismo hueco y lo único que cambia son los `orderBy`.
  *
  * ## El filtro de clasificatorias sale del ruleset activo
  *
@@ -1217,6 +1399,7 @@ export async function getAdminMatchHistory(
     const sort = readHistorySort(query);
     const filtros = readHistoryFilters(query);
     const { playerId, rango, resultado } = filtros;
+    const editionFrom = windowBounds(ruleset.window).from;
 
     // Los filtros se suman, no se eligen: `where` es una conjunción, así que jugador
     // + fechas + resultado se combinan solos. No hace falta ninguna lógica de "si hay
@@ -1244,21 +1427,34 @@ export async function getAdminMatchHistory(
       ...(hasDateBounds(rango) ? { achievedAt: rango } : {}),
     };
 
+    // Los liderazgos, con el mismo filtro más el de cohorte de la edición activa.
+    const liderazgosWhere: Prisma.ObjectiveLeadEventWhereInput = {
+      editionFrom,
+      ...(playerId === null ? {} : { playerId }),
+      ...(hasDateBounds(rango) ? { at: rango } : {}),
+    };
+
     return adminPage<AdminMatchHistoryRow, AdminHistorySort>(async (wanted) => {
       const skip = (wanted - 1) * pageSize;
 
-      // Los eventos salen enteros y antes que las partidas, porque el hueco de
-      // partidas depende de cuántos sean. El `count` de partidas no depende de eso, así
-      // que sí se pide en paralelo con ellos.
-      const [eventos, totalPartidas] = await Promise.all([
+      // Los objetivos (logros y liderazgos) salen enteros y antes que las partidas, porque
+      // el hueco de partidas depende de cuántos sean. El `count` de partidas no depende de
+      // eso, así que sí se pide en paralelo con ellos.
+      const [eventos, liderazgos, totalPartidas] = await Promise.all([
         resultado === null ? eventosDeObjetivo(eventosWhere, ruleset, sort.dir) : [],
+        resultado === null ? liderazgosDeObjetivo(liderazgosWhere, ruleset, sort.dir) : [],
         db.match.count({ where }),
       ]);
+
+      // Las dos clases de fila de objetivo forman una sola mitad del merge: el hueco cuenta
+      // cuántas filas del otro lado caben delante de la página a partir del total de las
+      // dos.
+      const objetivos = [...eventos, ...liderazgos];
 
       // El hueco acotado del docblock de `historyHole()`, y no `pageSize` a secas: una
       // página puede tener eventos delante y, si solo se trajeran `pageSize` partidas,
       // saldrían menos filas de las que la página pide.
-      const { skipPartidas, takePartidas } = historyHole(skip, pageSize, eventos.length);
+      const { skipPartidas, takePartidas } = historyHole(skip, pageSize, objetivos.length);
 
       const partidas = await db.match.findMany({
         where,
@@ -1287,8 +1483,8 @@ export async function getAdminMatchHistory(
       // aritmética que usa el historial público: entre la ventana de partidas y la lista
       // combinada, el índice de inicio de la página lo vuelve a calcular el mismo hueco.
       return {
-        total: totalPartidas + eventos.length,
-        rows: historyFeedPage(partidas.map(partidaEnFila), eventos, {
+        total: totalPartidas + objetivos.length,
+        rows: historyFeedPage(partidas.map(partidaEnFila), objetivos, {
           skip,
           pageSize,
           compare: historyComparator(sort),
@@ -1381,7 +1577,7 @@ export type AdminActionsQuery = AdminPageQuery & AdminSortQuery;
  * ofrecer el botón de deshacer dos veces. No publica la fila `ACTION_REVERTED` como algo
  * aparte: es una línea más del historial, y su `summary` ya dice qué se deshizo.
  *
- * Paginada en servidor por el mismo motivo que el historial de partidas, y con
+ * Paginada en servidor por el mismo motivo que el historial de puntos, y con
  * `id` de desempate del orden por la misma razón: dos acciones del mismo milisegundo
  * tienen que tener un orden estable para que la paginación no las mezcle.
  *

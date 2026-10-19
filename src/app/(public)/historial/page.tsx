@@ -11,7 +11,7 @@ import { getPointHistory, getStandings } from "@/lib/public";
 export const metadata: Metadata = {
   title: "Historial de puntos",
   description:
-    "Las ganancias de puntos de la Liga Hispana de Age of Empires IV: cada victoria clasificatoria y cada objetivo cumplido, de lo más reciente a lo más antiguo, con filtros por participante y por fechas.",
+    "Las ganancias de puntos de la Liga Hispana de Age of Empires IV: cada victoria clasificatoria, cada logro cumplido y cada cambio de poseedor de las competiciones, de lo más reciente a lo más antiguo, con filtros por participante y por fechas.",
 };
 
 // El feed se lee de la base en cada petición (`getPointHistory` no cachea), así que
@@ -27,9 +27,10 @@ function single(value: string | string[] | undefined): string | undefined {
 }
 
 /**
- * El historial público de ganancias de puntos: victorias clasificatorias y
- * objetivos cumplidos en un solo feed, de lo más reciente a lo más antiguo,
- * filtrable por participante y por rango de fechas y paginado en el servidor.
+ * El historial público de ganancias de puntos: victorias clasificatorias, logros
+ * cumplidos y cambios de poseedor de las competiciones en un solo feed, de lo más
+ * reciente a lo más antiguo, filtrable por participante y por rango de fechas y
+ * paginado en el servidor.
  *
  * Es la cara pública del historial del panel (`/admin/historial`) y se lee con el
  * cromo de las páginas públicas: la tabla del panel no se copia porque con siete
@@ -80,10 +81,10 @@ export default async function PointHistoryPage({ searchParams }: PageProps<"/his
 
       <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">
         Las ganancias de puntos del torneo, de lo más reciente a lo más antiguo: cada
-        victoria clasificatoria y cada objetivo cumplido, con lo que aporta cada uno.
-        Los objetivos que se resuelven en caliente se apuntan cuando termina el
-        torneo, así que durante la competición esta lista solo enseña victorias. Las
-        reglas y las cifras del sistema están en{" "}
+        victoria clasificatoria, cada logro cumplido y cada cambio de poseedor de las
+        competiciones. Los logros se resuelven en caliente y se apuntan cuando termina
+        el torneo; los cambios de poseedor salen en cuanto la sincronización los
+        detecta. Las reglas y las cifras del sistema están en{" "}
         <Link
           href="/puntuacion"
           className="text-accent underline underline-offset-4 hover:text-accent-strong"
@@ -128,7 +129,7 @@ export default async function PointHistoryPage({ searchParams }: PageProps<"/his
               body={
                 hasFilters
                   ? "Prueba con otro participante o amplía el rango de fechas. El filtro incluye el día final completo."
-                  : "Aquí aparecerán las victorias clasificatorias y los objetivos cumplidos, de lo más reciente a lo más antiguo. Las victorias salen en cuanto la sincronización las registra; los objetivos que se resuelven en caliente se apuntan cuando termina el torneo."
+                  : "Aquí aparecerán las victorias clasificatorias, los logros cumplidos y los cambios de poseedor de las competiciones, de lo más reciente a lo más antiguo. Las victorias y los cambios de poseedor salen en cuanto la sincronización los registra; los logros se apuntan cuando termina el torneo."
               }
             />
           ) : (

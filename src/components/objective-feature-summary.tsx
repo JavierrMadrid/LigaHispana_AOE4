@@ -10,12 +10,14 @@ import { prizeLabel } from "@/lib/objective-format";
  *
  * La tarjeta pequeña (`ObjectiveSummary`, `ParticipantObjectiveSummary`) enseña
  * el resumen pegado al borde superior; en la tarjeta grande —con mucho más
- * alto— eso dejaba el centro muerto. Aquí la lectura es vertical: la cabecera
- * abre con el título centrado y su filete, el emblema preside la parte alta del
- * cuerpo con la descripción del objetivo debajo, y el pie cierra con el estado a
- * la izquierda, los puntos en línea a la derecha y, bajo el filete, la puerta a
- * la clasificación. Sin columnas laterales: todo se apila en el eje central, y el
- * cuerpo crece con `flex-1` para empujar el pie al fondo sin bloques flotando.
+ * alto— eso dejaba el centro muerto. Aquí la lectura es vertical, en el orden
+ * lógico de la tarjeta: la cabecera abre con el título centrado y su filete, el
+ * emblema preside la parte alta del cuerpo con la descripción del objetivo
+ * debajo (**qué es**), el avance del jugador con sus puntos (**cómo va**) y, si
+ * lo hay, el desglose que ese avance desgrana (**el detalle**); el pie cierra
+ * con la puerta a la clasificación. Sin columnas laterales: todo se apila en el
+ * eje central, y el cuerpo crece con `flex-1` para empujar el pie al fondo sin
+ * bloques flotando.
  *
  * Es solo la composición: cada pantalla monta su variante con sus datos
  * (`ObjectiveFeatureSummary` para `/objetivos`, `ParticipantObjectiveFeatureSummary`
@@ -40,10 +42,12 @@ type ObjectiveFeatureFrameProps = {
   pointsTone?: "accent" | "neutral";
   /** Bajo el emblema: la regla del objetivo, con la tipografía mayor del frontal. */
   description: ReactNode;
-  /** Bajo la descripción, en tamaño menor: la nota de familia y el pool de mapas. */
+  /** Bajo la descripción, en tamaño menor: el contexto de la regla (la nota de familia y el pool de mapas). */
   detail?: ReactNode;
   /** En la fila sobre el filete, a la izquierda: el estado o el avance. */
   progress: ReactNode;
+  /** Bajo el avance y sobre el filete del pie, a todo el ancho: el desglose que lo detalla (civilización a civilización, mapas que faltan). */
+  breakdown?: ReactNode;
   actionLabel: string;
 };
 
@@ -51,24 +55,49 @@ type ObjectiveFeatureFrameProps = {
  * El armazón de la cara frontal: una sola columna centrada. La cabecera abre con
  * el título centrado —más grande que en la tarjeta pequeña— y un filete corto
  * debajo, con el subtítulo y los distintivos en una línea propia. El cuerpo, que
- * crece con `flex-1`, deja el emblema en su parte alta y la descripción justo
- * debajo; el pie separa con un filete el estado (izquierda) y los puntos en línea
- * (derecha) de la acción, que cierra centrada. En móvil llena la pantalla y
- * desplaza sin recortar.
+ * crece con `flex-1`, deja el emblema y la descripción **centrados en el aire
+ * que sobra**; después va el avance con los puntos en línea a su derecha, el
+ * desglose (si lo hay) y el pie, que separa con un filete la puerta a la
+ * clasificación. En móvil llena la pantalla y, por debajo del umbral que se
+ * cuenta abajo, desplaza sin recortar.
  *
- * Las separaciones están medidas para que la tarjeta en grande se lea por bloques
- * —título, emblema, descripción con su detalle, avance y pie— y no como una columna
- * apretada: 56px entre el título y el emblema y entre este y la descripción (72px a
- * partir de `sm`), 16px hasta el detalle, 24px del avance al filete del pie y otros
- * tantos bajo él. Es un aire que crece en la tarjeta y no en la pequeña, y que en las
- * ventanas bajas no se cobra recortando: el sobrante lo absorbe el `flex-1` del
- * cuerpo y, si no hay, la cara desplaza.
+ * ## Una cara que cabe entera y reparte su aire por igual
  *
- * La fila del avance va además **más adentro** que el cuerpo en horizontal (32px del
- * canto en móvil, 48px a partir de `sm`, el doble de separación del filete del marco):
- * sus dos textos son los extremos de la tarjeta —el estado a la izquierda y los puntos
- * a la derecha— y así no se pegan a la línea. Los demás bloques no se mueven, y el
- * pie, que va centrado, tampoco.
+ * La ventana mide `100dvh` con tope de `44rem` (`ObjectiveFlipDialog`) y esta
+ * cara **no debe desplazar**: toda la información se enseña de una vez. El caso
+ * que manda es la cabeza de familia en su peor rango —23 civilizaciones por
+ * detallar, que son dos filas de chips en `sm` y cuatro en móvil—: esa cara
+ * ocupa 595,5px de contenido en `sm` y 617,5px en móvil, y la ventana le deja
+ * 684px con el tope (cualquier viewport de 704px o más) y 647px en móvil, así
+ * que sobran 88,5px en escritorio y 29,5px en móvil. Con la ventana al mínimo
+ * en que la cara sigue cabiendo —616px de alto útil en `sm`, 638px en móvil—
+ * no sobra nada.
+ *
+ * Ese sobrante **no cae entero en un hueco**: el cuerpo centra el bloque
+ * «emblema + descripción» con `justify-center`, de modo que el aire que queda
+ * entre el filete de la cabecera y el emblema es idéntico al que queda entre la
+ * descripción y la primera sección (el avance). Así se leen homogéneas las
+ * tarjetas ligeras —en `/objetivos` el sobrante llega a 246px—, que antes se
+ * quedaban con el vacío entero de un solo lado. Las dos mitades miden 44,25px
+ * en escritorio (con el tope) y 14,75px en móvil; en un 1366×768 con barra del
+ * navegador —650px de alto útil, 630px de ventana— quedan 17,25px por lado y
+ * la cara sigue sin desplazar. Por debajo de ese umbral ya no cabe y la cara
+ * vuelve a desplazar: preferible a recortar el pie.
+ *
+ * Lo que es aire **entre secciones** no se mueve con el sobrante: es constante
+ * —16px del avance al desglose, 24px con la cabecera interna de ese desglose,
+ * y 24px del desglose al filete y del filete al pie—, y la X de cerrar reserva
+ * los 56px superiores (`pt-14`). Tampoco se tocó ningún tamaño para que quepa:
+ * el medallón sigue con sus 72px en móvil y 88px en `sm` (el original de 160px
+ * no cabía) y la descripción con la tipografía mayor de la cara.
+ *
+ * La fila del avance va además **más adentro** que el resto en horizontal (24px
+ * del canto en móvil, 48px a partir de `sm`, frente a los 20/32px del armazón):
+ * sus dos textos son los extremos de la tarjeta —el estado a la izquierda y los
+ * puntos a la derecha— y así no se pegan a la línea. El desglose, en cambio, va
+ * al ancho de la cabecera y del cuerpo, que es donde ya viven los chips en el
+ * resto de caras. Los demás bloques no se mueven, y el pie, que va centrado,
+ * tampoco.
  *
  * El relleno reserva el aire de la X de cerrar, que va dentro de la propia cara
  * (arriba a la derecha) y deja respirar la tarjeta por los cuatro lados, sin que
@@ -84,10 +113,11 @@ export function ObjectiveFeatureFrame({
   description,
   detail,
   progress,
+  breakdown,
   actionLabel,
 }: ObjectiveFeatureFrameProps) {
   return (
-    <div className="flex min-h-full flex-col p-6 pt-14 sm:p-8 sm:pt-16">
+    <div className="flex min-h-full flex-col px-5 pt-14 pb-6 sm:px-8 sm:pb-8">
       <header className="shrink-0 text-center">
         <h2 className="text-balance font-display text-2xl font-semibold leading-tight text-foreground sm:text-3xl">
           {title}
@@ -100,13 +130,17 @@ export function ObjectiveFeatureFrame({
             ) : null}
           </div>
         ) : null}
-        <span aria-hidden="true" className="mx-auto mt-3 block h-px w-16 bg-accent/40" />
+        <span aria-hidden="true" className="mx-auto mt-2 block h-px w-16 bg-accent/40" />
       </header>
 
-      <div className="flex flex-1 flex-col items-center pt-14 sm:pt-[4.5rem]">
+      {/* El cuerpo crece hasta llenar el alto de la cara y centra el bloque
+          «emblema + descripción» en el aire que le queda: así el hueco de
+          arriba —del filete al emblema— y el de abajo —de la descripción a esta
+          fila— miden lo mismo, sea cual sea el sobrante. */}
+      <div className="flex flex-1 flex-col items-center justify-center">
         <Medallion target={target} />
 
-        <div className="mt-14 w-full min-w-0 max-w-md text-center sm:mt-[4.5rem]">
+        <div className="mt-4 w-full min-w-0 max-w-md text-center sm:mt-5">
           <p className="text-base leading-relaxed text-muted sm:text-lg">{description}</p>
           {detail !== undefined ? (
             <div className="mt-4 text-xs leading-relaxed text-muted">{detail}</div>
@@ -115,16 +149,28 @@ export function ObjectiveFeatureFrame({
       </div>
 
       {/* La fila del estado y los puntos va más adentro que el resto: sus textos son
-          los extremos de la tarjeta, así que se separan del filete del marco el doble
-          que el cuerpo (32px del canto en móvil, 48px a partir de `sm`, 8px más que el
-          armazón), y el `ml-auto` de los puntos mantiene su borde derecho cuando la
-          fila envuelve. El pie y el tinte del marco no se mueven. */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-2 pb-6 sm:px-4">
+          los extremos de la tarjeta, así que se separan del filete del marco más que el
+          cuerpo (24px del canto en móvil, 48px a partir de `sm`), y el `ml-auto` de los
+          puntos mantiene su borde derecho cuando la fila envuelve. Los `gap` y el
+          relleno lateral se estrechan en móvil para que los dos extremos quepan en una
+          sola línea en una pantalla de 375px: si envuelven, los puntos bajan y la cara
+          deja de caber. Sus 16px de pie más los 8px de la cabecera del desglose dejan
+          24px fijos sobre los chips; el sobrante del cuerpo, en cambio, no es suyo:
+          se reparte por igual entre el filete de la cabecera y esta fila, que es
+          donde empieza su sección. El tinte del marco no se mueve. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 px-1 pb-4 sm:gap-x-4 sm:px-4">
         <div className="min-w-0 sm:flex-1">{progress}</div>
         <div className="ml-auto">
           <FeaturePoints target={target} points={points} tone={pointsTone} />
         </div>
       </div>
+
+      {/* El desglose va al ancho de la cabecera y del cuerpo —donde ya se leen las
+          banderas— y con 24px de pie: cierra el avance por abajo y deja el filete del
+          pie a su distancia, sea cual sea el alto de la ventana. */}
+      {breakdown !== undefined ? (
+        <div className="shrink-0 pb-6 text-center">{breakdown}</div>
+      ) : null}
 
       <footer className="flex shrink-0 items-center justify-center border-t border-line pt-6">
         {/* El clic lo recoge el `FlipCard`; el pie solo anuncia la acción. */}
@@ -142,6 +188,11 @@ export function ObjectiveFeatureFrame({
  * del mismo tamaño y cromo para todos —relleno elevado y filete dorado, con un
  * aro interior— y el icono dentro.
  *
+ * Su diámetro es el de la ficha a pantalla completa: 72px en móvil y 88px a
+ * partir de `sm`, con el icono inscrito en la misma proporción de dos tercios
+ * del medallón que tenía el de 160px. Es el tamaño que cabe sin desplazar la
+ * cara (ver `ObjectiveFeatureFrame`), no una elección estética suelta.
+ *
  * El icono va en una ventana cuadrada inscrita en el círculo: así el arte de
  * civilización —cuadrado y a color— entra entero, sin que el recorte circular le
  * corte las esquinas, y el glifo de línea de los demás objetivos queda centrado
@@ -149,12 +200,12 @@ export function ObjectiveFeatureFrame({
  */
 function Medallion({ target }: { target: FeatureTarget }) {
   return (
-    <div className="relative flex size-40 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-surface-raised">
+    <div className="relative flex size-18 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-surface-raised sm:size-22">
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-1.5 rounded-full border border-line"
       />
-      <span className="relative flex size-24 items-center justify-center">
+      <span className="relative flex size-11 items-center justify-center sm:size-13">
         <ObjectiveIcon option={target} className="size-full" />
       </span>
     </div>

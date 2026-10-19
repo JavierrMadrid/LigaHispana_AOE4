@@ -9,6 +9,7 @@ import type {
 import { BorderGlow } from "@/components/border-glow";
 import { MapGaps, MapPool } from "@/components/objective-card";
 import { ObjectiveFeatureFrame } from "@/components/objective-feature-summary";
+import { FamilyCivDetail } from "@/components/objective-family-detail";
 import { ObjectiveFamilyRail } from "@/components/objective-family-rail";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
@@ -17,10 +18,12 @@ import { StatFigure } from "@/components/stat-figure";
 import {
   hasNoCap,
   hasReachedTarget,
+  leaderDistance,
   objectiveCloseness,
   objectiveTitleParts,
   orderByObjectiveProgress,
   prizeLabel,
+  type LeaderDistance,
 } from "@/lib/objective-format";
 
 /**
@@ -34,6 +37,13 @@ const FAMILIES: readonly { headId: string; id: string; title: string }[] = [
   { headId: "polifacetico", id: "lider", title: "Líder" },
   { headId: "jugon", id: "acolito", title: "Acólito" },
 ];
+
+/**
+ * Cuántas civilizaciones caben en el detalle de una familia en la tarjeta
+ * pequeña: cuatro más el «y N más» es una sola fila con el ancho de la tarjeta.
+ * La lista entera vive en la ventana volteable.
+ */
+const FAMILY_CIV_DETAIL_LIMIT = 4;
 
 /** Bloques de la ficha, en el orden en que se leen. Alimentan el índice. */
 const SECTIONS: readonly DocSection[] = [
@@ -123,10 +133,22 @@ export function ParticipantObjectivesView({
     (total, option) => total + option.points,
     0,
   );
+  // El detalle por civilización de cada cabeza, por id de cabeza: la cabeza no
+  // referencia a sus hijos, así que la ficha se los pasa por prop a su tarjeta y
+  // a la ventana volteable.
+  const familyChildrenById = new Map(
+    families.map((family) => [family.head.id, family.children]),
+  );
+  const activeFamilyChildren =
+    active === null ? undefined : familyChildrenById.get(active.id);
   const bestBet = contending[0] ?? null;
   // `distance` de quien va primero es `0`, no `null`, así que la rama "lideras"
-  // se decide por la distancia ya formateada (que se anula al ir primero).
-  const bestDistance = bestBet === null ? null : formatDistance(bestBet);
+  // se decide por la distancia ya formateada, que se anula al ir primero; un
+  // empate a métrica devuelve su hueco marcado como tal, sin anularlo.
+  const bestGap =
+    bestBet === null
+      ? null
+      : leaderDistance(bestBet.distance, bestBet.position, bestBet.metric);
   const onPodium = contending.filter((option) => (option.position ?? 0) <= 3).length;
   const leading = contending.filter((option) => option.position === 1).length;
   const oneAway = contending.filter((option) => option.position === 2).length;
@@ -141,7 +163,7 @@ export function ParticipantObjectivesView({
       */}
       <div className="rounded-lg border border-line bg-surface px-5 py-4">
         <p className="max-w-[68ch] text-sm leading-relaxed text-muted">
-          <BestBetNote bestBet={bestBet} bestDistance={bestDistance} />
+          <BestBetNote bestBet={bestBet} bestGap={bestGap} />
         </p>
       </div>
 
@@ -160,6 +182,7 @@ export function ParticipantObjectivesView({
         groupLabels={groupLabels}
         mapPool={mapPool}
         emptyMessage="Ahora mismo no apareces en la clasificación de ningún objetivo. En cuanto cierres una partida que cuente para uno, saldrá aquí tu puesto."
+        familyChildrenById={familyChildrenById}
         onOpen={setActive}
         highlight
       >
@@ -223,15 +246,20 @@ export function ParticipantObjectivesView({
           key={active.id}
           option={active}
           highlightProfileId={player.profileId}
+          familyChildren={activeFamilyChildren}
           onClose={() => setActive(null)}
           front={
             // La X de cerrar vive en la esquina superior derecha de la propia cara
-            // (`ObjectiveFlipDialog`), así que el resumen le reserva ese aire.
+            // (`ObjectiveFlipDialog`), así que el resumen le reserva ese aire. El
+            // armazón calcula la cara para que quepa entera sin desplazar (ver
+            // `ObjectiveFeatureFrame`); el `overflow` solo se cobra por debajo del
+            // alto en que cabe, donde recortar el pie sería peor que desplazar.
             <div className="h-full overflow-y-auto">
               <ParticipantObjectiveFeatureSummary
                 objective={active}
                 groupLabels={groupLabels}
                 mapPool={mapPool}
+                familyChildren={activeFamilyChildren}
               />
             </div>
           }
@@ -250,13 +278,18 @@ export function ParticipantObjectivesView({
  * que le falta para el umbral; una competición, por el puesto y la distancia al
  * liderato. El orden de "Al alcance" mezcla los dos tipos, así que la entradilla
  * no puede dar por hecho que el primero sea una carrera.
+ *
+ * Una competición con **empate a métrica** —la distancia al líder es 0 y el
+ * desempate te deja segundo— se cuenta aparte: decir «te separan 0 victorias»
+ * sería mentira, así que se dice el empate y lo que hace falta para
+ * **adelantar** al primero, que es una unidad.
  */
 function BestBetNote({
   bestBet,
-  bestDistance,
+  bestGap,
 }: {
   bestBet: ParticipantObjective | null;
-  bestDistance: string | null;
+  bestGap: LeaderDistance | null;
 }) {
   if (bestBet === null) {
     return (
@@ -282,7 +315,7 @@ function BestBetNote({
     );
   }
 
-  if (bestDistance === null) {
+  if (bestGap === null) {
     return (
       <>
         Lideras la carrera por{" "}
@@ -292,12 +325,24 @@ function BestBetNote({
     );
   }
 
+  if (bestGap.tied) {
+    return (
+      <>
+        Tu objetivo más cercano es{" "}
+        <strong className="font-medium text-foreground">{bestBet.label}</strong>:
+        empatas con el primero y vas {ordinal(bestBet.position ?? 0)}; te hace falta{" "}
+        <strong className="font-medium text-foreground">{bestGap.text}</strong> para
+        adelantarle.
+      </>
+    );
+  }
+
   return (
     <>
       Tu objetivo más cercano es{" "}
       <strong className="font-medium text-foreground">{bestBet.label}</strong>: vas{" "}
       {ordinal(bestBet.position ?? 0)} y te separan{" "}
-      <strong className="font-medium text-foreground">{bestDistance}</strong> del
+      <strong className="font-medium text-foreground">{bestGap.text}</strong> del
       primer puesto.
     </>
   );
@@ -313,6 +358,7 @@ function ObjectiveSection({
   groupLabels,
   mapPool,
   emptyMessage,
+  familyChildrenById,
   onOpen,
   highlight = false,
   compact = false,
@@ -326,6 +372,11 @@ function ObjectiveSection({
   groupLabels: Record<ObjectiveGroup, string>;
   mapPool: readonly string[];
   emptyMessage: string;
+  /**
+   * Hijos de cada familia por id de su cabeza, para el detalle de sus tarjetas.
+   * Solo lo usa la sección de tarjetas completas: los chips no tienen sitio.
+   */
+  familyChildrenById?: ReadonlyMap<string, ParticipantObjective[]>;
   onOpen: (objective: ParticipantObjective) => void;
   highlight?: boolean;
   compact?: boolean;
@@ -381,6 +432,7 @@ function ObjectiveSection({
                 objective={objective}
                 groupLabels={groupLabels}
                 mapPool={mapPool}
+                familyChildren={familyChildrenById?.get(objective.id)}
                 onOpen={onOpen}
               />
             </li>
@@ -472,11 +524,14 @@ export function ParticipantObjectiveSummary({
   objective,
   groupLabels,
   mapPool,
+  familyChildren,
   dense = false,
 }: {
   objective: ParticipantObjective;
   groupLabels: Record<ObjectiveGroup, string>;
   mapPool: readonly string[];
+  /** Hijos de la familia si este objetivo es su cabeza; sin ellos, sin detalle. */
+  familyChildren?: readonly ParticipantObjective[];
   dense?: boolean;
 }) {
   return (
@@ -525,6 +580,12 @@ export function ParticipantObjectiveSummary({
         <ObjectiveMapDetail objective={objective} mapPool={mapPool} />
       ) : null}
 
+      {/* La familia se resume con la lista más corta de las dos y, si no cabe
+          entera, con «y N más»: la lista completa está en la ventana volteable. */}
+      {familyChildren === undefined ? null : (
+        <FamilyCivDetail items={familyChildren} limit={FAMILY_CIV_DETAIL_LIMIT} />
+      )}
+
       <div className="mt-auto flex items-end justify-end border-t border-line pt-3">
         {/* El clic lo recoge el botón invisible que cubre la tarjeta; el pie
             solo anuncia la acción, como en `/objetivos`. */}
@@ -542,24 +603,38 @@ export function ParticipantObjectiveSummary({
  * información que su tarjeta pequeña (emblema, nombre, grupo y detalle, puntos,
  * los tres datos del avance y la regla). Monta el mismo armazón que `/objetivos`
  * —título centrado con filete, emblema en grande y descripción debajo— y lleva a
- * la ranura inferior izquierda el avance del jugador, con los puntos en línea a la
- * derecha sobre el filete y la puerta a la clasificación debajo, que abre el
- * `FlipCard`.
+ * la ranura sobre el filete el avance del jugador, con los puntos en línea a la
+ * derecha y, debajo, el desglose que ese avance detalla: los mapas que le faltan
+ * o las civilización a civilización. La puerta a la clasificación cierra el pie,
+ * que recoge el clic el `FlipCard`.
  */
 export function ParticipantObjectiveFeatureSummary({
   objective,
   groupLabels,
   mapPool,
+  familyChildren,
 }: {
   objective: ParticipantObjective;
   groupLabels: Record<ObjectiveGroup, string>;
   mapPool: readonly string[];
+  /** Hijos de la familia si este objetivo es su cabeza; sin ellos, sin detalle. */
+  familyChildren?: readonly ParticipantObjective[];
 }) {
   // En la tarjeta grande, la barra del logro ya resume "X de Y": repetir "Tu
   // avance" justo encima es redundante. Solo se conserva cuando la barra no se
   // pinta —logro sin umbral, sin tope, binario o ya en el umbral—, para no
   // perder la cifra.
   const showGauge = showsProgressGauge(objective);
+  // Solo un desglose cabe a la vez: los dos son exclusivos por métrica —mapas o
+  // civilizaciones—, pero el guion deja el `undefined` que espera el armazón.
+  const breakdown =
+    objective.metric === "mapas" && mapPool.length > 0 ? (
+      <ObjectiveMapDetail objective={objective} mapPool={mapPool} />
+    ) : familyChildren === undefined ? (
+      undefined
+    ) : (
+      <FamilyCivDetail items={familyChildren} align="center" />
+    );
 
   return (
     <ObjectiveFeatureFrame
@@ -580,14 +655,10 @@ export function ParticipantObjectiveFeatureSummary({
       points={objective.points}
       pointsTone={objective.achieved ? "accent" : "neutral"}
       description={objective.description}
-      detail={
-        objective.metric === "mapas" && mapPool.length > 0 ? (
-          <ObjectiveMapDetail objective={objective} mapPool={mapPool} />
-        ) : undefined
-      }
+      breakdown={breakdown}
       progress={
-        <div className="flex flex-col gap-5">
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-4">
+        <div className="flex flex-col gap-4">
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-4 sm:gap-x-4">
             {showGauge ? null : (
               <div className="col-span-2">
                 <Fact label="Tu avance" value={formatMetricValue(objective)} strong />
@@ -636,7 +707,14 @@ function ObjectiveFacts({ objective }: { objective: ParticipantObjective }) {
   return (
     <>
       <Fact label="Posición" value={objective.achieved ? "Poseído" : positionText(objective)} />
-      <Fact label="Al primero" value={formatDistance(objective) ?? "—"} />
+      {/* Nunca un 0: con empate a métrica lo que falta para el liderato es una
+          unidad, la que hace falta para adelantar al primero. */}
+      <Fact
+        label="Al primero"
+        value={
+          leaderDistance(objective.distance, objective.position, objective.metric)?.text ?? "—"
+        }
+      />
     </>
   );
 }
@@ -671,12 +749,15 @@ function ObjectiveCard({
   objective,
   groupLabels,
   mapPool,
+  familyChildren,
   onOpen,
   dense = false,
 }: {
   objective: ParticipantObjective;
   groupLabels: Record<ObjectiveGroup, string>;
   mapPool: readonly string[];
+  /** Hijos de la familia si este objetivo es su cabeza; sin ellos, sin detalle. */
+  familyChildren?: readonly ParticipantObjective[];
   onOpen: (objective: ParticipantObjective) => void;
   dense?: boolean;
 }) {
@@ -686,6 +767,7 @@ function ObjectiveCard({
         objective={objective}
         groupLabels={groupLabels}
         mapPool={mapPool}
+        familyChildren={familyChildren}
         dense={dense}
       />
 
@@ -1096,35 +1178,6 @@ function formatMetricValue(objective: ParticipantObjective): string {
       return `${value}/${objective.target?.value ?? "?"} civilizaciones`;
     case "mapas":
       return `${value}/${objective.target?.value ?? "?"} mapas`;
-  }
-}
-
-/**
- * Distancia al líder, ya formateada según la métrica. Un `null` (sin puesto o ya
- * primero) no se pinta.
- */
-function formatDistance(objective: ParticipantObjective): string | null {
-  const { distance, metric } = objective;
-
-  if (distance === null || objective.position === null || objective.position === 1) {
-    return null;
-  }
-
-  switch (metric) {
-    case "partidas":
-      return distance === 1 ? "1 partida" : `${distance} partidas`;
-    case "victorias":
-      return distance === 1 ? "1 victoria" : `${distance} victorias`;
-    case "racha":
-      return distance === 1 ? "1 victoria seguida" : `${distance} victorias seguidas`;
-    case "racha-partidas":
-      return distance === 1 ? "1 partida seguida" : `${distance} partidas seguidas`;
-    case "dias":
-      return distance === 1 ? "1 día" : `${distance} días`;
-    case "civilizaciones":
-      return `${distance} civilizaciones`;
-    case "mapas":
-      return `${distance} mapas`;
   }
 }
 

@@ -8,7 +8,7 @@ type MatchHistoryFiltersProps = {
 };
 
 /**
- * Filtros del historial de partidas: jugador, resultado y rango de fechas.
+ * Filtros del historial de puntos: jugador, resultado y rango de fechas.
  *
  * La fuente de verdad es la URL (el servidor pagina y filtra con `searchParams`), así
  * que cada control navega al cambiar en lugar de guardar estado propio: si se recarga
