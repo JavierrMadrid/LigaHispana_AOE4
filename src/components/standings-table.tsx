@@ -57,7 +57,7 @@ const OBJECTIVE_COLUMNS = 7;
  */
 const POINTS_HINTS = {
   permanent:
-    "Permanentes: logros ya conseguidos, que no se pierden. Las victorias van dentro, porque son el objetivo Victorias.",
+    "Permanentes: logros ya conseguidos y el bono de los eventos puntuales, que no se pierden. Las victorias van dentro, porque son el objetivo Victorias.",
   temporary:
     "Temporales: competiciones, que se deciden al cierre y pueden cambiar de dueño.",
 } as const;
@@ -526,10 +526,10 @@ export function StandingsTable({ rows }: { rows: StandingRow[] }) {
               <table className="w-full min-w-[900px] border-separate border-spacing-y-1.5 text-sm">
                 <caption className="sr-only">
                   Clasificación de la liga: puesto, jugador, partidas jugadas,
-                  puntos totales con su desglose en permanentes (victorias y
-                  logros) y temporales (competiciones), elo, victorias y derrotas
-                  y racha. El nombre de cada jugador enlaza con su perfil de
-                  AoE4World y sus puntos abren el resumen de objetivos.
+                  puntos totales con su desglose en permanentes (victorias, logros
+                  y bono de eventos) y temporales (competiciones), elo, victorias y
+                  derrotas y racha. El nombre de cada jugador enlaza con su perfil
+                  de AoE4World y sus puntos abren el resumen de objetivos.
                 </caption>
                 <thead>
                   <tr>
@@ -1311,9 +1311,10 @@ function CompactPointsBreakdown({ row }: { row: StandingRow }) {
  *
  * El total manda y debajo van sus dos mitades, que el jugador lee sin hover:
  * los puntos permanentes (los **logros** ya conseguidos, con las victorias dentro
- * porque son el objetivo Victorias) y los temporales (competiciones, que se deciden
- * al cierre y pueden cambiar de dueño). La aclaración de cada cifra va en su
- * `title`, el apoyo discreto que ya usa la tabla para lo que no cabe en la celda.
+ * porque son el objetivo Victorias, y el bono de los eventos puntuales) y los
+ * temporales (competiciones, que se deciden al cierre y pueden cambiar de dueño).
+ * La aclaración de cada cifra va en su `title`, el apoyo discreto que ya usa la
+ * tabla para lo que no cabe en la celda.
  *
  * El resumen de objetivos se abre desde aquí, que es lo que era informativo: si
  * el jugador tiene objetivos el bloque entero es un botón con

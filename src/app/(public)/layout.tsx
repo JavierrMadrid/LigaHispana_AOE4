@@ -3,11 +3,12 @@ import Link from "next/link";
 import { AdminAccess } from "@/components/admin-access";
 import { DonationBanner } from "@/components/donation-banner";
 import { accentTheme } from "@/components/edition-theme";
+import { EventBanner } from "@/components/event-banner";
 import { ParticipateCta } from "@/components/participate-cta";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav, SiteTabBar } from "@/components/site-nav";
 import { SponsorBanner } from "@/components/sponsor-banner";
-import { getEditionConfig, getMatcherinoDonations } from "@/lib/public";
+import { getEditionConfig, getEditionEvents, getMatcherinoDonations } from "@/lib/public";
 
 export default async function PublicLayout({
   children,
@@ -16,15 +17,17 @@ export default async function PublicLayout({
   children: React.ReactNode;
   modal: React.ReactNode;
 }) {
-  // Dos lecturas ligeras de `Setting`, las dos envueltas en `cache()` por si otra
+  // Tres lecturas ligeras de `Setting`, las tres envueltas en `cache()` por si otra
   // pieza de la misma petición las necesita. Con la base caída llega `"degraded"`:
-  // el banner de donaciones no se pinta, porque un aviso de base caída en todas las
-  // páginas públicas sería ruido y "no hay campaña publicada" deja la misma página;
-  // y la marca de la edición no se aplica, así que el sitio se queda con su nombre,
-  // su emblema y su oro en vez de inventarse los de la edición.
-  const [donationsRead, editionRead] = await Promise.all([
+  // ni el banner del evento ni el de donaciones se pintan, porque un aviso de base
+  // caída en todas las páginas públicas sería ruido y "no hay evento" o "no hay
+  // campaña" dejan la misma página; y la marca de la edición no se aplica, así que
+  // el sitio se queda con su nombre, su emblema y su oro en vez de inventarse los de
+  // la edición.
+  const [donationsRead, editionRead, eventsRead] = await Promise.all([
     getMatcherinoDonations(),
     getEditionConfig(),
+    getEditionEvents(),
   ]);
 
   const edition = editionRead.status === "ok" ? editionRead.data : null;
@@ -50,12 +53,17 @@ export default async function PublicLayout({
         Saltar al contenido
       </a>
 
-      {/* El banner va antes de la cabecera y **fuera de su `sticky`**, en el flujo
-          normal: así la cabecera (`sticky top-0 z-20`) se pega al borde superior al
-          desplazar y el banner, que ya ha subido, no queda debajo ni la tapa. Debajo
-          de la cabecera se leería a medias durante el desplazamiento. Solo se pinta
-          cuando la lectura fue `"ok"`; el propio componente devuelve `null` si la
-          campaña está apagada. */}
+      {/* Los dos banners van antes de la cabecera y **fuera de su `sticky`**, en el
+          flujo normal: así la cabecera (`sticky top-0 z-20`) se pega al borde
+          superior al desplazar y los avisos, que ya han subido, no quedan debajo ni
+          la tapan. Debajo de la cabecera se leerían a medias durante el
+          desplazamiento. El del evento va primero —un multiplicador en curso cambia
+          lo que paga cada victoria ahora mismo— y el de donaciones después. Los dos
+          se pintan solo cuando su lectura fue `"ok"`; cada componente decide después
+          si le queda algo que decir: sin evento activo o sin campaña, devuelve
+          `null`. */}
+      {eventsRead.status === "ok" ? <EventBanner events={eventsRead.data} /> : null}
+
       {donationsRead.status === "ok" ? (
         <DonationBanner donations={donationsRead.data} />
       ) : null}

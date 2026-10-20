@@ -118,6 +118,102 @@ export function formatTournamentWindow(window: { from: string; to: string | null
   return `Del ${windowDayYear.format(from)} al ${windowDayYear.format(to)}`;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Fechas en Europe/Madrid                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * La zona con la que la organización lee el torneo.
+ *
+ * Es la misma que usan el panel (`parseMadridLocalInstant`) y el día natural de los
+ * objetivos. Todo lo que se pinte en hora de Madrid pasa por aquí para que no haya
+ * dos definiciones de "la hora del torneo".
+ */
+const MADRID_TIME_ZONE = "Europe/Madrid";
+
+/** El día de Madrid, en largo ("20 de septiembre de 2026"). */
+const madridDayLong = new Intl.DateTimeFormat("es-ES", {
+  dateStyle: "long",
+  timeZone: MADRID_TIME_ZONE,
+});
+
+/** La hora de Madrid, en 24 h y con dos dígitos ("08:05"). */
+const madridTime = new Intl.DateTimeFormat("es-ES", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZone: MADRID_TIME_ZONE,
+});
+
+/**
+ * La clave del día de Madrid (`YYYY-MM-DD`), para saber si dos instantes caen en la
+ * misma fecha **allí**.
+ *
+ * `en-CA` numera con dos dígitos y en el orden ISO, que es lo que hace comparables
+ * las dos cadenas.
+ */
+const madridDayKey = new Intl.DateTimeFormat("en-CA", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  timeZone: MADRID_TIME_ZONE,
+});
+
+/**
+ * Fecha y hora de Madrid, para la web y para el bot.
+ *
+ * Se compone con dos formateadores —el día en largo y la hora en 24 h— en vez de con
+ * `dateStyle`/`timeStyle`, porque el segundo deja la hora sin cero delante ("8:05") y
+ * en una ventana de evento esa hora se lee junto a otra. La zona va **explícita**: sin
+ * `timeZone`, el resultado dependería de dónde corra el proceso (el Worker, un script,
+ * la máquina de quien pruebe) y la misma fecha saldría distinta en cada sitio. No usa
+ * la zona del navegador ni la del servidor, solo Madrid.
+ *
+ * Devuelve `null` si el valor no es una fecha legible: un texto inventado se pinta
+ * vacío, no como "Invalid Date".
+ */
+export function formatMadridDateTime(instant: Date | string): string | null {
+  const date = instant instanceof Date ? instant : new Date(instant);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return `${madridDayLong.format(date)} a las ${madridTime.format(date)}`;
+}
+
+/**
+ * La ventana de un evento en una frase, con las dos horas en Madrid.
+ *
+ * Dos formas, según el día:
+ *
+ * - Mismo día de Madrid: "20 de septiembre de 2026, de 18:00 a 22:00 (hora de
+ *   Madrid)".
+ * - Días distintos: "Del 20 de septiembre de 2026 a las 18:00 al 22 de septiembre
+ *   de 2026 a las 22:00 (hora de Madrid)".
+ *
+ * Se compara el **día de Madrid** y no el de UTC: un evento de 23:00 a 01:00 es de
+ * una sola noche para quien lo juega, aunque en UTC caiga en dos días. El sufijo
+ * "(hora de Madrid)" va siempre porque el instante guardado es UTC y quien lo lee
+ * tiene que saber en qué reloj está.
+ *
+ * Devuelve `null` si alguno de los dos límites no se puede leer.
+ */
+export function formatEventWindow(event: { from: string; to: string }): string | null {
+  const from = new Date(event.from);
+  const to = new Date(event.to);
+
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return null;
+  }
+
+  if (madridDayKey.format(from) === madridDayKey.format(to)) {
+    return `${madridDayLong.format(from)}, de ${madridTime.format(from)} a ${madridTime.format(to)} (hora de Madrid)`;
+  }
+
+  return `Del ${madridDayLong.format(from)} a las ${madridTime.format(from)} al ${madridDayLong.format(to)} a las ${madridTime.format(to)} (hora de Madrid)`;
+}
+
 /**
  * Cuánto queda hasta `to`, desglosado en días, horas y minutos.
  *

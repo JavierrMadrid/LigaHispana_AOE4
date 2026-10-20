@@ -113,8 +113,9 @@ export default async function ParticipantPointHistoryTab({
       <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">
         Las ganancias de puntos de {name ?? "este participante"}, de lo más reciente a
         lo más antiguo: cada victoria clasificatoria, cada logro cumplido y cada cambio
-        de poseedor de las competiciones. Los logros se resuelven en caliente y se
-        apuntan cuando termina el torneo; los cambios de poseedor salen en cuanto la
+        de poseedor de las competiciones. El bono de los eventos puntuales se suma al
+        total de la clasificación y no se lista aquí. Los logros se resuelven en caliente
+        y se apuntan cuando termina el torneo; los cambios de poseedor salen en cuanto la
         sincronización los detecta. Cómo se puntúa está en{" "}
         <Link
           href="/puntuacion"

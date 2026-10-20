@@ -9,6 +9,7 @@ import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { divisionFromRankLevel, type DivisionId } from "@/lib/divisions";
 import { type MatcherinoDonations } from "@/lib/donations";
 import { readEditionConfig, type EditionConfig } from "@/lib/edition";
+import { readEditionEvents, type EditionEvent } from "@/lib/edition-events";
 import {
   aoe4WorldProfileUrl,
   describeMode,
@@ -92,6 +93,7 @@ export { DIVISIONS } from "@/lib/divisions";
 export type { Division, DivisionId } from "@/lib/divisions";
 export type { MatcherinoDonations } from "@/lib/donations";
 export type { EditionConfig } from "@/lib/edition";
+export type { EditionEvent, EditionEventEligibility, EditionEventsState } from "@/lib/edition-events";
 
 /**
  * El resultado de una lectura de las pantallas públicas: o los datos, o la
@@ -240,7 +242,9 @@ export type StandingRow = {
    * precios del catálogo: `imparable` reparte 1 punto por día con tope y `victorias`
    * paga por victoria sin tope, así que sus precios de catálogo no son lo que el
    * jugador cobró (ver `splitStandingPoints`). Aquí caen también los ids del desglose
-   * que ya no están en el catálogo, que no se pueden atribuir a ninguna competición.
+   * que ya no están en el catálogo, que no se pueden atribuir a ninguna competición, y
+   * el **bono de los eventos puntuales** (`breakdown.events`), que es permanente a
+   * efectos de la clasificación y no se pierde.
    */
   pointsByAchievements: number;
   /**
@@ -491,6 +495,15 @@ export type StandingPoints = {
  * fila vieja) no se pueden atribuir a ninguna competición, así que caen del lado de
  * los logros. Y si el `earned` no es una lista legible no hay nada que atribuir, así
  * que no hay competiciones y todo el total va a los logros.
+ *
+ * ## El bono de eventos va en los logros
+ *
+ * `total` incluye el bono de los eventos puntuales (`breakdown.events`), que no es una
+ * competición: se decide al jugar la ventana y no cambia de dueño. Como los logros son
+ * el resto hasta `total`, el bono cae ahí sin que haya que leerlo aparte, y las dos
+ * columnas siguen sumando el total. El recorte de competiciones se hace contra
+ * `breakdown.objectives.points` y no contra `total`, así que un bono no puede colarse
+ * en la columna temporal.
  *
  * `pointsByAchievements + pointsByCompetitions` es **siempre** `total`, incluso con el
  * desglose ausente, mal formado o de otra versión de las reglas.
@@ -1722,6 +1735,26 @@ export const getMatcherinoDonations = cache(
  */
 export const getEditionConfig = cache(async (): Promise<PublicRead<EditionConfig>> => {
   return readFromDatabase("public/getEditionConfig", () => readEditionConfig());
+});
+
+/**
+ * Los eventos puntuales de la edición, para `/reglas` y el layout público.
+ *
+ * Es una lectura ligera de `Setting["edition.events"]`, como `getEditionConfig()`: no
+ * arrastra el cálculo de nada. Con la base caída devuelve `{ status: "degraded",
+ * data: null }` y quien pinte decide qué hacer; **no** publica la lista vacía, porque
+ * "no hay eventos" y "no los hemos podido leer" son cosas distintas (y la segunda no
+ * debe hacer desaparecer el calendario de una edición que sí los tiene).
+ *
+ * Va envuelta en `cache()` de React por el mismo motivo que la configuración: la
+ * puede leer el layout y la página en la misma petición.
+ */
+export const getEditionEvents = cache(async (): Promise<PublicRead<EditionEvent[]>> => {
+  return readFromDatabase("public/getEditionEvents", async () => {
+    const config = await readEditionEvents();
+
+    return config.events;
+  });
 });
 
 /* -------------------------------------------------------------------------- */
