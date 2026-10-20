@@ -83,6 +83,70 @@ export function TextField({
   );
 }
 
+type TextareaFieldProps = {
+  name: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: string;
+  placeholder?: string;
+  maxLength?: number;
+  /** Alto en líneas visibles; por defecto tres. */
+  rows?: number;
+  required?: boolean;
+  className?: string;
+};
+
+/**
+ * Campo de texto largo del panel.
+ *
+ * Es el mismo campo que `TextField` —etiqueta real, control a 6px, pista en
+ * `text-xs`— con la caja alta, para lo que se escribe en frases y no en una
+ * línea: las instrucciones de un evento, por ejemplo. Se extrae aquí y no se
+ * deja como un `<textarea>` suelto para que no se separe del resto de campos del
+ * panel al retocar el dialecto.
+ */
+export function TextareaField({
+  name,
+  label,
+  value,
+  onChange,
+  hint,
+  placeholder,
+  maxLength,
+  rows = 3,
+  required,
+  className,
+}: TextareaFieldProps) {
+  const id = useId();
+  const hintId = hint !== undefined ? `${id}-hint` : undefined;
+
+  return (
+    <div className={`flex flex-col gap-1.5 ${className ?? ""}`}>
+      <label htmlFor={id} className="text-sm text-muted">
+        {label}
+      </label>
+      <textarea
+        id={id}
+        name={name}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        rows={rows}
+        required={required}
+        aria-describedby={hintId}
+        className="resize-y rounded-md border border-line bg-background px-3 py-2 text-foreground placeholder:text-muted"
+      />
+      {hint !== undefined ? (
+        <p id={hintId} className="text-xs leading-relaxed text-muted">
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Línea de estado de un formulario de Server Action.
  *

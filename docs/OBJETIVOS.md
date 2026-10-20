@@ -186,3 +186,15 @@ banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no repar
 reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en
 `kind === "achievement" && target === null`. Los puntos por objetivo, uno a uno, están en las tablas de
 arriba y en `OBJECTIVE_POINTS`.
+
+## El bono de eventos no es un objetivo
+
+Los **eventos puntuales** (una ventana con multiplicador) no forman parte de este catálogo:
+
+- No se poseen ni se cobran como logro o competición, y no aparecen en `/objetivos` ni en el reparto de
+  objetivos.
+- No alteran `victorias` ni su precio: el bono es un concepto aparte que se suma en
+  `PlayerScore.breakdown.events` y sube el total de la clasificación. `Match.points` sigue siendo el
+  punto base por victoria.
+- Por eso no cuentan en la suma nominal del catálogo ni en `OBJECTIVE_COUNT`, y no cambian los
+  desempates dentro de un objetivo. La regla del bono está en [`PUNTUACION.md`](./PUNTUACION.md).

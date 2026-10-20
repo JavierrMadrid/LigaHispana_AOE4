@@ -138,7 +138,7 @@ la web; `Match` no se lee para pintar la clasificación.
 | `playerId` | `String` | FK a `Player.id`, cascada. |
 | `ruleSetVersion` | `Int` | Con qué versión de reglas se calculó. Permite convivir dos versiones sin pisarse. |
 | `rank` | `Int` | Puesto de competición con el desempate ya aplicado: dos filas empatadas en total, tasa de victorias, victorias y partidas **comparten** puesto (1, 2, 2, 4). **Se guarda** porque el orden no se resuelve en SQL. |
-| `total` | `Int` | `objectives.points`: la suma de los objetivos del jugador. Todo punto sale de ahí (las victorias son el objetivo `victorias`). |
+| `total` | `Int` | `objectives.points + events.points`: la suma de los objetivos del jugador y el bono de los eventos puntuales. Las victorias son el objetivo `victorias`; el bono es un concepto aparte. |
 | `wins`, `matches` | `Int` | Victorias y partidas clasificatorias. |
 | `streak` | `Int?` | Racha **actual del torneo**: positiva = victorias clasificatorias seguidas, negativa = derrotas seguidas. `null` sin ninguna clasificatoria contada (la web pinta "-"; no es `0`). No es la racha de la ladder: esa vive en `Player.streak`. |
 | `breakdown` | `Json` | Desglose (ver formato abajo). |
@@ -151,8 +151,8 @@ sale con `total`, `wins` y `matches` a 0, el `breakdown` con ceros (las familias
 y `objectives` a 0 y vacío) y `streak` a `null`. Un jugador **no aprobado** (`PENDING`/`REJECTED`) no
 tiene fila y no aparece.
 
-Formato de `breakdown` (tipo `ScoreBreakdown` en `src/lib/scoring.ts`): las dos familias están
-siempre presentes, con ceros si no aplican.
+Formato de `breakdown` (tipo `ScoreBreakdown` en `src/lib/scoring.ts`): las familias y los dos bloques
+de puntos están siempre presentes en una fila nueva, con ceros si no aplican.
 
 ```json
 {
@@ -170,15 +170,26 @@ siempre presentes, con ceros si no aplican.
       "loco-por-ganar": { "points": 50, "count": 1 },
       "rey-1v1": { "points": 240, "count": 1 }
     }
+  },
+  "events": {
+    "points": 12,
+    "awards": {
+      "clasico-otono": { "points": 12, "wins": 3, "multiplier": 3 }
+    }
   }
 }
 ```
 
-`objectives.points` es el total de la fila. `awards` guarda, por id cobrado, el **importe real** y las
-**repeticiones** (`count`): `imparable` cobra 1 punto por día con tope y `victorias`, `pointsPerWin` por
-victoria, así que el precio del catálogo no es lo que se cobró. Las filas escritas antes de que
-existiera `awards` no lo traen, y quien las lea cae al precio de catálogo y a una repetición. `byMode` y
-`Match.points` son auditoría: no se suman al total.
+`objectives.points` + `events.points` es el total de la fila. `awards` guarda, por id cobrado, el
+**importe real** y las **repeticiones** (`count`): `imparable` cobra 1 punto por día con tope y
+`victorias`, `pointsPerWin` por victoria, así que el precio del catálogo no es lo que se cobró. Las filas
+escritas antes de que existiera `awards` no lo traen, y quien las lea cae al precio de catálogo y a una
+repetición. `byMode` y `Match.points` son auditoría: no se suman al total.
+
+`events` es **opcional** en las filas escritas antes de que existieran los eventos. `awards` va por
+`EditionEvent.id` y guarda las victorias que cobraron ese evento, su multiplicador y los puntos que
+salieron de ellas. `Match.points` sigue siendo el punto base por victoria; el bono no se materializa en
+`Match`, solo aquí (ver [`PUNTUACION.md`](./PUNTUACION.md)).
 
 ## `ObjectiveEvent`
 
@@ -370,6 +381,9 @@ Claves vivas en producción, con quién las escribe:
 | `registration.closesAt` | Fecha de cierre de inscripciones (ISO-8601 UTC). Pasada, el plazo se cierra solo; el interruptor sigue pudiendo cerrar antes. Ausente = sin fecha. | Panel (**solo superadministrador**), con `setRegistrationClosesAt`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
 | `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel (**solo superadministrador**), con `setMatcherinoDonations`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
 | `edition.config` | Configuración de la edición: nombre, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento). Versión 1 fija en código. | Panel de admin (**solo el superadministrador**) |
+| `edition.events` | Eventos puntuales de la edición: id estable, nombre, instrucciones, ventana `[from, to)` en ISO-8601 UTC, multiplicador entero `>= 2` y si exige Discord. Versión 1 fija en código. Solo se crean o editan **antes de `window.from`**; cada evento cae dentro de la ventana del torneo y no se solapa con otro. | Panel de admin (**solo el superadministrador**), con `saveEditionEvent` / `deleteEditionEvent` |
+| `edition.events.state` | Snapshot de elegibilidad por evento, congelado al empezar: `checkedAt`, `checkedPlayerIds` y `eligiblePlayerIds`. Un evento con `discordRequired` sin snapshot no reparte bono. Versión 1. | Proceso de comprobación de Discord (el worker); al borrar un evento, su entrada se borra en la misma transacción |
+| `edition.events.announcements` | Memoria de los recordatorios de eventos en Discord: `sent` con la clave `${eventId}:24h`/`12h`/`1h` → instante ISO en que se mandó. Un documento roto se lee como vacío. Versión 1. | Worker (`src/lib/edition-event-announcements.ts`) |
 | `edition.announcements` | Memoria de los avisos de la edición en Discord: comienzo y final (`startedAt`/`finishedAt`, o `null`), los hitos nuevos ya avisados (`sent`: clave de hito → instante) y si el plazo de inscripción llegó a estar abierto (`registrationWasOpen`). Una marca puesta no se quita nunca. | Worker (`src/lib/edition-announcements.ts`) |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube y su playlist de subidas, ya resueltos (30 días). | Worker |

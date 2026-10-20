@@ -41,23 +41,26 @@ mismo y quién está en directo.
 | **Partidas** (`/partidas`) | Las partidas que los participantes están jugando en este momento, con el mapa, el tipo de partida y quién está en directo enlazando a su retransmisión de Twitch, YouTube o Kick. Se filtran por tipo de partida, por varias divisiones a la vez y por «en directo» (solo las que se pueden ver), y cuando dos participantes de la misma partida emiten a la vez la tarjeta lleva al visor multi-stream con sus canales. |
 | **Objetivos** (`/objetivos`) | Los objetivos activos (hoy 88: 29 competiciones y 59 logros), con sus puntos y quién los cobra. Los de civilización se agrupan por familia (la cabeza y sus subobjetivos, con un filtro de banderas para saltar a cada uno y un riel que se recorre con la rueda, el gesto táctil o dos botones de flecha); las 23 competiciones `Masterizando <civ>` —que no tienen cabeza— van en su propio carrusel, «Masterizando», con el mismo filtro de banderas y riel. La tarjeta de la cabeza explica cómo puntúa el conjunto y cada tarjeta abre una ventana volteable: de primeras se ve la clasificación —solo quien disputa el objetivo—, con su avance (`12/23` civilizaciones, `2/3` victorias o el valor de su métrica en una competición) sobre una barra de fondo que lo compara con el líder de la lista, un check en quien lo ha completado —ninguno en un objetivo sin tope, que lo cobra todo el que suma— y el recuento de completadores sobre el total («3 de 12 lo han completado»); quien todavía no ha empezado la participación no sale en la lista, y su censo está en la clasificación del torneo. Al girarla aparece el resumen de la propia tarjeta, recompuesto en una columna centrada alrededor del emblema del objetivo, que se enseña en grande en un medallón: el arte de la civilización cuando el objetivo es de civilización y el glifo propio de la casa en el resto. Las tarjetas encienden un halo dorado al pasar el ratón y dejan una estela dorada que sigue al cursor por dentro. |
 | **Detalle de un participante** (`/detalle-jugador/<id>`) | Quién es un jugador y cómo va, en dos pestañas que son dos rutas: **Objetivos** e **Historial de puntos**. La cabecera —avatar, nombre con su emblema de liga, enlace a su perfil de AoE4World y las cifras de cabecera— es común a las dos. En **Objetivos** está su avance en los objetivos activos: una entradilla con el más cercano, el índice de secciones y los individuales en tres bloques —Al alcance (ordenado de más a menos cerca de cobrarlo), En posesión y Sin disputar—; dentro de "Al alcance", tras sus tarjetas, los de civilización se agrupan en los carruseles de Líder y Acólito, con el mismo riel y filtro de banderas que `/objetivos` pero con el avance del jugador y ordenados de mayor a menor porcentaje de consecución, y la tarjeta de la cabeza de familia resume su avance civilización por civilización —la lista más corta de las dos, las hechas o las que quedan, con su bandera y la unidad de la cifra: partidas en Jugón, victorias en Polifacético—. En «Por tierra y agua», los mapas que le faltan sustituyen al pool entero («Faltan 3 mapas · 2 × Golden Heights, …») y un objetivo repetible lleva sus repeticiones en el rótulo (`2 x Imparable`, `24 x Victorias`), con lo que ha cobrado de verdad en cada cifra. Al pulsar una tarjeta se abre su clasificación en una ventana volteable: cada fila lleva su avance sobre una barra de fondo que lo compara con el umbral o con el líder, la del jugador de la ficha se distingue con la etiqueta «Tú» —la ventana no tiñe ninguna fila— y, en «Por tierra y agua», lo que le falta encabeza la lista, entre la cabecera y la clasificación; en los logros de familia, el avance por civilización ocupa ese mismo sitio; al girarla aparece su resumen, con el mismo detalle de mapas o de civilizaciones. En **Historial de puntos** está su feed de puntos, el mismo que el global pero de un solo jugador, con filtro de fechas y paginación. La ruta vieja (`/objetivos/<id>`) redirige aquí de forma permanente. |
-| **Puntuación** (`/puntuacion`) | Cuánto vale cada victoria, qué cuenta como partida clasificatoria, los objetivos especiales y los desempates. Las cifras (puntos por victoria, objetivos activos y su total, premio base) salen del ruleset y de la edición activos. |
-| **Historial de puntos** (`/historial`) | El historial de puntos del torneo: cada victoria clasificatoria y cada logro cumplido, más los cambios de liderazgo de las competiciones —«ahora lidera» y «ya no lidera»—, de lo más reciente a lo más antiguo, paginados en servidor. Se filtra por participante y por rango de fechas (el día final entra completo), y se llega desde Puntuación. Cada participante tiene además su propio historial en su detalle. Una ganancia revertida por la organización sale tachada y marcada con texto, y no suma. Los liderazgos de las competiciones se registran en vivo durante el torneo; los logros, que se resuelven en caliente, se apuntan cuando el torneo termina. |
-| **Reglas** (`/reglas`) | Las normas del torneo: formato, participación, normas de obligado cumplimiento y organización. La retransmisión en directo se lista solo cuando la edición la exige, y la sección de organización anuncia el premio base y las donaciones cuando están publicados. |
+| **Puntuación** (`/puntuacion`) | Cuánto vale cada victoria y cómo la multiplica un evento puntual, qué cuenta como partida clasificatoria, los objetivos especiales y los desempates. Las cifras (puntos por victoria, objetivos activos y su total, premio base) salen del ruleset y de la edición activos. |
+| **Historial de puntos** (`/historial`) | El historial de puntos del torneo: cada victoria clasificatoria y cada logro cumplido, más los cambios de liderazgo de las competiciones —«ahora lidera» y «ya no lidera»—, de lo más reciente a lo más antiguo, paginados en servidor. Se filtra por participante y por rango de fechas (el día final entra completo), y se llega desde Puntuación. Cada participante tiene además su propio historial en su detalle. El bono de los eventos puntuales no sale en el historial: se suma al total de la clasificación. Una ganancia revertida por la organización sale tachada y marcada con texto, y no suma. Los liderazgos de las competiciones se registran en vivo durante el torneo; los logros, que se resuelven en caliente, se apuntan cuando el torneo termina. |
+| **Reglas** (`/reglas`) | Las normas del torneo: formato, participación, eventos puntuales con su calendario y su multiplicador, normas de obligado cumplimiento y organización. La retransmisión en directo se lista solo cuando la edición la exige, y la sección de organización anuncia el premio base y las donaciones cuando están publicados. |
 | **Participar** (`/participar`) | La inscripción pública al torneo. |
 
 Además, cuando la organización tiene publicada una campaña, todas las páginas públicas muestran arriba
-un **banner de donaciones** con el enlace a Matcherino.
+un **banner de donaciones** con el enlace a Matcherino. Mientras un **evento puntual** está en curso, su
+banner aparece por encima de ese aviso, con el multiplicador, las fechas y el requisito de Discord, y
+lleva al calendario de Reglas.
 
 La organización tiene además un **panel de administración** para aprobar participantes, revisar
 partidas y alertas, gestionar el torneo y publicar la campaña de donaciones. El **superadministrador**
 configura además la **edición**: su nombre y su premio base, la marca (emblema y color de acento) que se
-aplica a la web pública, si la retransmisión es obligatoria y las reglas de puntuación (ventana,
-familias, puntos y objetivos desactivados), todo sin desplegar. También puede **deshacer** lo que
-hicieron los admins regulares.
+aplica a la web pública, si la retransmisión es obligatoria, las reglas de puntuación (ventana,
+familias, puntos y objetivos desactivados) y los **eventos puntuales**, todo sin desplegar. También
+puede **deshacer** lo que hicieron los admins regulares.
 
 Un **bot de Discord** avisa del comienzo y el final del torneo en el canal de avisos, una sola vez por
-aviso, con el nombre de la edición y sus fechas.
+aviso, con el nombre de la edición y sus fechas. También recuerda cada **evento puntual** 24, 12 y 1 hora
+antes de que empiece, y el mensaje de comienzo incluye el resumen del calendario de eventos.
 
 ## Cómo se compite
 
@@ -67,6 +70,9 @@ aviso, con el nombre de la edición y sus fechas.
   **Victorias**, más los demás **objetivos activos** (hoy 88) que reparten puntos extra:
   **competiciones** (los cobra quien va primero) y **logros** (los cobra quien cumple la condición).
 - **Ventana de fechas**: solo cuentan las partidas jugadas dentro del periodo del torneo.
+- **Eventos puntuales**: ventanas programadas antes del torneo en las que cada victoria paga un
+  multiplicador, aplicado solo a los puntos por victoria. Algunos exigen estar en el Discord al
+  empezar el evento.
 - **Equipos equilibrados**: una partida por equipos solo cuenta si ningún compañero está a dos
   escalones o más de división del jugador, por encima o por debajo.
 - **Transparencia**: la organización vigila comportamientos que podrían inflar la clasificación
@@ -136,8 +142,9 @@ El panel de administración (`/admin`) es solo para la organización, y tiene **
 
 Lo del superadministrador vive en la pestaña **Administración**, que solo él ve y que se organiza en
 subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Puntuación**,
-**Inscripciones** (el plazo y los países admitidos), **Donaciones** y **Avisos** (la prueba del canal
-de Discord). El resto del panel es igual para los dos papeles.
+**Eventos** (el calendario con multiplicador), **Inscripciones** (el plazo y los países admitidos),
+**Donaciones** y **Avisos** (la prueba del canal de Discord). El resto del panel es igual para los dos
+papeles.
 
 El alta es **por invitación**: se escribe el correo en el panel y la persona recibe un enlace para
 fijar su contraseña (pasa por `/auth/confirm` y termina en `/login/establecer-contrasena`); un enlace

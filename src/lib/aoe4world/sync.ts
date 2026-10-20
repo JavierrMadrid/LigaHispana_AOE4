@@ -4,10 +4,15 @@ import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { evaluateAlerts, type EvaluateAlertsResult } from "@/lib/alerts/evaluate";
 import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { checkDiscordMembership, describeDiscordChecks, type DiscordChecksResult } from "@/lib/discord/check";
+import {
+  describeEditionEventEligibility,
+  syncEditionEventEligibility,
+} from "@/lib/discord/event-eligibility";
 import { describeParticipantRoleSync } from "@/lib/discord/participant-role";
 import { syncParticipantRole } from "@/lib/discord/role-sync";
 import { db } from "@/lib/db";
 import { announceEditionWindow } from "@/lib/edition-announcements";
+import { announceEditionEvents } from "@/lib/edition-event-announcements";
 import {
   checkPlayerHistory,
   describeHistoryChecks,
@@ -1014,6 +1019,35 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se han podido rellenar los summaries de partida: ${summariesError}`);
   }
 
+  // La **elegibilidad de los eventos puntuales** que exigen Discord se congela
+  // **antes** del recálculo, que es quien la lee para repartir el bono
+  // (`computeEventBonuses()`). Si se escribiera después, el bono de la primera pasada
+  // del evento llegaría un ciclo tarde. Es un paso tolerante: sin snapshot el motor no
+  // reparte bono, y un fallo no impide sincronizar ni recalcular lo demás.
+  let eventEligibilityError: string | null = null;
+
+  try {
+    const eventEligibility = await syncEditionEventEligibility({ signal });
+    eventEligibilityError = describeEditionEventEligibility(eventEligibility);
+
+    if (eventEligibilityError !== null) {
+      console.warn(`[sync] ${eventEligibilityError}`);
+    }
+
+    if (eventEligibility.checked > 0) {
+      console.info(
+        `[sync] Elegibilidad de eventos en Discord: ${eventEligibility.checked} comprobado(s), ` +
+          `${eventEligibility.eligible} elegible(s) nuevo(s), ` +
+          `${eventEligibility.pending} para la siguiente pasada.`,
+      );
+    }
+  } catch (error) {
+    eventEligibilityError = toErrorMessage(error);
+    console.error(
+      `[sync] No se ha podido comprobar la elegibilidad de los eventos en Discord: ${eventEligibilityError}`,
+    );
+  }
+
   // La clasificación se recalcula al final y en su propia transacción. Si falla,
   // las partidas ya están guardadas: la web serviría la clasificación anterior
   // hasta la próxima pasada, que es preferible a tumbar la sincronización entera.
@@ -1144,6 +1178,14 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido comprobar la pertenencia a Discord: ${discordError}`);
   }
 
+  // El snapshot de elegibilidad de los eventos comparte el rastro de Discord: es el
+  // mismo servicio y el mismo sitio donde ya se mira que Discord esté funcionando. Se
+  // **suma** al aviso de la pertenencia, no lo sustituye.
+  if (eventEligibilityError !== null) {
+    discordError =
+      discordError === null ? eventEligibilityError : `${discordError} ${eventEligibilityError}`;
+  }
+
   // El **rol de participante** (issue 56) va justo después, en el mismo tratamiento
   // tolerante y con el mismo destino en el rastro: es el adorno del torneo que acompaña
   // a la pertenencia, y comparte su resolución de cuentas (el roster resuelve los
@@ -1230,6 +1272,29 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   } catch (error) {
     announceError = toErrorMessage(error);
     console.error(`[sync] No se han podido enviar los avisos del torneo: ${announceError}`);
+  }
+
+  // Los recordatorios de los **eventos puntuales** (24/12/1 h antes) van junto a los
+  // hitos de la edición, con el mismo tratamiento: un fallo no para la pasada, el
+  // motivo se suma a `announceError` y el aviso que no salió queda pendiente. Sin
+  // eventos, o sin ninguno en su tramo, no se lee la configuración de Discord.
+  try {
+    const eventos = await announceEditionEvents();
+
+    if (eventos.sent.length > 0) {
+      console.info(
+        `[sync] Avisos de eventos enviados a Discord: ${eventos.sent.join(", ")}.`,
+      );
+    }
+
+    if (eventos.error !== null) {
+      announceError = announceError === null ? eventos.error : `${announceError} ${eventos.error}`;
+      console.warn(`[sync] ${eventos.error}`);
+    }
+  } catch (error) {
+    const eventosError = toErrorMessage(error);
+    announceError = announceError === null ? eventosError : `${announceError} ${eventosError}`;
+    console.error(`[sync] No se han podido enviar los avisos de los eventos: ${eventosError}`);
   }
 
   try {

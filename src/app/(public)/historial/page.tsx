@@ -82,9 +82,10 @@ export default async function PointHistoryPage({ searchParams }: PageProps<"/his
       <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">
         Las ganancias de puntos del torneo, de lo más reciente a lo más antiguo: cada
         victoria clasificatoria, cada logro cumplido y cada cambio de poseedor de las
-        competiciones. Los logros se resuelven en caliente y se apuntan cuando termina
-        el torneo; los cambios de poseedor salen en cuanto la sincronización los
-        detecta. Las reglas y las cifras del sistema están en{" "}
+        competiciones. El bono de los eventos puntuales se suma al total de la
+        clasificación y no se lista aquí. Los logros se resuelven en caliente y se
+        apuntan cuando termina el torneo; los cambios de poseedor salen en cuanto la
+        sincronización los detecta. Las reglas y las cifras del sistema están en{" "}
         <Link
           href="/puntuacion"
           className="text-accent underline underline-offset-4 hover:text-accent-strong"

@@ -851,6 +851,15 @@ export type ObjectiveMatchRow = {
   gameId: string;
   leaderboard: string;
   kind: string | null;
+  /**
+   * `Match.startedAt` en milisegundos.
+   *
+   * Lo usan los eventos puntuales, que cuentan por **cuándo empezó** la partida (el
+   * mismo criterio que la ventana del torneo) y no por cuándo terminó. Viaja como
+   * número por el mismo motivo que `finishedAtMs`: evita discutir con la zona
+   * horaria de la sesión al cruzar tiempos.
+   */
+  startedAtMs: number;
   finishedAtMs: number;
 };
 
@@ -900,6 +909,7 @@ function objectiveRowsQuery(ruleset: ScoringRuleset, cutoffs: LadderCutoffsTable
            m."gameId" as "gameId",
            m."leaderboard" as "leaderboard",
            m."rawJson" ->> 'kind' as "kind",
+           (extract(epoch from m."startedAt" at time zone 'UTC') * 1000)::double precision as "startedAtMs",
            (extract(epoch from m."finishedAt" at time zone 'UTC') * 1000)::double precision as "finishedAtMs"
     from "Match" m
     join "Player" p on p."id" = m."playerId"
@@ -1319,12 +1329,25 @@ export async function loadObjectiveMatchRows(
   return client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset, cutoffs));
 }
 
-export async function loadObjectivePlayers(
-  client: ObjectiveQueryClient,
+/**
+ * Lo que devuelve `loadObjectiveData()`: las filas clasificatorias y sus agregados.
+ *
+ * Se piden juntos porque salen del mismo barrido: los agregados alimentan el
+ * catálogo de objetivos y las filas alimentan los eventos puntuales, que cuentan
+ * victorias por **partida** y no por agregado.
+ */
+export type ObjectiveData = {
+  /** Los agregados por jugador, listos para el catálogo de objetivos. */
+  players: PlayerAggregate[];
+  /** Las filas clasificatorias de las que salen, ordenadas como las lee el motor. */
+  rows: ObjectiveMatchRow[];
+};
+
+/** Agrupa las filas por jugador y las convierte en agregados. */
+function aggregateObjectivePlayers(
+  rows: readonly ObjectiveMatchRow[],
   ruleset: ScoringRuleset,
-  cutoffs: LadderCutoffsTable | null,
-): Promise<PlayerAggregate[]> {
-  const rows = await loadObjectiveMatchRows(client, ruleset, cutoffs);
+): PlayerAggregate[] {
   const byPlayer = new Map<string, { meta: PlayerMeta; rows: ObjectiveMatchRow[] }>();
 
   for (const row of rows) {
@@ -1372,6 +1395,33 @@ export async function loadObjectivePlayers(
   }
 
   players.sort((a, b) => a.profileId - b.profileId);
+
+  return players;
+}
+
+/**
+ * Las partidas clasificatorias y sus agregados, en una sola consulta.
+ *
+ * `recomputeScores()` usa las dos partes: los agregados para los objetivos y las
+ * filas para el bono de los eventos puntuales. `loadObjectivePlayers()` se queda
+ * como el atajo de quien solo necesita lo primero (`loadObjectiveView`).
+ */
+export async function loadObjectiveData(
+  client: ObjectiveQueryClient,
+  ruleset: ScoringRuleset,
+  cutoffs: LadderCutoffsTable | null,
+): Promise<ObjectiveData> {
+  const rows = await loadObjectiveMatchRows(client, ruleset, cutoffs);
+
+  return { players: aggregateObjectivePlayers(rows, ruleset), rows };
+}
+
+export async function loadObjectivePlayers(
+  client: ObjectiveQueryClient,
+  ruleset: ScoringRuleset,
+  cutoffs: LadderCutoffsTable | null,
+): Promise<PlayerAggregate[]> {
+  const { players } = await loadObjectiveData(client, ruleset, cutoffs);
 
   return players;
 }

@@ -267,6 +267,27 @@ describe("splitStandingPoints", () => {
     expect(suma(reparto)).toBe(205);
   });
 
+  it("el bono de eventos cae en permanentes y las dos columnas siguen sumando el total", () => {
+    // Fila con 250 de objetivos (200 de competición) y 12 de bono de eventos: el
+    // total es 262 y el bono no es una competición, así que se queda del lado de los
+    // logros. El recorte de competiciones se hace contra los objetivos, no contra el
+    // total, así que el bono no puede colarse en la columna temporal.
+    const reparto = splitStandingPoints(
+      262,
+      {
+        objectives: { points: 250, earned: ["rey-1v1", "loco-por-ganar"] },
+        events: { points: 12, awards: { clasico: { points: 12, wins: 3, multiplier: 3 } } },
+      },
+      catalogo,
+    );
+
+    expect(reparto).toEqual({
+      pointsByAchievements: 62,
+      pointsByCompetitions: 200,
+    });
+    expect(suma(reparto)).toBe(262);
+  });
+
   it("el sobrante del total que no es de competiciones cae en logros", () => {
     // Fila de un ruleset en el que `rey-1v1` valía 250 y ahora vale 200: la
     // competición se cobra a precio de catálogo y los 50 de diferencia no se pueden

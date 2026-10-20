@@ -811,6 +811,73 @@ noticia.
 - **Sin cuenta resoluble no hay privado**, y sin canal no hay global; los dos son **independientes** y
   ninguno es un fallo. Sin `DISCORD_BOT_TOKEN` no se avisa de nada (solo queda el log).
 
+## Eventos puntuales
+
+Una **ventana con multiplicador**: durante el evento, cada victoria clasificatoria paga
+`pointsPerWin × (multiplier − 1)` puntos de bono (x2, x3…). Las reglas de qué cuenta y cómo se
+suma están en `docs/PUNTUACION.md`; aquí solo está la operativa. El catálogo se edita en el
+panel (`/admin/administracion/eventos`) y se **bloquea** cuando empieza la ventana del torneo
+(`window.from`): a partir de ahí, mover un evento cambiaría puntos ya publicados.
+
+| Qué | Dónde |
+|---|---|
+| Eventos | `Setting["edition.events"]` (nombre, descripción, `from`/`to`, multiplicador y `discordRequired`) |
+| Snapshot de elegibilidad | `Setting["edition.events.state"]` (`checkedAt`, `checkedPlayerIds`, `eligiblePlayerIds` por evento) |
+| Memoria de avisos | `Setting["edition.events.announcements"]` (`sent`: `${eventId}:24h`/`12h`/`1h` → instante) |
+| Dónde mirar | `announceError` (avisos) y `discordError` (elegibilidad) en `Setting["sync.lastRun"]`. Ninguno mueve `lastSuccessAt` |
+
+### Avisos
+
+El worker manda **tres recordatorios** por evento, dentro de su tramo y nunca atrasados:
+
+| Aviso | Cuándo (`now`) |
+|---|---|
+| 24 h | `[inicio − 24 h, inicio − 12 h)` |
+| 12 h | `[inicio − 12 h, inicio − 1 h)` |
+| 1 h | `[inicio − 1 h, inicio)` |
+
+- **Un evento ya empezado no genera recordatorios**: su información va en el aviso de comienzo.
+- **Un tramo saltado no se recupera**: si la pasada de las 24 h no ocurre, no se manda al día
+  siguiente; sale el tramo en el que estemos. Un aviso ya anotado no se repite.
+- El texto lleva el nombre, la ventana en hora de Madrid, el multiplicador, la descripción si la
+  hay y, si el evento lo pide, que solo cobran quienes estén en el servidor de Discord.
+- Se menciona al rol de participante (`DISCORD_PARTICIPANT_ROLE_ID`) con
+  `allowed_mentions` restringido a ese rol: no se pinguea a todo el mundo. **Sin ese rol no se
+  manda nada** y el aviso queda pendiente; el motivo va en `announceError`.
+- **El aviso de comienzo del torneo incluye un resumen de los eventos** (nombre, ventana,
+  multiplicador y requisito de Discord). Si no cabe en un mensaje de 2000 caracteres, el aviso
+  de inicio sale entero y el resumen en un segundo mensaje; la marca del comienzo se pone solo
+  cuando han salido los dos. Sin eventos, el mensaje de inicio no cambia. Los dos mensajes salen
+  con `allowed_mentions` vacío (`suppressMentions`): el nombre de un evento lo escribe el panel y
+  un `@everyone` dentro de él no puede pingear al servidor.
+
+### Snapshot de Discord
+
+Si un evento tiene `discordRequired`, el bono solo lo cobran quienes estén en el servidor, y
+quiénes son se decide **al empezar el evento** (`syncEditionEventEligibility()`, antes del
+recálculo de la clasificación).
+
+- **La primera pasada dentro del evento comprueba a todos los aprobados** y fuerza la lectura
+  de la lista de miembros, ignorando su caché de 12 h: el snapshot es la foto del momento de
+  empezar.
+- **Las pasadas siguientes solo comprueban a los aprobados que faltan** (altas a mitad de
+  evento). A quien ya se comprobó no se le vuelve a preguntar, y **nadie sale de
+  `eligiblePlayerIds`**: la elegibilidad crece, no se revisa.
+- El roster resuelve presencias sin una petición por jugador; una ausencia se confirma con
+  `GET /guilds/{id}/members/{user_id}`. Las confirmaciones por cuenta se acotan con
+  `DISCORD_CHECK_MAX_PER_RUN` y lo que queda se reintenta en la pasada siguiente.
+- **Sin `discordUserId`** el jugador se cuenta como comprobado y **no elegible**: sin cuenta
+  enlazada no hay manera de probar que es quien está en el servidor.
+- Un veredicto **`unknown`** (timeout, `401`, `5xx`, roster ilegible) **no se marca**: se
+  reintenta. No saber no es "no está", y aquí además sería "no cobra".
+- Esta comprobación **no crea alertas** `DISCORD_NOT_IN_GUILD`: de eso se encarga la
+  comprobación de pertenencia. Solo decide quién cobra.
+- **Sin snapshot no hay bono**: si el evento empieza y termina entre dos pasadas del cron, no
+  hay comprobación retroactiva y sus victorias no pagan extra. Es una limitación conocida del
+  cron de 5–10 minutos.
+- Sin `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` no se escribe nada y el motivo va en
+  `discordError`: el evento que exige Discord no repartirá bono hasta que se configure.
+
 ## Simulaciones
 
 ### Con fixtures (mock de AoE4World)
