@@ -1,6 +1,7 @@
 import "server-only";
 
 import { PlayerStatus } from "@/generated/prisma/enums";
+import { getAoe4WorldConfig } from "@/lib/aoe4world/env";
 import { db } from "@/lib/db";
 import { readEditionConfig } from "@/lib/edition";
 import { countsWithinWindow, rankedMatchWhere, teammatesWithinTier } from "@/lib/ranked-match";
@@ -117,6 +118,12 @@ type EvaluationContext = {
    * y no por jugador: es configuración, no un dato del torneo.
    */
   streamingRequired: boolean;
+  /**
+   * Ventana de revisión del resumen, en milisegundos
+   * (`AOE4WORLD_SUMMARY_REVIEW_WINDOW_HOURS`). Es lo que separa "el resumen aún
+   * puede llegar" de "esta partida se quedó sin revisar".
+   */
+  summaryReviewWindowMs: number;
   now: Date;
 };
 
@@ -142,6 +149,11 @@ type MatchRow = {
   startedAt: Date;
   durationSeconds: number | null;
   rawJson: unknown;
+  apm: number | null;
+  finishedAt: Date | null;
+  summaryCheckedAt: Date | null;
+  summaryLastAttemptAt: Date | null;
+  summaryAnomalies: unknown;
 };
 
 function toErrorMessage(error: unknown): string {
@@ -236,6 +248,14 @@ async function evaluatePlayers(
       startedAt: true,
       durationSeconds: true,
       rawJson: true,
+      // Las cinco del resumen: `apm`, `finishedAt` y las dos marcas de intento son
+      // lo que decide `SUMMARY_NOT_REVIEWED`, y `summaryAnomalies` es la evidencia
+      // de las tres reglas por partida.
+      apm: true,
+      finishedAt: true,
+      summaryCheckedAt: true,
+      summaryLastAttemptAt: true,
+      summaryAnomalies: true,
     },
     // El desempate por `gameId` es lo que hace determinista la secuencia: dos
     // jugadores de la liga que juegan la misma partida tienen el mismo
@@ -281,6 +301,11 @@ async function evaluatePlayers(
       startedAt: row.startedAt,
       durationSeconds: row.durationSeconds,
       rawJson: row.rawJson,
+      apm: row.apm,
+      finishedAt: row.finishedAt,
+      summaryCheckedAt: row.summaryCheckedAt,
+      summaryLastAttemptAt: row.summaryLastAttemptAt,
+      summaryAnomalies: row.summaryAnomalies,
     };
 
     const lista = porJugador.get(row.playerId);
@@ -304,6 +329,7 @@ async function evaluatePlayers(
       matches: porJugador.get(row.id) ?? [],
       ruleset: context.alertsRuleset,
       scoring: { modes: context.scoring.modes, window: context.scoring.window },
+      summaryReviewWindowMs: context.summaryReviewWindowMs,
       now: context.now,
     });
 
@@ -381,6 +407,11 @@ export async function evaluateAlerts(
   const startedAtMs = Date.now();
   const now = options.now ?? new Date();
 
+  // La ventana de revisión del resumen es configuración del worker y se lee en
+  // síncrono, antes de las lecturas de `Setting`: no depende de ellas y una
+  // evaluación completa no tiene por qué esperarla.
+  const summaryReviewWindowMs = getAoe4WorldConfig().summaryReviewWindowHours * 3_600_000;
+
   // El ruleset de alertas se publica aquí (una sola vez) y el de puntuación se lee:
   // de este salen los `modes` y la `window` que definen qué es clasificatoria. Los
   // dos, y la configuración de la edición (que decide si se evalúa
@@ -403,6 +434,7 @@ export async function evaluateAlerts(
     scoring,
     cutoffs,
     streamingRequired: edition.streamingRequired,
+    summaryReviewWindowMs,
     now,
   };
 

@@ -1668,8 +1668,8 @@ const ALERT_SELECT = {
  * |---|---|---|
  * | `from` / `to` | `Alert.createdAt` | fecha `YYYY-MM-DD` o instante con zona, con los mismos bordes que el historial |
  * | `playerId` | `Alert.playerId` | un `Player.id` con forma de `cuid` |
- * | `regla` | `Alert.rule` | uno de los once `AlertRule` |
- * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
+ * | `regla` | `Alert.rule` | uno de los dieciséis `AlertRule` |
+ * | `tipo` | `Alert.kind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED`, `MATCH_DETECTED` |
  *
  * Los cuatro se combinan (es una conjunción), y los tres que son una lista usan
  * **allowlist**: un valor que no está en la lista es ausencia de filtro, no "cero alertas

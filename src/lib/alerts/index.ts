@@ -49,6 +49,7 @@ export {
   type AlertsRuleset,
   type AlertsRulesetMergeResult,
   type AlertsThresholds,
+  type MatchAlertRule,
   type StateAlertRule,
   type StreakAlertRule,
   type TotalAlertRule,

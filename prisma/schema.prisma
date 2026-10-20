@@ -129,6 +129,28 @@ enum AlertRule {
   /// retransmisión obligatoria. Apagarla no borra las alertas ya escritas: `Alert`
   /// es *append-only* y lo que se dejó de comprobar no se desdice.
   NO_STREAM_CHANNEL
+  /// No creó **ningún aldeano** en los primeros minutos de una partida concreta.
+  ///
+  /// Esta y las dos siguientes (`NO_MILITARY_GAP` y `NO_RESOURCES_GAP`) son
+  /// **hallazgos sobre una partida**, no sobre una racha de partidas: el dato que
+  /// las dispara es el interior de esa partida (`Match.summaryAnomalies`, leído del
+  /// summary) y el aviso es uno por partida y regla. Van al final por el mismo
+  /// motivo que el resto de valores nuevos.
+  NO_VILLAGERS_FIRST_MINUTES
+  /// La puntuación militar no subió durante una ventana seguida de la partida,
+  /// con una gracia inicial.
+  NO_MILITARY_GAP
+  /// La suma de recursos recolectados no subió durante una ventana seguida de la
+  /// partida.
+  NO_RESOURCES_GAP
+  /// Hay partidas que llevan más de la ventana de revisión sin una respuesta
+  /// concluyente del summary, tras haberlas intentado.
+  ///
+  /// Es una regla de **estado** del jugador (una fila por jugador), no de una
+  /// partida: lo que dice es que no se ha podido revisar su historial reciente. El
+  /// caso de perfil privado **confirmado** sigue siendo `HISTORY_NOT_PUBLIC`; este
+  /// es el respaldo de lo que no se pudo confirmar.
+  SUMMARY_NOT_REVIEWED
 }
 
 /// Cuándo se ha detectado la alerta.
@@ -145,11 +167,18 @@ enum AlertRule {
 /// tiene "con qué evidencia", y por eso es el único cuyo `anchorGameId` es
 /// siempre `null`: la evidencia son las respuestas del sondeo, que van en
 /// `details`, y la corrección es que la condición deje de cumplirse.
+///
+/// `MATCH_DETECTED` (al final, como todos los valores nuevos) es el hallazgo de
+/// **una partida concreta**: la evidencia está dentro de esa partida
+/// (`Match.summaryAnomalies`) y el ancla es su `gameId`, así que a diferencia de
+/// `STATE_DETECTED` **sí lleva partida** y su clave de dedupe la incluye: una fila
+/// por partida y regla, no una por jugador.
 enum AlertKind {
   STREAK_CLOSED
   STREAK_AT_TOURNAMENT_END
   TOTAL_REACHED
   STATE_DETECTED
+  MATCH_DETECTED
 }
 
 /// Qué le ha pasado al poseedor de una competición (`ObjectiveLeadEvent`).
@@ -466,6 +495,19 @@ model Match {
   // concluyente: así no se vuelve a preguntar por ella. Un fallo de red, un 5xx o un
   // 200 ilegible **no** la tocan, así que la partida vuelve a la cola más tarde.
   summaryCheckedAt       DateTime?
+  // Cuándo se pidió el summary por última vez, con **cualquier** desenlace (200, 404,
+  // fallo, 429). `null` = nunca se intentó. Es distinto de `summaryCheckedAt`: esa
+  // marca dice "ya hay una respuesta concluyente" y esta dice "se intentó, saliera lo
+  // que saliera". De aquí salen el margen de reintento de una hora y la detección de
+  // las partidas que se intentaron y nunca se resolvieron (`SUMMARY_NOT_REVIEWED`).
+  summaryLastAttemptAt   DateTime?
+  // Evidencia compacta del summary para las alertas de comportamiento: si el
+  // `buildOrder` se pudo leer, cuándo se creó el primer aldeano y los dos tramos sin
+  // progreso (militar y de recursos). `null` = no hay summary. La forma exacta está en
+  // `SummaryAnomalies` (`src/lib/aoe4world/summary-anomalies.ts`); se guarda el resumen
+  // y no el payload entero porque lo que el motor necesita son cuatro datos, y
+  // `rawJson` no lleva el summary.
+  summaryAnomalies       Json?
   // Puntos que esta partida aporta según el ruleset activo: hoy
   // `DEFAULT_RULESET.pointsPerWin` en cada victoria clasificatoria resuelta y 0 en
   // el resto. El motor es el único que lo escribe, y solo en las filas cuyo valor
@@ -908,9 +950,11 @@ model Alert {
   // la liga no va a aparecer en ningún `join` del panel.
   subjectName      String?
 
-  // Magnitud del hallazgo: partidas de la racha para los avisos de racha, y
-  // partidas acumuladas para los de total. En un total es siempre el múltiplo o
-  // el umbral que se ha cruzado, así que `count == threshold`.
+  // Magnitud del hallazgo: partidas de la racha para los avisos de racha,
+  // partidas acumuladas para los de total y **segundos del tramo** para los
+  // hallazgos de una partida (`MATCH_DETECTED`). En `NO_VILLAGERS_FIRST_MINUTES`
+  // es 0, "cero aldeanos", y el umbral es la ventana del arranque. En un total es
+  // siempre el múltiplo o el umbral que se ha cruzado, así que `count == threshold`.
   //
   // Las reglas de estado (`AlertKind.STATE_DETECTED`) no cuentan nada: ahí
   // `count` es la magnitud **con la que se comparó** y `threshold` el valor con
@@ -922,7 +966,8 @@ model Alert {
   count     Int
   // Umbral que dispara el aviso, tomado del ruleset activo. Se guarda para que
   // el informe pueda decir con qué criterio se avisó aunque las reglas cambien
-  // después.
+  // después. En las tres reglas de partida del resumen es el umbral del ruleset
+  // (segundos de la ventana, o la ventana del arranque en la de aldeanos).
   threshold Int
 
   // Partida que **rompió** la racha (la primera clasificatoria sin el patrón) o

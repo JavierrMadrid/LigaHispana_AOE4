@@ -13,6 +13,7 @@ import {
   buildTriggeredAlert,
   hasStreamChannel,
   mergeAlertsRuleset,
+  minutos,
   partidas,
   type AlertTriggerInput,
 } from "@/lib/alerts/rules";
@@ -48,18 +49,19 @@ function disparo(overrides: Partial<AlertTriggerInput> = {}): AlertTriggerInput 
 }
 
 describe("etiquetas", () => {
-  it("las doce reglas y los cuatro tipos tienen su rótulo en español", () => {
+  it("las dieciséis reglas y los cinco tipos tienen su rótulo en español", () => {
     // El `satisfies Record<...>` del módulo obliga a decidir la etiqueta al añadir
     // una regla; aquí se comprueba que ninguna se quedó sin él ni con el mismo
-    // texto que otra. Las doce etiquetas son las **seis** reglas de comportamiento
-    // que se calculan hoy, las **dos retiradas** (R4 y R5, que se quedan por las
-    // filas históricas) y las **cuatro de estado** (historial, ladder, Discord y
-    // canal de directo); los cuatro tipos son las tres rachas/acumulados más
-    // `STATE_DETECTED`.
+    // texto que otra. Las dieciséis etiquetas son las **seis** reglas de
+    // comportamiento que se calculan por racha o acumulado, las **dos retiradas**
+    // (R4 y R5, que se quedan por las filas históricas), las **cinco de estado**
+    // (historial, ladder, Discord, canal de directo y resumen sin revisar) y las
+    // **tres de partida** que salen del resumen; los cinco tipos son las tres
+    // rachas/acumulados, `STATE_DETECTED` y `MATCH_DETECTED`.
     const etiquetas = Object.values(ALERT_RULE_LABELS);
 
-    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(12);
-    expect(Object.keys(ALERT_KIND_LABELS)).toHaveLength(4);
+    expect(Object.keys(ALERT_RULE_LABELS)).toHaveLength(16);
+    expect(Object.keys(ALERT_KIND_LABELS)).toHaveLength(5);
     expect(new Set(etiquetas).size).toBe(etiquetas.length);
     for (const etiqueta of [...etiquetas, ...Object.values(ALERT_KIND_LABELS)]) {
       expect(etiqueta.length).toBeGreaterThan(0);
@@ -80,6 +82,20 @@ describe("el plural de las partidas", () => {
     expect(partidas(1)).toBe("1 partida");
     expect(partidas(0)).toBe("0 partidas");
     expect(partidas(2)).toBe("2 partidas");
+  });
+});
+
+describe("los minutos", () => {
+  it("los segundos exactos se dicen sin decimal", () => {
+    expect(minutos(300)).toBe("5 minutos");
+    expect(minutos(60)).toBe("1 minuto");
+    expect(minutos(0)).toBe("0 minutos");
+  });
+
+  it("lo que no es exacto va con un decimal y coma", () => {
+    // Los umbrales son segundos y quien los retoca puede poner 330.
+    expect(minutos(330)).toBe("5,5 minutos");
+    expect(minutos(90)).toBe("1,5 minutos");
   });
 });
 
@@ -176,6 +192,7 @@ describe("alertSummary", () => {
       "HISTORY_NOT_PUBLIC",
       "MISSING_LADDER_MATCHES",
       "NO_STREAM_CHANNEL",
+      "SUMMARY_NOT_REVIEWED",
     ] as const) {
       const frase = alertSummary(
         disparo({
@@ -189,13 +206,87 @@ describe("alertSummary", () => {
 
       expect(frase).not.toContain("Rival Externo");
       // Habla en primera persona del sistema ("no nos llegan") o del jugador ("su
-      // historial"), nunca en tercera persona con nombre.
-      expect(frase).toMatch(/^(Su |La ladder)/);
+      // historial"), nunca en tercera persona con nombre. Las de partida hablan de lo
+      // que pasó, sin sujeto.
+      if (rule === "SUMMARY_NOT_REVIEWED") {
+        expect(frase).toMatch(/partidas? no se han? podido revisar/);
+      } else {
+        expect(frase).toMatch(/^(Su |La ladder)/);
+      }
       // Palabras que serían una acusación o una causa, que es justo lo que no se sabe.
       expect(frase).not.toMatch(/culpa|trampa|mentir|false|intencionad|mal hecho/i);
       // Y tampoco "al cerrar el torneo": un estado no se cierra, se comprueba.
       expect(frase).not.toContain("al cerrar el torneo");
     }
+  });
+
+  it("las tres del resumen dicen lo que se vio, en minutos", () => {
+    // Son hallazgos de una partida, no acusaciones: no llevan causa ni nombre, y el
+    // número que sale es el umbral o el tramo convertido a minutos.
+    expect(
+      alertSummary(
+        disparo({
+          rule: "NO_VILLAGERS_FIRST_MINUTES",
+          kind: "MATCH_DETECTED",
+          subject: SELF_SUBJECT,
+          count: 0,
+          threshold: 300,
+          anchorGameId: "800-010",
+        }),
+      ),
+    ).toBe("No hizo ningún aldeano en los primeros 5 minutos.");
+
+    expect(
+      alertSummary(
+        disparo({
+          rule: "NO_MILITARY_GAP",
+          kind: "MATCH_DETECTED",
+          subject: SELF_SUBJECT,
+          count: 600,
+          threshold: 300,
+          anchorGameId: "800-010",
+        }),
+      ),
+    ).toBe("Pasó 10 minutos seguidos sin progreso militar.");
+
+    expect(
+      alertSummary(
+        disparo({
+          rule: "NO_RESOURCES_GAP",
+          kind: "MATCH_DETECTED",
+          subject: SELF_SUBJECT,
+          count: 180,
+          threshold: 120,
+          anchorGameId: "800-010",
+        }),
+      ),
+    ).toBe("Pasó 3 minutos seguidos sin obtener recursos.");
+  });
+
+  it("el aviso de partidas sin revisar distingue una de varias", () => {
+    const una = alertSummary(
+      disparo({
+        rule: "SUMMARY_NOT_REVIEWED",
+        kind: "STATE_DETECTED",
+        subject: SELF_SUBJECT,
+        count: 1,
+        threshold: 1,
+        anchorGameId: null,
+      }),
+    );
+    const varias = alertSummary(
+      disparo({
+        rule: "SUMMARY_NOT_REVIEWED",
+        kind: "STATE_DETECTED",
+        subject: SELF_SUBJECT,
+        count: 4,
+        threshold: 1,
+        anchorGameId: null,
+      }),
+    );
+
+    expect(una).toBe("1 partida no se ha podido revisar por falta de resumen");
+    expect(varias).toBe("4 partidas no se han podido revisar por falta de resumen");
   });
 });
 
@@ -511,6 +602,67 @@ describe("alertDedupeKey", () => {
 
     expect(estado.dedupeKey).not.toBe(racha.dedupeKey);
   });
+
+  it("un hallazgo de partida lleva la partida en la clave: uno por partida y regla", () => {
+    // `MATCH_DETECTED` cae en la rama de la partida. Con la clave de estado, el
+    // primer hallazgo taparía todos los demás del jugador.
+    const enUna = buildTriggeredAlert(
+      disparo({
+        rule: "NO_VILLAGERS_FIRST_MINUTES",
+        kind: "MATCH_DETECTED",
+        subject: SELF_SUBJECT,
+        count: 0,
+        threshold: 300,
+        anchorGameId: "800-010",
+      }),
+    );
+    const enOtra = buildTriggeredAlert(
+      disparo({
+        rule: "NO_VILLAGERS_FIRST_MINUTES",
+        kind: "MATCH_DETECTED",
+        subject: SELF_SUBJECT,
+        count: 0,
+        threshold: 300,
+        anchorGameId: "800-011",
+      }),
+    );
+    const otraRegla = buildTriggeredAlert(
+      disparo({
+        rule: "NO_MILITARY_GAP",
+        kind: "MATCH_DETECTED",
+        subject: SELF_SUBJECT,
+        count: 600,
+        threshold: 300,
+        anchorGameId: "800-010",
+      }),
+    );
+
+    expect(enUna.dedupeKey).toContain("partida:800-010");
+    expect(enUna.dedupeKey).not.toBe(enOtra.dedupeKey);
+    expect(enUna.dedupeKey).not.toBe(otraRegla.dedupeKey);
+  });
+
+  it("el aviso de no revisadas es de estado: da igual cuántas partidas se midan", () => {
+    const clave = (count: number, gameIds: string[]) =>
+      buildTriggeredAlert(
+        disparo({
+          rule: "SUMMARY_NOT_REVIEWED",
+          kind: "STATE_DETECTED",
+          subject: SELF_SUBJECT,
+          count,
+          threshold: 1,
+          anchorGameId: null,
+          detail: { unreviewedGameIds: gameIds },
+        }),
+      ).dedupeKey;
+
+    const primera = clave(2, ["800-010", "800-011"]);
+    // Otra pasada: el jugador ha jugado una más y ahora hay tres sin revisar.
+    const segunda = clave(3, ["800-012", "800-010", "800-011"]);
+
+    expect(segunda).toBe(primera);
+    expect(primera).toContain("SUMMARY_NOT_REVIEWED|STATE_DETECTED");
+  });
 });
 
 describe("buildTriggeredAlert", () => {
@@ -617,5 +769,65 @@ describe("mergeAlertsRuleset", () => {
 
   it("la clave de `Setting` de los umbrales es la que usa el evaluador", () => {
     expect(ALERTS_RULESET_KEY).toBe("alerts.ruleset");
+  });
+
+  it("un documento de la versión 1 anterior a las reglas del resumen sigue siendo válido", () => {
+    // Es el documento que hay en producción: siete claves y ninguna de las cuatro
+    // nuevas. No sube la versión (el documento no cambia de estructura), así que se
+    // completa con los valores por defecto en vez de descartarse entero.
+    const guardado = {
+      version: 1,
+      label: DEFAULT_ALERTS_RULESET.label,
+      thresholds: {
+        shortMatchSeconds: 240,
+        shortMatchStreak: 2,
+        shortMatchTotalStep: 5,
+        repeatedOpponentStreak: 3,
+        repeatedOpponentTotalStep: 10,
+        repeatedTeammateStreak: 3,
+        repeatedTeammateTotal: 9,
+      },
+    };
+
+    const { ruleset, warnings } = mergeAlertsRuleset(guardado);
+
+    expect(warnings).toEqual([]);
+    expect(ALERTS_RULESET_VERSION).toBe(1);
+    // Lo guardado manda donde está.
+    expect(ruleset.thresholds.shortMatchSeconds).toBe(240);
+    expect(ruleset.thresholds.repeatedTeammateTotal).toBe(9);
+    // Y lo que no estaba se queda en el valor por defecto.
+    expect(ruleset.thresholds.noVillagersFirstSeconds).toBe(
+      DEFAULT_ALERTS_RULESET.thresholds.noVillagersFirstSeconds,
+    );
+    expect(ruleset.thresholds.noMilitaryGraceSeconds).toBe(
+      DEFAULT_ALERTS_RULESET.thresholds.noMilitaryGraceSeconds,
+    );
+    expect(ruleset.thresholds.noMilitaryGapSeconds).toBe(
+      DEFAULT_ALERTS_RULESET.thresholds.noMilitaryGapSeconds,
+    );
+    expect(ruleset.thresholds.noResourcesGapSeconds).toBe(
+      DEFAULT_ALERTS_RULESET.thresholds.noResourcesGapSeconds,
+    );
+  });
+
+  it("los cuatro umbrales del resumen se pueden retocar como los demás", () => {
+    const { ruleset, warnings } = mergeAlertsRuleset({
+      ...VALIDO,
+      thresholds: {
+        noVillagersFirstSeconds: 360,
+        noMilitaryGraceSeconds: 240,
+        noMilitaryGapSeconds: 480,
+        noResourcesGapSeconds: 180,
+      },
+    });
+
+    expect(warnings).toEqual([]);
+    expect(ruleset.thresholds).toMatchObject({
+      noVillagersFirstSeconds: 360,
+      noMilitaryGraceSeconds: 240,
+      noMilitaryGapSeconds: 480,
+      noResourcesGapSeconds: 180,
+    });
   });
 });
