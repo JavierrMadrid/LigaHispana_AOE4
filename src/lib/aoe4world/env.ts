@@ -105,6 +105,17 @@ export type Aoe4WorldConfig = {
   syncMaxPages: number;
   /** Plazo global de una sincronización, en milisegundos. */
   syncDeadlineMs: number;
+  /** Summaries de partida pedidos por pasada (presupuesto del worker). */
+  summaryMaxPerRun: number;
+  /** Separación mínima entre dos summaries, en milisegundos. */
+  summaryMinIntervalMs: number;
+  /** Cuánto se espera antes de reintentar un summary que no se resolvió. */
+  summaryRetryDelayMs: number;
+  /**
+   * Ventana de revisión de un summary, en horas: pasada esta edad sin una respuesta
+   * concluyente, la partida deja de pedirse y se avisa de que quedó sin revisar.
+   */
+  summaryReviewWindowHours: number;
   /**
    * `true` si `AOE4WORLD_MOCK` está activo: las peticiones se resuelven con las
    * fixtures locales de `mock/` y no se sale a la red. Imposible en producción
@@ -136,6 +147,10 @@ export function getAoe4WorldConfig(): Aoe4WorldConfig {
     syncPageSize: readPositiveInt("AOE4WORLD_SYNC_PAGE_SIZE", 50),
     syncMaxPages: readPositiveInt("AOE4WORLD_SYNC_MAX_PAGES", 10),
     syncDeadlineMs: readPositiveInt("AOE4WORLD_SYNC_DEADLINE_MS", 240_000),
+    summaryMaxPerRun: readPositiveInt("AOE4WORLD_SUMMARY_MAX_PER_RUN", 10),
+    summaryMinIntervalMs: readNonNegativeInt("AOE4WORLD_SUMMARY_MIN_INTERVAL_MS", 2_000),
+    summaryRetryDelayMs: readPositiveInt("AOE4WORLD_SUMMARY_RETRY_DELAY_MS", 3_600_000),
+    summaryReviewWindowHours: readPositiveInt("AOE4WORLD_SUMMARY_REVIEW_WINDOW_HOURS", 24),
     mock,
   };
 }

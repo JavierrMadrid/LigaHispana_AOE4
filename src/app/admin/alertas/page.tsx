@@ -37,8 +37,8 @@ function single(value: string | string[] | undefined): string | undefined {
  * ## Filtros y orden
  *
  * La tabla tiene los mismos filtros que el historial —jugador, rango de fechas— más los
- * dos propios de las alertas: **regla** (los once valores del enum, dos de ellos de reglas
- * retiradas que solo existen en filas del histórico) y **tipo** (las cuatro clases
+ * dos propios de las alertas: **regla** (los dieciséis valores del enum, dos de ellos de
+ * reglas retiradas que solo existen en filas del histórico) y **tipo** (las cinco clases
  * de hallazgo). Todos viven en la URL, junto con el orden por columna
  * (`fecha`, `jugador`, `regla`, `sujeto`, `conteo`). No hay filtro por sujeto, partida,
  * detalle ni conteo: el sujeto es un rival que puede no estar en la liga (no hay lista de

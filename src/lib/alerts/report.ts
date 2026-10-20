@@ -257,7 +257,7 @@ const ESTADO_EN_CURSO = "En curso";
 /**
  * `Tipo` de una racha abierta.
  *
- * Los tres `ALERT_KIND_LABELS` describen **cuándo se detectó**, así que ninguno le
+ * Los `ALERT_KIND_LABELS` describen **cuándo se detectó**, así que ninguno le
  * sirve a un tramo que todavía no ha avisado: aquí va lo que es, una racha en curso.
  */
 const TIPO_EN_CURSO = "Racha en curso";

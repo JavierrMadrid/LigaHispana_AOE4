@@ -1003,10 +1003,14 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
       console.warn(`[sync] ${summariesError}`);
     }
 
-    if (summaries.fetched > 0) {
+    if (summaries.fetched > 0 || summaries.throttled) {
       console.info(
         `[sync] Summaries de partida: ${summaries.fetched} guardado(s), ` +
-          `${summaries.missing} sin summary, ${summaries.candidates} candidata(s) pendiente(s).`,
+          `${summaries.missing} sin summary, ${summaries.unreviewed} sin revisar, ` +
+          `${summaries.candidates} candidata(s) pendiente(s).` +
+          (summaries.throttled
+            ? " AoE4World pidió bajar el ritmo (429): la pasada se ha cortado."
+            : ""),
       );
     }
   } catch (error) {
@@ -1032,15 +1036,27 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   // clasificatorias del jugador ha cambiado: y eso es exactamente lo que cuenta
   // cualquiera de los cuatro contadores. En una pasada sin novedades (lo normal,
   // 288 veces al día) no se evalúa a nadie y no se lee ni una fila de `Match`.
-  const tocados = settled
-    .filter(
-      (result) =>
-        result.matchesInserted > 0 ||
-        result.matchesUpdated > 0 ||
-        result.matchesResolvedByRefetch > 0 ||
-        result.matchesAbandoned > 0,
-    )
-    .map((result) => result.profileId);
+  //
+  // **Y los del summary, aunque no hayan jugado nada nuevo**: un resumen rellenado
+  // para una partida vieja cambia lo que el motor de alertas tiene que mirar
+  // (las tres reglas por partida y el estado de "sin revisar"), y esa partida pudo
+  // entrar en la base hace días. Sin sumarlos, el hallazgo no se vería hasta que el
+  // jugador volviera a jugar.
+  const tocados = [
+    ...new Set([
+      ...settled
+        .filter(
+          (result) =>
+            result.matchesInserted > 0 ||
+            result.matchesUpdated > 0 ||
+            result.matchesResolvedByRefetch > 0 ||
+            result.matchesAbandoned > 0,
+        )
+        .map((result) => result.profileId),
+      ...(summaries?.reviewedProfileIds ?? []),
+      ...(summaries?.unreviewedProfileIds ?? []),
+    ]),
+  ].sort((a, b) => a - b);
 
   let alerts: EvaluateAlertsResult | null = null;
   let alertsError: string | null = null;

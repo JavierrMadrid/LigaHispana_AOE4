@@ -47,6 +47,10 @@ const CONFIG: Aoe4WorldConfig = {
   syncPageSize: 50,
   syncMaxPages: 1,
   syncDeadlineMs: 1_000,
+  summaryMaxPerRun: 10,
+  summaryMinIntervalMs: 2_000,
+  summaryRetryDelayMs: 3_600_000,
+  summaryReviewWindowHours: 24,
   mock: false,
 };
 

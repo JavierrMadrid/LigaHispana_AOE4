@@ -1,6 +1,20 @@
 import { isRecord } from "@/lib/json";
 import { runWithDeadline } from "./http";
 import { mockGameSummaryPayload } from "./mock/summary";
+import {
+  GILDED_VILLAGER_PBGID,
+  MOUNTED_VILLAGER_PBGID,
+  VILLAGER_PBGIDS,
+  parseSummaryAnomalies,
+  readInteger,
+  type SummaryAnomalies,
+} from "./summary-anomalies";
+
+export {
+  GILDED_VILLAGER_PBGID,
+  MOUNTED_VILLAGER_PBGID,
+  VILLAGER_PBGIDS,
+} from "./summary-anomalies";
 
 /**
  * El *summary* de una partida: lo que pasó dentro, no solo el resultado.
@@ -46,7 +60,9 @@ import { mockGameSummaryPayload } from "./mock/summary";
  *     "team": 1, "apm": 137, "result": "win",
  *     "actions": { "feudalAge": [215], "castleAge": [512], "imperialAge": [1180] },
  *     "buildOrder": [{ "id": "...", "pbgid": 129272, "type": "unit",
- *                      "finished": [120], "constructed": [110], "destroyed": [900] }]
+ *                      "finished": [120], "constructed": [110], "destroyed": [900] }],
+ *     "resources": { "timestamps": [0, 20, …], "military": [13, 13, …],
+ *                    "foodGathered": [0, 12, …], … }
  *   }]
  * }
  * ```
@@ -60,6 +76,10 @@ import { mockGameSummaryPayload } from "./mock/summary";
  * instante repetido (un aldeano destruido dos veces en el mismo segundo), así que
  * el recuento es `array.length` y no un `Set`.
  *
+ * **La evidencia de comportamiento sale de `buildOrder` y de `resources`** y la
+ * lee `parseSummaryAnomalies()` (`summary-anomalies.ts`): no se guarda el payload,
+ * sino los cuatro datos que el motor de alertas necesita.
+ *
  * El payload se lee **sin `as`**, como el resto de la frontera de confianza
  * (`parse.ts`): un campo con la forma inesperada devuelve `null` y quien llama
  * decide. Un `null` aquí no significa "cero", significa "no lo sé": los títulos de
@@ -72,53 +92,41 @@ import { mockGameSummaryPayload } from "./mock/summary";
 /* -------------------------------------------------------------------------- */
 
 /**
- * Los `pbgid` de cada unidad que cuenta como aldeano, y por qué son conjuntos.
- *
- * Un `pbgid` identifica una **variación** concreta (una civilización, una mejora
- * o una variante de DLC), no un tipo genérico: el aldeano de la liga tiene 22, y
- * los de las dos civilizaciones con aldeano propio son uno más cada uno. La lista
- * está contrastada contra `github.com/aoe4world/data` (`units/unified/*.json`,
- * campo `variations[].pbgid`). Un DLC que añada una civilización con aldeano
- * nuevo dejará su id fuera hasta que se actualice esta lista, y eso solo puede
- * **infravalorar** las pérdidas: ningún id de aquí es de otra unidad.
+ * Los conjuntos de `pbgid` de los aldeanos viven en `summary-anomalies.ts` y se
+ * re-exportan desde aquí: los usan el recuento de pérdidas de este módulo y el
+ * lector de "creó aldeanos" del otro, y son el mismo dato. Ver el docblock de
+ * allí para el criterio con el que se mantienen.
  */
-export const VILLAGER_PBGIDS: ReadonlySet<number> = new Set([
-  129272, 132227, 133491, 134753, 136078, 137283, 166425, 199747, 2046469, 2359463, 2803786,
-  3729183, 3989658, 5000017, 5000197, 5786526, 6094899, 7287301, 7761185, 7788969, 9001047,
-  9003964,
-]);
-
-/** El aldeano dorado: aldeano propio de su civilización, que se cuenta aparte. */
-export const GILDED_VILLAGER_PBGID = 2513732;
-
-/** El aldeano montado, de la civilización nómada, que se cuenta aparte. */
-export const MOUNTED_VILLAGER_PBGID = 9004039;
 
 /**
  * Tope de summaries pedidos por pasada del worker.
  *
  * Es un presupuesto y no una cifra de ritmo: cada summary es una petición al sitio
  * de AoE4World, así que la primera pasada —con todo el torneo sin métricas— tiene
- * que ir poco a poco igual que `HISTORY_CHECK_MAX_PER_RUN`. Veinte por pasada y un
- * cron de diez minutos dan 2.880 summaries al día, de sobra para el torneo vivo y
- * con el histórico rellenándose por detrás.
+ * que ir poco a poco igual que `HISTORY_CHECK_MAX_PER_RUN`. Diez por pasada, dos
+ * segundos entre peticiones y un cron de diez minutos dan 1.440 summaries al día,
+ * de sobra para el torneo vivo y con el histórico rellenándose por detrás.
+ *
+ * Es el valor por defecto: el worker pasa el suyo (`AOE4WORLD_SUMMARY_MAX_PER_RUN`,
+ * ver `env.ts`), que es lo que permite bajarlo sin desplegar.
  */
-export const SUMMARY_MAX_PER_RUN = 20;
+export const SUMMARY_MAX_PER_RUN = 10;
 
 /**
- * Cuánto se espera antes de reintentar una partida **sin métricas**.
+ * Cuánto se espera antes de reintentar una partida **sin respuesta concluyente**.
  *
- * Un `failure` (timeout, 5xx, red) no escribe nada, así que su partida sigue
- * siendo candidata; sin este margen volvería a ser la primera de la cola en la
- * pasada siguiente, gastando el presupuesto entero en la misma partida. Una hora
- * es de sobra para que un bache de AoE4World haya pasado: el resumen de una
- * partida no mejora por preguntarlo dos veces seguidas.
+ * Un `failure` (timeout, 5xx, red, 429) no escribe métricas, así que su partida
+ * sigue pendiente; lo que sí escribe es `summaryLastAttemptAt`, y sin este margen
+ * volvería a ser la primera de la cola en la pasada siguiente, gastando el
+ * presupuesto entero en la misma partida. Una hora es de sobra para que un bache de
+ * AoE4World haya pasado: el resumen de una partida no mejora por preguntarlo dos
+ * veces seguidas.
  */
 export const SUMMARY_RETRY_DELAY_HOURS = 1;
 export const SUMMARY_RETRY_DELAY_MS = SUMMARY_RETRY_DELAY_HOURS * 3_600_000;
 
 /**
- * Hasta cuándo se reintenta una partida sin métricas, en horas.
+ * Hasta cuándo se intenta una partida sin respuesta concluyente, en horas.
  *
  * Pasado este plazo la partida **no se vuelve a intentar nunca**: la API ya no
  * publica el summary de un juego tan viejo (o no lo publicará nunca), y dejar la
@@ -128,29 +136,66 @@ export const SUMMARY_RETRY_DELAY_MS = SUMMARY_RETRY_DELAY_HOURS * 3_600_000;
  *
  * Lo aplica la **consulta** de `sync-summaries.ts` (basta con acotar el conjunto) y
  * no el planificador puro, porque es un filtro de la base y no una regla de orden.
+ * Lo que quedó fuera sin resolverse no se pierde: es lo que cuenta
+ * `SUMMARY_NOT_REVIEWED` y avisa a quien tiene que mirarlo.
  */
 export const SUMMARY_RETRY_WINDOW_HOURS = 24;
 
 /** Un `gameId` que no sea un entero daría un 404 que se leería como "no hay". */
 const NUMERIC_GAME_ID = /^\d+$/;
 
+/** Techo de la espera que pide la API, el mismo que aplica `http.ts`. */
+const MAX_SERVER_WAIT_MS = 120_000;
+
+/** `Retry-After`: segundos o una fecha HTTP. */
+function parseRetryAfter(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  const seconds = Number(value);
+
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(MAX_SERVER_WAIT_MS, Math.round(seconds * 1000));
+  }
+
+  const timestamp = Date.parse(value);
+
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+
+  return Math.min(MAX_SERVER_WAIT_MS, Math.max(0, timestamp - Date.now()));
+}
+
+/** `X-RateLimit-Reset`: epoch en segundos que marca cuándo hay cupo. */
+function parseRateLimitReset(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  const epochSeconds = Number(value);
+
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) {
+    return null;
+  }
+
+  const waitMs = epochSeconds * 1000 - Date.now();
+
+  return waitMs <= 0 ? 0 : Math.min(MAX_SERVER_WAIT_MS, Math.round(waitMs));
+}
+
+/** Cuánto hay que esperar por un 429, si la respuesta da alguna pista. */
+function readServerRequestedWait(headers: Headers): number | null {
+  return (
+    parseRetryAfter(headers.get("retry-after")) ??
+    parseRateLimitReset(headers.get("x-ratelimit-reset"))
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Lectura del payload                                                         */
 /* -------------------------------------------------------------------------- */
-
-function readInteger(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)) {
-    return value;
-  }
-
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value);
-
-    return Number.isInteger(parsed) ? parsed : null;
-  }
-
-  return null;
-}
 
 /**
  * El **primer** instante de una lista de marcas, en segundos.
@@ -313,16 +358,25 @@ export type SummaryFetchOptions = {
 /**
  * Qué se ha podido sacar de pedir el summary de una partida.
  *
- * - `summary`: se ha leído. Es el único desenlace que escribe métricas.
+ * - `summary`: se ha leído. Es el único desenlace que escribe métricas, y trae
+ *   también la evidencia de comportamiento (`anomalies`), que puede ser `null` si el
+ *   payload no se pudo leer para anomalías aunque las métricas sí.
  * - `none`: la partida **no tiene** summary (un 404 del sitio). Es una respuesta
  *   válida y concluyente: se apunta que se comprobó y no se vuelve a preguntar.
  * - `failure`: no se ha podido saber (timeout, 5xx, red, una respuesta que no se
- *   entiende). **No se escribe nada**: ni métricas ni la marca de comprobado.
+ *   entiende). **No se escriben métricas**, pero sí el intento: la partida vuelve a
+ *   la cola pasada la hora.
+ *
+ * `throttled` distingue el 429 del resto de fallos: no es un bache, es la API
+ * pidiendo que paremos, así que el worker **corta la pasada** en vez de seguir con
+ * la siguiente partida. `retryAfterMs` es lo que la propia API pidió esperar
+ * (`Retry-After` o `X-RateLimit-Reset`), con el mismo techo de 120 s que `http.ts`,
+ * y `null` si no lo dijo.
  */
 export type SummaryOutcome =
-  | { kind: "summary"; metrics: GameSummaryMetrics }
+  | { kind: "summary"; metrics: GameSummaryMetrics; anomalies: SummaryAnomalies | null }
   | { kind: "none"; reason: string | null }
-  | { kind: "failure"; reason: string };
+  | { kind: "failure"; reason: string; throttled: boolean; retryAfterMs: number | null };
 
 /**
  * Pide el summary de **una** partida y lo lee. **Nunca lanza.**
@@ -341,6 +395,8 @@ export async function fetchGameSummary(
     return {
       kind: "failure",
       reason: `gameId "${gameId}" no es un entero: no se pregunta nada`,
+      throttled: false,
+      retryAfterMs: null,
     };
   }
 
@@ -348,11 +404,21 @@ export async function fetchGameSummary(
   // cliente de la API (ver el docblock del módulo). La fixture saca las métricas de
   // la misma forma que la API, así que el lector se ejercita de verdad.
   if (options.mock === true) {
-    const metrics = parseGameSummary(mockGameSummaryPayload(profileId, gameId), profileId);
+    const payload = mockGameSummaryPayload(profileId, gameId);
+    const metrics = parseGameSummary(payload, profileId);
 
     return metrics === null
-      ? { kind: "failure", reason: "el mock del summary no ha dado un payload legible" }
-      : { kind: "summary", metrics };
+      ? {
+          kind: "failure",
+          reason: "el mock del summary no ha dado un payload legible",
+          throttled: false,
+          retryAfterMs: null,
+        }
+      : {
+          kind: "summary",
+          metrics,
+          anomalies: parseSummaryAnomalies(payload, profileId),
+        };
   }
 
   const url = gameSummaryUrl(options.apiBase, profileId, gameId);
@@ -373,10 +439,16 @@ export async function fetchGameSummary(
       });
 
       if (!response.ok) {
-        return { status: response.status, payload: null as unknown };
+        return {
+          status: response.status,
+          payload: null as unknown,
+          // Solo el 429 trae una pista de espera; se lee antes de descartar la
+          // respuesta porque las cabeceras se van con ella.
+          retryAfterMs: response.status === 429 ? readServerRequestedWait(response.headers) : null,
+        };
       }
 
-      return { status: response.status, payload: await response.json() };
+      return { status: response.status, payload: await response.json(), retryAfterMs: null };
     });
 
     if (outcome.kind === "failed") {
@@ -388,10 +460,10 @@ export async function fetchGameSummary(
               outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
             }`;
 
-      return { kind: "failure", reason };
+      return { kind: "failure", reason, throttled: false, retryAfterMs: null };
     }
 
-    const { status, payload } = outcome.value;
+    const { status, payload, retryAfterMs } = outcome.value;
 
     // Un 404 es la respuesta del sitio para "esta partida no tiene summary": es
     // concluyente y se apunta como `none`.
@@ -399,8 +471,24 @@ export async function fetchGameSummary(
       return { kind: "none", reason: null };
     }
 
+    // Un 429 no es un bache: es "has ido demasiado rápido". Se devuelve como fallo
+    // marcado para que quien llama corte la pasada en vez de seguir pidiendo.
+    if (status === 429) {
+      return {
+        kind: "failure",
+        reason: `AoE4World pidió bajar el ritmo (429) a ${url}`,
+        throttled: true,
+        retryAfterMs,
+      };
+    }
+
     if (status !== 200) {
-      return { kind: "failure", reason: `AoE4World respondió ${status} a ${url}` };
+      return {
+        kind: "failure",
+        reason: `AoE4World respondió ${status} a ${url}`,
+        throttled: false,
+        retryAfterMs: null,
+      };
     }
 
     const metrics = parseGameSummary(payload, profileId);
@@ -408,12 +496,19 @@ export async function fetchGameSummary(
     // Un 200 que no se entiende es un `failure`, no un `none`: no se sabe si la
     // partida tiene summary o no.
     return metrics === null
-      ? { kind: "failure", reason: `la respuesta de ${url} no se ha podido leer` }
-      : { kind: "summary", metrics };
+      ? {
+          kind: "failure",
+          reason: `la respuesta de ${url} no se ha podido leer`,
+          throttled: false,
+          retryAfterMs: null,
+        }
+      : { kind: "summary", metrics, anomalies: parseSummaryAnomalies(payload, profileId) };
   } catch (error) {
     return {
       kind: "failure",
       reason: `fallo al leer ${url}: ${error instanceof Error ? error.message : String(error)}`,
+      throttled: false,
+      retryAfterMs: null,
     };
   }
 }
@@ -431,8 +526,10 @@ export type SummaryBackfillCandidate = {
   profileId: number;
   /** Cuándo terminó; es el orden de la cola. */
   finishedAt: Date;
-  /** Última vez que se intentó; `null` = nunca. */
+  /** `true` si ya hubo una respuesta **concluyente** (200 o 404) alguna vez. */
   summaryCheckedAt: Date | null;
+  /** Última vez que se pidió, con cualquier desenlace; `null` = nunca. */
+  summaryLastAttemptAt: Date | null;
 };
 
 export type SummaryBackfillPlanOptions = {
@@ -460,14 +557,20 @@ export type SummaryBackfillPlanOptions = {
  *
  * ## Cuándo se reintenta
  *
- * Solo se reintenta —es decir, una fila ya intentada solo vuelve a la cola— si han
- * pasado `retryDelayMs` desde su último intento. Un `failure` no escribe nada, así
- * que su partida seguiría siendo la primera de la cola y se llevaría el
- * presupuesto entero: el margen es lo que deja pasar al resto.
+ * Lo concluyente (`summaryCheckedAt !== null`: hubo summary o el sitio dijo que no
+ * lo tiene) **nunca** vuelve a la cola. Lo demás se reintenta si han pasado
+ * `retryDelayMs` desde su último intento (`summaryLastAttemptAt`); una partida
+ * nunca intentada entra siempre.
+ *
+ * El margen se mide sobre el **intento** y no sobre la respuesta concluyente: un
+ * fallo ya dejó su `summaryLastAttemptAt` escrito, así que su partida no vuelve a
+ * ser la primera de la cola en la pasada siguiente y no se lleva el presupuesto
+ * entero. Antes del margen lo que no se sabía no se escribía y la fila volvía
+ * inmediatamente; ahora lo que se sabe es **cuándo se intentó**.
  *
  * Lo que **no** hace: filtrar por `finishedAt` reciente. Eso es un acotado de la
- * consulta (ver `SUMMARY_RETRY_WINDOW_HOURS`) y no una regla de orden; aqui una
- * fila que llegue es una fila que se puede pedir.
+ * consulta (la ventana de revisión) y no una regla de orden; aquí una fila que
+ * llegue es una fila que se puede pedir.
  */
 export function planSummaryBackfill(
   candidates: readonly SummaryBackfillCandidate[],
@@ -479,11 +582,16 @@ export function planSummaryBackfill(
 
   return [...candidates]
     .filter((candidate) => {
-      if (candidate.summaryCheckedAt === null) {
+      // Una respuesta concluyente saca la partida de la cola para siempre.
+      if (candidate.summaryCheckedAt !== null) {
+        return false;
+      }
+
+      if (candidate.summaryLastAttemptAt === null) {
         return true;
       }
 
-      return nowMs - candidate.summaryCheckedAt.getTime() >= retryDelayMs;
+      return nowMs - candidate.summaryLastAttemptAt.getTime() >= retryDelayMs;
     })
     .sort(
       (a, b) =>

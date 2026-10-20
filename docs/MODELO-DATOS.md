@@ -34,8 +34,8 @@ Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent`, `ObjectiveLeadEvent` y `Al
 | `MatchResult` | `WIN`, `LOSS` |
 | `ObjectiveLeadKind` | `LOST`, `GAINED` (en ese orden, y no es decorativo: ver abajo) |
 | `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
-| `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión) |
-| `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED` |
+| `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión), `NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP`, `NO_RESOURCES_GAP`, `SUMMARY_NOT_REVIEWED` |
+| `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED`, `MATCH_DETECTED` |
 
 Los valores nuevos de un enum se añaden **al final**: en Postgres `ALTER TYPE … ADD VALUE` solo
 añade al final, y poner uno en medio obligaría a recrear el tipo.
@@ -109,7 +109,9 @@ puntúa lo aplica el motor, no el importador.
 | `apm` | `Int?` | APM de la partida según su resumen. `null` = **sin resumen** (no es `0`), y es la marca de que la partida tiene resumen. |
 | `feudalAgeSeconds`, `castleAgeSeconds`, `imperialAgeSeconds` | `Int?` | Segundos de partida en que se alcanzó cada edad; gana el **primer** instante. |
 | `villagersLost`, `gildedVillagersLost`, `mountedVillagersLost` | `Int?` | Aldeanos perdidos, por tipo. Los dorados y los montados van aparte porque `defensor-del-pueblo` los exige por separado. |
-| `summaryCheckedAt` | `DateTime?` | Cuándo se pidió el **resumen** por última vez. `null` = nunca. Se escribe también tras un `404` concluyente ("esta partida no lo tiene"). |
+| `summaryCheckedAt` | `DateTime?` | Cuándo se obtuvo una respuesta **concluyente** del resumen (200 o 404). `null` = nunca. Saca la partida de la cola: ya se sabe si hay resumen o no. |
+| `summaryLastAttemptAt` | `DateTime?` | Cuándo se pidió el resumen por última vez, con **cualquier** desenlace (200, 404, fallo o 429). `null` = nunca se intentó. Sostiene el reintento de 1 h y detecta las partidas que se intentaron y nunca se resolvieron (`SUMMARY_NOT_REVIEWED`). |
+| `summaryAnomalies` | `Json?` | Evidencia compacta del resumen para las alertas. `null` = no hay resumen. Forma: `{ buildOrderReadable, firstVillagerSeconds, militaryNoGrowth: { fromSeconds, toSeconds }[], noResourceGain: { fromSeconds, toSeconds } \| null }`, con `null` en lo que no se pudo leer. `militaryNoGrowth` es una **lista** (todos los tramos sin máximo nuevo, los 10 más largos y de mayor a menor) porque la gracia inicial se descuenta después; `noResourceGain` es solo el más largo. Ver `src/lib/aoe4world/summary-anomalies.ts`. |
 | `points` | `Int` (`0`) | Puntos que aporta según el ruleset: `pointsPerWin` en una victoria clasificatoria, 0 en el resto. Solo lo escribe el motor. |
 | `revertedAt` | `DateTime?` | Marca de "deja de puntuar" (reversible). `null` = puntúa. |
 | `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** De aquí salen los compañeros y su rating para la condición de equipo. |
@@ -121,12 +123,17 @@ puntúa lo aplica el motor, no el importador.
 `mode` y `civRandomized` se rellenaron con `npm run backfill:model` en las filas anteriores; a
 partir de ahí las escribe el worker con cada partida.
 
-Las ocho columnas del **resumen de partida** (`apm`…`summaryCheckedAt`) las escribe el worker desde una
-ruta del **sitio** de AoE4World (no de su API) que se pide aparte y solo importa a las partidas que
-puntúan; el detalle está en [`OPERACION.md`](./OPERACION.md#resumen-de-partida). Las leen cinco
-objetivos, y en todas ellas `null` significa "**no hay resumen**", nunca "cero": una partida sin resumen
-no cumple ninguna hazaña y corta la racha de `ansioso`. `apm` es la marca de que la partida tiene
-resumen.
+Las **ocho métricas** del resumen de partida (`apm` … `mountedVillagersLost`) más **dos columnas de
+control** (`summaryCheckedAt` y `summaryLastAttemptAt`) y la evidencia (`summaryAnomalies`) las escribe
+el worker desde una ruta del **sitio** de AoE4World (no de su API) que se pide aparte y solo importa a
+las partidas que puntúan; el detalle está en
+[`OPERACION.md`](./OPERACION.md#resumen-de-partida). Las métricas las leen cinco objetivos, y en todas
+ellas `null` significa "**no hay resumen**", nunca "cero": una partida sin resumen no cumple ninguna
+hazaña y corta la racha de `ansioso`. `apm` es la marca de que la partida tiene resumen. Las dos marcas
+de control no son métricas del juego: `summaryCheckedAt` dice si hubo respuesta concluyente y
+`summaryLastAttemptAt` cuándo se intentó por última vez. `summaryAnomalies` no lo lee ningún objetivo:
+es la evidencia que consume el motor de alertas (`NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP` y
+`NO_RESOURCES_GAP`), y `null` ahí es "no hay resumen o no se pudo leer", que no genera alerta.
 
 ## `PlayerScore`
 
@@ -260,8 +267,8 @@ fila dice "a la 1 se detectó esto" y no se reescribe.
 | `kind` | `AlertKind` | Cómo se detectó. |
 | `playerId` | `String` | FK a `Player.id`, cascada. |
 | `subjectProfileId`, `subjectName` | `Int?`, `String?` | El rival (R2) o compañero (R3). No es FK: el sujeto suele ser de fuera de la liga. |
-| `count`, `threshold` | `Int` | Magnitud medida y umbral del ruleset. En las reglas de estado, la magnitud con la que se comparó. |
-| `anchorGameId` | `String?` | La partida que disparó la alerta. `null` en las reglas de estado. |
+| `count`, `threshold` | `Int` | Magnitud medida y umbral del ruleset. En las reglas de estado, la magnitud con la que se comparó. En las tres de partida nacidas del resumen: los segundos del tramo (0 en la de aldeanos, "cero aldeanos") y el umbral que lo dispara (en la de aldeanos, los segundos del arranque). |
+| `anchorGameId` | `String?` | La partida que disparó la alerta. `null` en las reglas de estado. **No** es `null` en `MATCH_DETECTED`: el hallazgo **es** una partida. |
 | `dedupeKey` | `String` **único** | Clave compuesta en código; ver abajo. |
 | `summary` | `String` | Una línea en español, ya redactada al escribir la fila. |
 | `details` | `Json` | Evidencia estructurada. |
@@ -273,6 +280,13 @@ La `dedupeKey` es texto y no un índice único compuesto porque en Postgres los 
 único no colisionan, y el sujeto es opcional. Se compone con (regla, tipo, jugador, sujeto y el
 remate: la partida o el número), salvo en `STATE_DETECTED`, que es solo (regla, tipo, jugador)
 porque un estado no tiene remate y si no insertaría una fila nueva cada 12 horas.
+
+`MATCH_DETECTED` es lo contrario de `STATE_DETECTED`: es el **hallazgo de una partida concreta** (no
+creó aldeanos en el arranque, no hizo un máximo militar, no recolectó), lleva el `anchorGameId` en la
+clave y por eso hay **una fila por partida y regla**. `SUMMARY_NOT_REVIEWED` es de **estado** y una por
+jugador: cuenta las partidas que pasaron la ventana de revisión del resumen sin respuesta concluyente,
+tras haberse intentado. Las dos existen a la vez porque `HISTORY_NOT_PUBLIC` afirma que el historial está
+cerrado (lo confirmó el sondeo) y `SUMMARY_NOT_REVIEWED` dice que no se pudo confirmar nada.
 
 ## `AdminAction`
 

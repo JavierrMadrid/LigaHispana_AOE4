@@ -13,6 +13,7 @@ import {
   type SummaryBackfillCandidate,
 } from "@/lib/aoe4world/summary";
 import { mockGameSummaryPayload } from "@/lib/aoe4world/mock/summary";
+import { parseSummaryAnomalies, readSummaryAnomalies } from "@/lib/aoe4world/summary-anomalies";
 
 /**
  * El *summary* de partida en lo que se puede comprobar sin red ni base de datos: el
@@ -59,6 +60,7 @@ const OTRO_PROFILE = 7_328_774;
 function fetchQueResponde(
   status: number,
   body: unknown = null,
+  headers: Record<string, string> = {},
 ): { fetch: typeof globalThis.fetch; llamadas: () => string[] } {
   const llamadas: string[] = [];
 
@@ -66,8 +68,11 @@ function fetchQueResponde(
     llamadas.push(String(input));
 
     return body === null
-      ? new Response(null, { status })
-      : new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      ? new Response(null, { status, headers })
+      : new Response(JSON.stringify(body), {
+          status,
+          headers: { "content-type": "application/json", ...headers },
+        });
   }) as typeof globalThis.fetch;
 
   return { fetch: fake, llamadas: () => llamadas };
@@ -180,14 +185,28 @@ describe("gameSummaryUrl", () => {
 });
 
 describe("fetchGameSummary", () => {
-  it("un 200 legible es un `summary`", async () => {
-    const { fetch: fake, llamadas } = fetchQueResponde(200, payload());
+  it("un 200 legible es un `summary`, con sus métricas y su evidencia", async () => {
+    const { fetch: fake, llamadas } = fetchQueResponde(
+      200,
+      payload({}, { resources: { timestamps: [0, 20, 40], military: [13, 13, 13] } }),
+    );
 
     const outcome = await fetchGameSummary(PROFILE, "9123456", { ...OPCIONES, fetch: fake });
 
     expect(outcome.kind).toBe("summary");
     expect(llamadas()).toHaveLength(1);
     expect(llamadas()[0]).toContain("?camelize=true");
+
+    if (outcome.kind !== "summary") {
+      throw new Error("se esperaba un summary");
+    }
+
+    expect(outcome.metrics.apm).toBe(137);
+    expect(outcome.anomalies).toMatchObject({
+      buildOrderReadable: true,
+      firstVillagerSeconds: null,
+      militaryNoGrowth: [{ fromSeconds: 0, toSeconds: 40 }],
+    });
   });
 
   it("un 404 es `none`: la partida no tiene summary, y es concluyente", async () => {
@@ -198,12 +217,44 @@ describe("fetchGameSummary", () => {
     expect(outcome).toEqual({ kind: "none", reason: null });
   });
 
-  it("un 5xx es `failure`: no se sabe nada y no se escribe nada", async () => {
+  it("un 5xx es `failure` sin throttled: no se sabe nada y no se escribe nada", async () => {
     const { fetch: fake } = fetchQueResponde(503);
 
     const outcome = await fetchGameSummary(PROFILE, "9123456", { ...OPCIONES, fetch: fake });
 
-    expect(outcome.kind).toBe("failure");
+    expect(outcome).toMatchObject({ kind: "failure", throttled: false, retryAfterMs: null });
+  });
+
+  it("un 429 es `failure` con `throttled` y la espera que pida la respuesta", async () => {
+    // La API no es un bache: pide bajar el ritmo, y quien llama corta la pasada.
+    const { fetch: fake } = fetchQueResponde(429, null, { "retry-after": "30" });
+
+    const outcome = await fetchGameSummary(PROFILE, "9123456", { ...OPCIONES, fetch: fake });
+
+    expect(outcome).toMatchObject({ kind: "failure", throttled: true, retryAfterMs: 30_000 });
+  });
+
+  it("un 429 sin cabeceras es `throttled` con la espera a `null`", async () => {
+    const { fetch: fake } = fetchQueResponde(429);
+
+    const outcome = await fetchGameSummary(PROFILE, "9123456", { ...OPCIONES, fetch: fake });
+
+    expect(outcome).toMatchObject({ kind: "failure", throttled: true, retryAfterMs: null });
+  });
+
+  it("lee `X-RateLimit-Reset` cuando no hay `Retry-After`", async () => {
+    const reset = Math.ceil(Date.now() / 1000) + 20;
+    const { fetch: fake } = fetchQueResponde(429, null, { "x-ratelimit-reset": String(reset) });
+
+    const outcome = await fetchGameSummary(PROFILE, "9123456", { ...OPCIONES, fetch: fake });
+
+    if (outcome.kind !== "failure") {
+      throw new Error("se esperaba un fallo");
+    }
+
+    expect(outcome.retryAfterMs).not.toBeNull();
+    expect(outcome.retryAfterMs ?? 0).toBeGreaterThan(0);
+    expect(outcome.retryAfterMs ?? 0).toBeLessThanOrEqual(120_000);
   });
 
   it("un 200 ilegible también es `failure`, no un `none`", async () => {
@@ -260,22 +311,54 @@ describe("fetchGameSummary", () => {
     expect(typeof metrics?.mountedVillagersLost).toBe("number");
     expect(VILLAGER_PBGIDS.has(VILLAGER_PBGID)).toBe(true);
   });
+
+  it("la fixture del mock ejercita el lector de anomalías en los dos sentidos", () => {
+    // La simulación tiene que enseñar las reglas del resumen tanto disparadas como
+    // no: si todas las partidas crearan aldeanos, `NO_VILLAGERS_FIRST_MINUTES` no se
+    // vería nunca en `npm run mock:tournament`.
+    const conAldeanos: number[] = [];
+    const sinAldeanos: number[] = [];
+
+    for (let gameId = 1; gameId <= 40; gameId += 1) {
+      const anomalies = parseSummaryAnomalies(
+        mockGameSummaryPayload(PROFILE, String(gameId)),
+        PROFILE,
+      );
+
+      expect(anomalies).not.toBeNull();
+      // Y lo que se escribe se puede volver a leer: es lo que guarda el worker.
+      expect(readSummaryAnomalies(anomalies)).toEqual(anomalies);
+
+      if (anomalies?.firstVillagerSeconds === null) {
+        sinAldeanos.push(gameId);
+      } else {
+        conAldeanos.push(gameId);
+      }
+    }
+
+    expect(conAldeanos.length).toBeGreaterThan(0);
+    expect(sinAldeanos.length).toBeGreaterThan(0);
+  });
 });
 
 describe("planSummaryBackfill", () => {
   function candidate(
     gameId: string,
     finishedAt: string,
-    summaryCheckedAt: string | null = null,
+    options: { checkedAt?: string | null; attemptedAt?: string | null } = {},
     profileId = 1,
     playerId = `p${profileId}`,
   ): SummaryBackfillCandidate {
+    const checked = options.checkedAt ?? null;
+    const attempted = options.attemptedAt ?? null;
+
     return {
       gameId,
       playerId,
       profileId,
       finishedAt: new Date(finishedAt),
-      summaryCheckedAt: summaryCheckedAt === null ? null : new Date(summaryCheckedAt),
+      summaryCheckedAt: checked === null ? null : new Date(checked),
+      summaryLastAttemptAt: attempted === null ? null : new Date(attempted),
     };
   }
 
@@ -301,9 +384,9 @@ describe("planSummaryBackfill", () => {
   it("desempata por `gameId` y luego por jugador, para que la cola sea estable", () => {
     const plan = planSummaryBackfill(
       [
-        candidate("20", "2026-10-17T10:00:00.000Z", null, 2, "pb"),
-        candidate("20", "2026-10-17T10:00:00.000Z", null, 1, "pa"),
-        candidate("3", "2026-10-17T10:00:00.000Z", null, 3, "pc"),
+        candidate("20", "2026-10-17T10:00:00.000Z", {}, 2, "pb"),
+        candidate("20", "2026-10-17T10:00:00.000Z", {}, 1, "pa"),
+        candidate("3", "2026-10-17T10:00:00.000Z", {}, 3, "pc"),
       ],
       { now: NOW },
     );
@@ -313,17 +396,42 @@ describe("planSummaryBackfill", () => {
     expect(plan.map((item) => `${item.gameId}/${item.playerId}`)).toEqual(["20/pa", "20/pb", "3/pc"]);
   });
 
-  it("corta por el presupuesto", () => {
+  it("el presupuesto por defecto es 10 y corta la cola", () => {
     const rows = Array.from({ length: SUMMARY_MAX_PER_RUN + 5 }, (_, index) =>
       candidate(`${index}`, `2026-10-17T10:00:${String(index).padStart(2, "0")}.000Z`),
     );
 
     const plan = planSummaryBackfill(rows, { now: NOW });
 
+    expect(SUMMARY_MAX_PER_RUN).toBe(10);
     expect(plan).toHaveLength(SUMMARY_MAX_PER_RUN);
     // Lo más nuevo primero: los cinco más viejos quedan fuera.
     expect(ids(plan)).not.toContain("0");
-    expect(ids(plan)).toContain("24");
+    expect(ids(plan)).toContain(`${SUMMARY_MAX_PER_RUN + 4}`);
+  });
+
+  it("el presupuesto se puede pasar por opciones, que es lo que hace el worker", () => {
+    const rows = Array.from({ length: 8 }, (_, index) =>
+      candidate(`${index}`, `2026-10-17T10:00:${String(index).padStart(2, "0")}.000Z`),
+    );
+
+    expect(planSummaryBackfill(rows, { now: NOW, budget: 3 })).toHaveLength(3);
+  });
+
+  it("una respuesta concluyente sale de la cola para siempre", () => {
+    const plan = planSummaryBackfill(
+      [
+        candidate("1", "2026-10-17T10:00:00.000Z", { checkedAt: "2026-10-17T11:00:00.000Z" }),
+        candidate("2", "2026-10-17T09:00:00.000Z"),
+      ],
+      { now: NOW },
+    );
+
+    // Da igual cuánto tiempo pase: la partida ya se resolvió.
+    expect(ids(plan)).toEqual(["2"]);
+    expect(
+      ids(planSummaryBackfill([candidate("1", "2026-10-01T10:00:00.000Z", { checkedAt: "2026-10-01T10:05:00.000Z" })], { now: NOW })),
+    ).toEqual([]);
   });
 
   it("no reintenta una partida intentada hace menos del margen", () => {
@@ -331,7 +439,7 @@ describe("planSummaryBackfill", () => {
 
     const plan = planSummaryBackfill(
       [
-        candidate("1", "2026-10-17T10:00:00.000Z", reciente),
+        candidate("1", "2026-10-17T10:00:00.000Z", { attemptedAt: reciente }),
         candidate("2", "2026-10-17T09:00:00.000Z"),
       ],
       { now: NOW },
@@ -343,11 +451,23 @@ describe("planSummaryBackfill", () => {
   it("sí reintenta una partida intentada más allá del margen", () => {
     const limite = new Date(NOW.getTime() - SUMMARY_RETRY_DELAY_MS - 1_000).toISOString();
 
-    const plan = planSummaryBackfill([candidate("1", "2026-10-17T10:00:00.000Z", limite)], {
-      now: NOW,
-    });
+    const plan = planSummaryBackfill(
+      [candidate("1", "2026-10-17T10:00:00.000Z", { attemptedAt: limite })],
+      { now: NOW },
+    );
 
     expect(ids(plan)).toEqual(["1"]);
+  });
+
+  it("el margen se mide sobre el intento, no sobre la marca concluyente", () => {
+    // Un fallo deja `summaryLastAttemptAt` y no `summaryCheckedAt`: es el caso que
+    // antes volvía a la cola en la pasada siguiente.
+    const plan = planSummaryBackfill(
+      [candidate("1", "2026-10-17T10:00:00.000Z", { attemptedAt: "2026-10-17T11:59:00.000Z" })],
+      { now: NOW },
+    );
+
+    expect(plan).toEqual([]);
   });
 
   it("lo que nunca se ha intentado siempre entra", () => {

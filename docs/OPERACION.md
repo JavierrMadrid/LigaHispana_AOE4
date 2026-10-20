@@ -492,10 +492,11 @@ from "Player" where discordUsername is not null group by 1 having count(*) > 1;
 
 ## Alertas de comportamiento
 
-El motor vigila **10 reglas**: **6 de patrón** sobre las clasificatorias (partidas cortas, rival
-repetido y compañero repetido, cada uno en racha y en total), **3 de estado** (historial no público,
-partidas de ladder que no llegan, y Discord fuera del servidor) y **1 condicional** (participante sin
-canal de directo, solo si la edición exige retransmisión).
+El motor vigila **14 reglas**: **6 de patrón** sobre las clasificatorias (partidas cortas, rival
+repetido y compañero repetido, cada uno en racha y en total), **4 de estado** (historial no público,
+partidas de ladder que no llegan, Discord fuera del servidor y partidas sin resumen que revisar), **3 de
+partida desde el resumen** (sin aldeanos en el arranque, sin crecimiento militar y sin obtener recursos)
+y **1 condicional** (participante sin canal de directo, solo si la edición exige retransmisión).
 
 ```bash
 npm test                       # el motor, con secuencias sintéticas y SIN base de datos
@@ -509,14 +510,33 @@ npm run alerts:cutoffs -- --show
 - La parte pura está en `tests/unit/lib/alerts/`: `compute.test.ts` (reglas sobre secuencias),
   `rules.test.ts` (umbrales, frases y claves de dedupe) y `division-cutoffs.test.ts`.
 - **Umbrales** en `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo):
-  partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10 y compañero repetido 7. `window` y
-  `modes` **no** se duplican: se leen del ruleset de puntuación, con el mismo `rankedMatchWhere()` y
-  el corte de inscripción.
+  partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10 y compañero repetido 7. Los cuatro del
+  resumen: primer aldeano antes de **300 s**, **300 s** de gracia militar, **300 s** seguidos sin máximo
+  militar después de la gracia y **120 s** seguidos sin recolectar. `window` y `modes` **no** se
+  duplican: se leen del ruleset de puntuación, con el mismo `rankedMatchWhere()` y el corte de
+  inscripción.
+- **Un documento antiguo del ruleset sigue valiendo**: las cuatro claves nuevas no suben la versión, así
+  que el documento que ya está en producción (versión 1, siete claves) se completa con los valores por
+  defecto en vez de descartarse.
 - **Qué partidas mira**: exactamente las que puntúan. Además del filtro de `rankedMatchWhere()` aplica
   en memoria la condición de equipo del motor de puntos, porque no cabe en un `where` de Prisma.
 - **Cuándo se evalúa**: en `syncApprovedPlayers()`, después de `recomputeScores()`, **solo los
-  jugadores tocados**; y también al revertir o restaurar una partida, al cerrar el torneo
+  jugadores tocados** —los que han cambiado partidas **y** los que han tenido un summary leído o una
+  partida sin revisar, porque un resumen rellenado para una partida vieja también mueve sus alertas—; y
+  también al revertir o restaurar una partida, al cerrar el torneo
   (`Setting["alerts.tournamentClose"]` lo marca) y a mano.
+- **Las tres reglas del resumen son una alerta por partida y regla** (`MATCH_DETECTED`, anclada al
+  `gameId`): el jugador que no hizo aldeanos en tres partidas tiene tres alertas, no una. Se evalúan
+  solo con `summaryAnomalies` legible; si el `buildOrder` no se pudo leer, la de aldeanos **no se
+  evalúa**, porque "no lo sé" no es "no hizo ninguno"; y **solo si la partida duró al menos la ventana
+  de aldeanos** (300 s), porque una partida más corta no llegó a jugar esos primeros minutos y no se
+  puede decir que no los hiciera. El tramo militar descuenta la gracia inicial (el explorador arranca la
+  puntuación en 13 y no hacer un máximo nuevo al principio es normal).
+- **`SUMMARY_NOT_REVIEWED` es de estado y una por jugador**: cuenta las partidas que pasaron la ventana
+  de revisión del resumen sin respuesta concluyente, tras haberse intentado, y lleva en `details` sus
+  `gameId` (hasta 20) y el último intento. Reevaluarla cada pasada no inserta nada nuevo. Distingue dos
+  casos que conviene no confundir: `HISTORY_NOT_PUBLIC` afirma que el historial está **cerrado** porque
+  el sondeo lo confirmó; `SUMMARY_NOT_REVIEWED` dice que **no se pudo confirmar** nada.
 - **`NO_STREAM_CHANNEL`** es la única **condicional**: se evalúa solo si
   `Setting["edition.config"].streamingRequired` está activo, y avisa de los participantes aprobados
   **sin ningún canal** (`twitchChannel`, `youtubeChannel`, `kickChannel` y `twitchUrl` vacíos). No mira
@@ -623,31 +643,49 @@ Cinco objetivos —`ansioso`, los tres `avance-relampago-*` y `defensor-del-pueb
 que **no están en el listado de partidas**: los APM, el minuto al que se pasó de edad y cuántos aldeanos
 se perdieron. Eso solo lo publica el **resumen** de cada partida, una ruta del **sitio** de AoE4World
 (no de su API), y lo rellena el worker en su pasada (`backfillMatchSummaries()`,
-`src/lib/sync-summaries.ts`).
+`src/lib/sync-summaries.ts`). Del mismo resumen salen las **tres alertas por partida** de
+[Alertas de comportamiento](#alertas-de-comportamiento).
 
 | Qué | Cuánto |
 |---|---|
 | Petición | Una por partida a `…/players/{profileId}/games/{gameId}/summary?camelize=true`, con el `User-Agent` del proyecto |
-| Partidas por pasada | **20** (`SUMMARY_MAX_PER_RUN`); el resto, a la siguiente |
+| Partidas por pasada | **10** (`SUMMARY_MAX_PER_RUN`; `AOE4WORLD_SUMMARY_MAX_PER_RUN`) |
+| Ritmo | **2 s** entre peticiones (`AOE4WORLD_SUMMARY_MIN_INTERVAL_MS`) |
 | Orden | De la partida **más nueva a la más vieja**, con el histórico rellenándose por detrás |
-| Reintento | Un fallo se reintenta pasada la hora; sin resolver, una partida **no** se reintenta después de **24 h** |
-| Columnas | Las ocho del resumen en `Match` (`apm` … `summaryCheckedAt`, ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
+| Reintento | Un fallo se reintenta pasada **1 h** (`AOE4WORLD_SUMMARY_RETRY_DELAY_MS`) |
+| Ventana de revisión | **24 h** (`AOE4WORLD_SUMMARY_REVIEW_WINDOW_HOURS`): pasada esa edad sin respuesta concluyente, la partida deja de pedirse y se avisa de que quedó **sin revisar** |
+| Columnas | Las ocho métricas del resumen (`apm` … `mountedVillagersLost`), `summaryAnomalies` y las dos marcas de control (ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
 
 - **Qué partidas**: exactamente las que puntúan (el mismo `rankedMatchSql()` que la clasificación) y de
   un jugador que no tenga el historial cerrado. El filtro `historyPublic is distinct from false` deja
   pasar el "sin comprobar" y descarta a quien consta que no publica partidas.
-- **Un `404` es concluyente**: la partida no tiene resumen, se apunta en `summaryCheckedAt` y no se
-  vuelve a preguntar. Un fallo de red, un `5xx` o un `200` ilegible **no escriben nada** —ni métricas ni
-  la marca—, así que la partida vuelve a la cola: no saber no es "no hay".
-- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las ocho columnas significa "no hay
+- **Dos marcas, dos significados**: `summaryCheckedAt` es una respuesta **concluyente** (200 o 404) y
+  saca la partida de la cola para siempre; `summaryLastAttemptAt` es **cualquier intento** (200, 404,
+  fallo o 429) y es lo que sostiene el reintento de una hora y la detección de lo no revisado. `null` en
+  la primera = nunca se resolvió; `null` en la segunda = nunca se intentó.
+- **Un `404` es concluyente**: la partida no tiene resumen, se apunta en las dos marcas y no se vuelve a
+  preguntar. Un fallo de red, un `5xx` o un `200` ilegible **no escriben métricas** —solo
+  `summaryLastAttemptAt`—, así que la partida vuelve a la cola pasada la hora: no saber no es "no hay".
+- **Un `429` corta la pasada.** No es un bache: es AoE4World pidiendo bajar el ritmo, así que se apunta
+  el intento, se deja el resto de la cola para la pasada siguiente y se avisa en el rastro
+  (`summariesError`). Seguir pidiendo sería la peor respuesta posible.
+- **Aviso de no revisadas**: una partida que se intentó y pasó la ventana de 24 h sin resolución se
+  descarta de la cola, pero no se olvida: se cuenta por jugador y el motor escribe
+  `SUMMARY_NOT_REVIEWED`, una alerta de estado con las partidas y el último intento en `details`. El
+  caso de **perfil privado confirmado** sigue siendo `HISTORY_NOT_PUBLIC`; este es el respaldo de lo que
+  no se pudo confirmar.
+- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las ocho métricas significa "no hay
   resumen", nunca "cero". Una partida sin resumen no cumple ninguna hazaña y **corta** la racha de
   `ansioso` (ver [`OBJETIVOS.md`](./OBJETIVOS.md#logros-cobra-quien-cumple)).
+- **`summaryAnomalies`** guarda la evidencia compacta para las alertas (si el `buildOrder` se pudo leer,
+  el primer aldeano y los dos tramos sin progreso). No sustituye a las métricas ni se escribe nunca sin
+  un 200: es un resumen de cuatro datos, no el payload.
 - Con `AOE4WORLD_MOCK=1` **no sale a la red**: se sirve una fixture determinista por partida, con la
-  misma forma que el resumen de verdad, para que el lector y los objetivos se ejerciten en las
-  simulaciones.
+  misma forma que el resumen de verdad (series incluidas), para que los lectores, los objetivos y las
+  alertas se ejerciten en las simulaciones.
 - Dónde mirar: `summariesError` en el rastro (`[sync] Summaries de partida: …`), con cuántos se han
-  guardado, cuántos no tienen resumen y cuántos quedan para la pasada siguiente. **No** mueve
-  `lastSuccessAt`: un resumen que no llega solo deja unos objetivos a medias.
+  guardado, cuántos no tienen resumen, **cuántos quedaron sin revisar** y cuántos esperan a la pasada
+  siguiente. **No** mueve `lastSuccessAt`: un resumen que no llega solo deja unos objetivos a medias.
 
 ## Transparencia del historial
 
