@@ -1,4 +1,6 @@
 import Image from "next/image";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { HomeShell } from "@/components/home-shell";
 import Link from "next/link";
 import { AdminAccess } from "@/components/admin-access";
 import { DonationBanner } from "@/components/donation-banner";
@@ -6,6 +8,17 @@ import { ParticipateCta } from "@/components/participate-cta";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav, SiteTabBar } from "@/components/site-nav";
 import { getMatcherinoDonations } from "@/lib/public";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-home-inter",
+  display: "swap",
+});
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-home-mono",
+  display: "swap",
+});
 
 export default async function PublicLayout({
   children,
@@ -20,7 +33,7 @@ export default async function PublicLayout({
   // ruido y "no hay campaña publicada" deja la misma página.
   const donationsRead = await getMatcherinoDonations();
 
-  return (
+  const legacy = (
     // El relleno inferior deja libre la franja que ocupa `SiteTabBar` en móvil:
     // la barra es fija y, sin él, taparía el último tramo del pie. Desde `sm` la
     // barra no existe y el relleno sobra.
@@ -129,5 +142,19 @@ export default async function PublicLayout({
           nada: un `<dialog>` sin abrir es `display: none`. */}
       {modal}
     </div>
+  );
+  return (
+    <HomeShell
+      legacy={legacy}
+      modal={modal}
+      fonts={`${inter.variable} ${mono.variable}`}
+      banner={
+        donationsRead.status === "ok" ? (
+          <DonationBanner donations={donationsRead.data} />
+        ) : null
+      }
+    >
+      {children}
+    </HomeShell>
   );
 }

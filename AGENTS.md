@@ -96,3 +96,6 @@ Son tests **puros**: sin base de datos, sin red, sin variables de entorno y sin 
 ## Skills del proyecto
 
 Viven en `.opencode/skills/` (scope local, versionadas). Se actualizan con `npx skills update`. Cada subagente decide cuáles carga según lo que toca el encargo; un cambio que no coincide con ninguna fila de su tabla no carga ninguna.
+
+- `gpt-taste`, de `Leonxlnx/taste-skill`, está disponible para encargos que lo soliciten. Las preferencias explícitas del usuario prevalecen sobre sus patrones visuales.
+- La portada `/` sigue [DESIGN.md](DESIGN.md): tema e iconos Phosphor exclusivos de esa superficie. Las otras rutas mantienen sus tokens actuales.

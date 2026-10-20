@@ -37,7 +37,7 @@ mismo y quién está en directo.
 
 | Página | Qué se ve |
 |---|---|
-| **Clasificación** (`/`) | La tabla del torneo: puesto, puntos, victorias, división, quién está en directo y cuánto queda de torneo. |
+| **Clasificación** (`/`) | Portada de competición: estado, puntos, filtros de jugador/división/estado (divisiones con emblemas), siete órdenes, páginas de 25 jugadores y objetivos con ayuda; banderas y filas compactas en móvil. Los enlaces de portada abren otra pestaña. |
 | **Partidas** (`/partidas`) | Las partidas que están jugando los participantes en este momento. |
 | **Objetivos** (`/objetivos`) | Los 82 objetivos (29 competiciones y 53 logros), con sus puntos y quién los cobra. Los de civilización se agrupan por familia (la cabeza y sus subobjetivos, con un filtro de banderas para saltar a cada uno y un riel que se recorre con la rueda, el gesto táctil o dos botones de flecha); las 23 competiciones `Masterizando <civ>` —que no tienen cabeza— van en su propio carrusel, «Masterizando», con el mismo filtro de banderas y riel. La tarjeta de la cabeza explica cómo puntúa el conjunto y cada tarjeta abre una ventana volteable: de primeras se ve la clasificación, con el avance de cada participante (`12/23` civilizaciones, `2/3` victorias o el valor de su métrica en una competición), un check en quien lo ha completado y el recuento de completadores sobre el total («3 de 12 lo han completado»); al girarla, aparece el resumen de la propia tarjeta, recompuesto en una columna centrada alrededor del emblema del objetivo, que se enseña en grande en un medallón: el arte de la civilización cuando el objetivo es de civilización y el glifo propio de la casa en el resto. Las tarjetas encienden un halo dorado al pasar el ratón y dejan una estela dorada que sigue al cursor por dentro. |
 | **Objetivos de un participante** (`/objetivos/<id>`) | El avance de un jugador en los 82 objetivos. Los individuales se leen en tres bloques —Al alcance (ordenado de más a menos cerca de cobrarlo), En posesión y Sin disputar— y dentro de "Al alcance", tras sus tarjetas, los de civilización se agrupan en los carruseles de Líder y Acólito, con el mismo riel y filtro de banderas que `/objetivos` pero con el avance del jugador y ordenados de mayor a menor porcentaje de consecución. |
@@ -86,7 +86,8 @@ Resumen de con qué está hecho. El detalle vive en [`docs/`](docs).
 | Capa | Elección |
 |---|---|
 | Framework | Next.js 16 (App Router) + TypeScript |
-| Estilos | TailwindCSS v4, tokens en `src/app/globals.css` |
+| Estilos | TailwindCSS v4; tokens globales en `src/app/globals.css`, portada con tokens locales y reglas en [DESIGN.md](DESIGN.md) |
+| Iconos de portada | Phosphor Icons, peso regular; conserva emblemas y logos originales |
 | Datos | PostgreSQL en Supabase + Prisma 7 (`prisma/schema.prisma`) |
 | Auth | Supabase Auth, solo para el panel de administración |
 | Datos externos | API de AoE4World; YouTube y Kick para los directos |
@@ -136,6 +137,7 @@ npm run dev          # http://localhost:3000
 | `npm run db:push` / `npm run db:security` | Sincroniza el schema y aplica la postura de RLS. |
 | `npm run db:cron` | Programa el reloj del torneo (Supabase Cron). |
 | `npm run mock:tournament` | Simula el torneo con fixtures locales. |
+| `node scripts/refresh-public-snapshot.mjs --fetch` | Copia la clasificación pública a una base local dedicada; [uso y límites](docs/OPERACION.md#captura-pública-para-trabajar-la-portada-en-local). |
 | `npm run deploy` / `npm run preview` | Despliega el Worker (producción / local). |
 
 ### Despliegue

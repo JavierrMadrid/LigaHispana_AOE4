@@ -73,7 +73,7 @@ está en [`docs/OPERACION.md`](./OPERACION.md).
 |---|---|
 | `wrangler.jsonc` | Si falta, OpenNext lo genera en cada build y `wrangler deploy` reconstruye el Worker sin los bindings ni el `observability` del panel, y sin el `keep_vars` que conserva las `vars` de texto. |
 | `open-next.config.ts` | Igual: sin el archivo, se pierde en cada build. |
-| `next.config.ts` | `outputFileTracingIncludes` mete la rama `workerd` de `pg-cloudflare` en el trace; sin ella el build muere con `Could not resolve "pg-cloudflare"`. |
+| `next.config.ts` | `outputFileTracingIncludes` mete la rama `workerd` de `pg-cloudflare` en el trace; sin ella el build muere con `Could not resolve "pg-cloudflare"`. `devIndicators: false` oculta el indicador flotante de Next.js en desarrollo. |
 | `scripts/deploy-worker.mjs` | Exporta `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>` desde `.dev.vars` antes de lanzar el CLI; sin ella el deploy falla al emular Hyperdrive. |
 | `prisma/schema.prisma` | `runtime = "workerd"` en el generator; sin él la base revienta en el Worker con `Wasm code generation disallowed by embedder`. |
 

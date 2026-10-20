@@ -2,7 +2,11 @@ import type { ReactNode } from "react";
 import { KickIcon } from "@/components/kick-icon";
 import { TwitchIcon } from "@/components/twitch-icon";
 import { YoutubeIcon } from "@/components/youtube-icon";
-import { kickChannelUrl, twitchChannelUrl, youtubeChannelUrl } from "@/lib/format";
+import {
+  kickChannelUrl,
+  twitchChannelUrl,
+  youtubeChannelUrl,
+} from "@/lib/format";
 
 /**
  * Canal de una plataforma, tal y como lo consume el componente: el canal ya
@@ -51,22 +55,29 @@ function ChannelLink({
   meta,
   value,
   name,
+  animateLive,
 }: {
   meta: PlatformMeta;
   value: ChannelValue;
   name: string;
+  animateLive: boolean;
 }) {
   const { Icon } = meta;
 
   return (
     <a
       href={meta.url(value.channel)}
+      data-platform={meta.id}
+      data-live-glow={animateLive || undefined}
+      data-live={value.isLive || undefined}
       target="_blank"
       rel="noopener noreferrer"
       aria-label={`Canal de ${meta.label} de ${name}${
         value.isLive ? ", en directo ahora mismo" : ""
       } (se abre en una pestaña nueva)`}
-      title={`${meta.label}: ${value.channel}`}
+      title={`${meta.label}: ${value.channel}${
+        value.isLive ? ", en directo" : ""
+      }`}
       className={`-m-1.5 inline-flex shrink-0 items-center justify-center p-1.5 transition-colors ${
         value.isLive ? meta.live : "text-muted/70 hover:text-muted"
       }`}
@@ -83,6 +94,7 @@ type ChannelLinksProps = {
   youtube?: ChannelValue | null;
   kick?: ChannelValue | null;
   className?: string;
+  animateLive?: boolean;
 };
 
 /**
@@ -101,12 +113,14 @@ export function ChannelLinks({
   youtube,
   kick,
   className,
+  animateLive = false,
 }: ChannelLinksProps) {
-  const channels: Record<PlatformMeta["id"], ChannelValue | null | undefined> = {
-    twitch,
-    youtube,
-    kick,
-  };
+  const channels: Record<PlatformMeta["id"], ChannelValue | null | undefined> =
+    {
+      twitch,
+      youtube,
+      kick,
+    };
   const present = PLATFORMS.filter((meta) => {
     const value = channels[meta.id];
 
@@ -119,7 +133,9 @@ export function ChannelLinks({
 
   return (
     <span
-      className={`inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${className ?? ""}`}
+      className={`inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${
+        className ?? ""
+      }`}
     >
       {present.map((meta) => {
         const value = channels[meta.id];
@@ -129,7 +145,15 @@ export function ChannelLinks({
           return null;
         }
 
-        return <ChannelLink key={meta.id} meta={meta} value={value} name={name} />;
+        return (
+          <ChannelLink
+            key={meta.id}
+            meta={meta}
+            value={value}
+            name={name}
+            animateLive={animateLive}
+          />
+        );
       })}
     </span>
   );

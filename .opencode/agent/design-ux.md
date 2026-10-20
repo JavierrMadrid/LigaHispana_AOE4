@@ -26,6 +26,7 @@ Las skills de diseño viven en `.opencode/skills/`. **No se cargan por defecto: 
 | Si el encargo toca… | Skill a cargar con la herramienta `skill` |
 |---|---|
 | Una vista nueva, un rediseño, una dirección estética que elegir, o cambiar la identidad visual de algo | `design-taste-frontend` |
+| El usuario solicita GPT Taste | `gpt-taste`, respetando la referencia y las preferencias explícitas del encargo |
 | Tipografía, jerarquía visual, un patrón de componente nuevo, o una sección que se ve genérica/por defecto | `frontend-design` |
 | Cromo de tu montaje: botones, cards, menús, headers, modales — un patrón nuevo o la lectura del sistema de diseño | `impeccable` |
 
@@ -39,7 +40,9 @@ Reglas de selección:
 ## Información específica de este proyecto
 
 - **Stack visual**: Next.js 16 (App Router, `src/app`) + TailwindCSS v4. Nada de librerías de UI nuevas sin motivo justificado; Tailwind v4 cubre el 100% de lo que necesita esta web.
-- **Tokens**: `src/app/globals.css` define `--background`, `--foreground` y las fuentes Geist, con soporte de `prefers-color-scheme`. Reutiliza los tokens y clases existentes en lugar de introducir colores sueltos.
+- **Tokens**: `src/app/globals.css` fija el tema oscuro y las fuentes Geist/Cinzel. La portada `/` tiene tokens locales de azul heráldico/tinta con oro reservado a acentos, y Cinzel/Inter/JetBrains Mono en `src/components/home.css`; sus reglas viven en `DESIGN.md`. Evita extender ese tema a otras rutas.
+- **Interacción de portada**: filtros con etiquetas e iconos de estado visibles y controles de 44px; un observador por página revela filas al desplazarse, Motion anima los objetivos, con `useReducedMotion` y alternativa estática. Mantén el contraste y la lectura del dato antes que la animación.
+- **Iconos de portada**: `@phosphor-icons/react`, peso regular; usa `/ssr` en Server Components. Conserva assets de marca, plataformas y divisiones.
 - **Páginas vivas**: públicas `/` (clasificación), `/partidas` (en directo), `/objetivos`, `/reglas` y `/participar`; de acceso `/login`; y el panel en `/admin`, con `/admin/historial`, `/admin/alertas` y `/admin/acciones`. El panel admin ya tiene su lenguaje visual (fondos `neutral-950/900/800`, acentos `amber-500`): respétalo para que el conjunto no parezca hecho por dos personas.
 - **Copy**: todo en español, sin emojis, terminología de torneo (clasificación, partida clasificatoria, jugador, jornada).
 - **Datos**: las cifras vienen de Prisma vía Server Components. No escribas queries ni llames a la BBDD desde un componente; si necesitas un dato nuevo, pídelo en el informe para que lo implemente `@logic-data`.

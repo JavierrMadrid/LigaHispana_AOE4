@@ -469,6 +469,52 @@ de los directos.
 
 ## Simulaciones
 
+### Carga de 1500 participantes en la portada
+
+- En `npm run dev`, abrir `http://localhost:3000/?preview=stress` para cargar las **1500 filas**
+  deterministas de `src/lib/home-preview.ts`; la interfaz recibe la lista completa.
+- Incluye todas las divisiones y países del catálogo local, nombres largos, puntuaciones a cero,
+  elo ausente, rachas negativas, canales y estados en directo, y objetivos conocidos.
+- Son identidades ficticias para revisar carga, búsqueda, filtros, ordenación y lectura. Los enlaces
+  a perfiles y canales también son de prueba; no representan jugadores inscritos.
+- La vista utiliza la presentación normal sin avisos de simulación visibles; identificarla por
+  `?preview=stress`. No muestra importes de premios inventados ni etiquetas de muestra.
+- Evalúa la serialización de la colección completa y la interacción paginada: **25 jugadores por
+  página**, incluidos los 25 del HTML inicial; búsqueda y ordenación trabajan sobre los 1500.
+  No mide consultas de
+  PostgreSQL ni el trabajo de sincronización o puntuación de 1500 participantes.
+- No escribe en la base, no consulta servicios externos y no ejecuta el motor de puntuación.
+  Sin `preview=stress` se muestran los datos normales; el parámetro se ignora en producción.
+
+### Captura pública para trabajar la portada en local
+
+| Archivo | Uso |
+|---|---|
+| `scripts/fixtures/public-homepage.json` | Clasificación y partidas publicadas, con URL de origen, fecha de captura y última actualización pública. |
+| `scripts/refresh-public-snapshot.mjs` | Importación manual en PostgreSQL local; nunca se carga desde la web ni consulta una base de producción. |
+
+```bash
+npx prisma dev --name ligahispana-local          # mantener abierto si se usa Prisma dev
+npm run db:push                                 # sobre la DATABASE_URL local de .env.local
+node scripts/refresh-public-snapshot.mjs         # reutiliza la captura guardada, sin red
+node scripts/refresh-public-snapshot.mjs --fetch # obtiene una captura nueva e importa
+node scripts/refresh-public-snapshot.mjs --fetch --dry-run # solo lee y valida; no escribe
+npm run dev
+```
+
+- Requiere una base dedicada vacía o con filas `live-snapshot-<profileId>`; rechaza otros jugadores,
+  destinos fuera de loopback y `NODE_ENV=production`. Carga `.env.local` y `.env` como los demás scripts.
+- `--fetch` lee una vez `/` y `/partidas` de `https://laligahispana.es/`. Solo procesa JSON público;
+  si cambió el formato o las dos páginas discrepan en quién está jugando, aborta sin modificar datos.
+- Conserva puestos, puntos y su desglose, victorias, derrotas, rachas, elo, canales, avatares y
+  objetivos publicados. Los estados de juego y emisiones son una foto de ese momento.
+- Sustituye las partidas en curso de la captura anterior y ajusta las fechas y los valores públicos
+  de los objetivos en el ruleset local. No inventa resultados ni importa el histórico de partidas.
+- No ejecutar `score` o `sync` sobre esta captura: el historial incompleto no puede reconstruir sus
+  totales. Las páginas de progreso por participante necesitan una simulación completa.
+- La fecha pública de sincronización queda en el JSON. No se crea un rastro `sync.lastRun` ficticio,
+  porque la portada pública no revela toda la ejecución; el indicador local puede quedar sin hora.
+
 ### Con fixtures (mock de AoE4World)
 
 `AOE4WORLD_MOCK=1` intercepta el único punto de salida HTTP (`performRequest()`) y responde con las
