@@ -443,6 +443,11 @@ export type LadderGapInput = {
  * un desfase **dentro** del margen no demuestra nada, y avisar ahí sería avisar de que
  * todos los jugadores que acaban de jugar nos están ocultando partidas.
  *
+ * El cursor global del incremental resta `SYNC_OVERLAP_MINUTES` (90) al mayor
+ * `updated_at` leído. El invariante es que ese solape sea **mayor o igual** que este
+ * margen: lo que el incremental no puede ver por quedar por debajo del cursor tiene
+ * que caer dentro de la franja que esta regla declara no poder juzgar.
+ *
  * Cuando no tenemos ninguna partida `rm_solo` en la ventana la pregunta es distinta, y
  * por eso el signo también: "la ladder dice que jugó en T; ¿hace ya más que el margen que
  * la publicación nos puede deber?". Es decir, en ese caso la comparación es contra `now`

@@ -38,7 +38,7 @@ import { readRuntimeEnv } from "@/lib/runtime-env";
 
 const DEFAULT_API_BASE = "https://discord.com/api/v10";
 const DEFAULT_TIMEOUT_MS = 8_000;
-const DEFAULT_USER_AGENT = "LigaHispanaAOE4/0.1 (inscripción Discord)";
+const DEFAULT_USER_AGENT = "LigaHispanaAOE4/0.1 (Discord)";
 
 /**
  * Vida de la cookie `discord_link`, en segundos (20 minutos).
