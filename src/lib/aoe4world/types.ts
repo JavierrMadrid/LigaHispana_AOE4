@@ -47,6 +47,14 @@ export type Aoe4WorldGamePlayer = {
 export type Aoe4WorldGame = {
   gameId: number;
   startedAt: Date;
+  /**
+   * `updated_at` de la partida, o el `startedAt` si la API no lo manda.
+   *
+   * El fallback es deliberado: el cursor global avanza con este valor, y sin él
+   * es preferible quedarse corto (volver a pedir una franja) que adelantar el
+   * cursor y perder partidas que la API publique después.
+   */
+  updatedAt: Date | null;
   /** `null` mientras la partida no está procesada. */
   durationSeconds: number | null;
   map: string | null;
@@ -82,6 +90,11 @@ export type Aoe4WorldGamesPage = {
   totalCount: number;
   count: number;
   nextPage: number | null;
+  /**
+   * Aviso que la API devuelve en `filters._important_notice_` (por ejemplo,
+   * cuando `updated_since` es demasiado antiguo). `null` si no hay aviso.
+   */
+  notice: string | null;
   games: Aoe4WorldGame[];
 };
 
