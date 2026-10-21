@@ -61,7 +61,7 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `id` | `String` (cuid) | Clave interna. Nunca se expone. |
 | `profileId` | `Int` único | Identificador de AoE4World. |
 | `name` | `String` | Nombre de display: lo escribe quien se inscribe o el admin; el worker no lo toca. |
-| `aoe4WorldName` | `String?` | Nombre oficial de AoE4World, en columna aparte. `null` = sin sincronizar. |
+| `aoe4WorldName` | `String?` | Nombre oficial de AoE4World, en columna aparte. Lo escriben la ladder y, si falta o la caché ha caducado, `GET /players/:profile_id`. `null` = sin sincronizar. |
 | `twitchChannel`, `youtubeChannel`, `kickChannel` | `String?` | Canales de la persona (los escribe quien se inscribe o el admin). YouTube sin arroba, Kick como slug. |
 | `twitchUrl` | `String?` | Respaldo: el canal que declara AoE4World. |
 | `contactEmail` | `String?` | Correo de contacto (nullable: el panel lo pide opcional y las filas antiguas no lo tienen). El motor no lo lee. |
@@ -77,6 +77,7 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `ladderUpdatedAt` | `DateTime?` | Última lectura de la ladder. Distingue "sin ladder" de "sin sync". |
 | `twitchIsLive`, `youtubeIsLive`, `kickIsLive` | `Boolean` | `false` = "no comprobado o no en directo". Los tres son degradables. |
 | `avatarUrl` | `String?` | `avatars.full` de AoE4World; `null` dibuja monograma. |
+| `profileCheckedAt` | `DateTime?` | Sello de la caché de perfil: cuándo se refrescaron el nombre oficial y el avatar. `null` = sin comprobar. Lo escriben la ladder y `GET /players/:profile_id`; con menos de 1 h no se pide el perfil. |
 | `historyPublic` | `Boolean?` | Historial de partidas público. `null` = sin comprobar (un fallo no escribe "cerrado"). |
 | `historyCheckedAt` | `DateTime?` | Caché de la comprobación de historial (12 h). |
 | `windowComplete` | `Boolean` (`false`) | `true` = se ha recorrido la ventana del torneo entera hasta el corte. `false` = pendiente; también es el valor de migración y el de un alta nueva. |

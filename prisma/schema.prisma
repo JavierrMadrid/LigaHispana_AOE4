@@ -208,8 +208,9 @@ model Player {
   // alguien eligió no dependa de que AoE4World lo cambie por su cuenta.
   name             String
   // Nombre **oficial de AoE4World**, separado del de display para poder publicar
-  // los dos. Lo refresca el worker con `GET /players/:profile_id`; null = aún no
-  // se ha sincronizado, que es lo que hay en toda fila creada hoy.
+  // los dos. Lo escriben la ladder (que ya lo trae en su entrada) y, si falta o
+  // la caché de perfil ha caducado, `GET /players/:profile_id`. `null` = todavía
+  // no se ha sincronizado.
   aoe4WorldName    String?
   // Canal registrado en el panel (lo escribe el admin). No es lo mismo que
   // `twitchUrl`, que es lo que AoE4World publica en el perfil del jugador.
@@ -400,6 +401,10 @@ model Player {
   twitchUrl        String?
   // `avatars.full`; si es null la interfaz dibuja un monograma.
   avatarUrl        String?
+  // Sello de la caché de perfil: cuándo se refrescó por última vez el nombre
+  // oficial y el avatar. `null` = sin comprobar. Lo escriben la ladder y
+  // `GET /players/:profile_id`; con menos de 1 h no se vuelve a pedir el perfil.
+  profileCheckedAt DateTime?
   // Cuándo se miró la ladder por última vez. No se toca si el jugador no
   // aparece en la respuesta, para poder distinguir "sin ladder" de "sin sync".
   ladderUpdatedAt  DateTime?

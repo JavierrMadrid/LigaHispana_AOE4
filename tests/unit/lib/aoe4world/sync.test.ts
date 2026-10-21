@@ -13,6 +13,7 @@ import {
   playersToQueueForBackfill,
   seedGamesCursor,
   shouldAdvanceGamesCursor,
+  shouldRefreshProfile,
   splitGamesByPlayer,
   type BackfillPlayerState,
   type BackfillWatchdogState,
@@ -632,5 +633,36 @@ describe("backfillProgressStalled", () => {
         { pendingStaleMs: 30_000 },
       ),
     ).toBe(true);
+  });
+});
+
+describe("shouldRefreshProfile", () => {
+  const AHORA_PERFIL = new Date("2026-10-21T12:00:00.000Z");
+  const TTL = 60 * 60_000;
+
+  it("sin sello siempre toca pedir el perfil", () => {
+    expect(shouldRefreshProfile(null, AHORA_PERFIL, TTL)).toBe(true);
+  });
+
+  it("un sello reciente no pide el perfil y uno justo en el TTL sí", () => {
+    expect(
+      shouldRefreshProfile(new Date(AHORA_PERFIL.getTime() - 59 * 60_000), AHORA_PERFIL, TTL),
+    ).toBe(false);
+    expect(
+      shouldRefreshProfile(new Date(AHORA_PERFIL.getTime() - TTL), AHORA_PERFIL, TTL),
+    ).toBe(true);
+    expect(
+      shouldRefreshProfile(new Date(AHORA_PERFIL.getTime() - TTL - 1), AHORA_PERFIL, TTL),
+    ).toBe(true);
+  });
+
+  it("una fecha futura se considera fresca", () => {
+    expect(
+      shouldRefreshProfile(new Date(AHORA_PERFIL.getTime() + TTL), AHORA_PERFIL, TTL),
+    ).toBe(false);
+  });
+
+  it("ttl 0 desactiva la caché", () => {
+    expect(shouldRefreshProfile(AHORA_PERFIL, AHORA_PERFIL, 0)).toBe(true);
   });
 });

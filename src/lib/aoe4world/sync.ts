@@ -141,6 +141,40 @@ const SYNC_OVERLAP_MS = SYNC_OVERLAP_MINUTES * 60_000;
  */
 const GAMES_CURSOR_NOTICE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** Caché de perfil: a partir de una hora se vuelve a pedir `GET /players/:id`. */
+export const PROFILE_CACHE_TTL_HOURS = 1;
+
+export const PROFILE_CACHE_TTL_MS = PROFILE_CACHE_TTL_HOURS * 60 * 60_000;
+
+/**
+ * ¿Toca pedir el perfil de este jugador?
+ *
+ * `null` es "nunca comprobado" y siempre toca. Una fecha futura se considera
+ * fresca (no se puede haber comprobado en el futuro; si el reloj se movió, no
+ * hay que pedir nada). `ttlMs = 0` desactiva la caché y toca siempre.
+ */
+export function shouldRefreshProfile(
+  checkedAt: Date | null,
+  now: Date,
+  ttlMs: number,
+): boolean {
+  if (checkedAt === null) {
+    return true;
+  }
+
+  if (ttlMs <= 0) {
+    return true;
+  }
+
+  const elapsed = now.getTime() - checkedAt.getTime();
+
+  if (elapsed < 0) {
+    return false;
+  }
+
+  return elapsed >= ttlMs;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Piezas puras del cursor global y del relleno                                */
 /* -------------------------------------------------------------------------- */
@@ -740,6 +774,8 @@ type SyncPlayerRow = {
   name: string;
   aoe4WorldName: string | null;
   avatarUrl: string | null;
+  /** Sello de la caché de perfil; `null` = sin comprobar. */
+  profileCheckedAt: Date | null;
   /**
    * Cuándo se inscribió la persona (`Player.registeredAt`). Es el corte por el que
    * cuenta `countsAsRanked()`: una partida anterior a esta fecha no puntúa. `null`
@@ -776,6 +812,7 @@ function readApprovedPlayers(profileIds: number[] | undefined): Promise<SyncPlay
       name: true,
       aoe4WorldName: true,
       avatarUrl: true,
+      profileCheckedAt: true,
       registeredAt: true,
       windowComplete: true,
       backfillPage: true,
@@ -1727,7 +1764,35 @@ async function refreshProfiles(
   client: Aoe4WorldClient,
   config: SyncConfig,
   signal: AbortSignal,
+  now: Date,
 ): Promise<void> {
+  // La ladder se ejecuta antes que este paso y sella `profileCheckedAt` y el
+  // nombre en la base. La lista de jugadores se leyó antes, así que hay que
+  // releer esas tres columnas para no pedir un perfil que la ladder acaba de
+  // dejar fresco.
+  if (players.length > 0) {
+    const frescos = await db.player.findMany({
+      where: { profileId: { in: players.map((player) => player.profileId) } },
+      select: {
+        profileId: true,
+        profileCheckedAt: true,
+        aoe4WorldName: true,
+        avatarUrl: true,
+      },
+    });
+    const byProfile = new Map(frescos.map((row) => [row.profileId, row]));
+
+    for (const player of players) {
+      const row = byProfile.get(player.profileId);
+
+      if (row !== undefined) {
+        player.profileCheckedAt = row.profileCheckedAt;
+        player.aoe4WorldName = row.aoe4WorldName;
+        player.avatarUrl = row.avatarUrl;
+      }
+    }
+  }
+
   await runPool([...players], config.concurrency, async (player) => {
     const result = results.get(player.profileId);
 
@@ -1740,29 +1805,35 @@ async function refreshProfiles(
       return;
     }
 
+    if (!shouldRefreshProfile(player.profileCheckedAt, now, PROFILE_CACHE_TTL_MS)) {
+      return;
+    }
+
     try {
       const profile = await client.getPlayer(player.profileId, { signal });
       const officialNameChanged = profile.name !== player.aoe4WorldName;
       const avatarUrl = profile.avatars.full;
       const avatarChanged = avatarUrl !== null && avatarUrl !== player.avatarUrl;
 
-      if (officialNameChanged || avatarChanged) {
-        await db.player.update({
-          where: { id: player.id },
-          data: {
-            ...(officialNameChanged ? { aoe4WorldName: profile.name } : {}),
-            ...(avatarChanged ? { avatarUrl } : {}),
-          },
-        });
+      await db.player.update({
+        where: { id: player.id },
+        data: {
+          ...(officialNameChanged ? { aoe4WorldName: profile.name } : {}),
+          ...(avatarChanged ? { avatarUrl } : {}),
+          // Se sella siempre que la llamada va bien, haya cambiado algo o no.
+          profileCheckedAt: now,
+        },
+      });
 
-        if (officialNameChanged) {
-          player.aoe4WorldName = profile.name;
-        }
-
-        if (avatarChanged) {
-          player.avatarUrl = avatarUrl;
-        }
+      if (officialNameChanged) {
+        player.aoe4WorldName = profile.name;
       }
+
+      if (avatarChanged) {
+        player.avatarUrl = avatarUrl;
+      }
+
+      player.profileCheckedAt = now;
     } catch (error) {
       if (error instanceof Aoe4WorldError && error.status === 404) {
         markPlayerFailed(result, `AoE4World no conoce el perfil ${player.profileId}.`);
@@ -2042,9 +2113,9 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     );
   }
 
-  // --- Paso 4: perfil (F2; F3 lo convertirá en cola fría) ---------------------
+  // --- Paso 4: perfil con caché de una hora --------------------------------
   if (players.length > 0) {
-    await refreshProfiles(players, results, client, config, signal);
+    await refreshProfiles(players, results, client, config, signal, new Date());
   }
 
   // --- Paso 6a/6b: avance del cursor y watchdog -------------------------------

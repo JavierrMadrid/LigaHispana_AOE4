@@ -28,6 +28,9 @@ import { DEFAULT_LEADERBOARD } from "./types";
  * - Un fallo de este paso **no tumba la pasada**: se devuelve en `error`, quien
  *   llama lo registra y la sincronización de partidas sigue igual. La web
  *   serviría el último snapshot guardado hasta la próxima pasada.
+ * - Además del elo, la entrada trae `name` y `avatars.full`: se escriben en
+ *   `aoe4WorldName`/`avatarUrl` y se sella `profileCheckedAt`, así el paso de
+ *   perfil no vuelve a pedir `GET /players/:id` en la misma hora.
  */
 
 export type LadderPlayerRow = {
@@ -122,6 +125,12 @@ export async function syncLadderSnapshot(
             ladderLastGameAt: entry.lastGameAt,
             twitchIsLive: entry.twitchIsLive,
             twitchUrl: entry.twitchUrl,
+            // La ladder ya trae el nombre oficial. No se escribe una cadena
+            // vacía: eso borraría el que ya había y no aporta nada.
+            ...(entry.name.trim() === "" ? {} : { aoe4WorldName: entry.name }),
+            // Sellar aquí evita pedir el perfil en la primera pasada tras el
+            // despliegue a quien ya aparece en la ladder.
+            profileCheckedAt: fetchedAt,
             // Sin la clave en el `update`, Prisma no toca el campo: un avatar
             // nulo de la respuesta no borra el que ya había (ver cabecera).
             ...(entry.avatars.full === null ? {} : { avatarUrl: entry.avatars.full }),

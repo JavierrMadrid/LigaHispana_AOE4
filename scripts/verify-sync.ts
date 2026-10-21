@@ -40,7 +40,12 @@ import type {
   Aoe4WorldClient,
   Aoe4WorldGamesQuery,
 } from "@/lib/aoe4world/client";
-import type { Aoe4WorldGame, Aoe4WorldGamesPage, Aoe4WorldLadderPage } from "@/lib/aoe4world/types";
+import type {
+  Aoe4WorldGame,
+  Aoe4WorldGamesPage,
+  Aoe4WorldLadderPage,
+  Aoe4WorldLeaderboard,
+} from "@/lib/aoe4world/types";
 import { isSyncTraceStale, type SyncRunTrace } from "@/lib/settings";
 
 /**
@@ -1255,6 +1260,11 @@ type FakePlayerGamesHandler = (
 type FakeClientOverrides = {
   bulk?: FakeBulkHandler;
   playerGames?: FakePlayerGamesHandler;
+  profileCalls?: number[];
+  leaderboard?: (
+    leaderboard: string,
+    profileIds: number[],
+  ) => Promise<Aoe4WorldLeaderboard> | Aoe4WorldLeaderboard;
 };
 
 /**
@@ -1273,6 +1283,8 @@ function createFakeClient(
 ): Aoe4WorldClient {
   return {
     async getPlayer(profileId) {
+      overrides.profileCalls?.push(profileId);
+
       return {
         profileId,
         name: "Jugador Muestra Actualizado",
@@ -1336,7 +1348,11 @@ function createFakeClient(
 
       return detail;
     },
-    async getLeaderboard() {
+    async getLeaderboard(leaderboard, profileIds) {
+      if (overrides.leaderboard !== undefined) {
+        return overrides.leaderboard(leaderboard, profileIds);
+      }
+
       throw new Error("no se usa en esta verificación");
     },
     async getLadderPage(): Promise<Aoe4WorldLadderPage> {
@@ -1972,6 +1988,7 @@ type ApprovedStateSnapshot = {
   windowComplete: boolean;
   backfillPage: number;
   windowCheckedAt: Date | null;
+  profileCheckedAt: Date | null;
 };
 
 type SettingSnapshot = {
@@ -2002,6 +2019,7 @@ async function snapshotDatabaseState(
       windowComplete: true,
       backfillPage: true,
       windowCheckedAt: true,
+      profileCheckedAt: true,
     },
   });
   const keys = [cursorKey, lastRunKey, ...sampleIds.map(playerSyncKey)];
@@ -2052,6 +2070,7 @@ async function restoreApprovedRows(
         windowComplete: row.windowComplete,
         backfillPage: row.backfillPage,
         windowCheckedAt: row.windowCheckedAt,
+        profileCheckedAt: row.profileCheckedAt,
       },
     });
   }
@@ -2899,6 +2918,98 @@ async function runDatabaseChecks(): Promise<void> {
         0,
         "la fila abandonada no puede quedar con finishedAt = null",
       );
+    });
+
+    await check("un perfil fresco no llama a getPlayer", async () => {
+      await db.player.update({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { profileCheckedAt: new Date(now.getTime() - 5 * 60_000) },
+      });
+      const profileCalls: number[] = [];
+
+      await syncApprovedPlayers({
+        profileIds: [SAMPLE_PROFILE_ID],
+        client: createFakeClient(games, new Map(), [], { profileCalls }),
+      });
+
+      assert.deepEqual(profileCalls, [], "la caché de una hora evita la petición");
+    });
+
+    await check("un perfil sin sello o caducado se pide y se sella", async () => {
+      for (const checkedAt of [null, new Date(now.getTime() - 2 * 60 * 60_000)]) {
+        await db.player.update({
+          where: { profileId: SAMPLE_PROFILE_ID },
+          data: { profileCheckedAt: checkedAt, aoe4WorldName: null },
+        });
+        const profileCalls: number[] = [];
+
+        await syncApprovedPlayers({
+          profileIds: [SAMPLE_PROFILE_ID],
+          client: createFakeClient(games, new Map(), [], { profileCalls }),
+        });
+
+        assert.equal(
+          profileCalls.includes(SAMPLE_PROFILE_ID),
+          true,
+          `un sello ${checkedAt === null ? "nulo" : "caducado"} tiene que pedir el perfil`,
+        );
+
+        const fila = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
+        assert.ok(fila?.profileCheckedAt !== null, "una llamada correcta sella la columna");
+        assert.equal(fila?.aoe4WorldName, "Jugador Muestra Actualizado");
+        assert.equal(fila?.name, "Jugador Muestra", "el nombre de display no se pisa");
+      }
+    });
+
+    await check("la ladder sella el perfil y evita getPlayer", async () => {
+      await db.player.update({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { profileCheckedAt: null, aoe4WorldName: null },
+      });
+      const profileCalls: number[] = [];
+      const leaderboard = async (
+        key: string,
+        profileIds: number[],
+      ): Promise<Aoe4WorldLeaderboard> => ({
+        key,
+        name: key,
+        season: 14,
+        totalCount: profileIds.length,
+        players: profileIds.map((profileId) => ({
+          profileId,
+          name: "Nombre desde la ladder",
+          country: "es",
+          rating: 1_500,
+          rank: 1,
+          rankLevel: "gold_1",
+          streak: 1,
+          gamesCount: 10,
+          winsCount: 5,
+          lossesCount: 5,
+          twitchUrl: null,
+          twitchIsLive: false,
+          avatars: { small: null, medium: null, full: null },
+          lastGameAt: null,
+        })),
+      });
+
+      await syncApprovedPlayers({
+        profileIds: [SAMPLE_PROFILE_ID],
+        client: createFakeClient(games, new Map(), [], { profileCalls, leaderboard }),
+      });
+
+      assert.deepEqual(profileCalls, [], "la ladder ya selló el perfil en esta pasada");
+      const fila = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
+      assert.equal(fila?.aoe4WorldName, "Nombre desde la ladder");
+      assert.ok(fila?.profileCheckedAt !== null, "la ladder sella profileCheckedAt");
+
+      // Las comprobaciones que vienen después esperan el nombre que dejó el
+      // camino de perfil. La ladder de este escenario es sintética, así que se
+      // deshace al terminar para no contaminar el resto de la verificación.
+      await db.player.update({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { aoe4WorldName: "Jugador Muestra Actualizado" },
+      });
     });
 
     await check("la clave de Setting es la documentada y el cursor es global", async () => {

@@ -105,6 +105,26 @@ misma edad de 30 días, no la cota de 6 h de la semilla.
 más reciente; no detecta un hueco en medio del historial. La paridad de `verify:aoe4world` es una
 **muestra**, no una prueba de exhaustividad.
 
+### Caché de perfil (F3)
+
+El perfil (`GET /players/:profile_id`) solo sirve para refrescar `aoe4WorldName` y `avatarUrl`. Desde
+F3 se pide con una caché de **1 h** (`PROFILE_CACHE_TTL_HOURS`), sellada en `Player.profileCheckedAt`.
+
+- **Dos escritores sellan**: la ladder, que ya trae `name` y `avatars.full` en su entrada, y el perfil
+  cuando de verdad se pide. La ladder sella antes de `refreshProfiles`, así que un jugador que aparece
+  en ella no pasa por `getPlayer` en la primera pasada tras el despliegue.
+- **Solo se piden** perfiles ausentes de la ladder o con el sello nulo/caducado. Si la caché está
+  fresca, no hay petición y el resultado queda como está.
+- **Con N=13**, tras la primera pasada el coste estable baja a **2 peticiones de API** (1 masiva + 1
+  ladder) si todos están en la ladder; el perfil es 0. La fórmula general es:
+  `ceil(N/50)` de ladder + `ceil(N/50)` de masivo + 0 de perfil si todos están frescos.
+- **Si el perfil falla** (404, 5xx, red), el jugador queda `failed` y **no se sella** la columna: se
+  reintenta en la siguiente pasada. Un fallo de perfil no borra los contadores de partidas ya
+  importadas.
+- **Nombre y avatar**: la ladder también puede escribir `aoe4WorldName` y `avatarUrl`; el perfil
+  compara antes de escribir y solo los actualiza si cambiaron. La paridad nombre/avatar entre ladder y
+  perfil se deja para una comprobación manual, fuera de este bloque.
+
 Hay **dos relojes**, y el primario no es GitHub:
 
 | Reloj | Qué es | Frecuencia real |
@@ -1063,9 +1083,9 @@ npm run verify:sync -- --db  # además comprueba el guardado y restaura el estad
 
 `--db` usa dos jugadores de prueba (`profileId` 9000001 y 9000020) y un ruleset de prueba con una
 ventana que cubre el presente. Antes de tocar nada guarda `sync.gamesCursor`, `sync.lastRun`, las
-columnas `windowComplete`/`backfillPage`/`windowCheckedAt` de **todos** los aprobados y el ruleset; en
-un `finally` borra los jugadores de prueba (con sus partidas, puntuaciones y claves de `Setting`) y
-restaura todo, incluso si una comprobación falla. Solo se niega a arrancar si alguno de esos
+columnas `windowComplete`/`backfillPage`/`windowCheckedAt`/`profileCheckedAt` de **todos** los
+aprobados y el ruleset; en un `finally` borra los jugadores de prueba (con sus partidas, puntuaciones
+y claves de `Setting`) y restaura todo, incluso si una comprobación falla. Solo se niega a arrancar si alguno de esos
 `profileId` ya existía de una ejecución anterior.
 
 ### Medidas de AoE4World
