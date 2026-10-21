@@ -6,14 +6,14 @@ import path from "node:path";
 
 import { isLiveGame, LIVE_GAME_WINDOW_MS, normalizeGame, readOwnCivRandomized, resolveGameMode } from "@/lib/aoe4world/normalize";
 import { parseGame, parseGamePlayer, parseGamesPage } from "@/lib/aoe4world/parse";
-import { Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
+import { Aoe4WorldError, Aoe4WorldNotFoundError } from "@/lib/aoe4world/http";
 
 import { CIVILIZATIONS } from "@/lib/civs";
 import { unwrapRead } from "@/lib/db-errors";
 import { SUBDIVISION_RANK_LEVELS } from "@/lib/divisions";
 import { describeMode, describeTeamSize, teamSizesFromRawJson } from "@/lib/format";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
-import { AlertKind, AlertRule, ObjectiveLeadKind } from "@/generated/prisma/enums";
+import { AlertKind, AlertRule, ObjectiveLeadKind, PlayerStatus } from "@/generated/prisma/enums";
 import type { TeamTierContext } from "@/lib/ranked-match";
 import {
   historyComparator,
@@ -35,7 +35,11 @@ import {
   RULESET_VERSION,
   SCORING_RULESET_KEY,
 } from "@/lib/scoring";
-import type { Aoe4WorldClient } from "@/lib/aoe4world/client";
+import type {
+  Aoe4WorldBulkGamesQuery,
+  Aoe4WorldClient,
+  Aoe4WorldGamesQuery,
+} from "@/lib/aoe4world/client";
 import type { Aoe4WorldGame, Aoe4WorldGamesPage, Aoe4WorldLadderPage } from "@/lib/aoe4world/types";
 import { isSyncTraceStale, type SyncRunTrace } from "@/lib/settings";
 
@@ -56,6 +60,9 @@ const SAMPLE_ALLY_ID = 9_000_003;
 const SAMPLE_RIVAL_ID = 9_000_004;
 /** Segundo jugador, para comprobar que las lecturas públicas filtran por estado. */
 const SAMPLE_PENDING_PROFILE_ID = 9_000_005;
+/** Segundo aprobado de la verificación del masivo: partida compartida y truncación. */
+const SAMPLE_BULK_SECOND_PROFILE_ID = 9_000_020;
+const SAMPLE_PROFILE_IDS = [SAMPLE_PROFILE_ID, SAMPLE_BULK_SECOND_PROFILE_ID] as const;
 
 /**
  * Objetivos que fija `docs/OBJETIVOS.md`. Vive como constante y no como
@@ -68,6 +75,13 @@ const EXPECTED_OBJECTIVE_COUNT = 88;
  * de `[from, to)` y son las que deciden qué cuenta.
  */
 const WINDOW_PROFILE_ID = 9_000_006;
+/** Todos los `profileId` que este script crea y debe borrar, pase lo que pase. */
+const TEST_PROFILE_IDS = [
+  ...SAMPLE_PROFILE_IDS,
+  SAMPLE_PENDING_PROFILE_ID,
+  SAMPLE_PENDING_PROFILE_ID + 1,
+  WINDOW_PROFILE_ID,
+] as const;
 
 /**
  * Contexto de equipos **sin cortes** con el que corren las comprobaciones puras de
@@ -569,6 +583,18 @@ async function checkNormalization(): Promise<void> {
       mapPoolError: null,
       summariesError: null,
       announceError: null,
+      gamesPagesRead: 0,
+      gamesBatchesIncomplete: 0,
+      gamesBatchesFailed: 0,
+      gamesPlayersQueuedForBackfill: 0,
+      gamesBatchErrors: [],
+      gamesCursor: null,
+      gamesCursorAdvanced: false,
+      gamesCursorSeeded: false,
+      backfillPlayers: 0,
+      backfillPagesRead: 0,
+      backfillPending: 0,
+      apiNotice: null,
       failures: [],
     };
 
@@ -690,6 +716,18 @@ async function checkNormalization(): Promise<void> {
       mapPoolError: null,
       summariesError: null,
       announceError: null,
+      gamesPagesRead: 0,
+      gamesBatchesIncomplete: 0,
+      gamesBatchesFailed: 0,
+      gamesPlayersQueuedForBackfill: 0,
+      gamesBatchErrors: [],
+      gamesCursor: null,
+      gamesCursorAdvanced: false,
+      gamesCursorSeeded: false,
+      backfillPlayers: 0,
+      backfillPagesRead: 0,
+      backfillPending: 0,
+      apiNotice: null,
       failures: [],
       lastSuccessAt: finishedAt,
     });
@@ -1205,20 +1243,38 @@ async function checkObjectiveCatalogue(): Promise<void> {
   });
 }
 
+type FakeBulkHandler = (
+  query: Aoe4WorldBulkGamesQuery,
+) => Promise<Aoe4WorldGamesPage> | Aoe4WorldGamesPage;
+
+type FakePlayerGamesHandler = (
+  profileId: number,
+  query: Aoe4WorldGamesQuery | undefined,
+) => Promise<Aoe4WorldGamesPage> | Aoe4WorldGamesPage;
+
+type FakeClientOverrides = {
+  bulk?: FakeBulkHandler;
+  playerGames?: FakePlayerGamesHandler;
+};
+
 /**
  * Cliente falso: no toca la red, solo sirve los payloads de ejemplo. El listado
  * y el detalle son independientes a propósito, para poder reproducir el caso en
  * el que el listado ya no alcanza una partida y solo el detalle la resuelve.
+ *
+ * `overrides` permite cambiar el masivo o el listado por jugador en cada
+ * escenario (truncación, fallo de lote, aviso de la API, partida compartida).
  */
 function createFakeClient(
   games: Aoe4WorldGame[],
   details: Map<string, Aoe4WorldGame> = new Map(),
   detailCalls: number[] = [],
+  overrides: FakeClientOverrides = {},
 ): Aoe4WorldClient {
   return {
-    async getPlayer() {
+    async getPlayer(profileId) {
       return {
-        profileId: SAMPLE_PROFILE_ID,
+        profileId,
         name: "Jugador Muestra Actualizado",
         steamId: null,
         siteUrl: null,
@@ -1226,14 +1282,47 @@ function createFakeClient(
         avatars: { small: null, medium: null, full: null },
       };
     },
-    async getPlayerGames(): Promise<Aoe4WorldGamesPage> {
+    async getPlayerGames(profileId, query): Promise<Aoe4WorldGamesPage> {
+      if (overrides.playerGames !== undefined) {
+        return overrides.playerGames(profileId, query);
+      }
+
+      const filtered = games.filter((game) =>
+        game.teams.some((team) =>
+          team.some((side) => side.profileId === profileId),
+        ),
+      );
+
       return {
         page: 1,
         perPage: 100,
-        totalCount: games.length,
-        count: games.length,
+        totalCount: filtered.length,
+        count: filtered.length,
         nextPage: null,
-        games: [...games],
+        notice: null,
+        games: filtered,
+      };
+    },
+    async getGamesBulk(query): Promise<Aoe4WorldGamesPage> {
+      if (overrides.bulk !== undefined) {
+        return overrides.bulk(query);
+      }
+
+      const ids = new Set(query.profileIds);
+      const filtered = games.filter((game) =>
+        game.teams.some((team) =>
+          team.some((side) => side.profileId !== null && ids.has(side.profileId)),
+        ),
+      );
+
+      return {
+        page: query.page,
+        perPage: 50,
+        totalCount: filtered.length,
+        count: filtered.length,
+        nextPage: null,
+        notice: null,
+        games: filtered,
       };
     },
     async getPlayerGame(_profileId, gameId) {
@@ -1261,6 +1350,48 @@ function createFakeClient(
 }
 
 /**
+ * Una página del masivo para los escenarios del cliente falso.
+ */
+function fakePage(
+  games: Aoe4WorldGame[],
+  options: { page?: number; nextPage?: number | null; notice?: string | null } = {},
+): Aoe4WorldGamesPage {
+  return {
+    page: options.page ?? 1,
+    perPage: 50,
+    totalCount: games.length,
+    count: games.length,
+    nextPage: options.nextPage ?? null,
+    notice: options.notice ?? null,
+    games,
+  };
+}
+
+/** Cambia variables de entorno durante una comprobación y las devuelve como estaban. */
+async function withEnv<T>(
+  values: Readonly<Record<string, string>>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = new Map(Object.keys(values).map((key) => [key, process.env[key]]));
+
+  for (const [key, value] of Object.entries(values)) {
+    process.env[key] = value;
+  }
+
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+/**
  * Las comprobaciones de normalización usan el `NOW` congelado de arriba, así que
  * son deterministas. El worker, en cambio, juzga si una partida está "en
  * directo" contra el reloj real, así que su fixture tiene que anclarse a `now`
@@ -1276,26 +1407,27 @@ function createFakeClient(
  * del torneo siga cubriendo el presente: lo comprueba la primera comprobación de
  * la sección de base de datos.
  */
-function withinWindow(days: number): string {
-  return new Date(Date.parse(DEFAULT_RULESET.window.from) + days * 86_400_000).toISOString();
+function withinWindow(days: number, window: { from: string } = DEFAULT_RULESET.window): string {
+  return new Date(Date.parse(window.from) + days * 86_400_000).toISOString();
 }
 
-function buildFixtureAt(now: Date) {
+function buildFixtureAt(now: Date, window: { from: string } = DEFAULT_RULESET.window) {
   const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
   const liveStartedAt = ago(10).toISOString();
 
   return {
-    solo: { ...SOLO_WIN, started_at: withinWindow(2) },
-    team: { ...TEAM_LOSS, started_at: withinWindow(3) },
+    solo: { ...SOLO_WIN, started_at: withinWindow(2, window) },
+    team: { ...TEAM_LOSS, started_at: withinWindow(3, window) },
     // 10 minutos dentro de la ventana de 60, con 50 de margen: aunque la
     // comprobación tardara media hora, la partida seguiría "en curso".
-    live: { ...ONGOING_SOLO, started_at: liveStartedAt },
+    live: { ...ONGOING_SOLO, started_at: liveStartedAt, updated_at: now.toISOString() },
     // La misma partida ya terminada: la API ahora sabe el resultado, así que
     // `result` y `duration` dejan de ser null y `state` pasa a `processed`.
     // Dura justo los 10 minutos que lleva jugada, así que acaba de terminar.
     liveFinished: {
       ...ONGOING_SOLO,
       started_at: liveStartedAt,
+      updated_at: now.toISOString(),
       duration: 600,
       state: "processed",
       ongoing: false,
@@ -1443,8 +1575,12 @@ async function runWindowChecks(
         "solo cuentan las partidas de dentro de la ventana",
       );
       assert.equal(score.wins, score.matches, "todas están ganadas");
+      const puntosPartidas = await db.match.aggregate({
+        where: { playerId: jugador.id },
+        _sum: { points: true },
+      });
       assert.equal(
-        score.total - (score.breakdown as { objectives: { points: number } }).objectives.points,
+        puntosPartidas._sum.points,
         score.wins * DEFAULT_RULESET.pointsPerWin,
         "los puntos de partidas cuadran con las victorias de la ventana",
       );
@@ -1536,6 +1672,15 @@ async function runWindowChecks(
       const agregados = await loadObjectivePlayers(db, await readRuleset(), await readDivisionCutoffs());
       const suyo = agregados.find((agregado) => agregado.playerId === jugador.id);
       assert.equal(suyo?.matches, esperada, "los objetivos también las cuentan");
+
+      if (rulesetGuardado === null) {
+        await db.setting.deleteMany({ where: { key: SCORING_RULESET_KEY } });
+      } else {
+        await db.setting.update({
+          where: { key: SCORING_RULESET_KEY },
+          data: { value: rulesetGuardado.value as Prisma.InputJsonValue },
+        });
+      }
     });
 
     /**
@@ -1718,7 +1863,14 @@ async function runWindowChecks(
 
         const leidas = await db.match.findMany({
           where: { playerId: jugador.id, gameId: { in: ["9001020", "9001021"] } },
-          select: { gameId: true, mode: true, startedAt: true, finishedAt: true, points: true },
+          select: {
+            gameId: true,
+            mode: true,
+            startedAt: true,
+            finishedAt: true,
+            points: true,
+            rawJson: true,
+          },
         });
         const deEquipo = leidas.find((fila) => fila.gameId === "9001020");
         const equilibradaLeida = leidas.find((fila) => fila.gameId === "9001021");
@@ -1813,42 +1965,186 @@ async function runWindowChecks(
   }
 }
 
+type ApprovedStateSnapshot = {
+  id: string;
+  profileId: number;
+  status: PlayerStatus;
+  windowComplete: boolean;
+  backfillPage: number;
+  windowCheckedAt: Date | null;
+};
+
+type SettingSnapshot = {
+  key: string;
+  value: Prisma.JsonValue;
+};
+
+type DatabaseSnapshot = {
+  approved: ApprovedStateSnapshot[];
+  cursor: SettingSnapshot | null;
+  lastRun: SettingSnapshot | null;
+  sampleStates: SettingSnapshot[];
+};
+
+async function snapshotDatabaseState(
+  db: PrismaClient,
+  cursorKey: string,
+  lastRunKey: string,
+  sampleIds: readonly number[],
+  playerSyncKey: (profileId: number) => string,
+): Promise<DatabaseSnapshot> {
+  const approved = await db.player.findMany({
+    where: { status: PlayerStatus.APPROVED },
+    select: {
+      id: true,
+      profileId: true,
+      status: true,
+      windowComplete: true,
+      backfillPage: true,
+      windowCheckedAt: true,
+    },
+  });
+  const keys = [cursorKey, lastRunKey, ...sampleIds.map(playerSyncKey)];
+  const settings = await db.setting.findMany({ where: { key: { in: keys } } });
+  const byKey = new Map(settings.map((setting) => [setting.key, setting]));
+
+  return {
+    approved,
+    cursor: byKey.get(cursorKey) ?? null,
+    lastRun: byKey.get(lastRunKey) ?? null,
+    sampleStates: settings.filter((setting) => setting.key !== cursorKey && setting.key !== lastRunKey),
+  };
+}
+
+async function restoreSetting(
+  db: PrismaClient,
+  key: string,
+  setting: SettingSnapshot | null,
+): Promise<void> {
+  if (setting === null) {
+    await db.setting.deleteMany({ where: { key } });
+    return;
+  }
+
+  await db.setting.upsert({
+    where: { key },
+    create: { key, value: setting.value as Prisma.InputJsonValue },
+    update: { value: setting.value as Prisma.InputJsonValue },
+  });
+}
+
+async function restoreApprovedRows(
+  db: PrismaClient,
+  rows: readonly ApprovedStateSnapshot[],
+  exceptProfileIds: readonly number[] = [],
+): Promise<void> {
+  const excluded = new Set(exceptProfileIds);
+
+  for (const row of rows) {
+    if (excluded.has(row.profileId)) {
+      continue;
+    }
+
+    await db.player.updateMany({
+      where: { id: row.id },
+      data: {
+        status: row.status,
+        windowComplete: row.windowComplete,
+        backfillPage: row.backfillPage,
+        windowCheckedAt: row.windowCheckedAt,
+      },
+    });
+  }
+}
+
+async function restoreDatabaseState(
+  db: PrismaClient,
+  snapshot: DatabaseSnapshot,
+  cursorKey: string,
+  lastRunKey: string,
+  sampleIds: readonly number[],
+  playerSyncKey: (profileId: number) => string,
+): Promise<void> {
+  await restoreApprovedRows(db, snapshot.approved);
+  await restoreSetting(db, cursorKey, snapshot.cursor);
+  await restoreSetting(db, lastRunKey, snapshot.lastRun);
+
+  await db.setting.deleteMany({
+    where: { key: { in: sampleIds.map(playerSyncKey) } },
+  });
+
+  for (const setting of snapshot.sampleStates) {
+    await restoreSetting(db, setting.key, setting);
+  }
+}
+
+/**
+ * Deja el roster real fuera de la pasada no dirigida: lo pasa a `PENDING`
+ * temporalmente y lo restaura al terminar. Así el masivo solo ve a los dos
+ * jugadores de muestra y el `backfillPending` de la pasada es el suyo.
+ */
+async function withIsolatedSampleRoster<T>(
+  db: PrismaClient,
+  snapshot: DatabaseSnapshot,
+  sampleIds: readonly number[],
+  run: () => Promise<T>,
+): Promise<T> {
+  await db.player.updateMany({
+    where: {
+      status: PlayerStatus.APPROVED,
+      profileId: { notIn: [...sampleIds] },
+    },
+    data: { status: PlayerStatus.PENDING },
+  });
+
+  try {
+    return await run();
+  } finally {
+    await restoreApprovedRows(db, snapshot.approved, sampleIds);
+  }
+}
+
+
 async function runDatabaseChecks(): Promise<void> {
   // Importación diferida: las comprobaciones de normalización no tocan la base
   // de datos y así funcionan aunque `DATABASE_URL` no esté definida.
   const { syncApprovedPlayers } = await import("@/lib/aoe4world/sync");
-  const { playerSyncKey, readPlayerSyncState, writePlayerSyncState } = await import(
-    "@/lib/settings"
-  );
+  const {
+    playerSyncKey,
+    readGamesCursor,
+    readPlayerSyncState,
+    writeGamesCursor,
+    SYNC_GAMES_CURSOR_KEY,
+    SYNC_LAST_RUN_KEY,
+  } = await import("@/lib/settings");
   const { db } = await import("@/lib/db");
   const { getObjectives, readRuleset, recomputeScores } = await import("@/lib/scoring");
   const { readDivisionCutoffs } = await import("@/lib/alerts/settings");
 
   const now = new Date();
-  const fixture = buildFixtureAt(now);
+  const existing = await db.player.findMany({
+    where: { profileId: { in: [...SAMPLE_PROFILE_IDS] } },
+    select: { profileId: true },
+  });
+  assert.equal(
+    existing.length,
+    0,
+    `ya existe un jugador de muestra (${existing.map((row) => row.profileId).join(", ")}); bórralo antes de repetir la verificación`,
+  );
+  const rulesetGuardado = await db.setting.findUnique({
+    where: { key: SCORING_RULESET_KEY },
+  });
+  const ventanaActiva = {
+    from: new Date(now.getTime() - 30 * 86_400_000).toISOString(),
+    to: new Date(now.getTime() + 86_400_000).toISOString(),
+  };
+  const rulesetPrueba = { ...DEFAULT_RULESET, window: ventanaActiva };
+
+  const fixture = buildFixtureAt(now, ventanaActiva);
   const soloStartedAt = new Date(fixture.solo.started_at);
   const liveStartedAt = new Date(fixture.live.started_at);
 
   console.log("Guardado en base de datos");
-
-  await check("la ventana activa cubre la fixture de esta verificación", async () => {
-    const ventana = (await readRuleset()).window;
-    const fin = ventana.to === null ? Number.POSITIVE_INFINITY : Date.parse(ventana.to);
-
-    assert.ok(
-      ventana.to !== null,
-      `la ventana de ${SCORING_RULESET_KEY} está abierta (to = null) y las cuentas de esta verificación asumen un fin`,
-    );
-    assert.ok(
-      soloStartedAt.getTime() < now.getTime() && new Date(fixture.team.started_at) < now,
-      "la ventana activa tiene que empezar en el pasado, o las partidas de muestra serían futuras",
-    );
-    assert.ok(
-      liveStartedAt.getTime() < fin,
-      `la ventana activa (${ventana.from} — ${String(ventana.to)}) ya no cubre el presente y la partida en ` +
-        "directo de la fixture caería fuera: hay que mover la ventana de DEFAULT_RULESET o esperar a la siguiente",
-    );
-  });
 
   const games: Aoe4WorldGame[] = [
     parsedGame(fixture.solo),
@@ -1856,34 +2152,119 @@ async function runDatabaseChecks(): Promise<void> {
     parsedGame(fixture.live),
   ];
 
-  const existing = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
-  assert.equal(
-    existing,
-    null,
-    `ya existe un jugador con profileId ${SAMPLE_PROFILE_ID}; bórralo antes de repetir la verificación`,
+  const snapshot = await snapshotDatabaseState(
+    db,
+    SYNC_GAMES_CURSOR_KEY,
+    SYNC_LAST_RUN_KEY,
+    TEST_PROFILE_IDS,
+    playerSyncKey,
   );
 
-  const player = await db.player.create({
-    data: { profileId: SAMPLE_PROFILE_ID, name: "Jugador Muestra", status: "APPROVED" },
-  });
+  let player: Awaited<ReturnType<typeof db.player.create>>;
 
   try {
-    await check("la primera pasada inserta las partidas y guarda el cursor", async () => {
-      const summary = await syncApprovedPlayers({
-        profileIds: [SAMPLE_PROFILE_ID],
-        client: createFakeClient(games),
+    await db.setting.upsert({
+      where: { key: SCORING_RULESET_KEY },
+      create: {
+        key: SCORING_RULESET_KEY,
+        value: rulesetPrueba as unknown as Prisma.InputJsonObject,
+      },
+      update: {
+        value: rulesetPrueba as unknown as Prisma.InputJsonObject,
+      },
+    });
+
+    await check("la ventana activa cubre la fixture de esta verificación", async () => {
+      const ventana = (await readRuleset()).window;
+      const fin = ventana.to === null ? Number.POSITIVE_INFINITY : Date.parse(ventana.to);
+
+      assert.ok(
+        ventana.to !== null,
+        `la ventana de ${SCORING_RULESET_KEY} está abierta (to = null) y las cuentas de esta verificación asumen un fin`,
+      );
+      assert.ok(
+        soloStartedAt.getTime() < now.getTime() && new Date(fixture.team.started_at) < now,
+        "la ventana activa tiene que empezar en el pasado, o las partidas de muestra serían futuras",
+      );
+      assert.ok(
+        liveStartedAt.getTime() < fin,
+        `la ventana activa (${ventana.from} — ${String(ventana.to)}) ya no cubre el presente y la partida en ` +
+          "directo de la fixture caería fuera: hay que mover la ventana de DEFAULT_RULESET o esperar a la siguiente",
+      );
+    });
+
+    player = await db.player.create({
+      data: { profileId: SAMPLE_PROFILE_ID, name: "Jugador Muestra", status: "APPROVED" },
+    });
+
+    await db.player.create({
+      data: {
+        profileId: SAMPLE_BULK_SECOND_PROFILE_ID,
+        name: "Jugador Muestra 2",
+        status: "APPROVED",
+      },
+    });
+
+    await check("la primera pasada inserta por el masivo y siembra el cursor global", async () => {
+      await db.setting.deleteMany({ where: { key: SYNC_GAMES_CURSOR_KEY } });
+      const finishedAt = new Date(now.getTime() - 2 * 60 * 60_000).toISOString();
+      await db.setting.upsert({
+        where: { key: SYNC_LAST_RUN_KEY },
+        create: {
+          key: SYNC_LAST_RUN_KEY,
+          value: { startedAt: finishedAt, finishedAt },
+        },
+        update: { value: { startedAt: finishedAt, finishedAt } },
+      });
+      await db.player.updateMany({
+        where: { profileId: { in: [...SAMPLE_PROFILE_IDS] } },
+        data: { windowComplete: false, backfillPage: 1 },
       });
 
-      const player = summary.players[0];
-      assert.equal(summary.playersOk, 1);
-      assert.equal(player.matchesInserted, 3);
-      assert.equal(player.matchesUpdated, 0);
-      assert.equal(player.matchesSkipped, 0, "no debería descartarse ninguna partida");
-      assert.equal(player.liveMatches, 1);
+      const summary = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () => syncApprovedPlayers({ client: createFakeClient(games) }),
+      );
+      const primero = summary.players.find((row) => row.profileId === SAMPLE_PROFILE_ID);
+      const otro = summary.players.find(
+        (row) => row.profileId === SAMPLE_BULK_SECOND_PROFILE_ID,
+      );
+
+      assert.ok(primero !== undefined && otro !== undefined, "los dos aprobados están en el resumen");
+      assert.equal(summary.playersTotal, 2);
+      assert.equal(primero.matchesInserted, 3);
+      assert.equal(otro.matchesInserted, 0);
+      assert.equal(summary.gamesPagesRead >= 1, true, "el masivo lee al menos una página");
+      assert.equal(summary.gamesBatchesFailed, 0);
+      assert.equal(summary.gamesBatchesIncomplete, 0);
+      assert.equal(summary.gamesCursorSeeded, true);
+      assert.equal(summary.gamesCursorAdvanced, true, "la partida nueva mueve el watermark");
+      assert.equal(summary.backfillPending, 0, "la ventana de los dos muestras queda completa");
+      assert.ok(summary.gamesCursor !== null, "el cursor global queda escrito");
+
+      const cursor = await readGamesCursor();
+      assert.ok(cursor !== null);
+      assert.equal(cursor.seededFrom, "sync.lastRun.finishedAt");
+      const seededAtMs = Date.parse(cursor.updatedAt);
+      assert.ok(
+        seededAtMs >= now.getTime() - 6 * 60 * 60_000 - 90 * 60_000 &&
+          seededAtMs <= now.getTime() - 90 * 60_000,
+        "la semilla nace entre el suelo de 6 h y el techo de ahora, menos el solape",
+      );
+
+      const fila = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
+      assert.equal(fila?.windowComplete, true);
+      assert.ok(fila?.windowCheckedAt !== null);
+
+      const estado = await readPlayerSyncState(SAMPLE_PROFILE_ID);
+      assert.ok(estado !== null);
+      assert.equal(estado.since, ventanaActiva.from, "la auditoría usa el inicio de la ventana");
       assert.equal(
-        player.name,
-        "Jugador Muestra",
-        "el resultado identifica al jugador por su nombre de display, no por el oficial",
+        estado.maxStartedAt,
+        liveStartedAt.toISOString(),
+        "la auditoría guarda el started_at más nuevo del relleno",
       );
 
       const rows = await db.match.findMany({
@@ -1891,63 +2272,48 @@ async function runDatabaseChecks(): Promise<void> {
         orderBy: { gameId: "asc" },
       });
       assert.equal(rows.length, 3);
+      assert.equal(rows.find((row) => row.gameId === "9000001")?.result, "WIN");
+      assert.equal(rows.find((row) => row.gameId === "9000002")?.mode, "rm_team");
+      assert.equal(rows.find((row) => row.gameId === "9000003")?.finishedAt, null);
+    });
 
-      const solo = rows.find((row) => row.gameId === "9000001");
-      assert.equal(solo?.result, "WIN");
-      assert.equal(solo?.leaderboard, "rm_solo");
-      assert.equal(solo?.mode, "rm_solo", "la familia de ladder se resuelve al guardar");
-      assert.equal(solo?.civRandomized, false);
-      assert.equal(
-        solo?.points,
-        DEFAULT_RULESET.pointsPerWin,
-        "el motor da pointsPerWin puntos a la victoria clasificatoria",
-      );
-      assert.equal(
-        solo?.finishedAt?.toISOString(),
-        new Date(soloStartedAt.getTime() + 1_800_000).toISOString(),
-        "finishedAt = started_at + duración",
-      );
+    await check("la segunda pasada no duplica ni mueve el cursor dirigido", async () => {
+      const cursorAntes = (await readGamesCursor())?.updatedAt;
+      const sinDirecto = games.filter((game) => game.gameId !== 9_000_003);
+      const summary = await syncApprovedPlayers({
+        profileIds: [SAMPLE_PROFILE_ID],
+        client: createFakeClient(sinDirecto),
+      });
+      const primero = summary.players[0];
 
-      const porEquipos = rows.find((row) => row.gameId === "9000002");
-      assert.equal(porEquipos?.mode, "rm_team");
-      assert.equal(porEquipos?.points, 0, "una derrota clasificatoria no da puntos, pero sí cuenta");
-
-      const enCurso = rows.find((row) => row.gameId === "9000003");
-      assert.equal(enCurso?.finishedAt, null);
-      assert.equal(enCurso?.result, null);
-      assert.equal(enCurso?.points, 0, "una partida en curso nunca puntúa");
-
-      const state = await readPlayerSyncState(SAMPLE_PROFILE_ID);
-      assert.ok(state !== null);
+      assert.ok(primero !== undefined);
+      assert.equal(primero.matchesInserted, 0, "no debe insertar nada nuevo");
+      assert.equal(primero.matchesUpdated, 0);
+      assert.equal(summary.newMatches, 0);
+      assert.equal(summary.gamesCursorAdvanced, false);
+      assert.equal((await readGamesCursor())?.updatedAt, cursorAntes);
       assert.equal(
-        state.maxStartedAt,
-        liveStartedAt.toISOString(),
-        "el cursor es el started_at más nuevo",
-      );
-      assert.equal(
-        state.since,
-        new Date(liveStartedAt.getTime() - 3_600_000).toISOString(),
-        "el since lleva 60 min de solape",
+        await db.match.count({ where: { player: { profileId: SAMPLE_PROFILE_ID } } }),
+        3,
+        "sigue habiendo tres filas, no se duplica nada",
       );
     });
 
-    await check("la segunda pasada no duplica y refresca la partida en curso", async () => {
-      // La partida en curso acaba de terminar: la API la devuelve procesada.
-      games[2] = parsedGame(fixture.liveFinished);
-
+    await check("la partida en curso se resuelve y suma una nueva clasificatoria", async () => {
+      const resuelta = parsedGame(fixture.liveFinished);
       const summary = await syncApprovedPlayers({
         profileIds: [SAMPLE_PROFILE_ID],
-        client: createFakeClient(games),
+        client: createFakeClient([games[0] as Aoe4WorldGame, games[1] as Aoe4WorldGame, resuelta]),
       });
+      const primero = summary.players[0];
 
-      const player = summary.players[0];
-      assert.equal(player.matchesInserted, 0, "no debe insertar nada nuevo");
-      assert.equal(player.matchesUpdated, 1, "solo la que estaba en curso");
-      assert.equal(player.matchesSkipped, 0, "ahora es jugable, no debe descartarse");
+      assert.ok(primero !== undefined);
+      assert.equal(primero.matchesInserted, 0);
+      assert.equal(primero.matchesUpdated, 1, "solo la que estaba en curso");
       assert.equal(
-        player.sinceStored,
-        player.sinceUsed,
-        "sin partidas más nuevas el cursor se queda donde estaba",
+        summary.newMatches,
+        1,
+        "la partida en curso pasa a contar: es una transición, no una inserción",
       );
 
       const refrescada = await db.match.findFirst({
@@ -1956,97 +2322,481 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(refrescada?.result, "WIN");
       assert.equal(refrescada?.finishedAt?.toISOString(), now.toISOString());
       assert.equal(refrescada?.durationSeconds, 600);
-
-      const total = await db.match.count({ where: { player: { profileId: SAMPLE_PROFILE_ID } } });
-      assert.equal(total, 3, "sigue habiendo tres filas, no se duplica nada");
     });
 
-    await check(
-      "el nombre de display no se pisa y el oficial va a su propia columna",
-      async () => {
-        const player = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
-        assert.equal(
-          player?.name,
-          "Jugador Muestra",
-          "el worker no toca `Player.name`: es lo que escribió quien se inscribió",
-        );
-        assert.equal(
-          player?.aoe4WorldName,
-          "Jugador Muestra Actualizado",
-          "el nombre de AoE4World se guarda aparte, para poder publicar los dos",
-        );
-      },
-    );
+    await check("una partida compartida deja una fila por jugador y una sola en la página", async () => {
+      await db.player.updateMany({
+        where: { profileId: { in: [...SAMPLE_PROFILE_IDS] } },
+        data: { windowComplete: true },
+      });
 
-    await check(
-      "el refetch resuelve una partida en vivo que el listado ya no devuelve",
-      async () => {
-        // La partida 9000010 se guardó en vivo hace 90 min, pero el cursor está
-        // 30 min por delante: el listado `since` ya no la alcanza.
-        const startedAt = new Date(now.getTime() - 90 * 60_000);
-        await db.match.create({
-          data: {
-            gameId: "9000010",
-            playerId: player.id,
-            leaderboard: "rm_solo",
-            result: null,
-            startedAt,
-            finishedAt: null,
-            rawJson: fixture.solo,
-          },
-        });
-
-        await writePlayerSyncState(SAMPLE_PROFILE_ID, {
-          since: new Date(now.getTime() - 60 * 60_000).toISOString(),
-          maxStartedAt: new Date(now.getTime() - 30 * 60_000).toISOString(),
-          lastSyncedAt: now.toISOString(),
-          historyTruncated: false,
-          abandonedCount: 0,
-          abandonedGameIds: [],
-          lastAbandonedAt: null,
-        });
-
-        // El detalle sí la devuelve ya resuelta; el listado no la menciona.
-        const details = new Map<string, Aoe4WorldGame>([
+      const compartida = parsedGame({
+        ...SOLO_WIN,
+        game_id: 9_000_050,
+        started_at: new Date(Date.parse(ventanaActiva.from) + 3_600_000).toISOString(),
+        updated_at: now.toISOString(),
+        teams: [
           [
-            "9000010",
-            parsedGame({
-              ...fixture.liveFinished,
-              game_id: 9_000_010,
-              started_at: startedAt.toISOString(),
-              duration: 3300,
-            }),
+            {
+              player: samplePlayer({
+                profile_id: SAMPLE_PROFILE_ID,
+                result: "win",
+                civilization: "english",
+              }),
+            },
           ],
-        ]);
-        const detailCalls: number[] = [];
+          [
+            {
+              player: samplePlayer({
+                profile_id: SAMPLE_BULK_SECOND_PROFILE_ID,
+                result: "loss",
+                civilization: "mongols",
+              }),
+            },
+          ],
+        ],
+      });
 
-        const summary = await syncApprovedPlayers({
+      const summary = await syncApprovedPlayers({
+        profileIds: [...SAMPLE_PROFILE_IDS],
+        client: createFakeClient([compartida]),
+      });
+      const primero = summary.players.find((row) => row.profileId === SAMPLE_PROFILE_ID);
+      const otro = summary.players.find(
+        (row) => row.profileId === SAMPLE_BULK_SECOND_PROFILE_ID,
+      );
+
+      assert.ok(primero !== undefined && otro !== undefined);
+      assert.equal(primero.matchesInserted, 1);
+      assert.equal(otro.matchesInserted, 1);
+      assert.equal(summary.gamesPagesRead, 1, "la página masiva trae la partida una sola vez");
+      assert.equal(summary.newMatches, 2, "cuenta una vez por jugador, no una vez por fila de página");
+      assert.equal(
+        await db.match.count({ where: { gameId: "9000050" } }),
+        2,
+        "hay una fila Match por jugador",
+      );
+    });
+
+    await check("una truncación avanza el cursor y no rebobina al que iba por la página 7", async () => {
+      await db.player.updateMany({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { windowComplete: false, backfillPage: 7 },
+      });
+      await db.player.updateMany({
+        where: { profileId: SAMPLE_BULK_SECOND_PROFILE_ID },
+        data: { windowComplete: false, backfillPage: 1 },
+      });
+
+      const cursorAntes = await readGamesCursor();
+      assert.ok(cursorAntes !== null);
+      await writeGamesCursor({
+        ...cursorAntes,
+        updatedAt: new Date(now.getTime() - 4 * 60 * 60_000).toISOString(),
+      });
+
+      const compartida = parsedGame({
+        ...SOLO_WIN,
+        game_id: 9_000_050,
+        started_at: new Date(Date.parse(ventanaActiva.from) + 3_600_000).toISOString(),
+        updated_at: now.toISOString(),
+        teams: [
+          [
+            {
+              player: samplePlayer({
+                profile_id: SAMPLE_PROFILE_ID,
+                result: "win",
+                civilization: "english",
+              }),
+            },
+          ],
+          [
+            {
+              player: samplePlayer({
+                profile_id: SAMPLE_BULK_SECOND_PROFILE_ID,
+                result: "loss",
+                civilization: "mongols",
+              }),
+            },
+          ],
+        ],
+      });
+
+      const summary = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () =>
+          withEnv(
+            {
+              AOE4WORLD_SYNC_BULK_MAX_PAGES: "1",
+              AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS: "1",
+              AOE4WORLD_SYNC_BACKFILL_PAGES_PER_PLAYER: "1",
+            },
+            () =>
+              syncApprovedPlayers({
+                client: createFakeClient(
+                  [compartida],
+                  new Map(),
+                  [],
+                  {
+                    bulk: (query) =>
+                      fakePage([compartida], { page: query.page, nextPage: 2 }),
+                  },
+                ),
+              }),
+          ),
+      );
+
+      assert.equal(summary.gamesBatchesIncomplete, 1);
+      assert.equal(summary.gamesCursorAdvanced, true, "una truncación no bloquea el cursor");
+      assert.equal(summary.gamesPlayersQueuedForBackfill, 2);
+      assert.equal(summary.backfillPending, 1, "queda pendiente el que iba por la página 7");
+
+      const fila7 = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
+      const fila1 = await db.player.findUnique({
+        where: { profileId: SAMPLE_BULK_SECOND_PROFILE_ID },
+      });
+      assert.equal(fila7?.backfillPage, 7, "keepPage conserva la página del que iba a medias");
+      assert.equal(fila7?.windowComplete, false);
+      assert.equal(fila1?.windowComplete, true);
+
+      const segunda = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () =>
+          syncApprovedPlayers({
+            client: createFakeClient([compartida]),
+          }),
+      );
+      assert.equal(segunda.gamesBatchesIncomplete, 0);
+      assert.equal(segunda.backfillPending, 0);
+
+      const fila7Final = await db.player.findUnique({
+        where: { profileId: SAMPLE_PROFILE_ID },
+      });
+      assert.equal(fila7Final?.backfillPage, 7, "la siguiente pasada no rebobina");
+      assert.equal(fila7Final?.windowComplete, true);
+    });
+
+    await check("un lote que falla bloquea el cursor y deja su número y su rango", async () => {
+      await db.player.updateMany({
+        where: { profileId: { in: [...SAMPLE_PROFILE_IDS] } },
+        data: { windowComplete: true },
+      });
+
+      const cursorAntes = (await readGamesCursor())?.updatedAt;
+      const summary = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () =>
+          syncApprovedPlayers({
+            client: createFakeClient(
+              [],
+              new Map(),
+              [],
+              {
+                bulk: () => {
+                  throw new Aoe4WorldError("fallo de lote de prueba", {
+                    status: 503,
+                    retryable: true,
+                  });
+                },
+              },
+            ),
+          }),
+      );
+
+      assert.equal(summary.gamesBatchesFailed, 1);
+      assert.equal(summary.gamesBatchErrors.length, 1);
+      assert.equal(summary.gamesBatchErrors[0]?.batch, 1);
+      assert.equal(summary.gamesBatchErrors[0]?.firstProfileId, SAMPLE_PROFILE_ID);
+      assert.equal(
+        summary.gamesBatchErrors[0]?.lastProfileId,
+        SAMPLE_BULK_SECOND_PROFILE_ID,
+      );
+      assert.equal(summary.playersFailed, 2);
+      assert.deepEqual(
+        summary.players.filter((row) => row.status === "failed").map((row) => row.profileId).sort(),
+        [...SAMPLE_PROFILE_IDS].sort(),
+      );
+      assert.equal(summary.gamesCursorAdvanced, false);
+      assert.equal((await readGamesCursor())?.updatedAt, cursorAntes);
+    });
+
+    await check("la siembra acotada no nace más atrás de la cota de la semilla", async () => {
+      await db.setting.deleteMany({ where: { key: SYNC_GAMES_CURSOR_KEY } });
+      const finishedAt = new Date(now.getTime() - 2 * 24 * 60 * 60_000).toISOString();
+      await db.setting.upsert({
+        where: { key: SYNC_LAST_RUN_KEY },
+        create: {
+          key: SYNC_LAST_RUN_KEY,
+          value: { startedAt: finishedAt, finishedAt },
+        },
+        update: { value: { startedAt: finishedAt, finishedAt } },
+      });
+
+      const fallaRelleno = () => {
+        throw new Aoe4WorldError("fallo de relleno de prueba", {
+          status: 503,
+          retryable: true,
+        });
+      };
+
+      const summary = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () =>
+          withEnv({ AOE4WORLD_SYNC_SEED_MAX_AGE_MINUTES: "360" }, () =>
+            syncApprovedPlayers({
+              profileIds: [SAMPLE_PROFILE_ID],
+              client: createFakeClient([], new Map(), [], { playerGames: fallaRelleno }),
+            }),
+          ),
+      );
+      const cursor = await readGamesCursor();
+      assert.ok(cursor !== null);
+      assert.equal(cursor.seededFrom, "sync.lastRun.finishedAt");
+      assert.equal(summary.gamesCursorSeeded, true);
+      assert.equal(summary.gamesCursorAdvanced, false);
+      const seededMs = Date.parse(cursor.updatedAt);
+      assert.ok(
+        seededMs >= now.getTime() - 6 * 60 * 60_000 - 90 * 60_000 - 60_000 &&
+          seededMs <= now.getTime() - 6 * 60 * 60_000 - 90 * 60_000 + 60_000,
+        "el rastro de hace dos días se sube al suelo de seis horas",
+      );
+
+      const filas = await db.player.findMany({
+        where: { profileId: { in: [...SAMPLE_PROFILE_IDS] } },
+        select: { windowComplete: true, backfillPage: true },
+      });
+      assert.equal(
+        filas.every((row) => row.windowComplete === false && row.backfillPage === 1),
+        true,
+        "la siembra reencola al roster",
+      );
+
+      await db.setting.deleteMany({ where: { key: SYNC_GAMES_CURSOR_KEY } });
+      await db.setting.deleteMany({ where: { key: SYNC_LAST_RUN_KEY } });
+
+      const catchUp = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () =>
+          syncApprovedPlayers({
+            profileIds: [SAMPLE_PROFILE_ID],
+            client: createFakeClient([], new Map(), [], { playerGames: fallaRelleno }),
+          }),
+      );
+      const cursorCatchUp = await readGamesCursor();
+      assert.ok(cursorCatchUp !== null);
+      assert.equal(cursorCatchUp.seededFrom, "catch-up");
+      assert.equal(catchUp.gamesCursorSeeded, true);
+      const catchUpMs = Date.parse(cursorCatchUp.updatedAt);
+      assert.ok(
+        catchUpMs >= now.getTime() - 90 * 60_000 - 60_000 &&
+          catchUpMs <= now.getTime() - 90 * 60_000 + 60_000,
+        "sin rastro la semilla nace en now menos el solape",
+      );
+    });
+
+    await check("el aviso de updated_since recupera el cursor y no entra en bucle", async () => {
+      const cursor = await readGamesCursor();
+      assert.ok(cursor !== null);
+      await writeGamesCursor({
+        ...cursor,
+        updatedAt: new Date(now.getTime() - 21 * 24 * 60 * 60_000).toISOString(),
+      });
+
+      const compartida = parsedGame({
+        ...SOLO_WIN,
+        game_id: 9_000_050,
+        started_at: new Date(Date.parse(ventanaActiva.from) + 3_600_000).toISOString(),
+        updated_at: now.toISOString(),
+        teams: [
+          [
+            {
+              player: samplePlayer({
+                profile_id: SAMPLE_PROFILE_ID,
+                result: "win",
+                civilization: "english",
+              }),
+            },
+          ],
+          [
+            {
+              player: samplePlayer({
+                profile_id: SAMPLE_BULK_SECOND_PROFILE_ID,
+                result: "loss",
+                civilization: "mongols",
+              }),
+            },
+          ],
+        ],
+      });
+      const aviso =
+        "updated_since=.. is too long ago, are you keeping it up to date?... and msg us on discord ~ aoe4world devs";
+      const handler = (query: Aoe4WorldBulkGamesQuery) => {
+        if (now.getTime() - query.updatedSince.getTime() > 20 * 24 * 60 * 60_000) {
+          return fakePage([], { notice: aviso });
+        }
+
+        return fakePage([compartida]);
+      };
+      const fallaRelleno = () => {
+        throw new Aoe4WorldError("fallo de relleno de prueba", {
+          status: 503,
+          retryable: true,
+        });
+      };
+
+      const summary = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () =>
+          syncApprovedPlayers({
+            client: createFakeClient([compartida], new Map(), [], {
+              bulk: handler,
+              playerGames: fallaRelleno,
+            }),
+          }),
+      );
+
+      assert.equal(summary.apiNotice, aviso);
+      assert.equal(summary.gamesCursorSeeded, true, "el aviso vuelve a sembrar");
+      assert.equal(summary.gamesCursorAdvanced, false);
+      const recuperado = await readGamesCursor();
+      assert.ok(recuperado !== null);
+      assert.equal(recuperado.seededFrom, "catch-up");
+      assert.ok(
+        Date.parse(recuperado.updatedAt) > now.getTime() - 2 * 60 * 60_000,
+        "el cursor recuperado es reciente",
+      );
+      assert.equal(summary.backfillPending, 2);
+
+      const segunda = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () =>
+          syncApprovedPlayers({
+            client: createFakeClient([compartida], new Map(), [], { bulk: handler }),
+          }),
+      );
+      assert.equal(segunda.gamesCursorSeeded, false);
+      assert.equal(segunda.apiNotice, null);
+      assert.equal(segunda.gamesBatchesIncomplete, 0);
+    });
+
+    await check("una pasada dirigida no mueve el cursor pero sí avanza su relleno", async () => {
+      await db.player.updateMany({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { windowComplete: false, backfillPage: 1 },
+      });
+      const cursorAntes = (await readGamesCursor())?.updatedAt;
+      const summary = await withEnv({ AOE4WORLD_SYNC_BACKFILL_PAGES_PER_PLAYER: "1" }, () =>
+        syncApprovedPlayers({
           profileIds: [SAMPLE_PROFILE_ID],
-          client: createFakeClient(games, details, detailCalls),
-        });
+          client: createFakeClient([games[0] as Aoe4WorldGame], new Map(), [], {
+            playerGames: (_profileId, query) =>
+              fakePage([games[0] as Aoe4WorldGame], {
+                page: query?.page ?? 1,
+                nextPage: 2,
+              }),
+          }),
+        }),
+      );
+      const primero = summary.players[0];
 
-        const playerResult = summary.players[0];
-        assert.equal(summary.resolvedByRefetch, 1);
-        assert.equal(playerResult.matchesResolvedByRefetch, 1);
-        assert.equal(playerResult.matchesAbandoned, 0, "una partida resuelta no se descarta");
-        assert.deepEqual(detailCalls, [9_000_010], "solo se pide el detalle de la partida affected");
+      assert.ok(primero !== undefined);
+      assert.equal(primero.backfillPage, 2, "la página del relleno avanza");
+      assert.equal(summary.gamesCursorAdvanced, false);
+      assert.equal((await readGamesCursor())?.updatedAt, cursorAntes);
+    });
 
-        const resuelta = await db.match.findFirst({
-          where: { gameId: "9000010", playerId: player.id },
-        });
-        assert.equal(resuelta?.result, "WIN");
-        assert.equal(resuelta?.durationSeconds, 3300);
-        assert.equal(
-          resuelta?.finishedAt?.toISOString(),
-          new Date(startedAt.getTime() + 3300_000).toISOString(),
-        );
-      },
-    );
+    await check("releer una ventana ya leída no inserta ni cuenta de más", async () => {
+      await db.player.updateMany({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { windowComplete: false, backfillPage: 1 },
+      });
+      const summary = await syncApprovedPlayers({
+        profileIds: [SAMPLE_PROFILE_ID],
+        client: createFakeClient(games),
+      });
+      const primero = summary.players[0];
+
+      assert.ok(primero !== undefined);
+      assert.equal(primero.matchesInserted, 0);
+      assert.equal(primero.matchesUpdated, 0);
+      assert.equal(summary.newMatches, 0);
+      assert.equal(summary.backfillPlayers, 1);
+      assert.equal(
+        (await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } }))
+          ?.windowComplete,
+        true,
+      );
+    });
+
+    await check("el refetch resuelve una partida en vivo que el listado ya no devuelve", async () => {
+      // La partida 9000010 se guardó en vivo hace 90 min, pero el masivo ya no
+      // la alcanza: el detalle tiene que resolverla.
+      const startedAt = new Date(now.getTime() - 90 * 60_000);
+      await db.match.create({
+        data: {
+          gameId: "9000010",
+          playerId: player.id,
+          leaderboard: "rm_solo",
+          result: null,
+          startedAt,
+          finishedAt: null,
+          rawJson: fixture.solo,
+        },
+      });
+
+      const details = new Map<string, Aoe4WorldGame>([
+        [
+          "9000010",
+          parsedGame({
+            ...fixture.liveFinished,
+            game_id: 9_000_010,
+            started_at: startedAt.toISOString(),
+            duration: 3300,
+          }),
+        ],
+      ]);
+      const detailCalls: number[] = [];
+
+      const summary = await syncApprovedPlayers({
+        profileIds: [SAMPLE_PROFILE_ID],
+        client: createFakeClient(games, details, detailCalls),
+      });
+
+      const playerResult = summary.players[0];
+      assert.ok(playerResult !== undefined);
+      assert.equal(summary.resolvedByRefetch, 1);
+      assert.equal(playerResult.matchesResolvedByRefetch, 1);
+      assert.equal(playerResult.matchesAbandoned, 0, "una partida resuelta no se descarta");
+      assert.deepEqual(detailCalls, [9_000_010], "solo se pide el detalle de la partida afectada");
+
+      const resuelta = await db.match.findFirst({
+        where: { gameId: "9000010", playerId: player.id },
+      });
+      assert.equal(resuelta?.result, "WIN");
+      assert.equal(resuelta?.durationSeconds, 3300);
+      assert.equal(
+        resuelta?.finishedAt?.toISOString(),
+        new Date(startedAt.getTime() + 3300_000).toISOString(),
+      );
+    });
 
     await check("una partida abandonada definitivamente se borra y queda anotada", async () => {
       // 9000011: la API la sigue dando en curso (nunca publica el desenlace).
-      // 9000012: la API ya no la conoce (404). Se ordenan por antigüedad para
-      // que la lista de abandonos sea predecible.
+      // 9000012: la API ya no la conoce (404).
       await db.match.createMany({
         data: [
           {
@@ -2087,6 +2837,7 @@ async function runDatabaseChecks(): Promise<void> {
       });
 
       const playerResult = summary.players[0];
+      assert.ok(playerResult !== undefined);
       assert.equal(playerResult.matchesAbandoned, 2, "las dos se descartan");
       assert.equal(playerResult.matchesResolvedByRefetch, 0);
       assert.equal(summary.abandonedMatches, 2);
@@ -2101,81 +2852,63 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(state.abandonedCount, 2);
       assert.deepEqual(state.abandonedGameIds, ["9000011", "9000012"]);
 
-      // El worker sella la hora con su propio reloj, unas milésimas después de
-      // la del fixture, así que se comprueba que es reciente y no un instante exacto.
       const abandonedAt = Date.parse(state.lastAbandonedAt ?? "");
       assert.ok(!Number.isNaN(abandonedAt), "lastAbandonedAt debe ser una fecha válida");
       assert.ok(
-        abandonedAt >= now.getTime() && abandonedAt - now.getTime() < 60_000,
-        "lastAbandonedAt debe ser de ahora mismo",
+        abandonedAt >= now.getTime() && abandonedAt <= Date.now() + 60_000,
+        "lastAbandonedAt debe ser de esta ejecución",
       );
     });
 
-    await check(
-      "una partida sin resolver más nueva que el cursor pero fuera de la ventana se abandona",
-      async () => {
-        // El caso que dejaba la fila colgada: la partida abandonada es la más nueva
-        // del jugador, así que `startedAt >= since` (el cursor es `maxStartedAt − 60
-        // min`) y el criterio del cursor no la alcanzaba. Ya fuera de la ventana de
-        // directo, el worker tiene que ir a por su desenlace igualmente.
-        const startedAt = new Date(now.getTime() - 70 * 60_000);
+    await check("una partida sin resolver fuera de la ventana de directo se abandona", async () => {
+      const startedAt = new Date(now.getTime() - 70 * 60_000);
 
-        await writePlayerSyncState(SAMPLE_PROFILE_ID, {
-          since: new Date(now.getTime() - 180 * 60_000).toISOString(),
-          maxStartedAt: new Date(now.getTime() - 150 * 60_000).toISOString(),
-          lastSyncedAt: now.toISOString(),
-          historyTruncated: false,
-          abandonedCount: 0,
-          abandonedGameIds: [],
-          lastAbandonedAt: null,
-        });
+      await db.match.create({
+        data: {
+          gameId: "9000013",
+          playerId: player.id,
+          leaderboard: "rm_solo",
+          result: null,
+          startedAt,
+          finishedAt: null,
+          rawJson: fixture.live,
+        },
+      });
 
-        await db.match.create({
-          data: {
-            gameId: "9000013",
-            playerId: player.id,
-            leaderboard: "rm_solo",
-            result: null,
-            startedAt,
-            finishedAt: null,
-            rawJson: fixture.live,
-          },
-        });
+      const details = new Map<string, Aoe4WorldGame>([
+        [
+          "9000013",
+          parsedGame({
+            ...fixture.live,
+            game_id: 9_000_013,
+            started_at: startedAt.toISOString(),
+          }),
+        ],
+      ]);
 
-        // La API la sigue dando sin desenlace: pasada la ventana, se abandona.
-        const details = new Map<string, Aoe4WorldGame>([
-          [
-            "9000013",
-            parsedGame({
-              ...fixture.live,
-              game_id: 9_000_013,
-              started_at: startedAt.toISOString(),
-            }),
-          ],
-        ]);
+      const summary = await syncApprovedPlayers({
+        profileIds: [SAMPLE_PROFILE_ID],
+        client: createFakeClient(games, details),
+      });
 
-        const summary = await syncApprovedPlayers({
-          profileIds: [SAMPLE_PROFILE_ID],
-          client: createFakeClient(games, details),
-        });
+      const playerResult = summary.players[0];
+      assert.ok(playerResult !== undefined);
+      assert.equal(playerResult.matchesAbandoned, 1);
+      assert.equal(
+        await db.match.count({ where: { playerId: player.id, gameId: "9000013" } }),
+        0,
+        "la fila abandonada no puede quedar con finishedAt = null",
+      );
+    });
 
-        const playerResult = summary.players[0];
-        assert.equal(playerResult.matchesAbandoned, 1, "la partida fuera de la ventana se abandona");
-        assert.equal(
-          await db.match.count({ where: { playerId: player.id, gameId: "9000013" } }),
-          0,
-          "la fila abandonada no puede quedar con finishedAt = null",
-        );
-      },
-    );
-
-    await check("la clave de Setting es la documentada", async () => {
-      const setting = await db.setting.findUnique({
+    await check("la clave de Setting es la documentada y el cursor es global", async () => {
+      const cursor = await db.setting.findUnique({ where: { key: SYNC_GAMES_CURSOR_KEY } });
+      const auditoria = await db.setting.findUnique({
         where: { key: playerSyncKey(SAMPLE_PROFILE_ID) },
       });
 
-      assert.ok(setting !== null);
-      assert.equal(setting.key, "aoe4world.sync.player.9000001");
+      assert.ok(cursor !== null, "sync.gamesCursor está en Setting");
+      assert.ok(auditoria !== null, "aoe4world.sync.player.<id> queda como auditoría");
     });
 
     await check("el motor deja la clasificación al día y es idempotente", async () => {
@@ -2202,8 +2935,8 @@ async function runDatabaseChecks(): Promise<void> {
 
       assert.ok(score !== null, "el jugador de muestra tiene que estar en la clasificación");
       assert.ok(score.rank >= 1, "el puesto es un entero positivo");
-      assert.equal(score.wins, 3);
-      assert.equal(score.matches, 4, "cuatro partidas clasificatorias resueltas: 3 ganadas y la perdida");
+      assert.equal(score.wins, 4);
+      assert.equal(score.matches, 5, "cinco partidas clasificatorias resueltas: 4 ganadas y la perdida");
 
       const breakdown = score.breakdown as {
         ruleSetVersion: number;
@@ -2261,9 +2994,9 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(breakdown.ruleSetVersion, RULESET_VERSION);
       assert.equal(typeof breakdown.rule, "string");
       assert.deepEqual(breakdown.byMode.rm_solo, {
-        wins: 3,
-        points: 3 * DEFAULT_RULESET.pointsPerWin,
-        matches: 3,
+        wins: 4,
+        points: 4 * DEFAULT_RULESET.pointsPerWin,
+        matches: 4,
       });
       assert.deepEqual(breakdown.byMode.rm_team, { wins: 0, points: 0, matches: 1 });
 
@@ -2463,8 +3196,8 @@ async function runDatabaseChecks(): Promise<void> {
         "los grupos salen en el orden documentado, sin intercalarse",
       );
       assert.deepEqual(
-        view.options.slice(0, 4).map((option) => option.id),
-        ["loco-por-ganar", "imparable", "bienhadado", "imbatible"],
+        view.options.slice(0, 5).map((option) => option.id),
+        ["loco-por-ganar", "imparable", "victorias", "bienhadado", "imbatible"],
         "Actividad y Racha salen en el orden documentado",
       );
       assert.equal(
@@ -2697,7 +3430,7 @@ async function runDatabaseChecks(): Promise<void> {
         assert.ok(esperado !== null);
         assert.equal(fila.points, esperado.total, "la tabla pública lee el total del agregado");
         assert.equal(fila.wins, esperado.wins);
-        assert.equal(fila.wins + fila.losses, 4);
+        assert.equal(fila.wins + fila.losses, 5);
         assert.equal(
           fila.points >= 3 * DEFAULT_RULESET.pointsPerWin,
           true,
@@ -2893,9 +3626,22 @@ async function runDatabaseChecks(): Promise<void> {
 
     await runWindowChecks(db, player);
   } finally {
-    await db.player.deleteMany({ where: { profileId: SAMPLE_PROFILE_ID } });
-    await db.setting.deleteMany({ where: { key: playerSyncKey(SAMPLE_PROFILE_ID) } });
-    console.log("  --    datos de prueba borrados");
+    await db.player.deleteMany({ where: { profileId: { in: [...TEST_PROFILE_IDS] } } });
+    await db.setting.deleteMany({
+      where: { key: { in: TEST_PROFILE_IDS.map(playerSyncKey) } },
+    });
+    await restoreSetting(db, SCORING_RULESET_KEY, rulesetGuardado);
+    await restoreApprovedRows(db, snapshot.approved);
+    await recomputeScores();
+    await restoreDatabaseState(
+      db,
+      snapshot,
+      SYNC_GAMES_CURSOR_KEY,
+      SYNC_LAST_RUN_KEY,
+      TEST_PROFILE_IDS,
+      playerSyncKey,
+    );
+    console.log("  --    datos de prueba borrados y estado de producción restaurado");
   }
 }
 

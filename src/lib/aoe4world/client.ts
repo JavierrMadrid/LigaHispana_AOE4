@@ -49,6 +49,23 @@ export const LADDER_MAX_PAGE_SIZE = 50;
  */
 export const GAMES_MAX_PAGE_SIZE = 50;
 
+/**
+ * Tope de páginas del endpoint masivo. F0 midió que la 20 sigue devolviendo
+ * 200 y la 21 contesta 400, así que el cliente se queda un escalón por debajo:
+ * no hay ninguna razón para pedir una página que la API va a rechazar.
+ */
+export const GAMES_BULK_MAX_PAGE = 19;
+
+/** Ids que acepta el endpoint masivo por llamada (el cliente valida 1–50). */
+export const GAMES_BULK_MAX_PROFILE_IDS = 50;
+
+export type Aoe4WorldBulkGamesQuery = {
+  profileIds: number[];
+  updatedSince: Date;
+  order: "started_at" | "updated_at";
+  page: number;
+};
+
 export type Aoe4WorldGamesQuery = {
   page?: number;
   limit?: number;
@@ -72,6 +89,11 @@ export type Aoe4WorldClient = {
   getPlayerGames(
     profileId: number,
     query?: Aoe4WorldGamesQuery,
+    options?: Aoe4WorldRequestOptions,
+  ): Promise<Aoe4WorldGamesPage>;
+  /** `GET /api/v0/games` (masivo por `updated_at`, hasta 50 ids y 19 páginas) */
+  getGamesBulk(
+    query: Aoe4WorldBulkGamesQuery,
     options?: Aoe4WorldRequestOptions,
   ): Promise<Aoe4WorldGamesPage>;
   /** `GET /api/v0/players/:profile_id/games/:game_id` */
@@ -164,6 +186,43 @@ function buildGamesQuery(query: Aoe4WorldGamesQuery | undefined): URLSearchParam
   return params;
 }
 
+function requireBulkGamesQuery(query: Aoe4WorldBulkGamesQuery): void {
+  const count = query.profileIds.length;
+
+  if (count < 1 || count > GAMES_BULK_MAX_PROFILE_IDS) {
+    throw new Aoe4WorldError(
+      `/games acepta entre 1 y ${GAMES_BULK_MAX_PROFILE_IDS} profile_id por llamada (recibidos: ${count}).`,
+    );
+  }
+
+  for (const profileId of query.profileIds) {
+    if (!Number.isInteger(profileId) || profileId <= 0) {
+      throw new Aoe4WorldError(`profile_id inválido en /games: ${profileId}`);
+    }
+  }
+
+  if (
+    !Number.isInteger(query.page) ||
+    query.page < 1 ||
+    query.page > GAMES_BULK_MAX_PAGE
+  ) {
+    throw new Aoe4WorldError(
+      `/games acepta páginas de 1 a ${GAMES_BULK_MAX_PAGE} (recibida: ${query.page}).`,
+    );
+  }
+
+  if (query.order !== "started_at" && query.order !== "updated_at") {
+    throw new Aoe4WorldError(`orden inválido en /games: ${String(query.order)}`);
+  }
+
+  if (
+    !(query.updatedSince instanceof Date) ||
+    Number.isNaN(query.updatedSince.getTime())
+  ) {
+    throw new Aoe4WorldError("updated_since inválido en /games: se esperaba una fecha válida.");
+  }
+}
+
 export function createAoe4WorldClient(
   http: Aoe4WorldHttpClient = createAoe4WorldHttpClient(),
 ): Aoe4WorldClient {
@@ -197,6 +256,26 @@ export function createAoe4WorldClient(
         throw new Aoe4WorldError(
           `La respuesta de /players/${profileId}/games no tiene la forma esperada.`,
         );
+      }
+
+      return page;
+    },
+
+    async getGamesBulk(query, options) {
+      requireBulkGamesQuery(query);
+
+      const params = new URLSearchParams({
+        profile_ids: query.profileIds.join(","),
+        updated_since: query.updatedSince.toISOString(),
+        order: query.order,
+        page: String(query.page),
+      });
+
+      const payload = await http.fetchJson("/games", params, options);
+      const page = parseGamesPage(payload);
+
+      if (page === null) {
+        throw new Aoe4WorldError("La respuesta de /games no tiene la forma esperada.");
       }
 
       return page;

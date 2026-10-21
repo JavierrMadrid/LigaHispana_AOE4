@@ -34,7 +34,8 @@ import {
   readRuleset,
   type ScoringRuleset,
 } from "@/lib/scoring";
-import { isSyncTraceStale, readSyncRunTrace, type SyncRunTrace } from "@/lib/settings";
+import { isSyncTraceStale, readGamesCursor, readSyncRunTrace, type GamesBatchError, type SyncRunTrace } from "@/lib/settings";
+import { backfillProgressStalled } from "@/lib/aoe4world/sync";
 
 /**
  * Capa de lectura del panel de administración.
@@ -630,6 +631,19 @@ export type SyncHealth = {
    * en el que la web pública puede estar enseñando una clasificación vieja.
    */
   degraded: boolean;
+  /** Aprobados con la ventana del torneo todavía incompleta. */
+  backfillPending: number;
+  /**
+   * `true` si el relleno lleva 7 pasadas truncando o su mínimo lleva 24 h sin
+   * bajar. `null` = sin medir (rastro viejo, rastro ausente o sin cursor).
+   */
+  backfillStalled: boolean | null;
+  /** Errores de lote del último rastro, con su número y su rango de ids. */
+  gamesBatchErrors: GamesBatchError[];
+  /** Aviso de la API (`filters._important_notice_`), si lo mandó. */
+  apiNotice: string | null;
+  /** `updated_since` que dejó la última pasada, si lo dejó. */
+  gamesCursor: string | null;
   /**
    * Resumen de una frase para el aviso corto, ya decidedo en el servidor. Va aquí y
    * no en el componente para que el mismo criterio no se implemente dos veces: un
@@ -648,17 +662,37 @@ export type SyncHealth = {
  */
 export async function getSyncHealth(): Promise<PublicRead<SyncHealth>> {
   return readFromDatabase("admin/getSyncHealth", async () => {
-    const trace = await readSyncRunTrace();
+    const [trace, cursor] = await Promise.all([readSyncRunTrace(), readGamesCursor()]);
     const stale = isSyncTraceStale(trace);
+    const now = new Date();
+    const backfillPending = await db.player.count({
+      where: { status: "APPROVED", windowComplete: false },
+    });
+    const backfillStalled =
+      trace !== null && !stale && cursor !== null
+        ? backfillProgressStalled(cursor, backfillPending, now)
+        : null;
 
     const degraded =
       trace !== null &&
       (trace.playersFailed > 0 ||
         trace.playersCancelled > 0 ||
+        trace.gamesBatchesFailed > 0 ||
         trace.ladderError !== null ||
         trace.scoringError !== null);
 
-    return { lastRun: trace, lastSuccessAt: trace?.lastSuccessAt ?? null, stale, degraded, headline: syncHeadline(trace, stale) };
+    return {
+      lastRun: trace,
+      lastSuccessAt: trace?.lastSuccessAt ?? null,
+      stale,
+      degraded,
+      backfillPending,
+      backfillStalled,
+      gamesBatchErrors: trace?.gamesBatchErrors ?? [],
+      apiNotice: trace?.apiNotice ?? null,
+      gamesCursor: trace?.gamesCursor ?? null,
+      headline: syncHeadline(trace, stale, backfillPending),
+    };
   });
 }
 
@@ -670,7 +704,11 @@ export async function getSyncHealth(): Promise<PublicRead<SyncHealth>> {
  * última pasada salió bien. Un fallo de la última pasada solo se cuenta junto a una
  * pasada que sí ocurrió, así que los dos casos van juntos.
  */
-function syncHeadline(trace: SyncRunTrace | null, stale: boolean): string {
+function syncHeadline(
+  trace: SyncRunTrace | null,
+  stale: boolean,
+  backfillPending: number,
+): string {
   if (trace === null) {
     return "El sincronizador todavía no ha escrito ninguna pasada.";
   }
@@ -679,10 +717,17 @@ function syncHeadline(trace: SyncRunTrace | null, stale: boolean): string {
     return `La última pasada es de ${formatRelativeTime(new Date(trace.finishedAt))} y no se ha escrito ninguna desde entonces.`;
   }
 
+  // El contador vive en la línea de detalle del panel (`backfillPending`), no
+  // aquí: si se repitiera en el titular, la misma tarjeta diría dos veces el
+  // mismo número con dos redacciones distintas.
+  const relleno =
+    trace.gamesBatchesIncomplete > 0 || backfillPending > 0
+      ? " El relleno de la ventana sigue en curso."
+      : "";
   const fallidos = trace.playersFailed + trace.playersCancelled;
 
   if (fallidos === 0 && trace.ladderError === null && trace.scoringError === null) {
-    return `La última pasada salió bien: ${trace.playersOk} de ${trace.playersTotal} jugadores y ${trace.newMatches} partidas nuevas.`;
+    return `La última pasada salió bien: ${trace.playersOk} de ${trace.playersTotal} jugadores y ${trace.newMatches} partidas nuevas.${relleno}`;
   }
 
   const partes: string[] = [];
@@ -701,7 +746,7 @@ function syncHeadline(trace: SyncRunTrace | null, stale: boolean): string {
     partes.push("no se ha podido recalcular la clasificación");
   }
 
-  return `La última pasada salió a medias: ${partes.join(", ")}.`;
+  return `La última pasada salió a medias: ${partes.join(", ")}.${relleno}`;
 }
 
 /* -------------------------------------------------------------------------- */

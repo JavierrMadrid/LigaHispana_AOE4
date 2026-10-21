@@ -46,6 +46,10 @@ const CONFIG: Aoe4WorldConfig = {
   syncConcurrency: 1,
   syncPageSize: 50,
   syncMaxPages: 1,
+  syncBulkMaxPages: 10,
+  syncBackfillMaxPlayers: 20,
+  syncBackfillPagesPerPlayer: 3,
+  syncSeedMaxAgeMinutes: 360,
   syncDeadlineMs: 1_000,
   summaryMaxPerRun: 10,
   summaryMinIntervalMs: 2_000,
@@ -301,5 +305,19 @@ describe("createAoe4WorldHttpClient", () => {
     await vi.advanceTimersByTimeAsync(200);
 
     await assertion;
+  });
+
+  it("la variante error del mock se traduce a Aoe4WorldError con su status", async () => {
+    // El mock del endpoint masivo reproduce el 400 de la página 21. Tiene que salir
+    // por la misma puerta que un error HTTP real, con `retryable` calculado por el
+    // código y sin dejar que el worker lo confunda con un fallo de red.
+    const client = createAoe4WorldHttpClient({ ...CONFIG, mock: true });
+
+    await expect(
+      client.fetchJson(
+        "/games",
+        new URLSearchParams({ profile_ids: "90000001", page: "21" }),
+      ),
+    ).rejects.toMatchObject({ status: 400, retryable: false });
   });
 });

@@ -430,6 +430,20 @@ model Player {
   // mismo ritmo.
   historyCheckedAt DateTime?
 
+  // --- Ventana completa y relleno (F2) ---
+  //
+  // `windowComplete` significa "se ha recorrido la ventana del torneo entera de
+  // este jugador hasta el corte". `false` es el valor de migración y también el
+  // de un jugador que entró después: su ventana todavía no se ha recorrido.
+  // No es lo mismo que `historyTruncated`, que se ponía a `false` en cuanto
+  // llegaba una partida nueva aunque el histórico siguiera cortado.
+  windowComplete  Boolean   @default(false)
+  // Página del relleno por la que sigue. 1 = empezar por el principio de la
+  // ventana; las páginas 1..backfillPage−1 ya se leyeron.
+  backfillPage    Int       @default(1)
+  // Cuándo se completó por última vez el recorrido de la ventana. `null` = nunca.
+  windowCheckedAt DateTime?
+
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   matches         Match[]
@@ -437,6 +451,11 @@ model Player {
   objectiveEvents ObjectiveEvent[]
   leadEvents      ObjectiveLeadEvent[]
   alerts          Alert[]
+
+  // Cola del relleno: quién está aprobado, quién tiene la ventana pendiente y
+  // por qué página va. El orden de las columnas es el de la consulta de
+  // candidatos (`status`, `windowComplete`, `backfillPage`).
+  @@index([status, windowComplete, backfillPage])
 }
 
 model Match {

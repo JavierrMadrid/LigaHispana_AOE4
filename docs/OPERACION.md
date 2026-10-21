@@ -55,6 +55,56 @@ frecuencia. Para las partidas en directo, 10 minutos basta: se detectan en la si
 10 y no 5 por el presupuesto de CPU del plan Free de Cloudflare: la mitad de pasadas es la mitad de
 CPU gastada (ver [El límite de CPU del plan Free](#el-límite-de-cpu-del-plan-free)).
 
+### Cursor global y relleno (F2)
+
+El incremental ya no pide el histórico jugador a jugador. El cursor es **global**
+(`Setting["sync.gamesCursor"]`, por `updated_at`) y cada pasada hace:
+
+1. **Masivo**: todos los aprobados en lotes estables de 50, `order=updated_at`, desde el cursor.
+2. **Relleno**: hasta `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` jugadores con `windowComplete=false`,
+   desde `max(window.from, registeredAt)`, `BULK` páginas cada uno.
+3. Perfil, ladder, reconciliación y el resto de pasos.
+
+| Variable | Defecto | Qué limita |
+|---|---:|---|
+| `AOE4WORLD_SYNC_BULK_MAX_PAGES` | 10 | Páginas por lote del masivo. Se recorta al tope de la API, 19 |
+| `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` | 20 | Jugadores que atiende el relleno por pasada |
+| `AOE4WORLD_SYNC_BACKFILL_PAGES_PER_PLAYER` | 3 | Páginas por jugador del relleno |
+| `AOE4WORLD_SYNC_MAX_PAGES` | 10 | Tope **duro** de páginas por jugador: el relleno usa `min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` |
+| `AOE4WORLD_SYNC_SEED_MAX_AGE_MINUTES` | 360 | Solo la **siembra inicial** del cursor; un cursor vivo no se recupera por esta cota |
+
+Volumen por pasada, sin contar summaries ni Discord: **cuenta cada `GET` a `/api/v0`** (masivo, ladder,
+perfil y detalle). Son `ceil(N/50)` llamadas de ladder, `ceil(N/50)` de masivo si la ventana cabe en
+una página por lote (`lotes × BULK_MAX_PAGES` si no), hasta
+`BACKFILL_MAX_PLAYERS × min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` de relleno, `N` de perfil y
+0–2 de detalle para reconciliar. Con N=13: 1 de ladder, 1 de masivo, 13 de perfil y 0–2 de detalle;
+el relleno solo aparece mientras queden ventanas pendientes.
+
+**Cesión y fallos**:
+
+- Un lote **truncado** agota `BULK_MAX_PAGES` con `next_page` no nulo. No bloquea: el cursor avanza,
+  el lote cuenta en `gamesBatchesIncomplete` y sus jugadores se encolan. `keepPage` conserva la
+  página de quien ya iba a medias; `rewind` vuelve a 1 a quien estaba completo o sin fila.
+- Un lote que **falla** (5xx, 429 agotado, red) se apunta en `gamesBatchErrors` con su número y su
+  rango de `profileId`, sus jugadores quedan `failed` y el cursor **no avanza**: la ventana se
+  reintenta entera en la pasada siguiente.
+- Un fallo de **guardado** deja al jugador `failed` y lo encola; no bloquea el cursor.
+- Una truncación no rebobina a quien iba por la mitad y el relleno se reanuda por `backfillPage`.
+
+**Atascos**: `sync.gamesCursor` guarda `bulkIncompleteStreak` (pasadas seguidas con truncación) y
+`pendingBestCount`/`pendingBestAt` (el mínimo de `backfillPending` visto y cuándo). El panel deriva
+`backfillStalled` al leer: racha ≥ 7 o mínimo con 24 h sin bajar, y `null` si el rastro está viejo o
+no hay cursor. Con `backfillPending = 0` nunca hay atasco.
+
+**Aviso de la API**: si `updated_since` tiene 30 días o más, AoE4World devuelve
+`filters._important_notice_` y una página vacía. La pasada vuelve a sembrar con `catch-up`, reencola
+al roster y escribe el aviso en `apiNotice`. La recuperación por edad de un cursor existente usa esa
+misma edad de 30 días, no la cota de 6 h de la semilla.
+
+**Lo que esto no demuestra**: `ladder.ahead` solo compara la **cabeza** de la ladder con la partida
+más reciente; no detecta un hueco en medio del historial. La paridad de `verify:aoe4world` es una
+**muestra**, no una prueba de exhaustividad.
+
 Hay **dos relojes**, y el primario no es GitHub:
 
 | Reloj | Qué es | Frecuencia real |
@@ -160,6 +210,11 @@ pestaña es para comportamientos de jugadores, no para salud de procesos). Tres 
 
 El rastro lleva `lastSuccessAt`, que **no avanza si la pasada sale a medias**: responde "¿desde cuándo
 está roto?". No hay histórico de pasadas: solo la última y el marcador de la última buena.
+
+Bajo el titular, la tarjeta de `/admin` añade el detalle del relleno (`backfillPending` con
+`backfillStalled`: completo, en curso, atascado o sin medir), los **errores de lote** por encima de
+los fallos por jugador —un lote caído explica hasta 50 de ellos— y, al pie, el `apiNotice` de
+AoE4World como nota. El `gamesCursor` se guarda en el rastro pero no se pinta.
 
 Los contadores del rastro son del **torneo**, no de filas tocadas. `newMatches` cuenta las partidas que
 **entran a contar** para el torneo en la pasada: las que se importan ya resueltas y cumplen la regla
@@ -418,7 +473,7 @@ credenciales el paso no existe** (no falla): el formulario no pinta el botón y 
 | `DISCORD_OAUTH_SECRET` | Firma de la cookie `discord_link` (20 min). Sin ella se usa `CRON_SECRET`; no hay respaldo en el código | Sí, en producción |
 | `DISCORD_REDIRECT_URI` | URI registrada en Discord. Si falta, se deriva del origen + `/api/discord/oauth/callback` | No, pero conviene fijarla |
 | `DISCORD_INVITE_URL` | Invitación de respaldo si el auto-unión falla | No |
-| `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord | No (valores por defecto) |
+| `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord; el `User-Agent` debe ser **ASCII** (sin tildes) | No (valores por defecto) |
 | `DISCORD_CHECK_MAX_PER_RUN` | Tope de cuentas comprobadas por pasada (10) | No |
 | `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas de la lista de miembros por refresco (20) y horas de caché (12) | No |
 | `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa de los **hitos de la edición** (comienzo, final, recordatorios y cierre de inscripciones) y manda el **informe diario de clasificación** | Sí, para avisar |
@@ -435,12 +490,25 @@ Van en el panel del Worker **y además** en *Build variables and secrets* del tr
 2. **OAuth2 → Redirects**: `https://laligahispana.es/api/discord/oauth/callback` (y el del
    `workers.dev` del Preview si se prueba ahí).
 3. **Crear el bot** y copiar su token.
-4. **Invitar el bot al servidor** con los permisos `CREATE_INSTANT_INVITE` (meter a quien se inscribe) y
-   `MANAGE_ROLES` (poner y quitar el rol de participante), y **colocar su rol por encima** del rol de
-   participante (Configuración del servidor → Roles). Sin `CREATE_INSTANT_INVITE`, el `PUT …/members`
-   responde 403 y **la inscripción no se bloquea**: se acepta con `joined: false` y se enseña el
-   `DISCORD_INVITE_URL`. Sin `MANAGE_ROLES` o con el rol por debajo, el paso del rol responde 403 y el
-   rastro lo dice ([ver abajo](#rol-de-participante-en-discord)).
+4. **Invitar el bot al servidor** con **solo estos cuatro permisos** (no usa ningún otro):
+
+   | Permiso | Para qué |
+   |---|---|
+   | `View Channels` (`VIEW_CHANNEL`) | Ver el canal de avisos |
+   | `Send Messages` (`SEND_MESSAGES`) | Hitos, informe diario y avisos globales |
+   | `Create Instant Invite` (`CREATE_INSTANT_INVITE`) | Auto-unión al inscribirse (`PUT …/members`) |
+   | `Manage Roles` (`MANAGE_ROLES`) | Poner y quitar el rol de participante |
+
+   Los **privados no necesitan permiso** (`POST /users/@me/channels` no pide ninguno). No hacen falta
+   `Read Message History`, `Manage Messages`, `Embed Links`, `Mention Everyone` ni nada de moderación.
+   La invitación con esos cuatro es
+   `https://discord.com/oauth2/authorize?client_id=<CLIENT_ID>&scope=bot&permissions=268438529`.
+
+   **Sin `CREATE_INSTANT_INVITE`**, el `PUT …/members` responde 403 y **la inscripción no se bloquea**:
+   se acepta con `joined: false` y se enseña el `DISCORD_INVITE_URL`. **Sin `MANAGE_ROLES`, o con el rol
+   del bot por debajo** del de participante, el paso del rol responde 403 y el rastro lo dice
+   ([ver abajo](#rol-de-participante-en-discord)). La jerarquía **no la salta `ADMINISTRATOR`**: hay que
+   subir el rol del bot (Configuración del servidor → Roles).
 5. **Activar el intent privilegiado `GUILD_MEMBERS`** (Bot → Privileged Gateway Intents → SERVER
    MEMBERS INTENT). Es manual y no se puede pedir por API; es lo que permite leer la **lista de
    miembros** del servidor, que comprueba a todos de una vez y **enlaza la cuenta de las altas de
@@ -450,6 +518,25 @@ Van en el panel del Worker **y además** en *Build variables and secrets* del tr
 
 Los scopes `identify` y `guilds.join` no se configuran en el portal: los pone el código al construir
 la URL de autorización.
+
+### Por qué parece que el bot necesita `ADMINISTRATOR`
+
+`ADMINISTRATOR` no añade ninguna acción que el bot use: concede todos los permisos **y salta las
+sobrescrituras de canal**. Si el bot solo funciona con él, lo que falta es un permiso al que los
+permisos del servidor no llegan:
+
+1. **Sobrescrituras del canal de avisos.** Si el canal es privado, el bot necesita `VIEW_CHANNEL` y
+   `SEND_MESSAGES` **en ese canal** (Editar canal → Permisos → rol del bot). `ADMINISTRATOR` las salta;
+   los permisos del servidor, no. Un `403` con «Missing Access» es esto.
+2. **Los permisos están en un rol que el bot no lleva.** El bot usa su propio rol (el que se crea con su
+   nombre al invitarlo) y los que se le asignen; un rol nuevo con permisos que nadie le ha puesto al bot
+   no hace nada.
+3. **Falta `MANAGE_ROLES` o el rol del bot está por debajo** del de participante. Un `403` con «Missing
+   Permissions» al publicar suele ser falta de `SEND_MESSAGES` en el canal; al poner el rol, falta
+   `MANAGE_ROLES` o sobra altura del rol de participante.
+
+`ADMINISTRATOR` **no** salta la jerarquía de roles: si lo que falla es poner el rol de participante y el
+rol del bot está por debajo, seguirá fallando con él.
 
 ### Dónde mirar si falla
 
@@ -971,12 +1058,28 @@ reales).
 
 ```bash
 npm run verify:sync          # normalización con datos de ejemplo (no necesita BBDD)
-npm run verify:sync -- --db  # además comprueba el guardado y borra lo que crea
+npm run verify:sync -- --db  # además comprueba el guardado y restaura el estado de producción
 ```
 
-`--db` usa un jugador de prueba (`profileId` 9000001) que **borra al terminar siempre**, incluso si
-una comprobación falla. Solo se niega a arrancar si ese jugador ya existía de una ejecución anterior
-que murió sin limpiar; entonces hay que borrarlo desde el panel o a mano por su `profileId`.
+`--db` usa dos jugadores de prueba (`profileId` 9000001 y 9000020) y un ruleset de prueba con una
+ventana que cubre el presente. Antes de tocar nada guarda `sync.gamesCursor`, `sync.lastRun`, las
+columnas `windowComplete`/`backfillPage`/`windowCheckedAt` de **todos** los aprobados y el ruleset; en
+un `finally` borra los jugadores de prueba (con sus partidas, puntuaciones y claves de `Setting`) y
+restaura todo, incluso si una comprobación falla. Solo se niega a arrancar si alguno de esos
+`profileId` ya existía de una ejecución anterior.
+
+### Medidas de AoE4World
+
+```bash
+npm run verify:aoe4world -- --sample 10   # muestra de 10 para páginas y paridad
+npm run verify:aoe4world -- --all         # mide todos los aprobados
+npm run verify:aoe4world -- --sample 5 --no-parity
+```
+
+Mide el roster y la ladder, recorre el histórico dentro de la ventana del ruleset, compara la paridad
+con `Match`, mide la semántica de `updated_at`, comprueba el envelope masivo de `/games` y publica el
+rastro del sincronizador. **Solo lee**; `--recalc` es la excepción: ejecuta `recomputeScores()`
+(idempotente) y avisa antes de escribir.
 
 ## Cuando la base de datos no responde
 
