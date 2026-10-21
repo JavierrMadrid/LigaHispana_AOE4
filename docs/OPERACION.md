@@ -55,15 +55,22 @@ frecuencia. Para las partidas en directo, 10 minutos basta: se detectan en la si
 10 y no 5 por el presupuesto de CPU del plan Free de Cloudflare: la mitad de pasadas es la mitad de
 CPU gastada (ver [El límite de CPU del plan Free](#el-límite-de-cpu-del-plan-free)).
 
+Los **300 ms** entre peticiones y la cadencia de **10 minutos** son empíricos: AoE4World no publica
+un contrato de rate limit ni devuelve cabeceras `X-RateLimit-*`. Se han visto 429 por debajo de 3
+minutos, así que no bajes la cadencia sin medir CPU y 429, y habla antes con AoE4World.
+
 ### Cursor global y relleno (F2)
 
 El incremental ya no pide el histórico jugador a jugador. El cursor es **global**
 (`Setting["sync.gamesCursor"]`, por `updated_at`) y cada pasada hace:
 
-1. **Masivo**: todos los aprobados en lotes estables de 50, `order=updated_at`, desde el cursor.
-2. **Relleno**: hasta `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` jugadores con `windowComplete=false`,
+1. **Ladder y reconciliación global**: la ladder sella el perfil; la reconciliación resuelve las
+   partidas pendientes.
+2. **Masivo**: todos los aprobados en lotes estables de 50, `order=updated_at`, desde el cursor.
+3. **Relleno**: hasta `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` jugadores con `windowComplete=false`,
    desde `max(window.from, registeredAt)`, `BULK` páginas cada uno.
-3. Perfil, ladder, reconciliación y el resto de pasos.
+4. **Perfil**: solo los que no estén frescos por la ladder o por la caché de 1 h.
+5. **Cursor y resto**: scoring, alertas, historial, Discord y streams.
 
 | Variable | Defecto | Qué limita |
 |---|---:|---|
@@ -73,12 +80,21 @@ El incremental ya no pide el histórico jugador a jugador. El cursor es **global
 | `AOE4WORLD_SYNC_MAX_PAGES` | 10 | Tope **duro** de páginas por jugador: el relleno usa `min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` |
 | `AOE4WORLD_SYNC_SEED_MAX_AGE_MINUTES` | 360 | Solo la **siembra inicial** del cursor; un cursor vivo no se recupera por esta cota |
 
-Volumen por pasada, sin contar summaries ni Discord: **cuenta cada `GET` a `/api/v0`** (masivo, ladder,
-perfil y detalle). Son `ceil(N/50)` llamadas de ladder, `ceil(N/50)` de masivo si la ventana cabe en
-una página por lote (`lotes × BULK_MAX_PAGES` si no), hasta
-`BACKFILL_MAX_PLAYERS × min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` de relleno, `N` de perfil y
-0–2 de detalle para reconciliar. Con N=13: 1 de ladder, 1 de masivo, 13 de perfil y 0–2 de detalle;
-el relleno solo aparece mientras queden ventanas pendientes.
+**Volumen por pasada**, sin contar summaries ni Discord: cuenta cada `GET` a `/api/v0`.
+
+| Paso | Peticiones |
+|---|---|
+| Masivo | `ceil(N/50)` lotes; hasta `BULK_MAX_PAGES` páginas por lote |
+| Ladder | `ceil(N/50)` lotes |
+| Perfil | Solo los ausentes de la ladder o con `profileCheckedAt` caducado (TTL 1 h); 0 en el caso estable |
+| Relleno | Hasta `BACKFILL_MAX_PLAYERS × min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` mientras haya ventanas pendientes |
+| Detalle | 0–2 para reconciliar partidas sin resolver |
+
+Con N=13 y todos en la ladder: **2 peticiones** (1 masiva + 1 ladder) y 0–2 de detalle; el perfil es
+0 y el relleno solo aparece con ventanas pendientes. El presupuesto del masivo es **por lote**
+(`BULK_MAX_PAGES`); el del relleno es **por jugador** (`BACKFILL_PAGES_PER_PLAYER`, limitado por
+`SYNC_MAX_PAGES`). Si el cursor supera los 30 días, la página viene vacía con
+`_important_notice_`; no significa "sin partidas" (ver **Aviso de la API**).
 
 **Cesión y fallos**:
 

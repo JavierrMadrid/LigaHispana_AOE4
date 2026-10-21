@@ -114,11 +114,11 @@ export type Aoe4WorldClient = {
    *
    * Es lo que permite recorrer la ladder (23 000 y pico jugadores) por páginas en
    * lugar de pedir 461 llamadas a mano, y es la única forma de localizar un tramo
-   * de divisiones: la API ignora en silencio `rating_min`/`rating_max` y
-   * `rank_level`, así que los tres devuelven siempre la página 1.
-   *
-   * El worker no la usa: solo la necesita quien busca por divisiones
-   * (`src/lib/simulation/select.ts`).
+   * de divisiones. La documentación actual de AoE4World ya no lista
+   * `rating_min`/`rating_max` ni `rank_level`; se comprobó que se ignoran en
+   * silencio y que los tres devuelven siempre la página 1. El worker no la usa:
+   * solo la necesita quien busca por divisiones
+   * (`src/lib/simulation/select.ts`), que depende de esta nota.
    */
   getLadderPage(
     leaderboard: string,
