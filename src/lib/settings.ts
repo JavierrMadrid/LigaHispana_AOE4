@@ -218,6 +218,64 @@ export async function writeScoringLastRun(
   });
 }
 
+/** Lo poco que necesita el worker para decidir si toca recalcular. */
+export type ScoringLastRunState = {
+  /** `RULESET_VERSION` con la que se calculó esa clasificación. */
+  ruleSetVersion: number;
+  /** `SCORING_CACHE_VERSION` del motor que la calculó. */
+  cacheVersion: number;
+  /**
+   * Jugadores con fila en la clasificación al terminar ese recálculo, que con la
+   * regla actual son **todos los aprobados**. Es lo que permite al worker notar
+   * que el roster cambió (alta, aprobado o rechazo) sin que nadie haya jugado:
+   * aprobar y rechazar no recalculan en su propia petición a propósito (ver
+   * `setPlayerStatus()`), así que el aviso tiene que llegar por aquí.
+   */
+  playersRanked: number;
+};
+
+/**
+ * Las tres cifras del último recálculo, o `null` si no se pueden leer.
+ *
+ * Solo devuelve un objeto si están **todas**: un rastro escrito antes de que
+ * existiera `cacheVersion` o `playersRanked` (o un valor corrupto) tiene que
+ * tratarse como "no hay rastro", porque el worker decide con esto si puede
+ * saltarse el recálculo y la respuesta segura es recalcular. No se usa
+ * `readCount()` a propósito: convierte un campo ausente en 0 y eso es
+ * indistinguible de un valor 0 legítimo.
+ */
+export function readScoringLastRunValue(value: unknown): ScoringLastRunState | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const { ruleSetVersion, cacheVersion, playersRanked } = value;
+
+  if (
+    typeof ruleSetVersion !== "number" ||
+    !Number.isInteger(ruleSetVersion) ||
+    typeof cacheVersion !== "number" ||
+    !Number.isInteger(cacheVersion) ||
+    typeof playersRanked !== "number" ||
+    !Number.isInteger(playersRanked)
+  ) {
+    return null;
+  }
+
+  return { ruleSetVersion, cacheVersion, playersRanked };
+}
+
+/**
+ * Rastro del último recálculo tal como está en la base, o `null` si falta o no
+ * es legible. Un fallo de la base sí se propaga: quien lo llama lo trata como
+ * "no hay rastro" y recalcula, que es la salida segura.
+ */
+export async function readScoringLastRun(): Promise<ScoringLastRunState | null> {
+  const setting = await db.setting.findUnique({ where: { key: SCORING_LAST_RUN_KEY } });
+
+  return setting === null ? null : readScoringLastRunValue(setting.value);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Pool de mapas del objetivo `por-tierra-y-agua`                             */
 /* -------------------------------------------------------------------------- */
@@ -368,6 +426,12 @@ export type SyncRunTrace = {
   ladderError: string | null;
   /** Por qué no se pudo recalcular la clasificación, si no se pudo. */
   scoringError: string | null;
+  /**
+   * `true` cuando la pasada se ha saltado el recálculo porque no había nada que
+   * lo justificara (`shouldRecomputeScores()`). No es un fallo: la clasificación
+   * publicada sigue siendo la de la última pasada que sí lo hizo.
+   */
+  scoringSkipped: boolean;
   /**
    * Por qué no se pudieron evaluar las alertas de comportamiento, si no se pudo.
    *
@@ -676,6 +740,7 @@ export function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     rateLimitPausesMs: readCount(value["rateLimitPausesMs"]),
     ladderError: readText(value["ladderError"]),
     scoringError: readText(value["scoringError"]),
+    scoringSkipped: readFlag(value["scoringSkipped"]),
     alertsError: readText(value["alertsError"]),
     historyError: readText(value["historyError"]),
     discordError: readText(value["discordError"]),

@@ -2,7 +2,7 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { LEADERBOARD_MAX_PROFILE_IDS, type Aoe4WorldClient } from "./client";
-import { DEFAULT_LEADERBOARD } from "./types";
+import { DEFAULT_LEADERBOARD, type Aoe4WorldLeaderboardEntry } from "./types";
 
 /**
  * Instantánea de la ladder de los participantes, una vez por pasada del worker.
@@ -36,6 +36,9 @@ import { DEFAULT_LEADERBOARD } from "./types";
 export type LadderPlayerRow = {
   id: string;
   profileId: number;
+  aoe4WorldName: string | null;
+  avatarUrl: string | null;
+  rankLevel: string | null;
 };
 
 export type LadderSyncResult = {
@@ -45,11 +48,48 @@ export type LadderSyncResult = {
   /** Jugadores que la ladder sí ha devuelto. */
   playersSeen: number;
   playersUpdated: number;
+  /**
+   * Jugadores a los que esta pasada **les ha cambiado un metadato que lee el
+   * motor de objetivos** (`aoe4WorldName`, `avatarUrl` o `rankLevel`). Los sellos
+   * de caché (`ladderUpdatedAt`, `profileCheckedAt`) se escriben siempre y **no**
+   * cuentan: si contaran, el recálculo no se saltaría nunca.
+   */
+  playersChanged: number;
   /** Pedidos que no aparecen en la respuesta: se conserva lo que ya tenían. */
   playersMissing: number;
   /** Por qué no se pudo completar el snapshot, si no se pudo. */
   error: string | null;
 };
+
+/**
+ * ¿Cambia esta entrada de la ladder alguno de los metadatos que publica
+ * `recomputeScores()` en la vista de objetivos?
+ *
+ * Es pura y la decide el worker para saber si el recálculo hace falta. La lista
+ * es **cerrada** y deja fuera lo que cambia con demasiada frecuencia o no influye
+ * en la clasificación: elo, racha, partidas de la ladder, última partida y el
+ * estado de Twitch no están aquí a propósito.
+ *
+ * Un nombre vacío **no** cuenta como cambio: la ladder no pisa con una cadena
+ * vacía el nombre que ya había. Un avatar `null` tampoco, por el mismo motivo (ver
+ * la cabecera del módulo).
+ */
+export function ladderPlayerChanged(
+  player: Pick<LadderPlayerRow, "aoe4WorldName" | "avatarUrl" | "rankLevel">,
+  entry: Pick<Aoe4WorldLeaderboardEntry, "name" | "avatars" | "rankLevel">,
+): boolean {
+  const name = entry.name.trim();
+
+  if (name !== "" && name !== player.aoe4WorldName) {
+    return true;
+  }
+
+  if (entry.avatars.full !== null && entry.avatars.full !== player.avatarUrl) {
+    return true;
+  }
+
+  return entry.rankLevel !== player.rankLevel;
+}
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -69,6 +109,7 @@ export async function syncLadderSnapshot(
     playersRequested: players.length,
     playersSeen: 0,
     playersUpdated: 0,
+    playersChanged: 0,
     playersMissing: 0,
     error: null,
   };
@@ -109,6 +150,10 @@ export async function syncLadderSnapshot(
           continue;
         }
 
+        // El cambio se mide **antes** de escribir: además de decidir el
+        // recálculo, deja claro que los sellos que van en el `update` no cuentan.
+        const changed = ladderPlayerChanged(player, entry);
+
         await db.player.update({
           where: { id: player.id },
           data: {
@@ -140,6 +185,10 @@ export async function syncLadderSnapshot(
 
         result.playersSeen += 1;
         result.playersUpdated += 1;
+
+        if (changed) {
+          result.playersChanged += 1;
+        }
       }
     }
   } catch (error) {

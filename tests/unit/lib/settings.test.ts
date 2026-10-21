@@ -4,6 +4,7 @@ import {
   GAMES_BATCH_ERRORS_LIMIT,
   parseGamesCursorValue,
   readGamesBatchErrors,
+  readScoringLastRunValue,
   readSyncRunTraceValue,
 } from "@/lib/settings";
 
@@ -171,5 +172,50 @@ describe("readSyncRunTraceValue", () => {
     expect(traza?.backfillPagesRead).toBe(4);
     expect(traza?.backfillPending).toBe(2);
     expect(traza?.apiNotice).toBe("aviso");
+  });
+});
+
+/**
+ * El rastro del motor es lo que decide si el worker se salta el recálculo (F3b).
+ *
+ * Por eso el parser es **todo o nada**: un rastro sin `cacheVersion` (el que dejó
+ * una versión anterior del motor) o sin `playersRanked` no puede describir la
+ * clasificación que hay publicada, y el worker tiene que recalcular. Devolver un
+ * objeto con ceros lo haría saltar el recálculo contra un rastro que no conoce.
+ */
+describe("readScoringLastRunValue", () => {
+  const COMPLETO = { ruleSetVersion: 4, cacheVersion: 1, playersRanked: 13 };
+
+  it("lee un rastro completo", () => {
+    expect(readScoringLastRunValue(COMPLETO)).toEqual(COMPLETO);
+  });
+
+  it("sin `cacheVersion` o sin `playersRanked` no hay rastro", () => {
+    expect(readScoringLastRunValue({ ruleSetVersion: 4, playersRanked: 13 })).toBeNull();
+    expect(readScoringLastRunValue({ ruleSetVersion: 4, cacheVersion: 1 })).toBeNull();
+    expect(readScoringLastRunValue({ cacheVersion: 1, playersRanked: 13 })).toBeNull();
+  });
+
+  it("lo que no tiene la forma esperada no es un rastro", () => {
+    expect(readScoringLastRunValue(null)).toBeNull();
+    expect(readScoringLastRunValue("scoring.lastRun")).toBeNull();
+    expect(readScoringLastRunValue([])).toBeNull();
+    expect(readScoringLastRunValue({ ...COMPLETO, ruleSetVersion: "4" })).toBeNull();
+    expect(readScoringLastRunValue({ ...COMPLETO, cacheVersion: 1.5 })).toBeNull();
+    expect(readScoringLastRunValue({ ...COMPLETO, playersRanked: null })).toBeNull();
+  });
+
+  it("un rastro del motor viejo solo trae las cifras del resultado", () => {
+    // Lo que hay hoy en producción antes de desplegar F3b: sin `cacheVersion`
+    // ni `playersRanked`. Tiene que forzar un recálculo, no colarse como válido.
+    expect(
+      readScoringLastRunValue({
+        ruleSetVersion: 4,
+        durationMs: 834,
+        totalPoints: 603,
+        playersRanked: undefined,
+        matchesUpdated: 0,
+      }),
+    ).toBeNull();
   });
 });

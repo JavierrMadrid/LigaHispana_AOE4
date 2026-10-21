@@ -33,6 +33,7 @@ import {
   mergeRuleset,
   RANKED_MODES,
   RULESET_VERSION,
+  SCORING_CACHE_VERSION,
   SCORING_RULESET_KEY,
 } from "@/lib/scoring";
 import type {
@@ -581,6 +582,7 @@ async function checkNormalization(): Promise<void> {
       rateLimitPausesMs: 0,
       ladderError: null,
       scoringError: null,
+      scoringSkipped: false,
       alertsError: null,
       historyError: null,
       discordError: null,
@@ -714,6 +716,7 @@ async function checkNormalization(): Promise<void> {
       rateLimitPausesMs: 0,
       ladderError: null,
       scoringError: null,
+      scoringSkipped: false,
       alertsError: null,
       historyError: null,
       discordError: null,
@@ -2000,6 +2003,7 @@ type DatabaseSnapshot = {
   approved: ApprovedStateSnapshot[];
   cursor: SettingSnapshot | null;
   lastRun: SettingSnapshot | null;
+  scoringLastRun: SettingSnapshot | null;
   sampleStates: SettingSnapshot[];
 };
 
@@ -2007,6 +2011,7 @@ async function snapshotDatabaseState(
   db: PrismaClient,
   cursorKey: string,
   lastRunKey: string,
+  scoringLastRunKey: string,
   sampleIds: readonly number[],
   playerSyncKey: (profileId: number) => string,
 ): Promise<DatabaseSnapshot> {
@@ -2022,7 +2027,8 @@ async function snapshotDatabaseState(
       profileCheckedAt: true,
     },
   });
-  const keys = [cursorKey, lastRunKey, ...sampleIds.map(playerSyncKey)];
+  const fixedKeys = [cursorKey, lastRunKey, scoringLastRunKey];
+  const keys = [...fixedKeys, ...sampleIds.map(playerSyncKey)];
   const settings = await db.setting.findMany({ where: { key: { in: keys } } });
   const byKey = new Map(settings.map((setting) => [setting.key, setting]));
 
@@ -2030,7 +2036,8 @@ async function snapshotDatabaseState(
     approved,
     cursor: byKey.get(cursorKey) ?? null,
     lastRun: byKey.get(lastRunKey) ?? null,
-    sampleStates: settings.filter((setting) => setting.key !== cursorKey && setting.key !== lastRunKey),
+    scoringLastRun: byKey.get(scoringLastRunKey) ?? null,
+    sampleStates: settings.filter((setting) => !fixedKeys.includes(setting.key)),
   };
 }
 
@@ -2081,12 +2088,16 @@ async function restoreDatabaseState(
   snapshot: DatabaseSnapshot,
   cursorKey: string,
   lastRunKey: string,
+  scoringLastRunKey: string,
   sampleIds: readonly number[],
   playerSyncKey: (profileId: number) => string,
 ): Promise<void> {
   await restoreApprovedRows(db, snapshot.approved);
   await restoreSetting(db, cursorKey, snapshot.cursor);
   await restoreSetting(db, lastRunKey, snapshot.lastRun);
+  // Los dos tests de F3b escriben y borran esta clave: si no se restaurara, la
+  // verificación dejaría la producción con el rastro de un recálculo que no fue.
+  await restoreSetting(db, scoringLastRunKey, snapshot.scoringLastRun);
 
   await db.setting.deleteMany({
     where: { key: { in: sampleIds.map(playerSyncKey) } },
@@ -2133,6 +2144,7 @@ async function runDatabaseChecks(): Promise<void> {
     readGamesCursor,
     readPlayerSyncState,
     writeGamesCursor,
+    SCORING_LAST_RUN_KEY,
     SYNC_GAMES_CURSOR_KEY,
     SYNC_LAST_RUN_KEY,
   } = await import("@/lib/settings");
@@ -2175,6 +2187,7 @@ async function runDatabaseChecks(): Promise<void> {
     db,
     SYNC_GAMES_CURSOR_KEY,
     SYNC_LAST_RUN_KEY,
+    SCORING_LAST_RUN_KEY,
     TEST_PROFILE_IDS,
     playerSyncKey,
   );
@@ -2262,6 +2275,12 @@ async function runDatabaseChecks(): Promise<void> {
       assert.equal(summary.gamesCursorAdvanced, true, "la partida nueva mueve el watermark");
       assert.equal(summary.backfillPending, 0, "la ventana de los dos muestras queda completa");
       assert.ok(summary.gamesCursor !== null, "el cursor global queda escrito");
+      assert.equal(
+        summary.scoringSkipped,
+        false,
+        "una pasada con partidas nuevas no puede saltarse el recálculo",
+      );
+      assert.ok(summary.scoring !== null, "y el resumen trae el recálculo");
 
       const cursor = await readGamesCursor();
       assert.ok(cursor !== null);
@@ -3022,6 +3041,175 @@ async function runDatabaseChecks(): Promise<void> {
       assert.ok(auditoria !== null, "aoe4world.sync.player.<id> queda como auditoría");
     });
 
+    /* ---------------------------------------------------------------------- */
+    /* F3b: no recalcular lo que no ha cambiado                                */
+    /* ---------------------------------------------------------------------- */
+
+    /**
+     * Repite la misma pasada hasta encontrar una que no tenga nada que hacer.
+     *
+     * La primera puede tener trabajo residual (un summary pendiente de la cola
+     * global, el nombre que dejó una comprobación anterior) y lo que se quiere
+     * medir es una **pasada idéntica que además se salte el recálculo**. Con tres
+     * intentos sobra y, si no sale ninguna, el fallo lo dice en vez de dar por
+     * buena una pasada con trabajo.
+     */
+    async function syncHastaPasadaOciosa(): Promise<{
+      summary: Awaited<ReturnType<typeof syncApprovedPlayers>>;
+      lastRunBefore: { updatedAt: Date; value: Prisma.JsonValue } | null;
+    }> {
+      for (let intento = 0; intento < 3; intento += 1) {
+        const lastRunBefore = await db.setting.findUnique({
+          where: { key: SCORING_LAST_RUN_KEY },
+        });
+        const summary = await withIsolatedSampleRoster(
+          db,
+          snapshot,
+          SAMPLE_PROFILE_IDS,
+          () => syncApprovedPlayers({ client: createFakeClient(games) }),
+        );
+        const nadaQueHacer =
+          summary.newMatches === 0 &&
+          summary.updatedMatches === 0 &&
+          summary.resolvedByRefetch === 0 &&
+          summary.abandonedMatches === 0 &&
+          (summary.summaries?.fetched ?? 0) === 0 &&
+          summary.mapPool?.status !== "updated";
+
+        if (nadaQueHacer && summary.scoringSkipped) {
+          return {
+            summary,
+            lastRunBefore:
+              lastRunBefore === null
+                ? null
+                : { updatedAt: lastRunBefore.updatedAt, value: lastRunBefore.value },
+          };
+        }
+      }
+
+      throw new Error(
+        "tres pasadas idénticas seguidas han recalculado: el salto del recálculo no está funcionando",
+      );
+    }
+
+    await check("una pasada ociosa se salta el recálculo y no toca scoring.lastRun", async () => {
+      await db.player.updateMany({
+        where: { profileId: { in: [...SAMPLE_PROFILE_IDS] } },
+        data: { windowComplete: true },
+      });
+
+      const { summary, lastRunBefore } = await syncHastaPasadaOciosa();
+
+      assert.ok(lastRunBefore !== null, "antes de la pasada tiene que existir scoring.lastRun");
+      assert.equal(summary.scoringSkipped, true, "sin novedades no se recalcula");
+      assert.equal(summary.scoring, null, "el resumen no trae recálculo");
+      assert.equal(summary.scoringError, null, "saltárselo no es un fallo");
+
+      const lastRunAfter = await db.setting.findUnique({
+        where: { key: SCORING_LAST_RUN_KEY },
+      });
+      assert.ok(lastRunAfter !== null);
+      assert.equal(
+        lastRunAfter.updatedAt.getTime(),
+        lastRunBefore.updatedAt.getTime(),
+        "el rastro del recálculo no se reescribe si no se recalcula",
+      );
+      assert.deepEqual(lastRunAfter.value, lastRunBefore.value);
+    });
+
+    await check("sin rastro del recálculo o con otra versión de caché, se recalcula", async () => {
+      await db.setting.deleteMany({ where: { key: SCORING_LAST_RUN_KEY } });
+
+      const sinRastro = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () => syncApprovedPlayers({ client: createFakeClient(games) }),
+      );
+
+      assert.equal(sinRastro.scoringSkipped, false, "sin rastro se recalcula");
+      assert.ok(sinRastro.scoring !== null, "y el resumen trae el recálculo");
+
+      const guardado = await db.setting.findUnique({ where: { key: SCORING_LAST_RUN_KEY } });
+      assert.ok(guardado !== null, "el recálculo vuelve a dejar el rastro");
+      const valor = guardado.value as unknown as Record<string, unknown>;
+
+      assert.equal(valor["cacheVersion"], SCORING_CACHE_VERSION);
+
+      // Una versión de caché vieja (lo que deja un despliegue con otra lista de
+      // dependencias) tiene que forzar un recálculo aunque no haya cambiado nada.
+      await db.setting.update({
+        where: { key: SCORING_LAST_RUN_KEY },
+        data: {
+          value: {
+            ...valor,
+            cacheVersion: SCORING_CACHE_VERSION + 1,
+          } as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      const versionVieja = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () => syncApprovedPlayers({ client: createFakeClient(games) }),
+      );
+
+      assert.equal(versionVieja.scoringSkipped, false, "otra versión de caché se recalcula");
+      assert.ok(versionVieja.scoring !== null);
+    });
+
+    await check("un cambio de metadato de la ladder fuerza el recálculo", async () => {
+      const nombreNuevo = "Nombre desde la ladder (F3b)";
+      const leaderboard = async (
+        key: string,
+        profileIds: number[],
+      ): Promise<Aoe4WorldLeaderboard> => ({
+        key,
+        name: key,
+        season: 14,
+        totalCount: profileIds.length,
+        players: profileIds.map((profileId) => ({
+          profileId,
+          name: nombreNuevo,
+          country: "es",
+          rating: 1_600,
+          rank: 1,
+          rankLevel: "platinum_1",
+          streak: 1,
+          gamesCount: 10,
+          winsCount: 5,
+          lossesCount: 5,
+          twitchUrl: null,
+          twitchIsLive: false,
+          avatars: { small: null, medium: null, full: null },
+          lastGameAt: null,
+        })),
+      });
+
+      const summary = await withIsolatedSampleRoster(
+        db,
+        snapshot,
+        SAMPLE_PROFILE_IDS,
+        () => syncApprovedPlayers({ client: createFakeClient(games, new Map(), [], { leaderboard }) }),
+      );
+
+      assert.equal(
+        summary.ladder.playersChanged > 0,
+        true,
+        "el nombre y la división nuevos cuentan como cambio",
+      );
+      assert.equal(summary.scoringSkipped, false, "un metadato que lee el motor fuerza el recálculo");
+      assert.ok(summary.scoring !== null);
+
+      // Las comprobaciones que vienen después esperan el nombre que dejó el camino
+      // de perfil, igual que el escenario de la ladder de más arriba.
+      await db.player.update({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { aoe4WorldName: "Jugador Muestra Actualizado" },
+      });
+    });
+
     await check("el motor deja la clasificación al día y es idempotente", async () => {
       const primera = await recomputeScores();
       assert.equal(primera.ruleSetVersion, RULESET_VERSION);
@@ -3151,8 +3339,8 @@ async function runDatabaseChecks(): Promise<void> {
 
       assert.equal(
         primera.totalPoints,
-        primera.objectivesPoints,
-        "todo punto de la tabla sale de los objetivos",
+        primera.objectivesPoints + primera.eventsPoints,
+        "todo punto de la tabla sale de los objetivos más el bono de los eventos",
       );
 
       // Los puestos de toda la tabla tienen que ser coherentes con el orden.
@@ -3749,6 +3937,7 @@ async function runDatabaseChecks(): Promise<void> {
       snapshot,
       SYNC_GAMES_CURSOR_KEY,
       SYNC_LAST_RUN_KEY,
+      SCORING_LAST_RUN_KEY,
       TEST_PROFILE_IDS,
       playerSyncKey,
     );

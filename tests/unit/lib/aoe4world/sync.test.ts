@@ -13,11 +13,13 @@ import {
   playersToQueueForBackfill,
   seedGamesCursor,
   shouldAdvanceGamesCursor,
+  shouldRecomputeScores,
   shouldRefreshProfile,
   splitGamesByPlayer,
   type BackfillPlayerState,
   type BackfillWatchdogState,
   type GamesBatch,
+  type RecomputeScoresInput,
 } from "@/lib/aoe4world/sync";
 import type { NormalizedMatch } from "@/lib/aoe4world/normalize";
 import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
@@ -664,5 +666,74 @@ describe("shouldRefreshProfile", () => {
 
   it("ttl 0 desactiva la caché", () => {
     expect(shouldRefreshProfile(AHORA_PERFIL, AHORA_PERFIL, 0)).toBe(true);
+  });
+});
+
+/**
+ * La lista cerrada que decide si la pasada recalcula (F3b).
+ *
+ * Cada entrada se prueba por separado porque cada una es un motivo distinto de que
+ * la clasificación publicada pueda haber quedado vieja. El caso "todo limpio" es el
+ * que importa de verdad: es el que devuelve `false` y el que quita el recálculo de
+ * las pasadas ociosas, que son la mayoría.
+ */
+describe("shouldRecomputeScores", () => {
+  const LIMPIO: RecomputeScoresInput = {
+    lastScoring: { ruleSetVersion: 4, cacheVersion: 1, playersRanked: 13 },
+    currentRuleSetVersion: 4,
+    currentCacheVersion: 1,
+    previousScoringError: null,
+    approvedPlayers: 13,
+    matchesChanged: 0,
+    summariesFetched: 0,
+    mapPoolUpdated: false,
+    playersChanged: 0,
+  };
+
+  it("sin nada que justifique el recálculo no se recalcula", () => {
+    expect(shouldRecomputeScores(LIMPIO)).toBe(false);
+  });
+
+  it("sin rastro del último recálculo siempre se recalcula", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, lastScoring: null })).toBe(true);
+  });
+
+  it("una versión de caché distinta fuerza el recálculo", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, currentCacheVersion: 2 })).toBe(true);
+  });
+
+  it("una versión de reglas distinta fuerza el recálculo", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, currentRuleSetVersion: 5 })).toBe(true);
+  });
+
+  it("si la pasada anterior falló al recalcular, se reintenta", () => {
+    expect(
+      shouldRecomputeScores({ ...LIMPIO, previousScoringError: "se cayó la base" }),
+    ).toBe(true);
+  });
+
+  it("una partida tocada fuerza el recálculo", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, matchesChanged: 1 })).toBe(true);
+  });
+
+  it("un summary rellenado fuerza el recálculo", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, summariesFetched: 1 })).toBe(true);
+  });
+
+  it("un pool de mapas reescrito fuerza el recálculo", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, mapPoolUpdated: true })).toBe(true);
+  });
+
+  it("un metadato de jugador cambiado fuerza el recálculo", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, playersChanged: 1 })).toBe(true);
+  });
+
+  it("un cambio en el número de aprobados fuerza el recálculo", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, approvedPlayers: 14 })).toBe(true);
+    expect(shouldRecomputeScores({ ...LIMPIO, approvedPlayers: 12 })).toBe(true);
+  });
+
+  it("sin el total de aprobados (pasada dirigida) el roster no decide", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, approvedPlayers: null })).toBe(false);
   });
 });

@@ -23,6 +23,7 @@ import {
   mergeAbandonedAudit,
   readGamesCursor,
   readPlayerSyncState,
+  readScoringLastRun,
   readSyncRunTrace,
   writeGamesCursor,
   writePlayerSyncState,
@@ -30,12 +31,15 @@ import {
   type GamesBatchError,
   type GamesCursorSeedSource,
   type GamesCursorState,
+  type ScoringLastRunState,
   type SyncRunTrace,
 } from "@/lib/settings";
 import { countsAsRanked, type TeamTierContext } from "@/lib/ranked-match";
 import {
   recomputeScores,
   readRuleset,
+  RULESET_VERSION,
+  SCORING_CACHE_VERSION,
   type RecomputeScoresResult,
   type ScoringRuleset,
 } from "@/lib/scoring";
@@ -71,7 +75,8 @@ import type { Aoe4WorldGame } from "./types";
  * ladder (`ladder.ts`): elo, división, racha y directo de Twitch de todos los
  * aprobados en una sola llamada.
  *
- * Al final se recalcula la clasificación y, si algo ha cambiado para alguien, se
+ * Al final se recalcula la clasificación —salvo que no haya cambiado nada que la
+ * justifique, ver `shouldRecomputeScores()`— y, si algo ha cambiado para alguien, se
  * evaluan las alertas de comportamiento **de ese jugador y solo de ese**. Es lo
  * que cumple el requisito de "siempre actualizada" sin que nadie tenga que
  * recargar: cada pasada del worker deja la tabla de puntos al día y el historial
@@ -173,6 +178,96 @@ export function shouldRefreshProfile(
   }
 
   return elapsed >= ttlMs;
+}
+
+/* -------------------------------------------------------------------------- */
+/* ¿Toca recalcular la clasificación?                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Las entradas que deciden si la pasada necesita recalcular. */
+export type RecomputeScoresInput = {
+  /** Lo que dejó el último recálculo, o `null` si no hay rastro legible. */
+  lastScoring: ScoringLastRunState | null;
+  /** `RULESET_VERSION` del código que está corriendo. */
+  currentRuleSetVersion: number;
+  /** `SCORING_CACHE_VERSION` del código que está corriendo. */
+  currentCacheVersion: number;
+  /** `scoringError` de la pasada anterior: si falló, se reintenta. */
+  previousScoringError: string | null;
+  /**
+   * Aprobados que hay ahora mismo, o `null` si esta pasada no los conoce todos
+   * (pasada dirigida a unos `profileId`). Se compara con
+   * `lastScoring.playersRanked`: un alta, una aprobación o un rechazo cambian la
+   * clasificación sin que nadie haya jugado, y quien los hace no recalcula.
+   */
+  approvedPlayers: number | null;
+  /** Partidas insertadas, actualizadas, resueltas o borradas en esta pasada. */
+  matchesChanged: number;
+  /** Summaries rellenados: cambian las métricas de cinco objetivos. */
+  summariesFetched: number;
+  /** El pool de mapas se ha reescrito: cambia `por-tierra-y-agua`. */
+  mapPoolUpdated: boolean;
+  /** Jugadores con un metadato cambiado que lee la vista de objetivos. */
+  playersChanged: number;
+};
+
+/**
+ * ¿Hay algo que justifique recalcular la clasificación en esta pasada?
+ *
+ * Es la lista **cerrada** de lo que `recomputeScores()` lee y puede haber
+ * cambiado por debajo: partidas, summaries, pool de mapas, el número de aprobados
+ * y los tres metadatos de jugador que publica la vista de objetivos. Con todo a
+ * cero y las mismas versiones, recalcular solo gasta CPU para escribir exactamente
+ * lo mismo.
+ *
+ * El número de aprobados entra porque aprobar y rechazar **no recalculan** en su
+ * propia petición —una pasada entera no cabe en el presupuesto de CPU— y se
+ * apoyaban en que el worker recalculaba siempre. Sin él, un rechazo dejaría al
+ * jugador en la clasificación hasta la siguiente partida de cualquiera.
+ *
+ * Queda fuera a propósito:
+ *
+ * - la configuración (`scoring.ruleset`, cortes, eventos): la recalculan sus
+ *   escritores (panel y scripts), no el worker;
+ * - el elo, la racha, el número de partidas de la ladder y Twitch: cambian con
+ *   demasiada frecuencia y no influyen en el motor;
+ * - los sellos de caché (`ladderUpdatedAt`, `profileCheckedAt`): se escriben en
+ *   **cada** pasada, y si contaran esto no se saltaría nunca.
+ *
+ * Y `matchesChanged` es "filas tocadas", no `newMatches`: una partida insertada
+ * en curso, fuera de la ventana o de un modo que no puntúa también puede cambiar
+ * el estado y no puede quedar fuera por un falso negativo.
+ */
+export function shouldRecomputeScores(input: RecomputeScoresInput): boolean {
+  if (input.lastScoring === null) {
+    return true;
+  }
+
+  if (input.lastScoring.cacheVersion !== input.currentCacheVersion) {
+    return true;
+  }
+
+  if (input.lastScoring.ruleSetVersion !== input.currentRuleSetVersion) {
+    return true;
+  }
+
+  if (input.previousScoringError !== null) {
+    return true;
+  }
+
+  if (
+    input.approvedPlayers !== null &&
+    input.approvedPlayers !== input.lastScoring.playersRanked
+  ) {
+    return true;
+  }
+
+  return (
+    input.matchesChanged > 0 ||
+    input.summariesFetched > 0 ||
+    input.mapPoolUpdated ||
+    input.playersChanged > 0
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -640,12 +735,21 @@ export type SyncSummary = {
   /** Aviso de la API (`filters._important_notice_`), si lo mandó. */
   apiNotice: string | null;
   /**
-   * Recálculo de la clasificación al final de la pasada. `null` solo si la
-   * versión de reglas leída no existe, lo que no debería ocurrir.
+   * Recálculo de la clasificación al final de la pasada. `null` cuando no había
+   * nada que justificara recalcular (`scoringSkipped`) o cuando la versión de
+   * reglas leída no existe, lo que no debería ocurrir.
    */
   scoring: RecomputeScoresResult | null;
   /** Por qué no se pudo recalcular la clasificación, si no se pudo. */
   scoringError: string | null;
+  /**
+   * `true` cuando la pasada **se ha saltado** el recálculo porque no había nada
+   * que lo justificara (`shouldRecomputeScores()`): ni partidas tocadas, ni
+   * summaries, ni pool nuevo, ni metadatos de jugador cambiados, y las versiones
+   * del rastro coinciden con las del código. No es un fallo: la clasificación
+   * publicada sigue siendo la de la última pasada que sí recalculó.
+   */
+  scoringSkipped: boolean;
   /**
    * Alertas de comportamiento de **los jugadores tocados** en esta pasada, más
    * la evaluación completa del cierre de torneo si esta pasada ha sido la que lo
@@ -774,6 +878,8 @@ type SyncPlayerRow = {
   name: string;
   aoe4WorldName: string | null;
   avatarUrl: string | null;
+  /** División de la ladder; la escribe el snapshot y no cuenta como cambio de caché. */
+  rankLevel: string | null;
   /** Sello de la caché de perfil; `null` = sin comprobar. */
   profileCheckedAt: Date | null;
   /**
@@ -812,6 +918,7 @@ function readApprovedPlayers(profileIds: number[] | undefined): Promise<SyncPlay
       name: true,
       aoe4WorldName: true,
       avatarUrl: true,
+      rankLevel: true,
       profileCheckedAt: true,
       registeredAt: true,
       windowComplete: true,
@@ -1765,7 +1872,7 @@ async function refreshProfiles(
   config: SyncConfig,
   signal: AbortSignal,
   now: Date,
-): Promise<void> {
+): Promise<number> {
   // La ladder se ejecuta antes que este paso y sella `profileCheckedAt` y el
   // nombre en la base. La lista de jugadores se leyó antes, así que hay que
   // releer esas tres columnas para no pedir un perfil que la ladder acaba de
@@ -1793,20 +1900,20 @@ async function refreshProfiles(
     }
   }
 
-  await runPool([...players], config.concurrency, async (player) => {
+  const changed = await runPool(players, config.concurrency, async (player): Promise<boolean> => {
     const result = results.get(player.profileId);
 
     if (result === undefined) {
-      return;
+      return false;
     }
 
     if (signal.aborted) {
       markPlayerCancelled(result);
-      return;
+      return false;
     }
 
     if (!shouldRefreshProfile(player.profileCheckedAt, now, PROFILE_CACHE_TTL_MS)) {
-      return;
+      return false;
     }
 
     try {
@@ -1834,19 +1941,27 @@ async function refreshProfiles(
       }
 
       player.profileCheckedAt = now;
+
+      // El sello no cuenta: lo que decide el recálculo son los metadatos que lee
+      // la vista de objetivos, y `profileCheckedAt` se escribe siempre.
+      return officialNameChanged || avatarChanged;
     } catch (error) {
       if (error instanceof Aoe4WorldError && error.status === 404) {
         markPlayerFailed(result, `AoE4World no conoce el perfil ${player.profileId}.`);
       } else {
         markPlayerFailed(result, toErrorMessage(error));
       }
+
+      return false;
     }
   });
+
+  return changed.filter((value) => value).length;
 }
 
 /** Reparte los jugadores en `concurrency` carriles para no saturar la API. */
 async function runPool<T, R>(
-  items: T[],
+  items: readonly T[],
   concurrency: number,
   worker: (item: T) => Promise<R>,
 ): Promise<R[]> {
@@ -2114,8 +2229,10 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   }
 
   // --- Paso 4: perfil con caché de una hora --------------------------------
+  let profilesChanged = 0;
+
   if (players.length > 0) {
-    await refreshProfiles(players, results, client, config, signal, new Date());
+    profilesChanged = await refreshProfiles(players, results, client, config, signal, new Date());
   }
 
   // --- Paso 6a/6b: avance del cursor y watchdog -------------------------------
@@ -2260,14 +2377,60 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   // La clasificación se recalcula al final y en su propia transacción. Si falla,
   // las partidas ya están guardadas: la web serviría la clasificación anterior
   // hasta la próxima pasada, que es preferible a tumbar la sincronización entera.
+  //
+  // Y desde F3b **solo se recalcula si hay algo que lo justifique**: el recálculo
+  // es la parte más cara de la pasada y, en una pasada ociosa, reescribiría la
+  // misma clasificación y el mismo `scoring.lastRun` para nada. La lista cerrada
+  // de motivos está en `shouldRecomputeScores()`; lo que no esté ahí no fuerza un
+  // recálculo, y por eso los escritores de configuración (panel, scripts) lo
+  // recalculan ellos al guardar.
   let scoring: RecomputeScoresResult | null = null;
   let scoringError: string | null = null;
 
+  const matchesChanged = settled.reduce(
+    (total, result) =>
+      total +
+      result.matchesInserted +
+      result.matchesUpdated +
+      result.matchesResolvedByRefetch +
+      result.matchesAbandoned,
+    0,
+  );
+  // Los metadatos de la ladder y los del perfil se suman: los dos escriben los
+  // mismos campos y los dos sellan caché, pero solo cuentan los cambios de verdad.
+  const playersChanged = ladder.playersChanged + profilesChanged;
+
+  // Sin rastro legible se recalcula: es la salida segura, y un fallo de lectura no
+  // puede tumbar la pasada.
+  let lastScoring: ScoringLastRunState | null = null;
+
   try {
-    scoring = await recomputeScores();
+    lastScoring = await readScoringLastRun();
   } catch (error) {
-    scoringError = toErrorMessage(error);
-    console.error(`[sync] No se ha podido recalcular la clasificación: ${scoringError}`);
+    console.warn(`[sync] No se ha podido leer el último recálculo: ${toErrorMessage(error)}`);
+  }
+
+  const scoringSkipped = !shouldRecomputeScores({
+    lastScoring,
+    currentRuleSetVersion: RULESET_VERSION,
+    currentCacheVersion: SCORING_CACHE_VERSION,
+    previousScoringError: previousTrace?.scoringError ?? null,
+    // En una pasada dirigida `players` es solo el subconjunto pedido, así que el
+    // total del roster no se conoce y no se usa como señal.
+    approvedPlayers: directed ? null : players.length,
+    matchesChanged,
+    summariesFetched: summaries?.fetched ?? 0,
+    mapPoolUpdated: mapPool?.status === "updated",
+    playersChanged,
+  });
+
+  if (!scoringSkipped) {
+    try {
+      scoring = await recomputeScores();
+    } catch (error) {
+      scoringError = toErrorMessage(error);
+      console.error(`[sync] No se ha podido recalcular la clasificación: ${scoringError}`);
+    }
   }
 
   // Las alertas van **después** del recálculo y solo para quien ha cambiado, porque
@@ -2579,6 +2742,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     apiNotice: bulkResult.apiNotice,
     scoring,
     scoringError,
+    scoringSkipped,
     alerts,
     alertsError,
     history,
@@ -2637,6 +2801,7 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       rateLimitPausesMs: summary.rateLimitPausesMs,
       ladderError: summary.ladder.error,
       scoringError: summary.scoringError,
+      scoringSkipped: summary.scoringSkipped,
       alertsError: summary.alertsError,
       historyError: summary.historyError,
       discordError: summary.discordError,

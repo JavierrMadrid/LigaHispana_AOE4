@@ -70,7 +70,8 @@ El incremental ya no pide el histórico jugador a jugador. El cursor es **global
 3. **Relleno**: hasta `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` jugadores con `windowComplete=false`,
    desde `max(window.from, registeredAt)`, `BULK` páginas cada uno.
 4. **Perfil**: solo los que no estén frescos por la ladder o por la caché de 1 h.
-5. **Cursor y resto**: scoring, alertas, historial, Discord y streams.
+5. **Cursor y resto**: scoring (solo si hay algo que recalcular, ver **Salto del recálculo**),
+   alertas, historial, Discord y streams.
 
 | Variable | Defecto | Qué limita |
 |---|---:|---|
@@ -140,6 +141,49 @@ F3 se pide con una caché de **1 h** (`PROFILE_CACHE_TTL_HOURS`), sellada en `Pl
 - **Nombre y avatar**: la ladder también puede escribir `aoe4WorldName` y `avatarUrl`; el perfil
   compara antes de escribir y solo los actualiza si cambiaron. La paridad nombre/avatar entre ladder y
   perfil se deja para una comprobación manual, fuera de este bloque.
+
+### Salto del recálculo (F3b)
+
+`recomputeScores()` es la parte más cara de una pasada y, cuando no ha cambiado nada, escribía
+exactamente lo mismo. Desde F3b el worker se lo salta y deja `scoringSkipped = true` en el resumen y
+en `Setting["sync.lastRun"]`.
+
+**La lista cerrada** (`shouldRecomputeScores()` en `src/lib/aoe4world/sync.ts`) — se recalcula si
+cualquiera se cumple:
+
+| Señal | De dónde sale |
+|---|---|
+| No hay `scoring.lastRun` legible | `readScoringLastRun()` |
+| `cacheVersion` distinta de la del código | `SCORING_CACHE_VERSION` |
+| `ruleSetVersion` distinta de la del código | `RULESET_VERSION` |
+| La pasada anterior falló al recalcular | `scoringError` del rastro anterior |
+| Partidas tocadas | `inserted + updated + resolvedByRefetch + abandoned > 0` |
+| Summaries rellenados | `summaries.fetched > 0` (cambian APM, edad y aldeanos) |
+| Pool de mapas nuevo | `mapPool.status === "updated"` (`por-tierra-y-agua`) |
+| Metadatos de jugador cambiados | `ladder.playersChanged + perfiles cambiados` |
+| Cambio en el número de aprobados | `playersRanked` de `scoring.lastRun` frente al roster |
+
+- **La primera pasada tras desplegar F3b siempre recalcula**: el rastro anterior no lleva
+  `cacheVersion` (o lleva otra) y eso es `true` por la segunda fila de la tabla. Subir
+  `SCORING_CACHE_VERSION` es lo que hay que hacer si un cambio del motor añade una dependencia que no
+  esté en la tabla.
+- **`playersChanged` cuenta solo lo que lee la vista de objetivos**: `aoe4WorldName`, `avatarUrl` y
+  `rankLevel`. No cuentan los sellos de caché (`ladderUpdatedAt`, `profileCheckedAt`), que se escriben
+  en cada pasada, ni elo, racha, partidas de la ladder o Twitch, que cambian demasiado.
+- **El número de aprobados entra en la lista** porque aprobar y rechazar **no** recalculan en su
+  propia petición (no cabe en el presupuesto de CPU): antes lo arreglaba la pasada siguiente y, sin
+  esta señal, un rechazo dejaría al jugador en la clasificación hasta la siguiente partida.
+- **La configuración la recalculan sus escritores**, no el worker: el ruleset (panel y
+  `npm run db:window`), los cortes de división (`npm run alerts:cutoffs`), los eventos puntuales y el
+  revert/restore de una partida. El pool de mapas es la excepción y se detecta por
+  `mapPool.status === "updated"`.
+- **Saltárselo no es un fallo**: `scoring = null`, `scoringError = null` y `scoring.lastRun` no se
+  toca. La clasificación publicada sigue siendo la última que se calculó.
+
+**Medición en la preview** (seis pasadas ociosas, 0 partidas nuevas, 2 peticiones de API cada una):
+CPU del Worker con mediana **658 ms** (media 727, p95/máx 1.028) y `scoring.durationMs` de 228–589 ms
+con mediana ~351 ms. F3b quita esa parte en las pasadas sin novedades; el resto (Prisma, masivo y
+ladder) sigue ahí y es lo que hay que medir en la siguiente ronda.
 
 Hay **dos relojes**, y el primario no es GitHub:
 

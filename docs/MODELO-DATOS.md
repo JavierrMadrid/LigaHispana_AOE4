@@ -389,7 +389,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana, objetivos y objetivos desactivados). Un documento de la versión anterior se migra al leerlo. | `ensureRuleset()` en `src/lib/scoring.ts`; el panel, con `saveScoringRuleset` |
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
-| `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
+| `scoring.lastRun` | Rastro del último recálculo: `ruleSetVersion`, `cacheVersion` (`SCORING_CACHE_VERSION`), `playersRanked` y las cifras del resultado. Lo lee el worker para decidir si puede saltarse el recálculo. | `recomputeScores()` |
 | `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 3) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `sync.gamesCursor` | Cursor global de partidas: `updatedAt` (el `updated_since` de la siguiente pasada), `seededAt`, `seededFrom`, la racha de lotes truncados y el mejor `backfillPending` visto. | Worker (`src/lib/aoe4world/sync.ts`), con `writeGamesCursor()` |

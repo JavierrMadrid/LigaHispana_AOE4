@@ -148,6 +148,22 @@ export const RULESET_VERSION = 4;
 export const LEGACY_RULESET_VERSION = 3;
 
 /**
+ * Versión de la caché que deja el recálculo en `Setting["scoring.lastRun"]`.
+ *
+ * El worker se salta el recálculo cuando no ha cambiado nada que lo justifique
+ * (ver `shouldRecomputeScores()` en `src/lib/aoe4world/sync.ts`), y esa decisión
+ * se apoya en la lista cerrada de entradas de aquella función. Si un cambio de
+ * este motor añade una dependencia nueva —una tabla, una columna, una regla que
+ * no estaba en la lista—, subir este número **fuerza un recálculo** en la
+ * primera pasada tras el despliegue: sin él, la clasificación publicada podría
+ * quedarse con lo que calculó la versión anterior hasta la siguiente partida.
+ *
+ * No es `RULESET_VERSION`: esa describe la forma del documento de reglas y su
+ * lectura ya invalida el recálculo por su cuenta.
+ */
+export const SCORING_CACHE_VERSION = 1;
+
+/**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
  *
  * Es texto de producto, así que lo fija **el código**: el `label` que haya en
@@ -1617,7 +1633,10 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       // Última sentencia de la transacción: el rastro de la pasada se confirma
       // junto con la clasificación que describe y no en una escritura aparte que
       // pudiera fallar o quedar desfasada.
-      await writeScoringLastRun({ ...recomputed }, tx);
+      await writeScoringLastRun(
+        { ...recomputed, cacheVersion: SCORING_CACHE_VERSION },
+        tx,
+      );
 
       return recomputed;
     },
