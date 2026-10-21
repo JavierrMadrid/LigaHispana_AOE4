@@ -300,6 +300,11 @@ export type BackfillPlan = {
   pages: number;
 };
 
+export type RecheckPlan = BackfillPlan & {
+  /** `true` cuando la ventana ya estaba completa y esta pasada la revisa (F2b). */
+  recheck: boolean;
+};
+
 /** Las tres guardas de avance del cursor global. */
 export type GamesCursorAdvanceInput = {
   directed: boolean;
@@ -530,6 +535,56 @@ export function backfillPlan(
     startPage: Math.max(1, player.backfillPage),
     pages: pagesPerPlayer,
   };
+}
+
+/**
+ * Plan de una pasada de la ventana: terminarla o revisitarla (F2b).
+ *
+ * `backfillPlan()` deja de mirar una ventana en cuanto se marca completa, así que
+ * una partida que se escapó antes de eso —publicada tarde, o que la API todavía no
+ * devolvía— no se recuperaría nunca. Esto devuelve un plan de **recheck** (desde la
+ * página 1 y con el mismo presupuesto) cuando el último recorrido completo tiene
+ * `recheckMaxAgeMs` o más; con `0` la revisión está desactivada y solo se atienden
+ * pendientes.
+ *
+ * Un `windowCheckedAt` nulo con la ventana completa significa "no se sabe cuándo se
+ * comprobó", y se revisa. Una fecha en el futuro (reloj movido) cuenta como fresca:
+ * no se puede haber comprobado después de ahora.
+ */
+export function recheckPlan(
+  state: {
+    windowComplete: boolean;
+    backfillPage: number;
+    registeredAt: Date | null;
+    windowCheckedAt: Date | null;
+  },
+  windowFrom: Date,
+  pagesPerPlayer: number,
+  recheckMaxAgeMs: number,
+  now: Date,
+): RecheckPlan | null {
+  if (!state.windowComplete) {
+    const plan = backfillPlan(state, windowFrom, pagesPerPlayer);
+
+    return plan === null ? null : { ...plan, recheck: false };
+  }
+
+  if (recheckMaxAgeMs <= 0) {
+    return null;
+  }
+
+  const checkedMs = state.windowCheckedAt === null ? null : state.windowCheckedAt.getTime();
+
+  if (checkedMs !== null && now.getTime() - checkedMs < recheckMaxAgeMs) {
+    return null;
+  }
+
+  const since =
+    state.registeredAt !== null && state.registeredAt.getTime() > windowFrom.getTime()
+      ? state.registeredAt
+      : windowFrom;
+
+  return { since, startPage: 1, pages: pagesPerPlayer, recheck: true };
 }
 
 /**
@@ -866,6 +921,11 @@ type SyncConfig = {
   backfillMaxPlayers: number;
   /** Páginas por jugador en cada pasada de relleno (sin recortar). */
   backfillPagesPerPlayer: number;
+  /**
+   * Antigüedad a la que una ventana ya completa se vuelve a leer, en ms (F2b).
+   * `0` desactiva la revisión: solo se atienden pendientes.
+   */
+  recheckMaxAgeMs: number;
   /** Cota de antigüedad de la semilla del cursor global, en ms. 0 = sin cota. */
   seedMaxAgeMs: number;
   concurrency: number;
@@ -1734,6 +1794,7 @@ async function runBackfillStep(
     registeredAt: Date | null;
     backfillPage: number;
     windowComplete: boolean;
+    windowCheckedAt: Date | null;
   }[],
   players: readonly SyncPlayerRow[],
   results: ReadonlyMap<number, SyncPlayerResult>,
@@ -1763,7 +1824,13 @@ async function runBackfillStep(
       continue;
     }
 
-    const plan = backfillPlan(candidate, windowFrom, pagesPerPlayer);
+    const plan = recheckPlan(
+      candidate,
+      windowFrom,
+      pagesPerPlayer,
+      config.recheckMaxAgeMs,
+      now,
+    );
 
     if (plan === null) {
       continue;
@@ -1818,6 +1885,8 @@ async function runBackfillStep(
       result.matchesCounted += persisted.counted;
       result.matchesUpdated += persisted.updated;
 
+      // Un recheck que se trunca cae en la rama de abajo y vuelve a la cola normal
+      // como pendiente; uno que falla no escribe nada y sigue siendo candidato.
       if (fetched.nextPage === null) {
         await db.player.update({
           where: { id: candidate.id },
@@ -1989,6 +2058,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     bulkMaxPages: Math.min(envConfig.syncBulkMaxPages, GAMES_BULK_MAX_PAGE),
     backfillMaxPlayers: envConfig.syncBackfillMaxPlayers,
     backfillPagesPerPlayer: envConfig.syncBackfillPagesPerPlayer,
+    recheckMaxAgeMs: envConfig.syncRecheckMaxAgeDays * 86_400_000,
     seedMaxAgeMs: envConfig.syncSeedMaxAgeMinutes * 60_000,
     concurrency: envConfig.syncConcurrency,
     deadlineMs: envConfig.syncDeadlineMs,
@@ -2194,13 +2264,31 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   let backfillResult: BackfillStepResult = { players: 0, pagesRead: 0, pending: 0 };
 
   if (players.length > 0) {
+    const backfillNow = new Date();
+    // Con la revisión activa, la cola es "pendientes primero y rechecks detrás",
+    // y el `take` corta: un recheck no puede desplazar a una ventana a medias.
+    const recheckBefore = new Date(backfillNow.getTime() - config.recheckMaxAgeMs);
+    const expiredOrUnknown =
+      config.recheckMaxAgeMs > 0
+        ? [
+            { windowComplete: false },
+            {
+              windowComplete: true,
+              OR: [
+                { windowCheckedAt: null },
+                { windowCheckedAt: { lt: recheckBefore } },
+              ],
+            },
+          ]
+        : [{ windowComplete: false }];
+
     const candidates = await db.player.findMany({
       where: {
         status: "APPROVED",
-        windowComplete: false,
         ...(options.profileIds === undefined
           ? {}
           : { profileId: { in: options.profileIds } }),
+        OR: expiredOrUnknown,
       },
       select: {
         id: true,
@@ -2208,8 +2296,9 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
         registeredAt: true,
         backfillPage: true,
         windowComplete: true,
+        windowCheckedAt: true,
       },
-      orderBy: [{ backfillPage: "asc" }, { profileId: "asc" }],
+      orderBy: [{ windowComplete: "asc" }, { backfillPage: "asc" }, { profileId: "asc" }],
       take: config.backfillMaxPlayers,
     });
 
@@ -2224,7 +2313,7 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
       ruleset,
       cutoffs,
       options.profileIds,
-      new Date(),
+      backfillNow,
     );
   }
 

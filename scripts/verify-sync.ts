@@ -2780,6 +2780,110 @@ async function runDatabaseChecks(): Promise<void> {
       );
     });
 
+    await check("F2b vuelve a leer una ventana completa caducada y no una reciente", async () => {
+      const hace31Dias = new Date(now.getTime() - 31 * 86_400_000);
+
+      await db.player.updateMany({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { windowComplete: true, backfillPage: 1, windowCheckedAt: hace31Dias },
+      });
+
+      const summary = await syncApprovedPlayers({
+        profileIds: [SAMPLE_PROFILE_ID],
+        client: createFakeClient(games),
+      });
+      const primero = summary.players[0];
+
+      assert.ok(primero !== undefined);
+      assert.equal(summary.backfillPlayers, 1, "la ventana caducada vuelve a leerse");
+      assert.equal(primero.matchesInserted, 0, "releerla no duplica nada");
+
+      const recheckado = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
+      assert.equal(recheckado?.windowComplete, true);
+      assert.ok(recheckado?.windowCheckedAt !== null);
+      assert.ok(
+        recheckado.windowCheckedAt.getTime() > now.getTime() - 60_000,
+        "el sello de la comprobación avanza a un valor reciente",
+      );
+
+      const segunda = await syncApprovedPlayers({
+        profileIds: [SAMPLE_PROFILE_ID],
+        client: createFakeClient(games),
+      });
+
+      assert.equal(segunda.backfillPlayers, 0, "una ventana recién comprobada no se rechecka");
+      assert.equal(
+        (await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } }))
+          ?.windowCheckedAt?.toISOString(),
+        recheckado.windowCheckedAt.toISOString(),
+        "sin recheck el sello no se mueve",
+      );
+    });
+
+    await check("F2b: con 0 días la revisión queda desactivada", async () => {
+      const hace31Dias = new Date(now.getTime() - 31 * 86_400_000);
+
+      await db.player.updateMany({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { windowComplete: true, backfillPage: 1, windowCheckedAt: hace31Dias },
+      });
+
+      const summary = await withEnv({ AOE4WORLD_SYNC_RECHECK_MAX_AGE_DAYS: "0" }, () =>
+        syncApprovedPlayers({
+          profileIds: [SAMPLE_PROFILE_ID],
+          client: createFakeClient(games),
+        }),
+      );
+
+      assert.equal(summary.backfillPlayers, 0, "con 0 días no se rechecka nada");
+
+      const sinMover = await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } });
+      assert.equal(sinMover?.windowCheckedAt?.toISOString(), hace31Dias.toISOString());
+      assert.equal(sinMover?.windowComplete, true);
+    });
+
+    await check("F2b: el recheck no desplaza a un pendiente", async () => {
+      const hace31Dias = new Date(now.getTime() - 31 * 86_400_000);
+
+      await db.player.updateMany({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { windowComplete: true, backfillPage: 1, windowCheckedAt: hace31Dias },
+      });
+      await db.player.updateMany({
+        where: { profileId: SAMPLE_BULK_SECOND_PROFILE_ID },
+        data: { windowComplete: false, backfillPage: 1 },
+      });
+
+      const summary = await withEnv({ AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS: "1" }, () =>
+        syncApprovedPlayers({
+          profileIds: [...SAMPLE_PROFILE_IDS],
+          client: createFakeClient(games),
+        }),
+      );
+
+      assert.equal(summary.backfillPlayers, 1, "solo hay hueco para un jugador por pasada");
+      assert.equal(summary.backfillPending, 0, "el hueco se lo lleva la ventana pendiente");
+      assert.equal(
+        (await db.player.findUnique({ where: { profileId: SAMPLE_BULK_SECOND_PROFILE_ID } }))
+          ?.windowComplete,
+        true,
+        "el pendiente se completa",
+      );
+      assert.equal(
+        (await db.player.findUnique({ where: { profileId: SAMPLE_PROFILE_ID } }))
+          ?.windowCheckedAt?.toISOString(),
+        hace31Dias.toISOString(),
+        "el completo caducado se queda para la pasada siguiente",
+      );
+
+      // Las comprobaciones que vienen después no tienen por qué arrastrar una
+      // ventana caducada: se deja el sello reciente para que no la rechecken.
+      await db.player.update({
+        where: { profileId: SAMPLE_PROFILE_ID },
+        data: { windowCheckedAt: new Date(now.getTime() - 60_000) },
+      });
+    });
+
     await check("el refetch resuelve una partida en vivo que el listado ya no devuelve", async () => {
       // La partida 9000010 se guardó en vivo hace 90 min, pero el masivo ya no
       // la alcanza: el detalle tiene que resolverla.

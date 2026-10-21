@@ -106,10 +106,15 @@ export type Aoe4WorldConfig = {
   syncMaxPages: number;
   /** Páginas máximas por lote del endpoint masivo (se recorta al tope del cliente). */
   syncBulkMaxPages: number;
-  /** Jugadores con la ventana pendiente que se rellenan por pasada. */
+  /** Jugadores que atiende el relleno por pasada: pendientes y, detrás, rechecks. */
   syncBackfillMaxPlayers: number;
   /** Páginas que se leen por jugador en cada pasada de relleno. */
   syncBackfillPagesPerPlayer: number;
+  /**
+   * Antigüedad a la que se vuelve a leer una ventana ya completa, en días (F2b).
+   * `0` desactiva la revisión: solo se atienden ventanas pendientes.
+   */
+  syncRecheckMaxAgeDays: number;
   /**
    * Antigüedad máxima de la **siembra inicial** del cursor global, en minutos.
    * Solo se aplica cuando no hay fila (`cursorState === null`); un cursor vivo
@@ -163,6 +168,7 @@ export function getAoe4WorldConfig(): Aoe4WorldConfig {
     syncBulkMaxPages: readPositiveInt("AOE4WORLD_SYNC_BULK_MAX_PAGES", 10),
     syncBackfillMaxPlayers: readPositiveInt("AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS", 20),
     syncBackfillPagesPerPlayer: readPositiveInt("AOE4WORLD_SYNC_BACKFILL_PAGES_PER_PLAYER", 3),
+    syncRecheckMaxAgeDays: readNonNegativeInt("AOE4WORLD_SYNC_RECHECK_MAX_AGE_DAYS", 30),
     syncSeedMaxAgeMinutes: readNonNegativeInt("AOE4WORLD_SYNC_SEED_MAX_AGE_MINUTES", 360),
     syncDeadlineMs: readPositiveInt("AOE4WORLD_SYNC_DEADLINE_MS", 240_000),
     summaryMaxPerRun: readPositiveInt("AOE4WORLD_SUMMARY_MAX_PER_RUN", 10),

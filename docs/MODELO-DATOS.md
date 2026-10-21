@@ -82,11 +82,11 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `historyCheckedAt` | `DateTime?` | Caché de la comprobación de historial (12 h). |
 | `windowComplete` | `Boolean` (`false`) | `true` = se ha recorrido la ventana del torneo entera hasta el corte. `false` = pendiente; también es el valor de migración y el de un alta nueva. |
 | `backfillPage` | `Int` (`1`) | Página del relleno por la que sigue. Las páginas 1..`backfillPage−1` ya se leyeron. |
-| `windowCheckedAt` | `DateTime?` | Cuándo se completó por última vez el recorrido de la ventana. `null` = nunca. |
+| `windowCheckedAt` | `DateTime?` | Cuándo se completó por última vez el recorrido de la ventana, incluidos los rechecks de F2b. `null` = nunca. |
 | `createdAt`, `updatedAt` | `DateTime` | |
 
 Índices: `id` (pk), `profileId` (único) y `(status, windowComplete, backfillPage)` para la cola del
-relleno (`status` y `windowComplete` por igualdad, `backfillPage` por orden). Los dos únicos de Discord
+relleno (`status` filtra; `windowComplete` y `backfillPage` ordenan, con los pendientes primero). Los dos únicos de Discord
 son **restricciones**, no filtros: sostienen "una cuenta y un `@usuario` no están en dos
 participantes".
 
@@ -444,7 +444,7 @@ aparece en una consulta, no se crea.**
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |
 | `/admin/historial` | Las mismas filas que `/historial`, de todos los aprobados: `Match` victorias clasificatorias con puntos (o revertidas) + `ObjectiveEvent` + `ObjectiveLeadEvent` (estos, filtrados por `editionFrom`), paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
 | `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados, más los `ObjectiveLeadEvent` de la edición activa; paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
-| Relleno de la ventana (F2) | `Player where status = APPROVED and windowComplete = false order by backfillPage, profileId`; y el `count` de la misma forma para `backfillPending` | `(status, windowComplete, backfillPage)` |
+| Relleno de la ventana (F2/F2b) | `Player where status = APPROVED and (windowComplete = false or (windowComplete = true and (windowCheckedAt is null or windowCheckedAt < now − RECHECK_MAX_AGE_DAYS))) order by windowComplete, backfillPage, profileId`; y el `count` de `windowComplete = false` para `backfillPending` | `(status, windowComplete, backfillPage)` |
 | `/admin/alertas` | `Alert [por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |

@@ -67,7 +67,8 @@ El incremental ya no pide el histórico jugador a jugador. El cursor es **global
 1. **Ladder y reconciliación global**: la ladder sella el perfil; la reconciliación resuelve las
    partidas pendientes.
 2. **Masivo**: todos los aprobados en lotes estables de 50, `order=updated_at`, desde el cursor.
-3. **Relleno**: hasta `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` jugadores con `windowComplete=false`,
+3. **Relleno**: hasta `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` jugadores, **primero** los que tienen
+   `windowComplete=false` y **detrás** las ventanas completas cuyo último recorrido venció (F2b),
    desde `max(window.from, registeredAt)`, `BULK` páginas cada uno.
 4. **Perfil**: solo los que no estén frescos por la ladder o por la caché de 1 h.
 5. **Cursor y resto**: scoring (solo si hay algo que recalcular, ver **Salto del recálculo**),
@@ -78,6 +79,7 @@ El incremental ya no pide el histórico jugador a jugador. El cursor es **global
 | `AOE4WORLD_SYNC_BULK_MAX_PAGES` | 10 | Páginas por lote del masivo. Se recorta al tope de la API, 19 |
 | `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` | 20 | Jugadores que atiende el relleno por pasada |
 | `AOE4WORLD_SYNC_BACKFILL_PAGES_PER_PLAYER` | 3 | Páginas por jugador del relleno |
+| `AOE4WORLD_SYNC_RECHECK_MAX_AGE_DAYS` | 30 | Días desde el último recorrido completo a partir de los cuales la ventana se vuelve a leer. `0` desactiva la revisión |
 | `AOE4WORLD_SYNC_MAX_PAGES` | 10 | Tope **duro** de páginas por jugador: el relleno usa `min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` |
 | `AOE4WORLD_SYNC_SEED_MAX_AGE_MINUTES` | 360 | Solo la **siembra inicial** del cursor; un cursor vivo no se recupera por esta cota |
 
@@ -88,7 +90,7 @@ El incremental ya no pide el histórico jugador a jugador. El cursor es **global
 | Masivo | `ceil(N/50)` lotes; hasta `BULK_MAX_PAGES` páginas por lote |
 | Ladder | `ceil(N/50)` lotes |
 | Perfil | Solo los ausentes de la ladder o con `profileCheckedAt` caducado (TTL 1 h); 0 en el caso estable |
-| Relleno | Hasta `BACKFILL_MAX_PLAYERS × min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` mientras haya ventanas pendientes |
+| Relleno | Hasta `BACKFILL_MAX_PLAYERS × min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` mientras haya ventanas pendientes o completas con el sello vencido (F2b) |
 | Detalle | 0–2 para reconciliar partidas sin resolver |
 
 Con N=13 y todos en la ladder: **2 peticiones** (1 masiva + 1 ladder) y 0–2 de detalle; el perfil es
@@ -107,6 +109,23 @@ Con N=13 y todos en la ladder: **2 peticiones** (1 masiva + 1 ladder) y 0–2 de
   reintenta entera en la pasada siguiente.
 - Un fallo de **guardado** deja al jugador `failed` y lo encola; no bloquea el cursor.
 - Una truncación no rebobina a quien iba por la mitad y el relleno se reanuda por `backfillPage`.
+
+**Revisión de ventanas completas (F2b)**:
+
+- Una ventana que se marca completa no se volvía a mirar nunca, así que una partida que se escapó
+  antes del sello (publicada tarde, o que la API no devolvía entonces) se perdía para siempre. F2b
+  vuelve a leerla cuando `windowCheckedAt` tiene **30 días** o más, con el mismo since y el mismo
+  presupuesto, y desde la **página 1**.
+- **Prioridad**: los pendientes van primero (`windowComplete=false`, luego `backfillPage`) y los
+  rechecks detrás; el `take` corta, así que un recheck nunca le quita el turno a una ventana a medias.
+- `AOE4WORLD_SYNC_RECHECK_MAX_AGE_DAYS=0` desactiva la revisión: solo se atienden pendientes.
+- **Coste**: con 60 jugadores son 3 pasadas al mes (20 por pasada), ~70–100 páginas; con 13, una
+  pasada al mes.
+- Un recheck **truncado** vuelve a la cola normal como pendiente (`windowComplete=false`,
+  `backfillPage=nextPage`); uno que **falla** deja el sello como estaba y se reintenta en la pasada
+  siguiente.
+- **No borra** partidas que AoE4World elimine después: solo recupera las que faltan. La paridad
+  manual (`verify:aoe4world -- --all`) sigue siendo la prueba completa.
 
 **Atascos**: `sync.gamesCursor` guarda `bulkIncompleteStreak` (pasadas seguidas con truncación) y
 `pendingBestCount`/`pendingBestAt` (el mínimo de `backfillPending` visto y cuándo). El panel deriva
@@ -1145,7 +1164,9 @@ npm run verify:sync -- --db  # además comprueba el guardado y restaura el estad
 ventana que cubre el presente. Antes de tocar nada guarda `sync.gamesCursor`, `sync.lastRun`, las
 columnas `windowComplete`/`backfillPage`/`windowCheckedAt`/`profileCheckedAt` de **todos** los
 aprobados y el ruleset; en un `finally` borra los jugadores de prueba (con sus partidas, puntuaciones
-y claves de `Setting`) y restaura todo, incluso si una comprobación falla. Solo se niega a arrancar si alguno de esos
+y claves de `Setting`) y restaura todo, incluso si una comprobación falla. Cubre también F2b: ventana
+caducada recheckada, ventana reciente no recheckada, `0` que la desactiva y prioridad del pendiente
+con `BACKFILL_MAX_PLAYERS=1`. Solo se niega a arrancar si alguno de esos
 `profileId` ya existía de una ejecución anterior.
 
 ### Medidas de AoE4World

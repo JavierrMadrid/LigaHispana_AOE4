@@ -11,6 +11,7 @@ import {
   nextBackfillWatchdog,
   nextGamesCursor,
   playersToQueueForBackfill,
+  recheckPlan,
   seedGamesCursor,
   shouldAdvanceGamesCursor,
   shouldRecomputeScores,
@@ -487,6 +488,146 @@ describe("backfillPlan", () => {
         3,
       )?.startPage,
     ).toBe(1);
+  });
+});
+
+/**
+ * La revisión de ventanas ya completas (F2b).
+ *
+ * `backfillPlan()` deja de mirar en cuanto la ventana se marca completa, así que
+ * una partida que se escapó antes de ese sello no se recuperaría nunca.
+ * `recheckPlan()` decide cuándo se vuelve a leer: por edad del último recorrido
+ * completo, y siempre desde la página 1. Con la revisión apagada (`0`), una
+ * ventana completa no vuelve a la cola.
+ */
+describe("recheckPlan", () => {
+  const DIA_MS = 86_400_000;
+  const CADUCIDAD_MS = 30 * DIA_MS;
+  const haceDias = (dias: number) => new Date(AHORA.getTime() - dias * DIA_MS);
+
+  it("un pendiente usa el plan normal de `backfillPlan`, con su página", () => {
+    const plan = recheckPlan(
+      { windowComplete: false, backfillPage: 7, registeredAt: null, windowCheckedAt: null },
+      VENTANA_DESDE,
+      3,
+      CADUCIDAD_MS,
+      AHORA,
+    );
+
+    expect(plan?.startPage).toBe(7);
+    expect(plan?.pages).toBe(3);
+    expect(plan?.recheck).toBe(false);
+  });
+
+  it("un completo con la comprobación reciente no vuelve a la cola", () => {
+    expect(
+      recheckPlan(
+        {
+          windowComplete: true,
+          backfillPage: 1,
+          registeredAt: null,
+          windowCheckedAt: haceDias(29),
+        },
+        VENTANA_DESDE,
+        3,
+        CADUCIDAD_MS,
+        AHORA,
+      ),
+    ).toBeNull();
+  });
+
+  it("un completo justo en el límite se rechecka desde la página 1", () => {
+    const plan = recheckPlan(
+      {
+        windowComplete: true,
+        backfillPage: 4,
+        registeredAt: null,
+        windowCheckedAt: haceDias(30),
+      },
+      VENTANA_DESDE,
+      3,
+      CADUCIDAD_MS,
+      AHORA,
+    );
+
+    expect(plan?.recheck).toBe(true);
+    expect(plan?.startPage).toBe(1);
+    expect(plan?.pages).toBe(3);
+  });
+
+  it("un completo caducado se rechecka", () => {
+    const plan = recheckPlan(
+      {
+        windowComplete: true,
+        backfillPage: 1,
+        registeredAt: null,
+        windowCheckedAt: haceDias(31),
+      },
+      VENTANA_DESDE,
+      3,
+      CADUCIDAD_MS,
+      AHORA,
+    );
+
+    expect(plan?.recheck).toBe(true);
+    expect(plan?.since.toISOString()).toBe(VENTANA_DESDE.toISOString());
+  });
+
+  it("un completo sin sello se rechecka: no se sabe cuándo se comprobó", () => {
+    expect(
+      recheckPlan(
+        { windowComplete: true, backfillPage: 1, registeredAt: null, windowCheckedAt: null },
+        VENTANA_DESDE,
+        3,
+        CADUCIDAD_MS,
+        AHORA,
+      )?.recheck,
+    ).toBe(true);
+  });
+
+  it("con la revisión apagada (`0`) los completos no vuelven, pero los pendientes sí", () => {
+    expect(
+      recheckPlan(
+        {
+          windowComplete: true,
+          backfillPage: 1,
+          registeredAt: null,
+          windowCheckedAt: haceDias(365),
+        },
+        VENTANA_DESDE,
+        3,
+        0,
+        AHORA,
+      ),
+    ).toBeNull();
+    expect(
+      recheckPlan(
+        { windowComplete: false, backfillPage: 1, registeredAt: null, windowCheckedAt: null },
+        VENTANA_DESDE,
+        3,
+        0,
+        AHORA,
+      )?.recheck,
+    ).toBe(false);
+  });
+
+  it("el `since` respeta un alta posterior al inicio de la ventana, también en el recheck", () => {
+    const registeredAt = new Date("2026-10-01T00:00:00.000Z");
+
+    expect(
+      recheckPlan(
+        {
+          windowComplete: true,
+          backfillPage: 3,
+          registeredAt,
+          windowCheckedAt: haceDias(31),
+        },
+        VENTANA_DESDE,
+        3,
+        CADUCIDAD_MS,
+        AHORA,
+      )?.since.toISOString(),
+    ).toBe(registeredAt.toISOString());
   });
 });
 
