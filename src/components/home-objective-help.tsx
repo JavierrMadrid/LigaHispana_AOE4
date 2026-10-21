@@ -6,12 +6,19 @@ import { createPortal } from "react-dom";
 export function HomeObjectiveHelp({
   description,
   children,
+  className = "",
+  ariaLabel,
+  compact = false,
 }: {
   description: string;
   children: ReactNode;
+  className?: string;
+  ariaLabel?: string;
+  compact?: boolean;
 }) {
   const id = useId();
   const container = useRef<HTMLDivElement>(null);
+  const tooltip = useRef<HTMLSpanElement>(null);
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -53,9 +60,13 @@ export function HomeObjectiveHelp({
     function place() {
       const box = container.current?.getBoundingClientRect();
       if (!box) return;
-      const width = Math.min(340, window.innerWidth - 32);
+      const width = Math.min(
+        compact ? (tooltip.current?.getBoundingClientRect().width ?? 340) : 340,
+        window.innerWidth - 32
+      );
+      const height = compact ? (tooltip.current?.offsetHeight ?? 48) : 170;
       setPosition({
-        top: Math.min(box.bottom + 8, window.innerHeight - 170),
+        top: Math.min(box.bottom + 8, window.innerHeight - height),
         left: Math.max(16, Math.min(box.left, window.innerWidth - width - 16)),
         width,
       });
@@ -68,10 +79,10 @@ export function HomeObjectiveHelp({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open]);
+  }, [open, compact]);
   return (
     <div
-      className="home-objective-help"
+      className={`home-objective-help ${className}`}
       ref={container}
       onMouseEnter={enter}
       onMouseLeave={leave}
@@ -79,6 +90,7 @@ export function HomeObjectiveHelp({
       <button
         type="button"
         className="home-objective-help-trigger"
+        aria-label={ariaLabel}
         aria-describedby={open ? id : undefined}
         aria-expanded={pinned}
         onFocus={() => {
@@ -100,15 +112,25 @@ export function HomeObjectiveHelp({
       >
         {children}
       </button>
-      {open && position
+      {open && (position || compact)
         ? createPortal(
             <span
               id={id}
+              ref={tooltip}
               role="tooltip"
               className="home-objective-tooltip"
               onMouseEnter={enter}
               onMouseLeave={leave}
-              style={position}
+              style={
+                compact
+                  ? {
+                      ...position,
+                      width: "max-content",
+                      maxWidth: "calc(100vw - 32px)",
+                      visibility: position ? "visible" : "hidden",
+                    }
+                  : position ?? undefined
+              }
             >
               {description}
             </span>,

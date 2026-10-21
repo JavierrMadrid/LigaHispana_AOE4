@@ -52,7 +52,7 @@ export function HomeShell({
               alt=""
               priority
             />
-            <span>Liga Hispana</span>
+            <span>La Liga Hispana</span>
           </Link>
           <nav aria-label="Navegación principal" className="home-nav">
             {navigation.map(({ href, label }) => (

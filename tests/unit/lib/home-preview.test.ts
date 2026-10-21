@@ -54,6 +54,21 @@ describe("clasificación de desarrollo para carga completa", () => {
     expect(rows.some((row) => row.objectives.length >= 10)).toBe(true);
     expect(rows.some((row) => row.isPlaying && row.twitchIsLive)).toBe(true);
   });
+
+  it("presenta actividad variada y las tres plataformas en las primeras filas de la demo", () => {
+    const firstRows = createHomeStressRows().slice(0, 8);
+    const isLive = (row: (typeof firstRows)[number]) => row.twitchIsLive || row.youtubeIsLive || row.kickIsLive;
+
+    expect(firstRows[0].isPlaying).toBe(true);
+    expect(firstRows.some((row) => row.isPlaying && row.twitchIsLive && row.twitchChannel)).toBe(true);
+    expect(firstRows.some((row) => row.isPlaying && row.youtubeIsLive && row.youtubeChannel)).toBe(true);
+    expect(firstRows.some((row) => row.isPlaying && row.kickIsLive && row.kickChannel)).toBe(true);
+    expect(firstRows.some((row) => row.isPlaying && !isLive(row))).toBe(true);
+    expect(firstRows.some((row) => !row.isPlaying && isLive(row))).toBe(true);
+    expect(firstRows.some((row) => !row.isPlaying && !isLive(row))).toBe(true);
+    expect(firstRows.some((row) => !row.twitchChannel && !row.youtubeChannel && !row.kickChannel)).toBe(true);
+    expect(firstRows.some((row) => !isLive(row) && (row.twitchChannel || row.youtubeChannel || row.kickChannel))).toBe(true);
+  });
 });
 
 describe("descripciones de objetivos de portada", () => {

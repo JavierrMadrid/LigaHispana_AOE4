@@ -57,7 +57,7 @@ function Identity({ row }: { row: StandingRow }) {
   const flag = row.country ? countryFlagUrl(row.country) : null;
   return (
     <div className="home-player">
-      <span className="home-avatar-frame">
+      <div className="home-avatar-frame">
         <PlayerAvatar
           name={row.name}
           avatarUrl={row.avatarUrl}
@@ -65,14 +65,16 @@ function Identity({ row }: { row: StandingRow }) {
           shape="square"
         />
         {row.isPlaying ? (
-          <span
+          <HomeObjectiveHelp
+            description="En partida"
             className="home-playing-indicator"
-            role="img"
-            aria-label="En partida"
-            title="En partida"
-          />
+            ariaLabel="En partida"
+            compact
+          >
+            <span className="home-playing-dot" aria-hidden="true" />
+          </HomeObjectiveHelp>
         ) : null}
-      </span>
+      </div>
       <div className="home-player-copy">
         <div className="home-player-name">
           <a
@@ -482,17 +484,14 @@ export function HomeStandings({
                           {row.wins + row.losses}
                         </td>
                         <td className="home-elo" data-label="Elo">
-                          <span>
+                          <span
+                            title={row.division ? divisionLabel(row.division) : "Sin clasificar"}
+                          >
                             <span className="home-elo-badge-slot">
                               <RankArtwork row={row} />
                             </span>
                             <span className="home-elo-value">
                               {row.elo === null ? "—" : number(row.elo)}
-                              <small>
-                                {row.division
-                                  ? divisionLabel(row.division)
-                                  : "Sin clasificar"}
-                              </small>
                             </span>
                           </span>
                         </td>

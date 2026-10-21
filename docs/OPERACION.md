@@ -475,10 +475,17 @@ de los directos.
   deterministas de `src/lib/home-preview.ts`; la interfaz recibe la lista completa.
 - Incluye todas las divisiones y países del catálogo local, nombres largos, puntuaciones a cero,
   elo ausente, rachas negativas, canales y estados en directo, y objetivos conocidos.
+- Las primeras ocho filas por puntuación combinan partidas en curso y directos de Twitch,
+  YouTube y Kick con jugadores desconectados y canales sin emitir para grabar demos de la UI.
+  Estos estados se fijan después de ordenar, sin alterar puntos ni posiciones.
 - Son identidades ficticias para revisar carga, búsqueda, filtros, ordenación y lectura. Los enlaces
   a perfiles y canales también son de prueba; no representan jugadores inscritos.
 - La vista utiliza la presentación normal sin avisos de simulación visibles; identificarla por
   `?preview=stress`. No muestra importes de premios inventados ni etiquetas de muestra.
+- La franja de estado muestra datos ficticios: **3 partidas en juego**, **1500 participantes**,
+  un torneo iniciado hace un día que termina en **9 días, 7 h y 22 min**, y una actualización de
+  hace **2 minutos**. Las fechas se calculan respecto a cada carga para mantener visible la UI;
+  el contador y la hora reutilizan `TournamentCountdown` y `LiveRefresh`.
 - Evalúa la serialización de la colección completa y la interacción paginada: **25 jugadores por
   página**, incluidos los 25 del HTML inicial; búsqueda y ordenación trabajan sobre los 1500.
   No mide consultas de

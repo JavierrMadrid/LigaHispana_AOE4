@@ -23,6 +23,17 @@ const OBJECTIVES: ReadonlyMap<string, StandingObjective> = new Map(
 );
 const CIVILIZATION_OBJECTIVES = OBJECTIVE_DEFINITIONS.filter(({ id }) => id.startsWith("lider-"));
 const COMPETITIONS = OBJECTIVE_DEFINITIONS.filter(({ kind }) => kind === "competition");
+// Se aplican después de ordenar para que la primera pantalla sirva también para las demos.
+const FIRST_ROWS_ACTIVITY = [
+  { platform: "twitch", isLive: true, isPlaying: true },
+  { platform: "youtube", isLive: true, isPlaying: true },
+  { platform: null, isLive: false, isPlaying: false },
+  { platform: "kick", isLive: true, isPlaying: true },
+  { platform: "twitch", isLive: false, isPlaying: false },
+  { platform: null, isLive: false, isPlaying: true },
+  { platform: "youtube", isLive: false, isPlaying: false },
+  { platform: "twitch", isLive: true, isPlaying: false },
+] as const;
 
 function sampleObjectives(index: number, wins: number, losses: number): StandingObjective[] {
   const ids = new Set<string>();
@@ -94,5 +105,20 @@ export function createHomeStressRows(): StandingRow[] {
   });
 
   rows.sort((a, b) => b.points - a.points || b.wins - a.wins || a.profileId - b.profileId);
-  return rows.map((row, index) => ({ ...row, rank: index + 1 }));
+  return rows.map((row, index) => {
+    const ranked = { ...row, rank: index + 1 };
+    const activity = FIRST_ROWS_ACTIVITY[index];
+    if (!activity) return ranked;
+    const channel = `liga_demo_${String(row.profileId - 90_100_000 + 1).padStart(4, "0")}`;
+    return {
+      ...ranked,
+      isPlaying: activity.isPlaying,
+      twitchChannel: activity.platform === "twitch" ? channel : null,
+      twitchIsLive: activity.platform === "twitch" && activity.isLive,
+      youtubeChannel: activity.platform === "youtube" ? channel : null,
+      youtubeIsLive: activity.platform === "youtube" && activity.isLive,
+      kickChannel: activity.platform === "kick" ? channel : null,
+      kickIsLive: activity.platform === "kick" && activity.isLive,
+    };
+  });
 }

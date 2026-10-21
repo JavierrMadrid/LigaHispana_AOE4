@@ -204,22 +204,23 @@
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  min-height: 148px;
+  min-height: 236px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  border: 1px solid #435776;
+  justify-content: flex-start;
+  border: 1px solid var(--line-strong);
   border-radius: 6px;
-  background: #142542;
-  padding: 16px 24px;
+  background: var(--surface);
+  padding: 20px 40px;
   margin-bottom: 16px;
   animation: home-rise 0.55s ease-out both;
 }
 .home-banner-art {
   z-index: -3;
   object-fit: cover;
-  object-position: center 24%;
+  object-position: center 12%;
+  opacity: 0.88;
+  filter: saturate(0.8);
 }
 .home-intro::before {
   content: "";
@@ -227,12 +228,14 @@
   inset: 0;
   z-index: -2;
   background: linear-gradient(
-    90deg,
-    #0c1930f2 0%,
-    #122340dd 37%,
-    #0e193568 70%,
-    #101a2925
-  );
+      90deg,
+      #0b182bf5 0%,
+      #10213be8 38%,
+      #122039a8 58%,
+      #12203928 82%,
+      #12203914 100%
+    ),
+    linear-gradient(0deg, #0a152b6b, transparent 50%);
 }
 .home-intro::after {
   content: "";
@@ -244,49 +247,42 @@
 }
 .home-hero-identity {
   display: flex;
-  gap: 24px;
+  gap: 32px;
   align-items: center;
+  min-width: 0;
 }
 .home-hero-emblem {
-  width: 96px;
-  height: 96px;
+  width: 234px;
+  height: auto;
+  object-fit: contain;
   flex-shrink: 0;
-  filter: drop-shadow(0 8px 10px #0008);
+  filter: drop-shadow(0 12px 18px #0009) drop-shadow(0 0 28px #8da6d71a);
 }
-.home-hero-kicker {
-  font-size: 10px !important;
-  line-height: 1.4;
-  color: #d6deed !important;
-  margin-bottom: 5px;
+.home-hero-copy {
+  min-width: 0;
+  text-shadow: 0 2px 12px #0008;
 }
 .home-intro h1 {
-  font: 600 clamp(28px, 2.5vw, 36px) / 1.1 var(--font-cinzel), serif;
-  letter-spacing: -0.7px;
+  font: 600 clamp(32px, 3.2vw, 44px) / 1.1 var(--font-cinzel), serif;
+  letter-spacing: -0.8px;
 }
-.home-hero-game {
-  font: 500 17px/1.4 var(--font-cinzel), serif;
-  margin: 3px 0 7px;
-  color: #e0e5ef !important;
+.home-intro .home-hero-game {
+  font: 500 20px/1.4 var(--font-cinzel), serif;
+  margin: 8px 0 0;
+  color: var(--foreground);
 }
-.home-intro p {
-  max-width: 520px;
-  color: #c8d4e6;
+.home-intro .home-hero-description {
+  margin: 12px 0 0;
+  color: var(--muted);
   font-size: 14px;
   line-height: 1.6;
-}
-.home-intro-aside {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  color: #d0d9e6;
-  font-size: 12px;
 }
 .home-status {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding: 10px 20px;
+  gap: 16px;
+  padding: 10px 16px;
   background: #10213a;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -296,33 +292,19 @@
 .home-status-main {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-.home-status-icon {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  background: #1c3557;
-  border: 1px solid #3b5578;
-  border-radius: 4px;
-  color: #ccd9ed;
+  gap: 10px;
+  flex-shrink: 0;
 }
 .home-status-main strong {
   display: block;
   font-size: 15px;
   font-weight: 600;
-}
-.home-status-main small {
-  display: block;
-  color: #b6c3d6;
-  margin-top: 5px;
-  font-size: 13px;
+  white-space: nowrap;
 }
 .home-status-meta {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 16px;
   color: #b6c3d6;
   font-size: 13px;
 }
@@ -344,7 +326,7 @@
   white-space: nowrap;
 }
 .home-status-meta p {
-  max-width: 270px;
+  white-space: nowrap;
 }
 .home-status-meta .font-display {
   font-family: var(--font-home-inter), sans-serif;
@@ -623,7 +605,7 @@
   gap: 14px;
   min-width: 0;
 }
-.home-player > span,
+.home-player > .home-avatar-frame,
 .home-player > img {
   width: 48px;
   height: 48px;
@@ -684,10 +666,22 @@
   width: 100%;
   height: 100%;
 }
-.home-playing-indicator {
+.home-avatar-frame > .home-playing-indicator {
   position: absolute;
-  right: -3px;
-  bottom: -3px;
+  right: -10px;
+  bottom: -10px;
+  width: 24px;
+  height: 24px;
+}
+.home-playing-indicator .home-objective-help-trigger {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  cursor: help;
+}
+.home-playing-dot {
   width: 10px;
   height: 10px;
   background: #e3bf70;
@@ -729,7 +723,7 @@
 .home-elo > span {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 8px;
   font-size: 17px;
   font-weight: 550;
@@ -738,12 +732,9 @@
   width: 38px;
   height: 46px;
 }
-.home-elo small {
-  display: block;
-  color: #b5c5dc;
-  font-size: 12px;
-  margin-top: 5px;
-  font-weight: 400;
+.home-table th:nth-child(5),
+.home-table .home-elo {
+  text-align: center;
 }
 .home-win {
   color: #a4d9c5;
@@ -975,7 +966,7 @@
   border-radius: 6px;
 }
 .home-skeleton-status {
-  height: 88px;
+  height: 44px;
   background: #172b46;
   border-radius: 6px;
 }
@@ -1036,12 +1027,16 @@
   .home-status {
     flex-direction: column;
     align-items: flex-start;
+    gap: 10px;
   }
   .home-status-meta {
     width: 100%;
     flex-wrap: wrap;
     justify-content: space-between;
-    gap: 16px;
+    gap: 10px 16px;
+  }
+  .home-status-meta p {
+    white-space: normal;
   }
   .home-toolbar {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1117,6 +1112,9 @@
   .home-elo {
     grid-area: elo;
   }
+  .home-table .home-elo {
+    text-align: center !important;
+  }
   .home-record {
     grid-area: record;
   }
@@ -1137,13 +1135,6 @@
     margin-bottom: 6px;
     color: #b8c9e0;
     font-size: 12px;
-  }
-  .home-elo > span {
-    justify-content: flex-start;
-  }
-  .home-elo small {
-    display: inline-block;
-    margin: 0 0 0 8px;
   }
   .home-objective-detail {
     display: block;
@@ -1197,55 +1188,46 @@
     padding: 20px 16px 40px;
   }
   .home-intro {
-    padding: 16px 20px;
-    min-height: 180px;
+    padding: 24px 20px;
+    min-height: 0;
     margin-bottom: 20px;
+    justify-content: center;
   }
-  .home-hero-identity {
-    align-items: flex-start;
-    gap: 12px;
-  }
-  .home-hero-emblem {
-    width: 72px;
-    height: 72px;
-  }
-  .home-hero-kicker {
-    font-size: 10px !important;
-    margin-bottom: 9px;
-    max-width: 180px !important;
-  }
-  .home-intro h1 {
-    font-size: 27px;
-    line-height: 1.2;
-  }
-  .home-hero-game {
-    font-size: 15px !important;
-    margin: 6px 0 10px;
-  }
-  .home-intro p {
-    font-size: 12px;
+  .home-banner-art {
+    object-position: 80% center;
+    opacity: 0.62;
   }
   .home-intro::before {
-    background: linear-gradient(
-      180deg,
-      #0c1930f0 0%,
-      #122340d8 48%,
-      #10234465 100%
-    );
+    background: linear-gradient(180deg, #10213b38 0%, #10213bd9 65%, #0c1930f5),
+      linear-gradient(90deg, #0c193099, transparent 85%);
   }
-  .home-intro-aside {
-    display: none;
+  .home-hero-identity {
+    flex-direction: column;
+    gap: 12px;
+    text-align: center;
+  }
+  .home-hero-emblem {
+    width: 172px;
+  }
+  .home-intro h1 {
+    font-size: 30px;
+    line-height: 1.2;
+  }
+  .home-intro .home-hero-game {
+    font-size: 17px;
+    margin-top: 5px;
+  }
+  .home-intro .home-hero-description {
+    font-size: 12px;
+    margin-top: 8px;
   }
   .home-status {
-    padding: 12px 16px;
-    gap: 16px;
+    padding: 10px 16px;
+    gap: 10px;
     margin-bottom: 24px;
   }
   .home-status-main strong {
     font-size: 14px;
-  }
-  .home-status-main small {
-    font-size: 12px;
   }
   .home-status-meta {
     font-size: 12px;
@@ -1307,7 +1289,7 @@
   .home-player {
     gap: 8px;
   }
-  .home-player > span,
+  .home-player > .home-avatar-frame,
   .home-player > img {
     width: 36px;
     height: 36px;
@@ -1357,9 +1339,6 @@
   }
   .home-elo > span {
     font-size: 16px;
-  }
-  .home-elo small {
-    font-size: 11px;
   }
   .home-division-emblem {
     width: 30px;
@@ -1534,8 +1513,8 @@
   flex-shrink: 0;
 }
 .home-elo-value {
-  width: 90px;
-  text-align: right;
+  min-width: 4ch;
+  text-align: left;
   flex-shrink: 0;
 }
 .home-loss {
@@ -1565,15 +1544,6 @@
   font: 14px/1.6 var(--font-geist-sans), sans-serif;
   box-shadow: 0 8px 28px #0008;
   pointer-events: none;
-}
-@media (max-width: 1050px) {
-  .home-elo-value {
-    text-align: left;
-  }
-  .home-elo-value small {
-    display: block;
-    margin: 4px 0 0;
-  }
 }
 @media (max-width: 640px) {
   .home-elo-badge-slot {

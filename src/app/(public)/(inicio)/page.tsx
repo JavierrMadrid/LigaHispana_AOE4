@@ -2,9 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowUpRight } from "@phosphor-icons/react/dist/ssr/ArrowUpRight";
-import { Broadcast } from "@phosphor-icons/react/dist/ssr/Broadcast";
 import { Users } from "@phosphor-icons/react/dist/ssr/Users";
-import { Sword } from "@phosphor-icons/react/dist/ssr/Sword";
+import { LiveDot } from "@/components/live-dot";
 import {
   HomeLeaders,
   HomeStandings,
@@ -53,6 +52,20 @@ export default async function StandingsPage({
         getLastSyncFinishedAt(),
       ]);
   const now = new Date().toISOString();
+  const nowMs = new Date(now).getTime();
+  const statusWindow = stress
+    ? {
+        from: new Date(nowMs - 24 * 60 * 60_000).toISOString(),
+        to: new Date(nowMs + (9 * 24 * 60 + 7 * 60 + 22) * 60_000).toISOString(),
+      }
+    : tournamentWindow.status === "ok"
+      ? tournamentWindow.data
+      : null;
+  const statusUpdatedAt = stress
+    ? new Date(nowMs - 2 * 60_000).toISOString()
+    : lastSync.status === "ok"
+      ? lastSync.data
+      : null;
   const degraded =
     !stress &&
     (standings.status === "degraded" ||
@@ -71,44 +84,41 @@ export default async function StandingsPage({
             }
           : row
       );
-  const liveGames = preview === "live" ? 1 : liveMatches.data?.length ?? 0;
+  const liveGames = stress
+    ? 3
+    : preview === "live"
+      ? 1
+      : liveMatches.data?.length ?? 0;
   const hub =
     process.env.NODE_ENV === "development" && params.concept === "hub";
 
   return (
     <div>
-      <div className="home-intro home-heraldic-frame">
+      <section className="home-intro home-heraldic-frame" aria-labelledby="home-title">
         <Image
           src="/imagenes/portada/aoe4-delhi-banner.webp"
           alt=""
           fill
-          preload
-          sizes="(max-width: 1400px) 100vw, 1320px"
+          sizes="(max-width: 640px) calc(100vw - 32px), (max-width: 1440px) calc(100vw - 80px), 1360px"
           className="home-banner-art"
         />
         <div className="home-hero-identity">
           <Image
-            src="/imagenes/marca/emblema-256.png"
+            src="/imagenes/portada/escudo-liga-hispana.webp"
             alt=""
-            width={144}
-            height={144}
+            width={960}
+            height={804}
+            preload
+            sizes="(max-width: 640px) 172px, 234px"
             className="home-hero-emblem"
           />
           <div className="home-hero-copy">
-            <p className="home-hero-kicker">
-              Competición de la comunidad hispanohablante
-            </p>
-            <h1>{hub ? "La liga se juega aquí." : "Liga Hispana"}</h1>
+            <h1 id="home-title">{hub ? "La liga se juega aquí." : "Liga Hispana"}</h1>
             <p className="home-hero-game">Age of Empires IV</p>
+            <p className="home-hero-description">Clasificación y partidas en directo</p>
           </div>
         </div>
-        {hub ? (
-          <div className="home-intro-aside">
-            <Broadcast size={16} aria-hidden="true" />
-            Seguimiento del torneo
-          </div>
-        ) : null}
-      </div>
+      </section>
       {degraded ? (
         <section className="home-error">
           <h2>La clasificación no está disponible</h2>
@@ -123,11 +133,9 @@ export default async function StandingsPage({
         <>
           <div className="home-status">
             <div className="home-status-main">
-              <span className="home-status-icon">
-                <Sword size={22} weight="regular" aria-hidden="true" />
-              </span>
+              {liveGames > 0 ? <LiveDot /> : null}
               <div>
-                {!stress && liveGames > 0 ? (
+                {liveGames > 0 ? (
                   <Link
                     target="_blank"
                     rel="noopener noreferrer"
@@ -135,24 +143,18 @@ export default async function StandingsPage({
                   >
                     <strong>
                       {liveGames === 1
-                        ? "1 partida en juego"
-                        : `${liveGames} partidas en juego`}
+                        ? "1 Partida en juego ahora"
+                        : `${liveGames} Partidas en juego ahora`}
                       <ArrowUpRight
                         size={14}
                         className="inline ml-2"
                         aria-hidden="true"
                       />
                     </strong>
-                    <small>Ver quién está jugando ahora</small>
                   </Link>
                 ) : (
                   <>
-                    <strong>Estado del torneo</strong>
-                    <small>
-                      {stress
-                        ? "Clasificación general de participantes"
-                        : "Sin partidas en juego ahora mismo"}
-                    </small>
+                    <strong>Sin partidas en juego ahora mismo</strong>
                   </>
                 )}
               </div>
@@ -163,21 +165,14 @@ export default async function StandingsPage({
                 <strong>{rows.length}</strong>{" "}
                 {rows.length === 1 ? "participante" : "participantes"}
               </span>
-              {!stress && tournamentWindow.status === "ok" ? (
+              {statusWindow ? (
                 <TournamentCountdown
-                  from={tournamentWindow.data.from}
-                  to={tournamentWindow.data.to}
+                  from={statusWindow.from}
+                  to={statusWindow.to}
                   serverNow={now}
                 />
               ) : null}
-              {!stress ? (
-                <LiveRefresh
-                  showStatus
-                  dataUpdatedAt={
-                    lastSync.status === "ok" ? lastSync.data : null
-                  }
-                />
-              ) : null}
+              <LiveRefresh showStatus dataUpdatedAt={statusUpdatedAt} />
             </div>
           </div>
           {hub ? <HomeLeaders rows={rows} /> : null}
