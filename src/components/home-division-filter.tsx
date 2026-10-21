@@ -3,18 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { SlidersHorizontal } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
-import { DIVISION_UI, DivisionIcon } from "@/components/division-icon";
-import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
+import { DIVISION_UI } from "@/components/division-icon";
+import { LeagueIcon, leagueFilterRank } from "@/components/league-icon";
 import type { DivisionId } from "@/lib/public";
 
-const prefixes: Record<DivisionId, string> = {
-  bronce: "bronze",
-  plata: "silver",
-  oro: "gold",
-  platino: "platinum",
-  diamante: "diamond",
-  conquistador: "conqueror",
-};
 const options = [
   { id: "" as DivisionId | "", label: "Todas las divisiones" },
   ...DIVISION_UI,
@@ -26,11 +18,11 @@ export function HomeDivisionArtwork({
   division: DivisionId | "";
 }) {
   if (!division) return <SlidersHorizontal size={20} aria-hidden="true" />;
-  const rank = rankLevelToLeague(`${prefixes[division]}_3`);
-  return rank ? (
-    <LeagueIcon rank={rank} className="home-filter-division-icon" />
-  ) : (
-    <DivisionIcon division={division} className="home-filter-division-icon" />
+  return (
+    <LeagueIcon
+      rank={leagueFilterRank(division)}
+      className="home-filter-division-icon"
+    />
   );
 }
 

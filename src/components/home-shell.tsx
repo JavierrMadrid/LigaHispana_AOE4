@@ -5,15 +5,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ArrowUpRight } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
+import { PUBLIC_NAVIGATION } from "@/lib/public-navigation";
 import "./home.css";
-
-const navigation = [
-  { href: "/", label: "Clasificación" },
-  { href: "/partidas", label: "Partidas" },
-  { href: "/objetivos", label: "Objetivos" },
-  { href: "/puntuacion", label: "Puntuación" },
-  { href: "/reglas", label: "Reglas" },
-];
 
 export function HomeShell({
   legacy,
@@ -55,15 +48,15 @@ export function HomeShell({
             <span>La Liga Hispana</span>
           </Link>
           <nav aria-label="Navegación principal" className="home-nav">
-            {navigation.map(({ href, label }) => (
+            {PUBLIC_NAVIGATION.map((item) => (
               <Link
                 target="_blank"
                 rel="noopener noreferrer"
-                key={href}
-                href={href}
-                aria-current={href === "/" ? "page" : undefined}
+                key={item.href}
+                href={item.href}
+                aria-current={item.href === "/" ? "page" : undefined}
               >
-                {label}
+                {"homeLabel" in item ? item.homeLabel : item.label}
               </Link>
             ))}
           </nav>

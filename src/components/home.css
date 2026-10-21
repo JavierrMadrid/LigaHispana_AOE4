@@ -486,6 +486,7 @@
   padding: 0 36px 0 12px;
   border-radius: 4px;
   font-size: 13px;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
 }
 .home-sort-select {
   position: relative;
@@ -572,13 +573,16 @@
   align-items: center;
   justify-content: center;
   gap: 3px;
-  width: 42px;
+  width: auto;
+  min-width: 44px;
+  padding: 5px 6px;
   min-height: 44px;
   background: #0d1a2e;
   border: 1px solid #3a5479;
   border-radius: 4px 4px 12px 12px;
   color: #c6d3e7;
   font: 550 17px var(--font-home-mono), monospace;
+  font-variant-numeric: tabular-nums;
 }
 .home-rank-badge svg {
   flex-shrink: 0;
@@ -1273,14 +1277,15 @@
     margin: 0 10px 12px;
   }
   .home-standing {
-    grid-template-columns: 36px minmax(0, 1fr) 84px;
+    grid-template-columns: 44px minmax(0, 1fr) 84px;
     gap: 12px 9px;
     padding: 14px 12px;
   }
   .home-rank-badge {
-    width: 34px;
+    min-width: 42px;
     min-height: 46px;
     font-size: 14px;
+    padding: 5px 3px;
   }
   .home-rank-badge svg {
     width: 15px;
@@ -1503,6 +1508,7 @@
 }
 .home-table .home-standing td {
   background: transparent;
+  position: static;
 }
 .home-elo-badge-slot {
   width: 46px;
@@ -1543,7 +1549,7 @@
   color: #e4ebf7;
   font: 14px/1.6 var(--font-geist-sans), sans-serif;
   box-shadow: 0 8px 28px #0008;
-  pointer-events: none;
+  pointer-events: auto;
 }
 @media (max-width: 640px) {
   .home-elo-badge-slot {
@@ -1564,9 +1570,6 @@
   background-color: var(--row-surface);
   background-image: none;
 }
-.home-table .home-standing td {
-  position: static;
-}
 .home-standing td > :not(.home-row-flag) {
   position: relative;
   z-index: 1;
@@ -1582,6 +1585,8 @@
   opacity: 0.5;
   mask-image: linear-gradient(90deg, transparent 0%, #000 90%);
   pointer-events: none;
+  background: none !important;
+  overflow: hidden;
 }
 .home-row-flag::after {
   content: "";
@@ -1589,12 +1594,6 @@
   inset: 0;
   background: #08172d88;
   border-radius: inherit;
-}
-.home-rank-badge {
-  width: auto;
-  min-width: 44px;
-  padding: 5px 6px;
-  font-variant-numeric: tabular-nums;
 }
 .home-pagination {
   display: flex;
@@ -1643,26 +1642,12 @@
     linear-gradient(#d6b568, #d6b568) right bottom/24px 1px no-repeat,
     linear-gradient(#d6b568, #d6b568) right bottom/1px 24px no-repeat;
 }
-.home-objective-tooltip {
-  pointer-events: auto;
-}
 @media (max-width: 1050px) {
-  .home-row-flag {
-    width: min(240px, 100%);
-  }
   .home-focus-command .home-standing:has(:focus-visible) {
     border-color: #d6b568a0;
   }
 }
 @media (max-width: 640px) {
-  .home-standing {
-    grid-template-columns: 44px minmax(0, 1fr) 84px;
-  }
-  .home-rank-badge {
-    min-width: 42px;
-    font-size: 14px;
-    padding: 5px 3px;
-  }
   .home-pagination {
     flex-direction: column;
     align-items: flex-start;
@@ -1687,7 +1672,7 @@
 .home-standing td > .home-row-glow {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 3;
   pointer-events: none;
   border-radius: 4px;
   opacity: 0;
@@ -1723,10 +1708,6 @@
 }
 .home-table .home-pointer-row td {
   box-shadow: none;
-}
-.home-row-flag {
-  background: none !important;
-  overflow: hidden;
 }
 .home-row-flag-art {
   position: absolute;
@@ -1891,9 +1872,6 @@
 .home-focus-command .home-standing:has(:focus-visible) .home-row-outline {
   border-color: #d6b568;
 }
-.home-standing td > .home-row-glow {
-  z-index: 3;
-}
 .home-scroll-reveal {
   transition: opacity 0.34s ease, transform 0.34s ease;
 }
@@ -1909,9 +1887,6 @@
 }
 .home-objectives button svg:last-child {
   transition: transform 0.2s ease;
-}
-.home-sort select {
-  transition: border-color 0.2s, background 0.2s, color 0.2s;
 }
 @media (prefers-reduced-motion: reduce) {
   .home-reveal-pending {

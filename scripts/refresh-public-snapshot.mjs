@@ -2,9 +2,8 @@ import "./load-env.mjs";
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { Client } from "pg";
-import { localDatabaseConfig, parsePublicHomepage, parsePublicMatches, validateSnapshot } from "./public-snapshot.mjs";
+import { PUBLIC_SNAPSHOT_SOURCE as SOURCE, localDatabaseConfig, parsePublicHomepage, parsePublicMatches, validateSnapshot } from "./public-snapshot.mjs";
 
-const SOURCE = "https://laligahispana.es/";
 const FIXTURE = new URL("./fixtures/public-homepage.json", import.meta.url);
 const PREFIX = "live-snapshot-";
 

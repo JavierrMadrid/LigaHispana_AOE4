@@ -1,3 +1,5 @@
+export const PUBLIC_SNAPSHOT_SOURCE = "https://laligahispana.es/";
+
 const PLAYER_FIELDS = [
   "rank", "profileId", "name", "aoe4WorldName", "country", "points", "pointsByWins",
   "pointsByObjectives", "wins", "losses", "elo", "division", "rankLevel", "streak",
@@ -113,7 +115,7 @@ export function validateSnapshot(snapshot) {
   const fail = () => { throw new Error("Captura pública inválida o incoherente; no se importará nada."); };
   const integer = (value) => Number.isSafeInteger(value) && value >= 0;
   const date = (value) => typeof value === "string" && Number.isFinite(Date.parse(value));
-  if (snapshot.source !== "https://laligahispana.es/" || !date(snapshot.capturedAt)
+  if (snapshot.source !== PUBLIC_SNAPSHOT_SOURCE || !date(snapshot.capturedAt)
     || !date(snapshot.window?.from) || (snapshot.window.to !== null && !date(snapshot.window.to))
     || !Array.isArray(snapshot.rows) || snapshot.rows.length === 0
     || !Array.isArray(snapshot.matches)) fail();

@@ -7,6 +7,16 @@ import { OBJECTIVE_DEFINITIONS } from "@/lib/objectives";
 import type { StandingObjective, StandingRow } from "@/lib/public";
 
 export const HOME_STRESS_PLAYER_COUNT = 1500;
+const PROFILE_ID_BASE = 90_100_000;
+
+function sampleIdentity(index: number) {
+  const suffix = String(index + 1).padStart(4, "0");
+  return {
+    profileId: PROFILE_ID_BASE + index,
+    suffix,
+    channel: `liga_demo_${suffix}`,
+  };
+}
 
 const NAMES = [
   "Centinela", "Tizona", "Cóndor Andino", "Alfil", "Guardián del Sur", "Jaguar",
@@ -54,8 +64,7 @@ function sampleObjectives(index: number, wins: number, losses: number): Standing
 // Solo la vista de desarrollo invoca esta fábrica: no escribe ni recalcula puntuaciones.
 export function createHomeStressRows(): StandingRow[] {
   const rows = Array.from({ length: HOME_STRESS_PLAYER_COUNT }, (_, index): StandingRow => {
-    const profileId = 90_100_000 + index;
-    const suffix = String(index + 1).padStart(4, "0");
+    const { profileId, suffix, channel } = sampleIdentity(index);
     const noMatches = index % 37 === 0;
     const wins = noMatches || index % 29 === 0 ? 0 : (index * 17 + 13) % 121;
     const losses = noMatches ? 0 : (index * 7 + 11) % 76;
@@ -72,8 +81,6 @@ export function createHomeStressRows(): StandingRow[] {
       : negativeStreak
         ? -Math.min(losses, index % 9 + 1)
         : Math.min(wins, index % 12 + 1);
-    const channel = `liga_demo_${suffix}`;
-
     return {
       rank: 0,
       profileId,
@@ -109,7 +116,7 @@ export function createHomeStressRows(): StandingRow[] {
     const ranked = { ...row, rank: index + 1 };
     const activity = FIRST_ROWS_ACTIVITY[index];
     if (!activity) return ranked;
-    const channel = `liga_demo_${String(row.profileId - 90_100_000 + 1).padStart(4, "0")}`;
+    const { channel } = sampleIdentity(row.profileId - PROFILE_ID_BASE);
     return {
       ...ranked,
       isPlaying: activity.isPlaying,

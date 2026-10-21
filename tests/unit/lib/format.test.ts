@@ -10,6 +10,7 @@ import {
   formatRelativeTime,
   formatTournamentWindow,
   kickChannelUrl,
+  normalizeSearchText,
   teamSizesFromRawJson,
   twitchChannelUrl,
   youtubeChannelUrl,
@@ -28,6 +29,18 @@ const AHORA = new Date("2026-09-20T20:00:00.000Z");
 function hace(segundos: number): Date {
   return new Date(AHORA.getTime() - segundos * 1000);
 }
+
+describe("normalizeSearchText", () => {
+  it("iguala acentos y mayúsculas tanto compuestos como descompuestos", () => {
+    expect(normalizeSearchText("ÁGUILA Ñandú")).toBe("aguila nandu");
+    expect(normalizeSearchText("A\u0301GUILA N\u0303andu\u0301")).toBe("aguila nandu");
+  });
+
+  it("conserva los espacios y admite la cadena vacía", () => {
+    expect(normalizeSearchText("  Cóndor   Andino  ")).toBe("  condor   andino  ");
+    expect(normalizeSearchText("")).toBe("");
+  });
+});
 
 describe("formatRelativeTime", () => {
   it("menos de un minuto dice «ahora mismo»", () => {

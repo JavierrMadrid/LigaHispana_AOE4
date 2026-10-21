@@ -23,6 +23,7 @@ import { LeagueIcon, rankLevelToLeague } from "@/components/league-icon";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
 import { countryFlagSvgUrl, countryFlagUrl } from "@/lib/flag";
+import { normalizeSearchText as normalize } from "@/lib/format";
 import { HomeDivisionFilter } from "@/components/home-division-filter";
 import { HomeObjectiveHelp } from "@/components/home-objective-help";
 import { paginateRows } from "@/lib/pagination";
@@ -46,11 +47,6 @@ const sortOptions: { key: SortKey; label: string }[] = [
   { key: "record", label: "Victorias − derrotas" },
   { key: "streak", label: "Racha" },
 ];
-const normalize = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
 const number = (value: number) => value.toLocaleString("es-ES");
 
 function Identity({ row }: { row: StandingRow }) {
@@ -362,15 +358,7 @@ export function HomeStandings({
               </caption>
               <thead>
                 <tr>
-                  {[
-                    { field: "rank", label: "Puesto" },
-                    { field: "name", label: "Jugador" },
-                    { field: "points", label: "Puntos" },
-                    { field: "matches", label: "Partidas" },
-                    { field: "elo", label: "Elo" },
-                    { field: "record", label: "V − D" },
-                    { field: "streak", label: "Racha" },
-                  ].map(({ field, label }) => (
+                  {sortOptions.map(({ key: field, label }) => (
                     <th
                       key={field}
                       scope="col"
@@ -382,7 +370,7 @@ export function HomeStandings({
                           : "none"
                       }
                     >
-                      <button onClick={() => sort(field as SortKey)}>
+                      <button onClick={() => sort(field)}>
                         {field === "record" ? (
                           <>
                             <span className="home-win">V</span>

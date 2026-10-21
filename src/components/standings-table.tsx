@@ -9,6 +9,7 @@ import type {
   StandingRow,
 } from "@/lib/public";
 import { countryFlagSvgUrl, countryFlagUrl } from "@/lib/flag";
+import { normalizeSearchText as normalize } from "@/lib/format";
 import { ChannelLinks } from "@/components/channel-links";
 import { divisionColor } from "@/components/division-icon";
 import { EmptyState } from "@/components/empty-state";
@@ -102,13 +103,6 @@ const GROUP_LABELS: Record<ObjectiveGroup, string> = {
   formato: "Formatos",
   civilizacion: "Civilizaciones",
 };
-
-function normalize(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
 
 type SortKey =
   | "rank"
