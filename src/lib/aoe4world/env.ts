@@ -20,7 +20,8 @@ import { readRuntimeEnv } from "@/lib/runtime-env";
  */
 
 const DEFAULT_API_BASE = "https://aoe4world.com";
-const DEFAULT_USER_AGENT = "LigaHispanaAOE4/0.1 (sync AoE4World)";
+const DEFAULT_USER_AGENT =
+  "LigaHispanaAOE4/0.1 (+https://github.com/JavierrMadrid/LigaHispana_AOE4)";
 
 function readPositiveInt(name: string, fallback: number): number {
   const raw = readRuntimeEnv(name);
