@@ -38,9 +38,11 @@ async function main(): Promise<void> {
   console.log(`Partidas en directo detectadas: ${summary.liveMatches}`);
   console.log(`Partidas descartadas: ${summary.skippedGames}`);
   console.log(
-    summary.scoring === null
-      ? "Clasificación: no recalculada"
-      : `Clasificación: ${summary.scoring.playersRanked} jugadores, ${summary.scoring.matchesUpdated} partidas con puntos actualizados (${summary.scoring.durationMs} ms)`,
+    summary.scoringSkipped
+      ? "Clasificación: sin cambios desde el último recálculo, no se recalcula"
+      : summary.scoring === null
+        ? "Clasificación: no recalculada"
+        : `Clasificación: ${summary.scoring.playersRanked} jugadores, ${summary.scoring.matchesUpdated} partidas con puntos actualizados (${summary.scoring.durationMs} ms)`,
   );
   if (summary.scoringError !== null) {
     console.log(`Clasificación: ERROR — ${summary.scoringError}`);
@@ -53,6 +55,22 @@ async function main(): Promise<void> {
   console.log(
     `Llamadas a la API: ${summary.apiRequests} (reintentos: ${summary.apiRetries}, pausas por rate limit: ${summary.rateLimitPausesMs} ms)`,
   );
+  console.log(
+    `Masivo: ${summary.gamesPagesRead} página(s), ${summary.gamesBatchesIncomplete} lote(s) incompletos, ` +
+      `${summary.gamesBatchesFailed} fallido(s); ${summary.gamesPlayersQueuedForBackfill} jugador(es) encolados.`,
+  );
+  console.log(
+    `Relleno: ${summary.backfillPlayers} jugador(es), ${summary.backfillPagesRead} página(s), ` +
+      `${summary.backfillPending} pendiente(s).`,
+  );
+  console.log(
+    `Cursor global: ${summary.gamesCursor ?? "sin cursor"}` +
+      `${summary.gamesCursorAdvanced ? " (avanzado)" : ""}` +
+      `${summary.gamesCursorSeeded ? " (sembrado)" : ""}`,
+  );
+  if (summary.apiNotice !== null) {
+    console.log(`Aviso de AoE4World: ${summary.apiNotice}`);
+  }
   console.log(`Duración: ${summary.durationMs} ms`);
   console.log("");
 
@@ -66,7 +84,9 @@ async function main(): Promise<void> {
         : null,
       player.matchesAbandoned > 0 ? `${player.matchesAbandoned} abandonadas` : null,
       player.matchesSkipped > 0 ? `${player.matchesSkipped} descartadas` : null,
-      player.historyTruncated ? "histórico recortado" : null,
+      player.windowComplete
+        ? "ventana completa"
+        : `histórico por traer (página ${player.backfillPage})`,
     ]
       .filter((value): value is string => value !== null)
       .join(", ");

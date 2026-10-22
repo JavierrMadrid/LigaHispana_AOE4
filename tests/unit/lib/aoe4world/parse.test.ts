@@ -170,6 +170,21 @@ describe("parseGame", () => {
     expect(parseGame({ ...MINIMO, duration: null })?.durationSeconds).toBeNull();
   });
 
+  it("lee `updated_at` y, si falta o no se entiende, cae a `started_at`", () => {
+    const conUpdated = parseGame({
+      ...MINIMO,
+      updated_at: "2026-09-20T18:30:00.000Z",
+    });
+    const sinUpdated = parseGame(MINIMO);
+    const updatedRoto = parseGame({ ...MINIMO, updated_at: "ayer" });
+
+    expect(conUpdated?.updatedAt?.toISOString()).toBe("2026-09-20T18:30:00.000Z");
+    // El fallback es deliberado: el cursor prefiere quedarse corto antes que
+    // adelantarse y perder partidas publicadas después.
+    expect(sinUpdated?.updatedAt?.getTime()).toBe(sinUpdated?.startedAt.getTime());
+    expect(updatedRoto?.updatedAt?.getTime()).toBe(updatedRoto?.startedAt.getTime());
+  });
+
   it("lee la media de rating de la partida (`average_rating`), que es la que compara la condición de equipos", () => {
     expect(parseGame({ ...MINIMO, average_rating: 1_610 })?.averageRating).toBe(1_610);
     expect(parseGame({ ...MINIMO, average_rating: "1610" })?.averageRating).toBe(1_610);
@@ -314,6 +329,15 @@ describe("parseGamesPage", () => {
     expect(parseGamesPage({ next_page: 0 })?.nextPage).toBeNull();
     expect(parseGamesPage({ next_page: null })?.nextPage).toBeNull();
     expect(parseGamesPage({ next_page: 7 })?.nextPage).toBe(7);
+  });
+
+  it("lee el aviso de `filters._important_notice_` solo cuando es texto", () => {
+    expect(
+      parseGamesPage({ filters: { _important_notice_: "updated_since antiguo" } })?.notice,
+    ).toBe("updated_since antiguo");
+    expect(parseGamesPage({ filters: {} })?.notice).toBeNull();
+    expect(parseGamesPage({ filters: "nope" })?.notice).toBeNull();
+    expect(parseGamesPage({})?.notice).toBeNull();
   });
 
   it("más allá de la última página la API contesta 200 con la lista vacía", () => {

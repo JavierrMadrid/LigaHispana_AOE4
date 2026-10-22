@@ -37,7 +37,7 @@ export {
  * ```
  *
  * Comprobado contra producción el 2026-10-17: con el `User-Agent` del proyecto
- * (`LigaHispanaAOE4/0.1 (sync AoE4World)`) responde 200 JSON. El sitio es estricto
+ * (que identifica el repositorio y el uso) responde 200 JSON. El sitio es estricto
  * con quién pregunta —la misma ruta de la partida sin `/summary` responde 429 a un
  * `curl/8.x` sin identificar y 403 a un `User-Agent` de navegador—, así que aquí se
  * manda el mismo identificador del cliente de la API, que es lo que la documentación

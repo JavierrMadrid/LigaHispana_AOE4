@@ -40,6 +40,10 @@ import {
  * Clave que introduce el arreglo del sync invisible:
  * - `sync.lastRun`: rastro de la última pasada del sincronizador, con sus fallos.
  *
+ * Clave que introduce el cursor global de F2:
+ * - `sync.gamesCursor`: `updated_since` de la siguiente pasada y contadores del
+ *   detector de atascos del relleno.
+ *
  * Clave que introduce el cierre manual de inscripciones:
  * - `registration.open`: booleano; si falta o no es legible, el plazo está cerrado.
  *
@@ -79,14 +83,12 @@ export function playerSyncKey(profileId: number): string {
 }
 
 export type PlayerSyncState = {
-  /** Último `started_at` visto menos el solape de seguridad; es lo que se manda como `since`. */
+  /** Último `started_at` visto en el último backfill; queda como auditoría. */
   since: string;
-  /** Último `started_at` visto tal cual, sin restar el solape. */
+  /** Último `started_at` visto tal cual en el último backfill. */
   maxStartedAt: string;
   /** Cuándo se hizo esta sincronización. */
   lastSyncedAt: string;
-  /** `true` si el tope de páginas cortó el histórico y quedan partidas por traer. */
-  historyTruncated: boolean;
   /**
    * Rastro de la regla "una partida abandonada nunca cuenta": cuántas se han
    * descartado y cuáles, para que el borrado no sea silencioso. No puntúa
@@ -110,7 +112,7 @@ function readPlayerSyncStateValue(value: unknown): PlayerSyncState | null {
     return null;
   }
 
-  const { since, maxStartedAt, lastSyncedAt, historyTruncated } = value;
+  const { since, maxStartedAt, lastSyncedAt } = value;
 
   if (typeof since !== "string" || typeof maxStartedAt !== "string") {
     return null;
@@ -125,7 +127,6 @@ function readPlayerSyncStateValue(value: unknown): PlayerSyncState | null {
     since,
     maxStartedAt,
     lastSyncedAt: typeof lastSyncedAt === "string" ? lastSyncedAt : since,
-    historyTruncated: historyTruncated === true,
     abandonedCount: Math.max(abandonedCount, 0),
     abandonedGameIds: readStringArray(value.abandonedGameIds).slice(0, ABANDONED_AUDIT_LIMIT),
     lastAbandonedAt: typeof value.lastAbandonedAt === "string" ? value.lastAbandonedAt : null,
@@ -217,6 +218,64 @@ export async function writeScoringLastRun(
   });
 }
 
+/** Lo poco que necesita el worker para decidir si toca recalcular. */
+export type ScoringLastRunState = {
+  /** `RULESET_VERSION` con la que se calculó esa clasificación. */
+  ruleSetVersion: number;
+  /** `SCORING_CACHE_VERSION` del motor que la calculó. */
+  cacheVersion: number;
+  /**
+   * Jugadores con fila en la clasificación al terminar ese recálculo, que con la
+   * regla actual son **todos los aprobados**. Es lo que permite al worker notar
+   * que el roster cambió (alta, aprobado o rechazo) sin que nadie haya jugado:
+   * aprobar y rechazar no recalculan en su propia petición a propósito (ver
+   * `setPlayerStatus()`), así que el aviso tiene que llegar por aquí.
+   */
+  playersRanked: number;
+};
+
+/**
+ * Las tres cifras del último recálculo, o `null` si no se pueden leer.
+ *
+ * Solo devuelve un objeto si están **todas**: un rastro escrito antes de que
+ * existiera `cacheVersion` o `playersRanked` (o un valor corrupto) tiene que
+ * tratarse como "no hay rastro", porque el worker decide con esto si puede
+ * saltarse el recálculo y la respuesta segura es recalcular. No se usa
+ * `readCount()` a propósito: convierte un campo ausente en 0 y eso es
+ * indistinguible de un valor 0 legítimo.
+ */
+export function readScoringLastRunValue(value: unknown): ScoringLastRunState | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const { ruleSetVersion, cacheVersion, playersRanked } = value;
+
+  if (
+    typeof ruleSetVersion !== "number" ||
+    !Number.isInteger(ruleSetVersion) ||
+    typeof cacheVersion !== "number" ||
+    !Number.isInteger(cacheVersion) ||
+    typeof playersRanked !== "number" ||
+    !Number.isInteger(playersRanked)
+  ) {
+    return null;
+  }
+
+  return { ruleSetVersion, cacheVersion, playersRanked };
+}
+
+/**
+ * Rastro del último recálculo tal como está en la base, o `null` si falta o no
+ * es legible. Un fallo de la base sí se propaga: quien lo llama lo trata como
+ * "no hay rastro" y recalcula, que es la salida segura.
+ */
+export async function readScoringLastRun(): Promise<ScoringLastRunState | null> {
+  const setting = await db.setting.findUnique({ where: { key: SCORING_LAST_RUN_KEY } });
+
+  return setting === null ? null : readScoringLastRunValue(setting.value);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Pool de mapas del objetivo `por-tierra-y-agua`                             */
 /* -------------------------------------------------------------------------- */
@@ -294,6 +353,37 @@ export const SYNC_STALE_MINUTES = 20;
 /** Cuántos fallos por jugador se guardan. El resto va en el conteo. */
 export const SYNC_FAILURES_LIMIT = 20;
 
+/** Cuántos errores de lote se guardan en el rastro. */
+export const GAMES_BATCH_ERRORS_LIMIT = 5;
+
+/** Clave de `Setting` con el cursor global de partidas. */
+export const SYNC_GAMES_CURSOR_KEY = "sync.gamesCursor";
+
+/** De dónde salió la semilla del cursor global. */
+export type GamesCursorSeedSource = "sync.lastRun.finishedAt" | "catch-up";
+
+/**
+ * Estado persistido del cursor global, en campos planos.
+ *
+ * `updatedAt` es el `updated_since` que se pedirá en la siguiente pasada. Los
+ * contadores de atasco viven aquí y no en el rastro porque el rastro es una fila
+ * que se sobrescribe y no permitiría medir una racha.
+ */
+export type GamesCursorState = {
+  /** `updated_since` de la siguiente pasada. */
+  updatedAt: string;
+  /** Cuándo se sembró. */
+  seededAt: string;
+  /** De dónde salió la semilla, para poder verlo en el rastro. */
+  seededFrom: GamesCursorSeedSource;
+  /** Pasadas seguidas con algún lote sin terminar su ventana. */
+  bulkIncompleteStreak: number;
+  /** El `backfillPending` más bajo visto; 0 mientras no haya ninguno. */
+  pendingBestCount: number;
+  /** Cuándo se vio ese mínimo; `null` = nunca se ha medido ninguno. */
+  pendingBestAt: string | null;
+};
+
 /**
  * Rastro de la última pasada del sincronizador.
  *
@@ -336,6 +426,12 @@ export type SyncRunTrace = {
   ladderError: string | null;
   /** Por qué no se pudo recalcular la clasificación, si no se pudo. */
   scoringError: string | null;
+  /**
+   * `true` cuando la pasada se ha saltado el recálculo porque no había nada que
+   * lo justificara (`shouldRecomputeScores()`). No es un fallo: la clasificación
+   * publicada sigue siendo la de la última pasada que sí lo hizo.
+   */
+  scoringSkipped: boolean;
   /**
    * Por qué no se pudieron evaluar las alertas de comportamiento, si no se pudo.
    *
@@ -434,6 +530,30 @@ export type SyncRunTrace = {
    * presupuesto), igual que el aviso de `YOUTUBE_API_KEY` en `streamsError`.
    */
   summariesError: string | null;
+  /** Páginas leídas del endpoint masivo en la pasada. */
+  gamesPagesRead: number;
+  /** Lotes que agotaron su presupuesto de páginas con la ventana abierta. */
+  gamesBatchesIncomplete: number;
+  /** Lotes que fallaron enteros (5xx, 429 agotado, red). */
+  gamesBatchesFailed: number;
+  /** Jugadores que quedaron encolados para el relleno. */
+  gamesPlayersQueuedForBackfill: number;
+  /** Errores de lote, acotados a `GAMES_BATCH_ERRORS_LIMIT`. */
+  gamesBatchErrors: GamesBatchError[];
+  /** `updated_since` que dejó la pasada, o `null` si no hay cursor. */
+  gamesCursor: string | null;
+  /** `true` si el cursor global avanzó en esta pasada. */
+  gamesCursorAdvanced: boolean;
+  /** `true` si esta pasada sembró el cursor (no existía). */
+  gamesCursorSeeded: boolean;
+  /** Jugadores a los que el relleno tocó en esta pasada. */
+  backfillPlayers: number;
+  /** Páginas leídas por el relleno de la ventana. */
+  backfillPagesRead: number;
+  /** Jugadores aprobados con la ventana todavía incompleta al terminar. */
+  backfillPending: number;
+  /** Aviso de la API (`filters._important_notice_`), si lo mandó. */
+  apiNotice: string | null;
   /** Jugadores que no se pudieron sincronizar, con su motivo. */
   failures: SyncRunFailure[];
   /**
@@ -452,6 +572,15 @@ export type SyncRunFailure = {
   error: string;
 };
 
+/** Un lote del masivo que falló entero, con su rango de ids. */
+export type GamesBatchError = {
+  /** Número de lote, 1-based, en el orden de `groupProfileIds`. */
+  batch: number;
+  firstProfileId: number;
+  lastProfileId: number;
+  error: string;
+};
+
 export const SYNC_LAST_RUN_KEY = "sync.lastRun";
 
 function readCount(value: unknown): number {
@@ -460,6 +589,102 @@ function readCount(value: unknown): number {
 
 function readText(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** Solo un `true` literal es `true`: un `"true"` o un `1` no lo son. */
+function readFlag(value: unknown): boolean {
+  return value === true;
+}
+
+/**
+ * Estado del cursor global, tolerante campo a campo.
+ *
+ * `null` cuando faltan las dos fechas o no se pueden leer: sin ellas no hay
+ * `updated_since` que usar, y el llamador lo interpreta como "no hay fila" y
+ * vuelve a sembrar. Una fila vieja con solo la semilla sale con los contadores a
+ * cero, que es el estado sano.
+ */
+export function parseGamesCursorValue(value: unknown): GamesCursorState | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const updatedAt = readText(value["updatedAt"]);
+  const seededAt = readText(value["seededAt"]);
+
+  if (
+    updatedAt === null ||
+    seededAt === null ||
+    Number.isNaN(Date.parse(updatedAt)) ||
+    Number.isNaN(Date.parse(seededAt))
+  ) {
+    return null;
+  }
+
+  return {
+    updatedAt,
+    seededAt,
+    seededFrom:
+      value["seededFrom"] === "sync.lastRun.finishedAt" ? "sync.lastRun.finishedAt" : "catch-up",
+    bulkIncompleteStreak: readCount(value["bulkIncompleteStreak"]),
+    pendingBestCount: readCount(value["pendingBestCount"]),
+    pendingBestAt: readText(value["pendingBestAt"]),
+  };
+}
+
+/** Cursor global guardado, o `null` si no existe o no se puede leer. */
+export async function readGamesCursor(): Promise<GamesCursorState | null> {
+  const setting = await db.setting.findUnique({ where: { key: SYNC_GAMES_CURSOR_KEY } });
+
+  return setting === null ? null : parseGamesCursorValue(setting.value);
+}
+
+/** Escribe el cursor global. Idempotente: repetir el mismo estado no cambia nada. */
+export async function writeGamesCursor(
+  state: GamesCursorState,
+  client: SettingWriter = db,
+): Promise<void> {
+  const value = state as unknown as Prisma.InputJsonObject;
+
+  await client.setting.upsert({
+    where: { key: SYNC_GAMES_CURSOR_KEY },
+    create: { key: SYNC_GAMES_CURSOR_KEY, value },
+    update: { value },
+  });
+}
+
+/**
+ * Errores de lote del rastro, tolerantes y acotados.
+ *
+ * Un item sin los cuatro campos exigibles se descarta: un error de lote sin
+ * número o sin rango no se puede ni pintar ni reconstruir.
+ */
+export function readGamesBatchErrors(value: unknown): GamesBatchError[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(isRecord)
+    .filter(
+      (item): item is Record<string, unknown> & {
+        batch: number;
+        firstProfileId: number;
+        lastProfileId: number;
+        error: string;
+      } =>
+        typeof item["batch"] === "number" &&
+        typeof item["firstProfileId"] === "number" &&
+        typeof item["lastProfileId"] === "number" &&
+        typeof item["error"] === "string",
+    )
+    .map((item) => ({
+      batch: item.batch,
+      firstProfileId: item.firstProfileId,
+      lastProfileId: item.lastProfileId,
+      error: item.error,
+    }))
+    .slice(0, GAMES_BATCH_ERRORS_LIMIT);
 }
 
 function readFailures(value: unknown): SyncRunFailure[] {
@@ -482,7 +707,7 @@ function readFailures(value: unknown): SyncRunFailure[] {
     .slice(0, SYNC_FAILURES_LIMIT);
 }
 
-function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
+export function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -515,6 +740,7 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     rateLimitPausesMs: readCount(value["rateLimitPausesMs"]),
     ladderError: readText(value["ladderError"]),
     scoringError: readText(value["scoringError"]),
+    scoringSkipped: readFlag(value["scoringSkipped"]),
     alertsError: readText(value["alertsError"]),
     historyError: readText(value["historyError"]),
     discordError: readText(value["discordError"]),
@@ -522,6 +748,18 @@ function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     streamsError: readText(value["streamsError"]),
     mapPoolError: readText(value["mapPoolError"]),
     summariesError: readText(value["summariesError"]),
+    gamesPagesRead: readCount(value["gamesPagesRead"]),
+    gamesBatchesIncomplete: readCount(value["gamesBatchesIncomplete"]),
+    gamesBatchesFailed: readCount(value["gamesBatchesFailed"]),
+    gamesPlayersQueuedForBackfill: readCount(value["gamesPlayersQueuedForBackfill"]),
+    gamesBatchErrors: readGamesBatchErrors(value["gamesBatchErrors"]),
+    gamesCursor: readText(value["gamesCursor"]),
+    gamesCursorAdvanced: readFlag(value["gamesCursorAdvanced"]),
+    gamesCursorSeeded: readFlag(value["gamesCursorSeeded"]),
+    backfillPlayers: readCount(value["backfillPlayers"]),
+    backfillPagesRead: readCount(value["backfillPagesRead"]),
+    backfillPending: readCount(value["backfillPending"]),
+    apiNotice: readText(value["apiNotice"]),
     failures: readFailures(value["failures"]),
     lastSuccessAt: readText(value["lastSuccessAt"]),
   };
@@ -577,6 +815,7 @@ export async function writeSyncRunTrace(
   const value = {
     ...trace,
     failures: trace.failures.slice(0, SYNC_FAILURES_LIMIT),
+    gamesBatchErrors: trace.gamesBatchErrors.slice(0, GAMES_BATCH_ERRORS_LIMIT),
     lastSuccessAt: salioBien ? trace.finishedAt : (previous?.lastSuccessAt ?? null),
   } as Prisma.InputJsonObject;
 

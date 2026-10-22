@@ -20,7 +20,8 @@ import { readRuntimeEnv } from "@/lib/runtime-env";
  */
 
 const DEFAULT_API_BASE = "https://aoe4world.com";
-const DEFAULT_USER_AGENT = "LigaHispanaAOE4/0.1 (sync AoE4World)";
+const DEFAULT_USER_AGENT =
+  "LigaHispanaAOE4/0.1 (+https://github.com/JavierrMadrid/LigaHispana_AOE4)";
 
 function readPositiveInt(name: string, fallback: number): number {
   const raw = readRuntimeEnv(name);
@@ -101,8 +102,26 @@ export type Aoe4WorldConfig = {
   syncConcurrency: number;
   /** Partidas por página en el histórico (la API no devuelve más de 50). */
   syncPageSize: number;
-  /** Páginas máximas por sincronización (tope del histórico inicial). */
+  /** Páginas máximas por sincronización (tope duro del backfill por jugador). */
   syncMaxPages: number;
+  /** Páginas máximas por lote del endpoint masivo (se recorta al tope del cliente). */
+  syncBulkMaxPages: number;
+  /** Jugadores que atiende el relleno por pasada: pendientes y, detrás, rechecks. */
+  syncBackfillMaxPlayers: number;
+  /** Páginas que se leen por jugador en cada pasada de relleno. */
+  syncBackfillPagesPerPlayer: number;
+  /**
+   * Antigüedad a la que se vuelve a leer una ventana ya completa, en días (F2b).
+   * `0` desactiva la revisión: solo se atienden ventanas pendientes.
+   */
+  syncRecheckMaxAgeDays: number;
+  /**
+   * Antigüedad máxima de la **siembra inicial** del cursor global, en minutos.
+   * Solo se aplica cuando no hay fila (`cursorState === null`); un cursor vivo
+   * no se recupera por esta cota. `0` desactiva la cota y siembra desde
+   * `finishedAt` tal cual.
+   */
+  syncSeedMaxAgeMinutes: number;
   /** Plazo global de una sincronización, en milisegundos. */
   syncDeadlineMs: number;
   /** Summaries de partida pedidos por pasada (presupuesto del worker). */
@@ -146,6 +165,11 @@ export function getAoe4WorldConfig(): Aoe4WorldConfig {
     syncConcurrency: readPositiveInt("AOE4WORLD_SYNC_CONCURRENCY", 3),
     syncPageSize: readPositiveInt("AOE4WORLD_SYNC_PAGE_SIZE", 50),
     syncMaxPages: readPositiveInt("AOE4WORLD_SYNC_MAX_PAGES", 10),
+    syncBulkMaxPages: readPositiveInt("AOE4WORLD_SYNC_BULK_MAX_PAGES", 10),
+    syncBackfillMaxPlayers: readPositiveInt("AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS", 20),
+    syncBackfillPagesPerPlayer: readPositiveInt("AOE4WORLD_SYNC_BACKFILL_PAGES_PER_PLAYER", 3),
+    syncRecheckMaxAgeDays: readNonNegativeInt("AOE4WORLD_SYNC_RECHECK_MAX_AGE_DAYS", 30),
+    syncSeedMaxAgeMinutes: readNonNegativeInt("AOE4WORLD_SYNC_SEED_MAX_AGE_MINUTES", 360),
     syncDeadlineMs: readPositiveInt("AOE4WORLD_SYNC_DEADLINE_MS", 240_000),
     summaryMaxPerRun: readPositiveInt("AOE4WORLD_SUMMARY_MAX_PER_RUN", 10),
     summaryMinIntervalMs: readNonNegativeInt("AOE4WORLD_SUMMARY_MIN_INTERVAL_MS", 2_000),

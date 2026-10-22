@@ -18,6 +18,29 @@ export const metadata: Metadata = {
 };
 
 /**
+ * Detalle del relleno de la ventana, debajo del `headline`.
+ *
+ * El `headline` solo nombra el relleno cuando la pasada truncó; esta línea está
+ * siempre que hay rastro, con el contador vivo de aprobados pendientes y el
+ * veredicto de `backfillStalled`. Sin rastro no se pinta: el contador sale de la
+ * base y no de la pasada, así que «completo» o «atascado» afirmarían un estado
+ * que nadie ha medido.
+ */
+function backfillDetail(pending: number, stalled: boolean | null): string {
+  if (stalled === null) {
+    return "Relleno: sin medir.";
+  }
+
+  if (pending === 0) {
+    return "Relleno completo.";
+  }
+
+  const estado = stalled ? "Relleno atascado" : "Relleno en curso";
+
+  return `${estado}: ${pending} jugador(es) pendiente(s).`;
+}
+
+/**
  * Pestaña de participantes: resumen, cola de aprobación, estado del sincronizador,
  * alta y listado.
  *
@@ -161,6 +184,19 @@ export default async function AdminPage() {
                   ? syncState.headline
                   : "No se ha podido leer el estado del sincronizador."}
               </p>
+              {syncState?.lastRun ? (
+                /* Un paso por debajo del `headline` (`text-xs` frente a `text-sm`):
+                   es su detalle, no otro titular. Se tiñe de `loss` solo cuando el
+                   relleno está atascado, que es el único caso que no siempre levanta
+                   el aviso de la tarjeta y sí pide una intervención. */
+                <p
+                  className={`mt-1 text-xs ${
+                    syncState.backfillStalled === true ? "text-loss" : "text-muted"
+                  }`}
+                >
+                  {backfillDetail(syncState.backfillPending, syncState.backfillStalled)}
+                </p>
+              ) : null}
             </div>
 
             {/* El botón está arriba a la derecha de su propia tarjeta y no debajo
@@ -172,15 +208,39 @@ export default async function AdminPage() {
             </div>
           </div>
 
+          {/* Los lotes van por encima de los fallos por jugador porque un solo lote
+              caído explica hasta 50 de esos fallos: leerlos al revés haría buscar la
+              causa jugador a jugador. El aviso de la API cierra la tarjeta como nota
+              al pie, que es lo que es: contexto de AoE4World, no un fallo nuestro. */}
+          {syncState?.gamesBatchErrors.length ? (
+            <ul
+              aria-label="Errores de lote del masivo"
+              className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-xs text-muted"
+            >
+              {syncState.gamesBatchErrors.map((lote) => (
+                <li key={lote.batch} className="break-words">
+                  <span className="text-foreground">Lote {lote.batch}</span> (ids{" "}
+                  {lote.firstProfileId}–{lote.lastProfileId}): {lote.error}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
           {syncState?.lastRun?.failures.length ? (
             <ul className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-xs text-muted">
               {syncState.lastRun.failures.map((fallo) => (
-                <li key={fallo.profileId}>
+                <li key={fallo.profileId} className="break-words">
                   <span className="text-foreground">{fallo.name}</span> (
                   {fallo.profileId}): {fallo.error}
                 </li>
               ))}
             </ul>
+          ) : null}
+
+          {syncState?.apiNotice ? (
+            <p className="mt-3 break-words text-xs text-muted">
+              Aviso de AoE4World: {syncState.apiNotice}
+            </p>
           ) : null}
         </section>
       </div>

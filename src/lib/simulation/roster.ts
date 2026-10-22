@@ -31,11 +31,11 @@ export const SIMULATION_ROSTER_VERSION = 1;
 
 /**
  * Margen que se le resta al inicio de la ventana del torneo para sembrar el
- * cursor. Es el mismo solape que aplica el worker (`SYNC_OVERLAP_MINUTES`): sin
- * él, una partida empezada un minuto antes del arranque se quedaría fuera y no
- * volvería a pedirse nunca, porque el cursor solo avanza.
+ * `since` de auditoría. Es el mismo solape que aplica el cursor global del worker
+ * (`SYNC_OVERLAP_MINUTES`, hoy 90): sin él, una partida empezada un minuto antes
+ * del arranque quedaría fuera de la foto que deja el primer relleno.
  */
-export const SIMULATION_CURSOR_LEAD_MINUTES = 60;
+export const SIMULATION_CURSOR_LEAD_MINUTES = 90;
 
 /** Un jugador dado de alta por la simulación. */
 export type SimulationRosterEntry = {
@@ -257,29 +257,21 @@ export async function upsertSimulationPlayers(
 }
 
 /**
- * Siembra el cursor de sincronización de cada jugador en el inicio del torneo.
+ * Siembra el estado de **auditoría** de cada jugador al inicio del torneo.
  *
- * ## Por qué hay que sembrarlo
+ * El cursor de peticiones ya no vive por jugador: es global (`sync.gamesCursor`)
+ * y lo siembra el worker. El relleno pide desde `max(window.from, registeredAt)`,
+ * así que este estado tampoco decide desde dónde se pide: solo guarda `since`,
+ * `maxStartedAt`, `lastSyncedAt` y el rastro de abandonos del último relleno. Se
+ * mantiene para que la simulación deje desde el primer momento una auditoría
+ * coherente con la ventana que va a recorrer.
  *
- * El worker guarda por jugador hasta qué fecha le ha pedido partidas a la API, y
- * con el cursor a `null` recorre **el histórico entero**: hasta
- * `AOE4WORLD_SYNC_MAX_PAGES` (10) × 50 partidas por jugador y pasada, y las
- * vuelve a pedir en cada ejecución posterior porque el cursor queda detrás de la
- * fecha de la última partida que vio. Para seis jugadores de ladder real eso son
- * miles de partidas por encima de la ventana del torneo, y ninguna suma puntos:
- * el torneo empieza dentro de tres semanas.
+ * ## Por qué no pisa un estado más reciente
  *
- * Sembrando el cursor en el arranque del torneo el backfill pide exactamente por
- * la ventana del torneo, y a partir de ahí el cursor avanza solo con el ritmo
- * normal del worker, así que la simulación **sigue creciendo** con cada pasada
- * real del cron.
- *
- * ## Por qué nunca retrocede
- *
- * Si ya hay un cursor y es más reciente que el arranque, se deja como está:
- * repetir el script no puede hacer perder partidas ya importadas. Solo se adelanta
- * cuando el cursor guardado es anterior a la ventana del torneo, que es el caso
- * del primer lanzamiento.
+ * Si ya hay un estado y su `since` es más reciente que el arranque, se deja como
+ * está: repetir el script no puede hacer perder la auditoría de partidas ya
+ * importadas. Solo se adelanta cuando el guardado es anterior a la ventana del
+ * torneo, que es el caso del primer lanzamiento.
  */
 export async function seedSyncCursors(
   entries: readonly SimulationRosterEntry[],
@@ -314,7 +306,6 @@ export async function seedSyncCursors(
       since: since.toISOString(),
       maxStartedAt: since.toISOString(),
       lastSyncedAt: nowIso,
-      historyTruncated: false,
       abandonedCount: 0,
       abandonedGameIds: [],
       lastAbandonedAt: null,
