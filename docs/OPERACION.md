@@ -508,7 +508,8 @@ npm run alerts:cutoffs -- --show
 ```
 
 - La parte pura está en `tests/unit/lib/alerts/`: `compute.test.ts` (reglas sobre secuencias),
-  `rules.test.ts` (umbrales, frases y claves de dedupe) y `division-cutoffs.test.ts`.
+  `rules.test.ts` (umbrales, frases y claves de dedupe), `division-cutoffs.test.ts`,
+  `report-archive.test.ts` (los CSV y su entrecomillado) y `zip.test.ts` (estructura del ZIP).
 - **Umbrales** en `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo):
   partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10 y compañero repetido 7. Los cuatro del
   resumen: primer aldeano antes de **300 s**, **300 s** de gracia militar, **300 s** seguidos sin máximo
@@ -544,8 +545,11 @@ npm run alerts:cutoffs -- --show
   cada pasada no inserta nada. Apagar el interruptor no borra las alertas ya escritas. Al **encenderlo**,
   los avisos aparecen en la siguiente evaluación que cubra a cada jugador: una pasada sin partidas
   nuevas evalúa a todos los aprobados, y el informe de alertas fuerza una completa.
-- **Informe**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) es un CSV para Excel con
-  alertas disparadas y rachas abiertas, y llama a `evaluateAlerts({ full: true })` antes.
+- **Informe**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) devuelve un ZIP con tres
+  CSV estándar (coma, RFC 4180, BOM UTF-8 y CRLF): `resumen.csv` con la cabecera de la tanda en dos
+  columnas `Campo,Valor`, `alertas-disparadas.csv` y `rachas-abiertas.csv`, las dos con la misma
+  cabecera de doce columnas. Un bloque sin filas sale con su cabecera y nada más. Antes llama a
+  `evaluateAlerts({ full: true })`.
 - **Idempotente**: `createMany({ skipDuplicates: true })` sobre `dedupeKey`; repetirlo no crea nada.
 - **Dos reglas retiradas**: `TEAMMATE_ELO_GAP` (brecha de elo) y `LOW_DIVISION_TEAM_GAME` (equipo en
   una división muy distinta) **ya no se calculan**: su caso pasó a ser la condición de equipo de la
