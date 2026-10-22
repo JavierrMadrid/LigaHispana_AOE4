@@ -4,8 +4,9 @@
  * El informe (CSV + panel) y el panel de administración consumen **solo** de
  * aquí; el resto de módulos son piezas internas con una razón para estar
  * separados (`rules.ts` puro y versionable, `compute.ts` puro y comprobable con
- * datos sintéticos, `settings.ts` con las claves de `Setting`, `report.ts` con
- * el CSV, `derive-cutoffs.ts` con lo que sale a la red).
+ * datos sintéticos, `settings.ts` con las claves de `Setting`, `edition.ts` con el
+ * filtro de edición de las lecturas, `report.ts` con el CSV, `derive-cutoffs.ts` con
+ * lo que sale a la red).
  *
  * Las etiquetas de regla y de tipo (`ALERT_RULE_LABELS`, `ALERT_KIND_LABELS`)
  * también salen de aquí, para que el panel y el informe no puedan divergir en cómo
@@ -20,6 +21,8 @@ export {
   type OpenStreak,
   type PlayerAlertsEvaluation,
 } from "./compute";
+
+export { alertEditionWhere } from "./edition";
 
 export {
   evaluateAlerts,

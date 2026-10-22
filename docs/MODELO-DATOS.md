@@ -50,7 +50,8 @@ Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con
 `LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
 caso pasó a ser una condición de **puntuación** (una partida por equipos con un compañero a dos
 escalones o más no cuenta; ver [`PUNTUACION.md`](./PUNTUACION.md)). Se quedan —con su etiqueta y su
-frase— porque hay filas históricas de `Alert` que el panel y el informe siguen leyendo.
+frase— porque hay filas históricas de `Alert` en la tabla, y las que caen en la edición activa se
+siguen leyendo en el panel y en el informe.
 
 ## `Player`
 
@@ -269,7 +270,9 @@ decide quien pinta.
 ## `Alert`
 
 Un comportamiento anómalo, detectado sobre las partidas clasificatorias. Es **append-only**: una
-fila dice "a la 1 se detectó esto" y no se reescribe.
+fila dice "a la 1 se detectó esto" y no se reescribe. Las lecturas del panel y del informe se acotan
+a la **edición activa** (`createdAt >= window.from`): las filas de ediciones anteriores siguen en la
+tabla, pero dejan de publicarse al avanzar la ventana.
 
 | Campo | Tipo | Nota |
 |---|---|---|
@@ -435,7 +438,7 @@ aparece en una consulta, no se crea.**
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |
 | `/admin/historial` | Las mismas filas que `/historial`, de todos los aprobados: `Match` victorias clasificatorias con puntos (o revertidas) + `ObjectiveEvent` + `ObjectiveLeadEvent` (estos, filtrados por `editionFrom`), paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
 | `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados, más los `ObjectiveLeadEvent` de la edición activa; paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
-| `/admin/alertas` | `Alert [por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
+| `/admin/alertas` | `Alert` de la edición activa (`createdAt >= window.from`) `[por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
 | Motor (recálculo) | `Match where mode = any(...) and startedAt en ventana and result/finishedAt no nulos` | `(mode, startedAt)` |

@@ -2,7 +2,7 @@ import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, AlertKind, AlertRule, MatchResult, ObjectiveLeadKind, PlayerStatus } from "@/generated/prisma/enums";
-import { ALERT_RULE_LABELS, anchorInstant, readAlertsRuleset, type AlertsThresholds } from "@/lib/alerts";
+import { ALERT_RULE_LABELS, alertEditionWhere, anchorInstant, readAlertsRuleset, type AlertsThresholds } from "@/lib/alerts";
 import { db } from "@/lib/db";
 import { readFromDatabase, type PublicRead } from "@/lib/db-errors";
 import { describeTeamSize, formatRelativeTime, teamSizesFromRawJson } from "@/lib/format";
@@ -1769,6 +1769,13 @@ export function readAlertsFilters(query: AdminAlertsQuery): AdminAlertsFilters {
  * acumulados que se alcanzaron"— y por eso tiene su propio parámetro en vez de quedar
  * metido en la regla.
  *
+ * Por encima de esos cuatro hay un quinto filtro que no viene de la URL: la **edición
+ * activa**. Solo se publican las alertas con `createdAt >= window.from` de la ventana del
+ * ruleset de puntos (ver `alertEditionWhere()`), para que la tabla no mezcle avisos de dos
+ * torneos. Las filas anteriores siguen en `Alert` (append-only) y dejan de mostrarse al
+ * avanzar la ventana; no hay cota superior porque el cierre de torneo se detecta después
+ * de `window.to`.
+ *
  * **No** hay filtro por sujeto, por detalle ni por conteo, y es una decisión del cliente
  * y no un hueco:
  *
@@ -1803,12 +1810,20 @@ export async function getAdminAlerts(
     });
     const sort = readAlertsSort(query);
     const filtros = readAlertsFilters(query);
+    // La ventana activa, para no mezclar avisos de dos ediciones en la misma tabla.
+    const ruleset = await readRuleset();
 
     // Un solo `where` para las **dos** consultas, como en el resto de listas con filtro:
     // un `count` que no contara lo mismo que la página daría una paginación falsa.
+    //
+    // El filtro de edición va en `createdAt` y el rango del usuario en un `AND`, no
+    // sustituyéndolo: así un `?from` anterior a la ventana no puede anular el suelo de la
+    // edición. Con `createdAt` a dos niveles Prisma los combina como una conjunción, que
+    // es justo la intersección que se quiere.
     const where: Prisma.AlertWhereInput = {
+      ...alertEditionWhere(ruleset.window),
       ...(filtros.playerId === null ? {} : { playerId: filtros.playerId }),
-      ...(hasDateBounds(filtros.rango) ? { createdAt: filtros.rango } : {}),
+      ...(hasDateBounds(filtros.rango) ? { AND: [{ createdAt: filtros.rango }] } : {}),
       ...(filtros.regla === null ? {} : { rule: filtros.regla }),
       ...(filtros.kind === null ? {} : { kind: filtros.kind }),
     };

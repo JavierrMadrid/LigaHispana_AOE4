@@ -8,6 +8,7 @@ import { isRecord } from "@/lib/json";
 import { readInstant, type ScoringWindow } from "@/lib/ranked-match";
 import { readRuleset } from "@/lib/scoring";
 import type { OpenStreak } from "./compute";
+import { alertEditionWhere } from "./edition";
 import { evaluateAlerts } from "./evaluate";
 import {
   alertSummary,
@@ -39,7 +40,7 @@ import {
  *
  * | Bloque | De dónde sale |
  * |---|---|
- * | alertas disparadas | de la tabla `Alert`, de la más reciente a la más antigua |
+ * | alertas disparadas | de la tabla `Alert`, de la más reciente a la más antigua y solo las de la edición activa (`createdAt >= window.from`) |
  * | rachas abiertas en curso | de `openStreaks`, el resultado del motor de esta misma pasada |
  *
  * Las rachas abiertas **no son alertas**: son tramos que todavía no han terminado y que
@@ -465,6 +466,9 @@ export async function buildAlertsReport(now: Date = new Date()): Promise<AlertsR
   const disparadas = unwrapRead(
     await readFromDatabase(REPORT_SCOPE, () =>
       db.alert.findMany({
+        // La misma edición activa que publica la pestaña: el informe y el panel tienen
+        // que contar lo mismo, y las alertas de una edición anterior no son de esta.
+        where: alertEditionWhere(scoring.window),
         // El mismo orden que la pestaña, y con `id` de desempate por el mismo motivo
         // que allí: dos filas del mismo milisegundo tienen que tener orden estable.
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
