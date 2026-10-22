@@ -4,12 +4,13 @@ import { requireAdmin } from "@/lib/auth";
 /**
  * Informe descargable de las alertas de comportamiento: `GET /admin/alertas/reporte`.
  *
- * Es el botón de la pestaña de alertas apuntando a esta ruta, y devuelve un CSV para
- * Excel con las alertas disparadas y las rachas que siguen abiertas. Lo genera
+ * Es el botón de la pestaña de alertas apuntando a esta ruta, y devuelve un ZIP con
+ * tres CSV estándar: el resumen de la tanda, las alertas disparadas y las rachas que
+ * siguen abiertas. Lo genera
  * `buildAlertsReport()` (`src/lib/alerts/report.ts`), que **antes de escribir nada hace
  * una comprobación completa** del motor: un informe que describiera el estado de la
  * última pasada del sincronizador podría dejar fuera avisos de partidas que entraron
- * después, sin que nada en el fichero loindicara.
+ * después, sin que nada en el fichero lo indicara.
  *
  * ## Por qué `requireAdmin()` y no un secreto
  *
@@ -21,7 +22,7 @@ import { requireAdmin } from "@/lib/auth";
  * No hace falta marcar la ruta como dinámica: `requireAdmin()` lee cookies, que ya es
  * una API de/request-time, así que Next no puede prerenderizarla.
  *
- * ## Por qué 503 y no un CSV a medias
+ * ## Por qué 503 y no un ZIP a medias
  *
  * Un informe que sale a medias no es un informe degradado, es un informe falso: si la
  * lectura de la tabla falla a mitad, el fichero descargado daría la impresión de que esas
@@ -36,9 +37,9 @@ export async function GET(): Promise<Response> {
   try {
     const report = await buildAlertsReport();
 
-    return new Response(report.csv, {
+    return new Response(report.bytes, {
       headers: {
-        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${report.filename}"`,
         // Un informe es el estado de un momento concreto: guardarlo en una caché (de
         // Cloudflare o del navegador) haría que dos descargas seguidas dieran ficheros
