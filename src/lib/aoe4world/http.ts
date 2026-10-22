@@ -370,6 +370,18 @@ export function createAoe4WorldHttpClient(
         throw new Aoe4WorldNotFoundError(path);
       }
 
+      if (mocked.kind === "error") {
+        // El mock reproduce también los errores de validación de la API (por
+        // ejemplo, la página 21 del endpoint masivo). Se traducen al mismo
+        // `Aoe4WorldError` que sale de una respuesta real, con el mismo criterio
+        // de reintento por código, para que el worker no tenga una rama distinta
+        // cuando corre contra el mock.
+        throw new Aoe4WorldError(mocked.message, {
+          status: mocked.status,
+          retryable: RETRYABLE_STATUS.has(mocked.status),
+        });
+      }
+
       return mocked.payload;
     }
 

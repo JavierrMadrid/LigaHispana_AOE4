@@ -62,7 +62,7 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `id` | `String` (cuid) | Clave interna. Nunca se expone. |
 | `profileId` | `Int` único | Identificador de AoE4World. |
 | `name` | `String` | Nombre de display: lo escribe quien se inscribe o el admin; el worker no lo toca. |
-| `aoe4WorldName` | `String?` | Nombre oficial de AoE4World, en columna aparte. `null` = sin sincronizar. |
+| `aoe4WorldName` | `String?` | Nombre oficial de AoE4World, en columna aparte. Lo escriben la ladder y, si falta o la caché ha caducado, `GET /players/:profile_id`. `null` = sin sincronizar. |
 | `twitchChannel`, `youtubeChannel`, `kickChannel` | `String?` | Canales de la persona (los escribe quien se inscribe o el admin). YouTube sin arroba, Kick como slug. |
 | `twitchUrl` | `String?` | Respaldo: el canal que declara AoE4World. |
 | `contactEmail` | `String?` | Correo de contacto (nullable: el panel lo pide opcional y las filas antiguas no lo tienen). El motor no lo lee. |
@@ -78,13 +78,20 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `ladderUpdatedAt` | `DateTime?` | Última lectura de la ladder. Distingue "sin ladder" de "sin sync". |
 | `twitchIsLive`, `youtubeIsLive`, `kickIsLive` | `Boolean` | `false` = "no comprobado o no en directo". Los tres son degradables. |
 | `avatarUrl` | `String?` | `avatars.full` de AoE4World; `null` dibuja monograma. |
+| `profileCheckedAt` | `DateTime?` | Sello de la caché de perfil: cuándo se refrescaron el nombre oficial y el avatar. `null` = sin comprobar. Lo escriben la ladder y `GET /players/:profile_id`; con menos de 1 h no se pide el perfil. |
 | `historyPublic` | `Boolean?` | Historial de partidas público. `null` = sin comprobar (un fallo no escribe "cerrado"). |
 | `historyCheckedAt` | `DateTime?` | Caché de la comprobación de historial (12 h). |
+| `windowComplete` | `Boolean` (`false`) | `true` = se ha recorrido la ventana del torneo entera hasta el corte. `false` = pendiente; también es el valor de migración y el de un alta nueva. |
+| `backfillPage` | `Int` (`1`) | Página del relleno por la que sigue. Las páginas 1..`backfillPage−1` ya se leyeron. |
+| `windowCheckedAt` | `DateTime?` | Cuándo se completó por última vez el recorrido de la ventana, incluidos los rechecks de F2b. `null` = nunca. |
 | `createdAt`, `updatedAt` | `DateTime` | |
 
-Índices: `id` (pk) y `profileId` (único). Los dos únicos de Discord son **restricciones**, no
-filtros: sostienen "una cuenta y un `@usuario` no están en dos participantes". No hay índice en
-`status`: la tabla tiene decenas de filas y el listado del panel ya recorre entera.
+Índices: `id` (pk), `profileId` (único) y `(status, windowComplete, backfillPage)` para la cola del
+relleno (`status` filtra; `windowComplete` y `backfillPage` ordenan, con los pendientes primero). Los dos únicos de Discord
+son **restricciones**, no filtros: sostienen "una cuenta y un `@usuario` no están en dos
+participantes".
+
+> Las tres columnas de la ventana y su índice ya están aplicados en producción con el `db:push` de F2.
 
 ## `Match`
 
@@ -385,9 +392,10 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana, objetivos y objetivos desactivados). Un documento de la versión anterior se migra al leerlo. | `ensureRuleset()` en `src/lib/scoring.ts`; el panel, con `saveScoringRuleset` |
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
-| `scoring.lastRun` | Rastro del último recálculo. | `recomputeScores()` |
+| `scoring.lastRun` | Rastro del último recálculo: `ruleSetVersion`, `cacheVersion` (`SCORING_CACHE_VERSION`), `playersRanked` y las cifras del resultado. Lo lee el worker para decidir si puede saltarse el recálculo. | `recomputeScores()` |
 | `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 3) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
+| `sync.gamesCursor` | Cursor global de partidas: `updatedAt` (el `updated_since` de la siguiente pasada), `seededAt`, `seededFrom`, la racha de lotes truncados y el mejor `backfillPending` visto. | Worker (`src/lib/aoe4world/sync.ts`), con `writeGamesCursor()` |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
 | `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |
@@ -404,7 +412,7 @@ Claves vivas en producción, con quién las escribe:
 | `edition.announcements` | Memoria de los avisos de la edición en Discord: comienzo y final (`startedAt`/`finishedAt`, o `null`), los hitos nuevos ya avisados (`sent`: clave de hito → instante) y si el plazo de inscripción llegó a estar abierto (`registrationWasOpen`). Una marca puesta no se quita nunca. | Worker (`src/lib/edition-announcements.ts`) |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube y su playlist de subidas, ya resueltos (30 días). | Worker |
-| `aoe4world.sync.player.<profileId>` | Cursor de sincronización por jugador. | Worker; la baja de `/admin` lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede un cursor viejo. |
+| `aoe4world.sync.player.<profileId>` | Estado de **auditoría** del último relleno del jugador: `since`, `maxStartedAt`, `lastSyncedAt` y abandonos. Ya no es el cursor de petición; ese es global (`sync.gamesCursor`). | Worker; la baja de `/admin` lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede una auditoría vieja. |
 
 ## Índices
 
@@ -415,6 +423,7 @@ aparece en una consulta, no se crea.**
 |---|---|---|
 | `Player` | `id` (pk), `profileId` (único) | Ficha por id o por `profileId`. |
 | `Player` | `discordUserId`, `discordUsername` (únicos) | Restricciones, no filtros. |
+| `Player` | `(status, windowComplete, backfillPage)` | Candidatos al relleno: aprobados con la ventana pendiente, por página. |
 | `Match` | único `(playerId, gameId)` | Dedupe del worker. |
 | `Match` | `(playerId, startedAt)` | Partidas de un jugador por fecha. |
 | `Match` | `(playerId, finishedAt)` | Partidas en curso y orden de hitos. |
@@ -438,6 +447,7 @@ aparece en una consulta, no se crea.**
 | `/admin` (jugadores) | `Player order by profileId` | `profileId` (único) |
 | `/admin/historial` | Las mismas filas que `/historial`, de todos los aprobados: `Match` victorias clasificatorias con puntos (o revertidas) + `ObjectiveEvent` + `ObjectiveLeadEvent` (estos, filtrados por `editionFrom`), paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
 | `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados, más los `ObjectiveLeadEvent` de la edición activa; paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
+| Relleno de la ventana (F2/F2b) | `Player where status = APPROVED and (windowComplete = false or (windowComplete = true and (windowCheckedAt is null or windowCheckedAt < now − RECHECK_MAX_AGE_DAYS))) order by windowComplete, backfillPage, profileId`; y el `count` de `windowComplete = false` para `backfillPending` | `(status, windowComplete, backfillPage)` |
 | `/admin/alertas` | `Alert` de la edición activa (`createdAt >= window.from`) `[por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |

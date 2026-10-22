@@ -3,21 +3,27 @@
  *
  * Recibe lo mismo que `fetch` recibiría en `http.ts` (path + query) y devuelve
  * la respuesta ya serializada, o `not-found` para que quien llama traduzca el
- * fallo al `Aoe4WorldNotFoundError` del que ya sabe el worker. No lanza errores
- * propios: así el mock no se cuela en la política de reintentos de `http.ts`.
+ * fallo al `Aoe4WorldNotFoundError` del que ya sabe el worker. Tampoco lanza los
+ * errores de validación: devuelve la variante `error` y es `http.ts` quien la
+ * convierte en un `Aoe4WorldError` con el status y el criterio de reintento que
+ * tendría una respuesta real.
  *
- * Solo se mockean los tres endpoints que usa el worker (`getPlayer`,
- * `getPlayerGames` y `getPlayerGame`); `leaderboards` y `autocomplete` llevan
- * además una versión básica para que ninguna llamada de futuro se rompa. El
- * directorio de jugadores incluye también a los rivales externos: preguntar por
- * alguien de la ladder que no juega la liga devuelve su perfil, no un 404.
+ * Solo se mockean los cuatro endpoints que usa el worker (`getPlayer`,
+ * `getPlayerGames`, `getPlayerGame` y el masivo `GET /games`); `leaderboards` y
+ * `autocomplete` llevan además una versión básica para que ninguna llamada de
+ * futuro se rompa. El directorio de jugadores incluye también a los rivales
+ * externos: preguntar por alguien de la ladder que no juega la liga devuelve su
+ * perfil, no un 404.
  */
 
 import { DEFAULT_LEADERBOARD } from "../types";
 import {
   MOCK_ALL_GAMES,
   mockCareerStats,
+  mockGameStartedAtMs,
+  mockGameUpdatedAtMs,
   mockGamesForPlayer,
+  mockGamesForPlayers,
   serializeMockGame,
   type MockCareerStats,
   type MockGame,
@@ -31,7 +37,8 @@ import {
 
 export type MockAoe4WorldResponse =
   | { kind: "ok"; payload: unknown }
-  | { kind: "not-found" };
+  | { kind: "not-found" }
+  | { kind: "error"; status: number; message: string };
 
 /** Máximo real de partidas por página; la API devuelve como mucho 50. */
 const MAX_PAGE_SIZE = 50;
@@ -39,6 +46,21 @@ const MAX_PAGE_SIZE = 50;
 const DEFAULT_PAGE_SIZE = 50;
 
 const DEFAULT_AUTOCOMPLETE_LIMIT = 10;
+
+/** Ids que el endpoint masivo acepta por llamada (el cliente valida 1–50). */
+const MAX_BULK_PROFILE_IDS = 50;
+
+/** Tope real de páginas del endpoint masivo: la 21 devuelve 400. */
+const MAX_BULK_PAGE = 20;
+
+/**
+ * Antigüedad a partir de la cual `updated_since` deja de servir. Medido en F0:
+ * con 30, 60 y 90 días la API responde 200 con una página vacía y este aviso.
+ */
+const UPDATED_SINCE_NOTICE_MS = 30 * 24 * 60 * 60 * 1000;
+
+export const OLD_UPDATED_SINCE_NOTICE =
+  "updated_since=.. is too long ago, are you keeping it up to date?... and msg us on discord ~ aoe4world devs";
 
 const OK = (payload: unknown): MockAoe4WorldResponse => ({ kind: "ok", payload });
 
@@ -66,10 +88,8 @@ function readPositiveIntParam(params: URLSearchParams, name: string, fallback: n
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-/** `since` llega como ISO desde `client.ts`; se tolera también epoch. */
-function readSinceMs(params: URLSearchParams): number | null {
-  const raw = params.get("since");
-
+/** `since` y `updated_since` llegan como ISO desde `client.ts`; se tolera epoch. */
+function readDateMs(raw: string | null): number | null {
   if (raw === null || raw.trim() === "") {
     return null;
   }
@@ -87,6 +107,41 @@ function readSinceMs(params: URLSearchParams): number | null {
   }
 
   return epoch < 1e11 ? epoch * 1000 : epoch;
+}
+
+function readSinceMs(params: URLSearchParams): number | null {
+  return readDateMs(params.get("since"));
+}
+
+function readUpdatedSinceMs(params: URLSearchParams): number | null {
+  return readDateMs(params.get("updated_since"));
+}
+
+/**
+ * Los `profile_ids` del endpoint masivo, separados por comas.
+ *
+ * Se conserva el orden y se quitan repetidos: el límite de 50 se aplica después
+ * sobre la lista ya limpia, que es lo que hace que `filters.profile_ids` diga
+ * exactamente qué ids se quedó la API.
+ */
+function readProfileIds(params: URLSearchParams): number[] {
+  const ids = new Set<number>();
+
+  for (const raw of (params.get("profile_ids") ?? "").split(",")) {
+    const text = raw.trim();
+
+    if (!/^\d+$/.test(text)) {
+      continue;
+    }
+
+    const value = Number(text);
+
+    if (Number.isSafeInteger(value) && value > 0) {
+      ids.add(value);
+    }
+  }
+
+  return [...ids];
 }
 
 /** Común a participantes y externos: lo mínimo para poblar `GET /players/:id`. */
@@ -155,6 +210,93 @@ function gamesPagePayload(profileId: number, params: URLSearchParams): unknown {
     },
     games: slice.map((game) => serializeMockGame(game, now, "listing")),
   };
+}
+
+/**
+ * `GET /games?profile_ids=…&since=…&updated_since=…&order=…&page=…`.
+ *
+ * Es el endpoint masivo que F2 usará para traer las partidas nuevas de varios
+ * jugadores en una sola llamada. Reproduce lo que se midió contra la API real en
+ * F0: sin `total_count`, `per_page` fijo en 50, `_important_notice_` cuando
+ * `updated_since` es demasiado antiguo, tope de 20 páginas y página vacía más
+ * allá del final.
+ *
+ * La unión de las partidas se deduplica aquí por `gameId`: `mockGamesForPlayers()`
+ * devuelve la partida compartida en el array de cada uno de sus jugadores, y la
+ * API masiva la publica una sola vez por página.
+ */
+function bulkGamesPayload(params: URLSearchParams): MockAoe4WorldResponse {
+  const page = readPositiveIntParam(params, "page", 1);
+
+  if (page > MAX_BULK_PAGE) {
+    return {
+      kind: "error",
+      status: 400,
+      message: `Page greater than ${MAX_BULK_PAGE} is not supported`,
+    };
+  }
+
+  const now = new Date();
+  const nowMs = now.getTime();
+  const keptIds = readProfileIds(params).slice(0, MAX_BULK_PROFILE_IDS);
+  const sinceMs = readSinceMs(params);
+  const updatedSinceMs = readUpdatedSinceMs(params);
+  const order = params.get("order") === "started_at" ? "started_at" : "updated_at";
+  const notice =
+    updatedSinceMs !== null && nowMs - updatedSinceMs >= UPDATED_SINCE_NOTICE_MS
+      ? OLD_UPDATED_SINCE_NOTICE
+      : null;
+  const filters = {
+    profile_ids: keptIds,
+    since: params.get("since"),
+    updated_since: params.get("updated_since"),
+    order,
+    ...(notice === null ? {} : { _important_notice_: notice }),
+  };
+  const offset = (page - 1) * DEFAULT_PAGE_SIZE;
+
+  if (notice !== null) {
+    return OK({
+      page,
+      per_page: DEFAULT_PAGE_SIZE,
+      count: 0,
+      offset,
+      next_page: null,
+      filters,
+      games: [],
+    });
+  }
+
+  const union = new Map<number, MockGame>();
+
+  for (const games of mockGamesForPlayers(keptIds).values()) {
+    for (const game of games) {
+      union.set(game.gameId, game);
+    }
+  }
+
+  const timestamp =
+    order === "started_at"
+      ? (game: MockGame): number => mockGameStartedAtMs(game, now)
+      : (game: MockGame): number => mockGameUpdatedAtMs(game, now);
+
+  const games = [...union.values()]
+    .filter((game) => sinceMs === null || mockGameStartedAtMs(game, now) >= sinceMs)
+    .filter((game) => updatedSinceMs === null || mockGameUpdatedAtMs(game, now) >= updatedSinceMs)
+    .sort((a, b) => timestamp(b) - timestamp(a) || b.gameId - a.gameId);
+
+  const slice = games.slice(offset, offset + DEFAULT_PAGE_SIZE);
+
+  return OK({
+    page,
+    per_page: DEFAULT_PAGE_SIZE,
+    count: slice.length,
+    offset,
+    next_page:
+      page < MAX_BULK_PAGE && offset + DEFAULT_PAGE_SIZE < games.length ? page + 1 : null,
+    filters,
+    games: slice.map((game) => serializeMockGame(game, now, "listing")),
+  });
 }
 
 function gameDetailPayload(profileId: number, gameId: number): MockAoe4WorldResponse {
@@ -259,6 +401,11 @@ export function resolveMockAoe4WorldRequest(
 ): MockAoe4WorldResponse {
   const segments = path.split("/").filter((segment) => segment !== "");
   const params = searchParams ?? new URLSearchParams();
+
+  // El endpoint masivo va antes que `players` porque no cuelga de un perfil.
+  if (segments[0] === "games") {
+    return segments.length === 1 ? bulkGamesPayload(params) : NOT_FOUND;
+  }
 
   if (segments[0] === "players") {
     if (segments[1] === "autocomplete" && segments.length === 2) {
