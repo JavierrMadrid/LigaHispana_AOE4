@@ -1,7 +1,57 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
+
+type ActiveHelp = { id: string; dismiss: () => void };
+type HelpGroup = {
+  activeId: string | null;
+  activate: (help: ActiveHelp) => void;
+  release: (id: string) => void;
+  dismiss: () => void;
+};
+
+const HelpGroupContext = createContext<HelpGroup | null>(null);
+
+export function HomeObjectiveHelpProvider({ children }: { children: ReactNode }) {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const active = useRef<ActiveHelp | null>(null);
+  const activate = useCallback((help: ActiveHelp) => {
+    if (active.current?.id !== help.id) active.current?.dismiss();
+    active.current = help;
+    setActiveId(help.id);
+  }, []);
+  const release = useCallback((id: string) => {
+    if (active.current?.id !== id) return;
+    active.current = null;
+    setActiveId(null);
+  }, []);
+  const dismiss = useCallback(() => {
+    active.current?.dismiss();
+    active.current = null;
+    setActiveId(null);
+  }, []);
+  const group = useMemo(
+    () => ({ activeId, activate, release, dismiss }),
+    [activeId, activate, release, dismiss]
+  );
+
+  return (
+    <HelpGroupContext.Provider value={group}>
+      {children}
+    </HelpGroupContext.Provider>
+  );
+}
 
 export function HomeObjectiveHelp({
   description,
@@ -16,6 +66,9 @@ export function HomeObjectiveHelp({
   ariaLabel?: string;
   compact?: boolean;
 }) {
+  const group = useContext(HelpGroupContext);
+  const activate = group?.activate;
+  const release = group?.release;
   const id = useId();
   const container = useRef<HTMLDivElement>(null);
   const tooltip = useRef<HTMLSpanElement>(null);
@@ -24,19 +77,36 @@ export function HomeObjectiveHelp({
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function enter() {
+  const clearLeaveTimer = useCallback(() => {
     if (leaveTimer.current) clearTimeout(leaveTimer.current);
+    leaveTimer.current = null;
+  }, []);
+  const dismiss = useCallback(() => {
+    clearLeaveTimer();
+    setPinned(false);
+    setHovered(false);
+    setFocused(false);
+    setDismissed(true);
+  }, [clearLeaveTimer]);
+  function enter() {
+    clearLeaveTimer();
+    activate?.({ id, dismiss });
     setHovered(true);
     setDismissed(false);
   }
   function leave() {
-    leaveTimer.current = setTimeout(() => setHovered(false), 160);
+    clearLeaveTimer();
+    leaveTimer.current = setTimeout(() => {
+      leaveTimer.current = null;
+      setHovered(false);
+    }, 160);
   }
   useEffect(
     () => () => {
-      if (leaveTimer.current) clearTimeout(leaveTimer.current);
+      clearLeaveTimer();
+      release?.(id);
     },
-    []
+    [clearLeaveTimer, id, release]
   );
   const [position, setPosition] = useState<{
     top: number;
@@ -46,15 +116,22 @@ export function HomeObjectiveHelp({
   useEffect(() => {
     if (!pinned) return;
     function outside(event: PointerEvent) {
-      if (!container.current?.contains(event.target as Node)) {
-        setPinned(false);
-        setFocused(false);
+      const target = event.target as Node;
+      if (
+        !container.current?.contains(target) &&
+        !tooltip.current?.contains(target)
+      ) {
+        dismiss();
+        release?.(id);
       }
     }
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
-  }, [pinned]);
-  const open = !dismissed && (pinned || hovered || focused);
+  }, [pinned, dismiss, release, id]);
+  const open =
+    (!group || group.activeId === id) &&
+    !dismissed &&
+    (pinned || hovered || focused);
   useEffect(() => {
     if (!open) return;
     function place() {
@@ -92,21 +169,30 @@ export function HomeObjectiveHelp({
         className="home-objective-help-trigger"
         aria-label={ariaLabel}
         aria-describedby={open ? id : undefined}
-        aria-expanded={pinned}
+        aria-expanded={open && pinned}
         onFocus={() => {
+          clearLeaveTimer();
+          activate?.({ id, dismiss });
           setFocused(true);
           setDismissed(false);
         }}
         onBlur={() => setFocused(false)}
         onClick={() => {
-          setPinned(!pinned);
-          setDismissed(pinned);
+          if (pinned) {
+            dismiss();
+            release?.(id);
+          } else {
+            clearLeaveTimer();
+            activate?.({ id, dismiss });
+            setPinned(true);
+            setDismissed(false);
+          }
         }}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
-            setPinned(false);
-            setDismissed(true);
+            if (group) group.dismiss();
+            else dismiss();
           }
         }}
       >

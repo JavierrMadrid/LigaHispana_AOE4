@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ArrowUpRight } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { PUBLIC_NAVIGATION } from "@/lib/public-navigation";
+import { HomeObjectiveHelpProvider } from "@/components/home-objective-help";
 import "./home.css";
 
 export function HomeShell({
@@ -74,7 +75,7 @@ export function HomeShell({
         </div>
       </header>
       <main id="contenido" className="home-content">
-        {children}
+        <HomeObjectiveHelpProvider>{children}</HomeObjectiveHelpProvider>
       </main>
       <footer className="home-footer">
         <div className="home-footer-inner">

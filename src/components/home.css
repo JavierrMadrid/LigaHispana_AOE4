@@ -798,13 +798,21 @@
 }
 .home-objective-detail li {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: stretch;
+  font-size: 14px;
+}
+.home-objective-detail li > .home-objective-help {
+  display: flex;
+}
+.home-objective-detail .home-objective-help-trigger {
   padding: 14px;
   background: #192d48;
   border: 1px solid #496184;
   border-radius: 4px;
-  font-size: 14px;
+  transition: background-color 0.2s ease;
+}
+.home-objective-detail .home-objective-help-trigger:is(:hover, :focus-visible) {
+  background-color: #25416a;
 }
 .home-objective-detail strong {
   margin-left: auto;
