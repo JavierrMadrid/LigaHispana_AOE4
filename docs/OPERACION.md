@@ -731,6 +731,12 @@ npm run alerts:cutoffs -- --show
   cada pasada no inserta nada. Apagar el interruptor no borra las alertas ya escritas. Al **encenderlo**,
   los avisos aparecen en la siguiente evaluación que cubra a cada jugador: una pasada sin partidas
   nuevas evalúa a todos los aprobados, y el informe de alertas fuerza una completa.
+- **Solo se publica la edición activa**: la pestaña y el informe filtran
+  `Alert.createdAt >= window.from` de la ventana del ruleset de puntos, sin cota superior. Las filas
+  anteriores se conservan en `Alert` (*append-only*) pero dejan de mostrarse al avanzar la ventana, así
+  que la vista se reinicia con cada torneo sin borrar nada. No hay tope superior porque las alertas
+  de cierre (`STREAK_AT_TOURNAMENT_END`) se escriben **después** de `window.to` y un
+  `createdAt <= window.to` las ocultaría.
 - **Informe**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) devuelve un ZIP con tres
   CSV estándar (coma, RFC 4180, BOM UTF-8 y CRLF): `resumen.csv` con la cabecera de la tanda en dos
   columnas `Campo,Valor`, `alertas-disparadas.csv` y `rachas-abiertas.csv`, las dos con la misma
@@ -741,7 +747,8 @@ npm run alerts:cutoffs -- --show
   una división muy distinta) **ya no se calculan**: su caso pasó a ser la condición de equipo de la
   puntuación (una partida con un compañero a dos escalones o más no cuenta, ver
   [`PUNTUACION.md`](./PUNTUACION.md)). Sus valores del enum, sus etiquetas y sus frases se quedan
-  porque hay filas históricas de `Alert` que el panel sigue pintando.
+  porque hay filas históricas de `Alert` en la tabla, y las que caen en la edición activa se siguen
+  pintando.
 - Un fallo del motor **no** mueve `lastSuccessAt`.
 
 ## Cortes de división
