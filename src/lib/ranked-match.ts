@@ -839,7 +839,7 @@ export function rankedModesWhere(modes: readonly string[]): Prisma.MatchWhereInp
  * Las condiciones de partida clasificatoria **sin** la marca de revertida.
  *
  * Es el filtro de `rankedMatchWhere()` menos una condición, y existe para un solo
- * consumidor: el historial de partidas del panel de admin, que tiene que **listar**
+ * consumidor: el historial de puntos del panel de admin, que tiene que **listar**
  * las revertidas (marcándolas, para que se vea que no puntúan) en vez de esconderlas.
  * Que el listado historialice en vez de borrar es una decisión de producto: sin la
  * fila no habría nada que deshacer, y el worker de sync la volvería a importar

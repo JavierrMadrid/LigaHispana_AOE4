@@ -44,19 +44,17 @@ import {
  * verdad que estén dentro de un mes.
  *
  * Idempotente: repetirlo vuelve a elegir (la selección se audita cada vez), no
- * duplica jugadores ni partidas, y no mueve el cursor de sincronización hacia
- * atrás.
+ * duplica jugadores ni partidas, y no mueve el cursor global hacia atrás.
  */
 
 /**
  * Ventana del torneo simulado: cuatro semanas de las que ya han pasado tres.
  *
  * No es un dato del motor — las reglas todavía no filtran por fecha (D-02/D-03
- * están diferidas) — sino la ventana que se le pide a la API: el arranque marca
- * desde dónde se importa y el fin marca dónde acabarían las cuatro semanas. Un
- * torneo que sigue vivo tiene que **poder seguir creciendo** con el worker real,
- * y por eso el script siembra el cursor en el arranque en vez de truncarlo al
- * momento de importarlo.
+ * están diferidas) — sino la ventana de la selección de candidatos y del
+ * manifiesto. **El relleno del worker pide desde `scoring.ruleset.window.from`**,
+ * así que el torneo simulado tiene que caer dentro de esa ventana para que se
+ * importe; el script deja el estado de auditoría sembrado en este arranque.
  */
 const TOURNAMENT_WEEKS = 4;
 const TOURNAMENT_WEEKS_ELAPSED = 3;
@@ -236,13 +234,13 @@ async function runSimulation(argv: string[]): Promise<void> {
   }
 
   console.log("");
-  console.log("--- 3. Cursor de sincronización acotado a la ventana del torneo ---");
+  console.log("--- 3. Estado de auditoría del relleno acotado a la ventana del torneo ---");
 
   const cursors = await seedSyncCursors(entries, window.start, now.toISOString());
 
   console.log(
     `Semillados en el arranque del torneo: ${cursors.seeded}. ` +
-      `Ya tenían un cursor más reciente y se han respetado: ${cursors.kept}.`,
+      `Ya tenían un estado más reciente y se han respetado: ${cursors.kept}.`,
   );
 
   console.log("");
@@ -261,7 +259,9 @@ async function runSimulation(argv: string[]): Promise<void> {
             `${player.matchesInserted} insertadas, ${player.matchesCounted} al torneo`,
             player.matchesSkipped > 0 ? `${player.matchesSkipped} descartadas` : null,
             player.matchesAbandoned > 0 ? `${player.matchesAbandoned} abandonadas` : null,
-            player.historyTruncated ? "histórico recortado" : null,
+            player.windowComplete
+              ? "ventana completa"
+              : `histórico por traer (página ${player.backfillPage})`,
           ]
             .filter((value): value is string => value !== null)
             .join(", ")
@@ -276,6 +276,22 @@ async function runSimulation(argv: string[]): Promise<void> {
       `elo/división/avatar${sync.ladder.error === null ? "" : ` — ERROR: ${sync.ladder.error}`}`,
   );
   console.log(`Llamadas a la API: ${sync.apiRequests} (reintentos: ${sync.apiRetries}).`);
+  console.log(
+    `Masivo: ${sync.gamesPagesRead} página(s), ${sync.gamesBatchesIncomplete} lote(s) incompletos, ` +
+      `${sync.gamesBatchesFailed} fallido(s); ${sync.gamesPlayersQueuedForBackfill} jugador(es) encolados.`,
+  );
+  console.log(
+    `Relleno: ${sync.backfillPlayers} jugador(es), ${sync.backfillPagesRead} página(s), ` +
+      `${sync.backfillPending} pendiente(s).`,
+  );
+  console.log(
+    `Cursor global: ${sync.gamesCursor ?? "sin cursor"}` +
+      `${sync.gamesCursorAdvanced ? " (avanzado)" : ""}` +
+      `${sync.gamesCursorSeeded ? " (sembrado)" : ""}`,
+  );
+  if (sync.apiNotice !== null) {
+    console.log(`Aviso de AoE4World: ${sync.apiNotice}`);
+  }
   console.log(`Duración del import: ${sync.durationMs} ms.`);
 
   if (sync.playersFailed > 0) {

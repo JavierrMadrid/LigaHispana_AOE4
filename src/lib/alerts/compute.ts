@@ -1,4 +1,5 @@
 import { parseTeamView } from "@/lib/aoe4world/parse";
+import { readSummaryAnomalies, type SummaryAnomalyWindow } from "@/lib/aoe4world/summary-anomalies";
 import type { ScoringWindow } from "@/lib/ranked-match";
 import {
   buildTriggeredAlert,
@@ -7,6 +8,7 @@ import {
   type AlertSubject,
   type AlertsRuleName,
   type AlertsRuleset,
+  type MatchAlertRule,
   type StreakAlertRule,
   type TriggeredAlert,
 } from "./rules";
@@ -17,7 +19,7 @@ import {
  * sale a la red, para que `compute.test.ts` (vía `npm test`) pueda comprobarlo con
  * secuencias sintéticas y sin nada preparado.
  *
- * ## El modelo, que es el mismo para las seis reglas
+ * ## El modelo, que es el mismo para las seis reglas de secuencia
  *
  * Para cada regla hay un **flag por partida** sobre la secuencia de
  * clasificatorias del jugador ordenada por `startedAt`. Una **racha** es un
@@ -36,7 +38,7 @@ import {
  * filtrada con `rankedMatchWhere()` **y** con la condición de equipos
  * (`teammatesWithinTier()`), que no cabe en ese filtro y la aplica quien llama.
  *
- * ## Las seis reglas
+ * ## Las seis reglas de secuencia
  *
  * | Regla | Modo | Flag por partida | Racha | Acumulado |
  * |---|---|---|---|---|
@@ -53,6 +55,17 @@ import {
  * R2 y R3 llevan **sujeto** (el rival, el compañero), así que sus rachas y sus
  * acumulados son *por sujeto*: tres partidas seguidas contra el mismo rival, no
  * tres contra cualquiera. El resto habla del jugador y su sujeto es él mismo.
+ *
+ * ## Las cuatro del resumen
+ *
+ * Aparte de las rachas y los acumulados hay cuatro reglas que no miran la secuencia
+ * de partidas sino **dentro de cada partida** (`summaryAlerts()`): no creó aldeanos
+ * en el arranque, pasó una ventana sin que la puntuación militar hiciera un máximo
+ * nuevo y pasó una ventana sin recolectar —las tres, `MATCH_DETECTED`, una alerta
+ * por partida y regla, con la partida como ancla—, más un estado del jugador
+ * (`SUMMARY_NOT_REVIEWED`) con las partidas que se intentaron leer y nunca dieron
+ * una respuesta concluyente. La evidencia sale de `Match.summaryAnomalies` y se
+ * valida con `readSummaryAnomalies()`.
  *
  * ## La partida que ancla la alerta
  *
@@ -91,6 +104,19 @@ export type AlertMatch = {
   startedAt: Date;
   durationSeconds: number | null;
   rawJson: unknown;
+  /**
+   * `Match.apm`: la marca de "esta partida tiene resumen". `null` = no lo tiene (o
+   * aún no se ha leído), y las reglas que salen del resumen no se evalúan.
+   */
+  apm: number | null;
+  /** `Match.finishedAt`; `null` mientras la partida está en curso. */
+  finishedAt: Date | null;
+  /** `Match.summaryCheckedAt`: hubo respuesta concluyente (200 o 404). */
+  summaryCheckedAt: Date | null;
+  /** `Match.summaryLastAttemptAt`: el último intento, con cualquier desenlace. */
+  summaryLastAttemptAt: Date | null;
+  /** `Match.summaryAnomalies`, sin validar: se pasa por `readSummaryAnomalies()`. */
+  summaryAnomalies: unknown;
 };
 
 export type ComputeAlertsInput = {
@@ -107,12 +133,18 @@ export type ComputeAlertsInput = {
   /**
    * Alcance de la puntuación: `modes` y `window` del ruleset de puntos.
    *
-   * Solo se usa la ventana, y para una cosa: saber si el torneo ya ha terminado
+   * Solo se usa la ventana, y para dos cosas: saber si el torneo ya ha terminado
    * (`now >= window.to`), que es lo que convierte una racha abierta en un aviso
-   * de cierre. Los modos no se vuelven a aplicar porque `matches` ya viene
-   * filtrado con ellos, y por eso no se duplican en el ruleset de alertas.
+   * de cierre; y decir en qué periodo se evaluó cada alerta. Los modos no se
+   * vuelven a aplicar porque `matches` ya viene filtrado con ellos, y por eso no se
+   * duplican en el ruleset de alertas.
    */
   scoring: { modes: string[]; window: ScoringWindow };
+  /**
+   * Cuánto puede estar una partida sin una respuesta concluyente del summary antes
+   * de contarse como no revisada (`AOE4WORLD_SUMMARY_REVIEW_WINDOW_HOURS`).
+   */
+  summaryReviewWindowMs: number;
   now: Date;
 };
 
@@ -443,6 +475,217 @@ function repeatedTeammateFlags(context: RuleContext): FlagRow {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Las reglas del resumen                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** Lo que necesitan las cuatro reglas que miran dentro de la partida. */
+export type SummaryAlertContext = {
+  player: AlertPlayer;
+  matches: AlertMatch[];
+  thresholds: AlertsRuleset["thresholds"];
+  scoring: { window: ScoringWindow };
+  /** Cuánto puede tardar un summary en resolverse (`summaryReviewWindowMs`). */
+  summaryReviewWindowMs: number;
+  now: Date;
+};
+
+/** Las partidas que quedaron sin revisar, de la más reciente a la más antigua. */
+function unreviewedMatches(
+  matches: readonly AlertMatch[],
+  cutoffMs: number,
+): { match: AlertMatch; attemptedAt: Date }[] {
+  const rows: { match: AlertMatch; attemptedAt: Date }[] = [];
+
+  for (const match of matches) {
+    // Hace falta todo: sin métricas (`apm`), sin respuesta concluyente, con al
+    // menos un intento, resuelta y ya pasada la ventana. Cualquier pieza que falte
+    // deja la partida en "no se sabe", que no es "no se revisó".
+    if (
+      match.apm !== null ||
+      match.summaryCheckedAt !== null ||
+      match.summaryLastAttemptAt === null ||
+      match.finishedAt === null ||
+      match.finishedAt.getTime() >= cutoffMs
+    ) {
+      continue;
+    }
+
+    rows.push({ match, attemptedAt: match.summaryLastAttemptAt });
+  }
+
+  return rows.sort(
+    (a, b) =>
+      (b.match.finishedAt?.getTime() ?? 0) - (a.match.finishedAt?.getTime() ?? 0) ||
+      (a.match.gameId < b.match.gameId ? -1 : a.match.gameId > b.match.gameId ? 1 : 0),
+  );
+}
+
+/**
+ * Las cuatro reglas que salen del **resumen** de la partida.
+ *
+ * Tres son hallazgos de una partida (`MATCH_DETECTED`): no creó aldeanos en el
+ * arranque, pasó una ventana sin que la puntuación militar hiciera un máximo nuevo
+ * y pasó una ventana sin recolectar. La cuarta es de **estado** del jugador
+ * (`SUMMARY_NOT_REVIEWED`): sus partidas se intentaron leer y nunca hubo respuesta
+ * concluyente.
+ *
+ * ## Lo que degrada, y por qué no acusa
+ *
+ * La evidencia entra como `unknown` y se pasa por `readSummaryAnomalies()`: si la
+ * forma no es la esperada, esa partida no aporta nada. Y dentro de la evidencia, un
+ * dato que no se pudo leer es `null`, nunca cero: `buildOrderReadable: false`
+ * significa "no se pudo leer el `buildOrder`", no "no hizo aldeanos", así que la
+ * regla de aldeanos **no se evalúa** en ese caso.
+ *
+ * ## La gracia del militar
+ *
+ * Una partida empieza con el explorador y la puntuación militar arranca en 13: no
+ * hacer un máximo nuevo en los primeros minutos es lo normal mientras se abre. Por
+ * eso el tramo se recorta por delante con `noMilitaryGraceSeconds`, y lo que se mide
+ * —y se guarda como `count`— es lo que queda **después** de la gracia.
+ */
+export function summaryAlerts(context: SummaryAlertContext): TriggeredAlert[] {
+  const { player, matches, thresholds, scoring, summaryReviewWindowMs, now } = context;
+  const alerts: TriggeredAlert[] = [];
+
+  const hallazgo = (
+    rule: MatchAlertRule,
+    match: AlertMatch,
+    count: number,
+    threshold: number,
+    detail: AlertAnchorDetail,
+  ) => {
+    alerts.push(
+      buildTriggeredAlert({
+        rule,
+        kind: "MATCH_DETECTED",
+        playerId: player.id,
+        playerProfileId: player.profileId,
+        subject: SELF_SUBJECT,
+        count,
+        threshold,
+        // El ancla es la partida: su clave de dedupe lleva el `gameId`, así que hay
+        // una fila por partida y regla.
+        anchorGameId: match.gameId,
+        anchorStartedAt: match.startedAt,
+        anchorLadder: match.mode,
+        window: scoring.window,
+        detail,
+      }),
+    );
+  };
+
+  for (const match of matches) {
+    const anomalies = readSummaryAnomalies(match.summaryAnomalies);
+
+    // Sin evidencia legible no hay nada que decir de esa partida. `null` aquí es
+    // "no hay summary" o "no se pudo leer", y ninguna de las dos acusa a nadie.
+    if (anomalies === null) {
+      continue;
+    }
+
+    // `count: 0` es "cero aldeanos dentro del plazo". El umbral es **el del
+    // ruleset** (`noVillagersFirstSeconds`) y no un `1`: es lo que dispara la regla
+    // y lo que la frase necesita para decir "en los primeros N minutos". Y la partida
+    // tiene que haber llegado a esa ventana: si duró menos (o no se sabe cuánto duró),
+    // esos minutos no se jugaron y no hay nada que decir. Es la misma dirección segura
+    // que el `buildOrder` ilegible: lo que no llegó a pasar no es un hallazgo.
+    const duroLaVentana =
+      match.durationSeconds !== null && match.durationSeconds >= thresholds.noVillagersFirstSeconds;
+
+    if (
+      duroLaVentana &&
+      anomalies.buildOrderReadable &&
+      (anomalies.firstVillagerSeconds === null ||
+        anomalies.firstVillagerSeconds > thresholds.noVillagersFirstSeconds)
+    ) {
+      hallazgo(
+        "NO_VILLAGERS_FIRST_MINUTES",
+        match,
+        0,
+        thresholds.noVillagersFirstSeconds,
+        { firstVillagerSeconds: anomalies.firstVillagerSeconds },
+      );
+    }
+
+    const tramosMilitares = anomalies.militaryNoGrowth;
+
+    if (tramosMilitares !== null && tramosMilitares.length > 0) {
+      // La gracia se descuenta a **cada** tramo y gana el que más dura después de
+      // ella: el más largo de la partida puede empezar antes de la gracia y dejar
+      // pocos segundos útiles, mientras que otro posterior, más corto, cuenta entero.
+      let mejor: { tramo: SummaryAnomalyWindow; segundos: number } | null = null;
+
+      for (const tramo of tramosMilitares) {
+        const desde = Math.max(tramo.fromSeconds, thresholds.noMilitaryGraceSeconds);
+        const segundos = tramo.toSeconds - desde;
+
+        if (mejor === null || segundos > mejor.segundos) {
+          mejor = { tramo, segundos };
+        }
+      }
+
+      // Una sola alerta por partida y regla, con la evidencia del tramo que la
+      // dispara: si hubiera dos tramos que pasan el umbral, se avisa una vez.
+      if (mejor !== null && mejor.segundos >= thresholds.noMilitaryGapSeconds) {
+        hallazgo("NO_MILITARY_GAP", match, mejor.segundos, thresholds.noMilitaryGapSeconds, {
+          militaryNoGrowthFromSeconds: mejor.tramo.fromSeconds,
+          militaryNoGrowthToSeconds: mejor.tramo.toSeconds,
+        });
+      }
+    }
+
+    const recursos = anomalies.noResourceGain;
+
+    if (recursos !== null) {
+      const tramo = recursos.toSeconds - recursos.fromSeconds;
+
+      if (tramo >= thresholds.noResourcesGapSeconds) {
+        hallazgo("NO_RESOURCES_GAP", match, tramo, thresholds.noResourcesGapSeconds, {
+          noResourceGainFromSeconds: recursos.fromSeconds,
+          noResourceGainToSeconds: recursos.toSeconds,
+        });
+      }
+    }
+  }
+
+  // Una sola alerta de estado por jugador, con el recuento y las partidas: la clave
+  // de dedupe de `STATE_DETECTED` no lleva ni ancla ni número, así que reevaluarla
+  // cada pasada no inserta nada nuevo.
+  const sinRevisar = unreviewedMatches(matches, now.getTime() - summaryReviewWindowMs);
+
+  if (sinRevisar.length > 0) {
+    const ultimoIntento = sinRevisar.reduce(
+      (latest, row) => (row.attemptedAt.getTime() > latest ? row.attemptedAt.getTime() : latest),
+      0,
+    );
+
+    alerts.push(
+      buildTriggeredAlert({
+        rule: "SUMMARY_NOT_REVIEWED",
+        kind: "STATE_DETECTED",
+        playerId: player.id,
+        playerProfileId: player.profileId,
+        subject: SELF_SUBJECT,
+        count: sinRevisar.length,
+        threshold: 1,
+        anchorGameId: null,
+        anchorStartedAt: null,
+        window: scoring.window,
+        detail: {
+          // El tope de 20 es el mismo que el de las partidas sondeadas del
+          // historial: la evidencia cabe en una fila sin crecer sin límite.
+          unreviewedGameIds: sinRevisar.slice(0, 20).map((row) => row.match.gameId),
+          summaryLastAttemptAt: new Date(ultimoIntento).toISOString(),
+        },
+      }),
+    );
+  }
+
+  return alerts;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Evaluación                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -502,7 +745,7 @@ function plannedRules(ruleset: AlertsRuleset): PlannedRule[] {
  * de torneo, y para eso está `now`.
  */
 export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEvaluation {
-  const { player, matches, ruleset, scoring, now } = input;
+  const { player, matches, ruleset, scoring, summaryReviewWindowMs, now } = input;
   const to = scoring.window.to;
   const tournamentEnded = to !== null && now.getTime() >= Date.parse(to);
 
@@ -604,6 +847,19 @@ export function computePlayerAlerts(input: ComputeAlertsInput): PlayerAlertsEval
       `${context.unreadable} clasificatorias con rawJson ilegible no aportan flags a las reglas de equipo`,
     );
   }
+
+  // Las cuatro del resumen van aparte: no son rachas ni acumulados, sino hallazgos
+  // dentro de cada partida y un estado del jugador.
+  alerts.push(
+    ...summaryAlerts({
+      player,
+      matches,
+      thresholds: ruleset.thresholds,
+      scoring,
+      summaryReviewWindowMs,
+      now,
+    }),
+  );
 
   return {
     alerts,

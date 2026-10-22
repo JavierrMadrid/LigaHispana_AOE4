@@ -55,6 +55,155 @@ frecuencia. Para las partidas en directo, 10 minutos basta: se detectan en la si
 10 y no 5 por el presupuesto de CPU del plan Free de Cloudflare: la mitad de pasadas es la mitad de
 CPU gastada (ver [El límite de CPU del plan Free](#el-límite-de-cpu-del-plan-free)).
 
+Los **300 ms** entre peticiones y la cadencia de **10 minutos** son empíricos: AoE4World no publica
+un contrato de rate limit ni devuelve cabeceras `X-RateLimit-*`. Se han visto 429 por debajo de 3
+minutos, así que no bajes la cadencia sin medir CPU y 429, y habla antes con AoE4World.
+
+### Cursor global y relleno (F2)
+
+El incremental ya no pide el histórico jugador a jugador. El cursor es **global**
+(`Setting["sync.gamesCursor"]`, por `updated_at`) y cada pasada hace:
+
+1. **Ladder y reconciliación global**: la ladder sella el perfil; la reconciliación resuelve las
+   partidas pendientes.
+2. **Masivo**: todos los aprobados en lotes estables de 50, `order=updated_at`, desde el cursor.
+3. **Relleno**: hasta `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` jugadores, **primero** los que tienen
+   `windowComplete=false` y **detrás** las ventanas completas cuyo último recorrido venció (F2b),
+   desde `max(window.from, registeredAt)`, `BULK` páginas cada uno.
+4. **Perfil**: solo los que no estén frescos por la ladder o por la caché de 1 h.
+5. **Cursor y resto**: scoring (solo si hay algo que recalcular, ver **Salto del recálculo**),
+   alertas, historial, Discord y streams.
+
+| Variable | Defecto | Qué limita |
+|---|---:|---|
+| `AOE4WORLD_SYNC_BULK_MAX_PAGES` | 10 | Páginas por lote del masivo. Se recorta al tope de la API, 19 |
+| `AOE4WORLD_SYNC_BACKFILL_MAX_PLAYERS` | 20 | Jugadores que atiende el relleno por pasada |
+| `AOE4WORLD_SYNC_BACKFILL_PAGES_PER_PLAYER` | 3 | Páginas por jugador del relleno |
+| `AOE4WORLD_SYNC_RECHECK_MAX_AGE_DAYS` | 30 | Días desde el último recorrido completo a partir de los cuales la ventana se vuelve a leer. `0` desactiva la revisión |
+| `AOE4WORLD_SYNC_MAX_PAGES` | 10 | Tope **duro** de páginas por jugador: el relleno usa `min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` |
+| `AOE4WORLD_SYNC_SEED_MAX_AGE_MINUTES` | 360 | Solo la **siembra inicial** del cursor; un cursor vivo no se recupera por esta cota |
+
+**Volumen por pasada**, sin contar summaries ni Discord: cuenta cada `GET` a `/api/v0`.
+
+| Paso | Peticiones |
+|---|---|
+| Masivo | `ceil(N/50)` lotes; hasta `BULK_MAX_PAGES` páginas por lote |
+| Ladder | `ceil(N/50)` lotes |
+| Perfil | Solo los ausentes de la ladder o con `profileCheckedAt` caducado (TTL 1 h); 0 en el caso estable |
+| Relleno | Hasta `BACKFILL_MAX_PLAYERS × min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` mientras haya ventanas pendientes o completas con el sello vencido (F2b) |
+| Detalle | 0–2 para reconciliar partidas sin resolver |
+
+Con N=13 y todos en la ladder: **2 peticiones** (1 masiva + 1 ladder) y 0–2 de detalle; el perfil es
+0 y el relleno solo aparece con ventanas pendientes. El presupuesto del masivo es **por lote**
+(`BULK_MAX_PAGES`); el del relleno es **por jugador** (`BACKFILL_PAGES_PER_PLAYER`, limitado por
+`SYNC_MAX_PAGES`). Si el cursor supera los 30 días, la página viene vacía con
+`_important_notice_`; no significa "sin partidas" (ver **Aviso de la API**).
+
+**Cesión y fallos**:
+
+- Un lote **truncado** agota `BULK_MAX_PAGES` con `next_page` no nulo. No bloquea: el cursor avanza,
+  el lote cuenta en `gamesBatchesIncomplete` y sus jugadores se encolan. `keepPage` conserva la
+  página de quien ya iba a medias; `rewind` vuelve a 1 a quien estaba completo o sin fila.
+- Un lote que **falla** (5xx, 429 agotado, red) se apunta en `gamesBatchErrors` con su número y su
+  rango de `profileId`, sus jugadores quedan `failed` y el cursor **no avanza**: la ventana se
+  reintenta entera en la pasada siguiente.
+- Un fallo de **guardado** deja al jugador `failed` y lo encola; no bloquea el cursor.
+- Una truncación no rebobina a quien iba por la mitad y el relleno se reanuda por `backfillPage`.
+
+**Revisión de ventanas completas (F2b)**:
+
+- Una ventana que se marca completa no se volvía a mirar nunca, así que una partida que se escapó
+  antes del sello (publicada tarde, o que la API no devolvía entonces) se perdía para siempre. F2b
+  vuelve a leerla cuando `windowCheckedAt` tiene **30 días** o más, con el mismo since y el mismo
+  presupuesto, y desde la **página 1**.
+- **Prioridad**: los pendientes van primero (`windowComplete=false`, luego `backfillPage`) y los
+  rechecks detrás; el `take` corta, así que un recheck nunca le quita el turno a una ventana a medias.
+- `AOE4WORLD_SYNC_RECHECK_MAX_AGE_DAYS=0` desactiva la revisión: solo se atienden pendientes.
+- **Coste**: con 60 jugadores son 3 pasadas al mes (20 por pasada), ~70–100 páginas; con 13, una
+  pasada al mes.
+- Un recheck **truncado** vuelve a la cola normal como pendiente (`windowComplete=false`,
+  `backfillPage=nextPage`); uno que **falla** deja el sello como estaba y se reintenta en la pasada
+  siguiente.
+- **No borra** partidas que AoE4World elimine después: solo recupera las que faltan. La paridad
+  manual (`verify:aoe4world -- --all`) sigue siendo la prueba completa.
+
+**Atascos**: `sync.gamesCursor` guarda `bulkIncompleteStreak` (pasadas seguidas con truncación) y
+`pendingBestCount`/`pendingBestAt` (el mínimo de `backfillPending` visto y cuándo). El panel deriva
+`backfillStalled` al leer: racha ≥ 7 o mínimo con 24 h sin bajar, y `null` si el rastro está viejo o
+no hay cursor. Con `backfillPending = 0` nunca hay atasco.
+
+**Aviso de la API**: si `updated_since` tiene 30 días o más, AoE4World devuelve
+`filters._important_notice_` y una página vacía. La pasada vuelve a sembrar con `catch-up`, reencola
+al roster y escribe el aviso en `apiNotice`. La recuperación por edad de un cursor existente usa esa
+misma edad de 30 días, no la cota de 6 h de la semilla.
+
+**Lo que esto no demuestra**: `ladder.ahead` solo compara la **cabeza** de la ladder con la partida
+más reciente; no detecta un hueco en medio del historial. La paridad de `verify:aoe4world` es una
+**muestra**, no una prueba de exhaustividad.
+
+### Caché de perfil (F3)
+
+El perfil (`GET /players/:profile_id`) solo sirve para refrescar `aoe4WorldName` y `avatarUrl`. Desde
+F3 se pide con una caché de **1 h** (`PROFILE_CACHE_TTL_HOURS`), sellada en `Player.profileCheckedAt`.
+
+- **Dos escritores sellan**: la ladder, que ya trae `name` y `avatars.full` en su entrada, y el perfil
+  cuando de verdad se pide. La ladder sella antes de `refreshProfiles`, así que un jugador que aparece
+  en ella no pasa por `getPlayer` en la primera pasada tras el despliegue.
+- **Solo se piden** perfiles ausentes de la ladder o con el sello nulo/caducado. Si la caché está
+  fresca, no hay petición y el resultado queda como está.
+- **Con N=13**, tras la primera pasada el coste estable baja a **2 peticiones de API** (1 masiva + 1
+  ladder) si todos están en la ladder; el perfil es 0. La fórmula general es:
+  `ceil(N/50)` de ladder + `ceil(N/50)` de masivo + 0 de perfil si todos están frescos.
+- **Si el perfil falla** (404, 5xx, red), el jugador queda `failed` y **no se sella** la columna: se
+  reintenta en la siguiente pasada. Un fallo de perfil no borra los contadores de partidas ya
+  importadas.
+- **Nombre y avatar**: la ladder también puede escribir `aoe4WorldName` y `avatarUrl`; el perfil
+  compara antes de escribir y solo los actualiza si cambiaron. La paridad nombre/avatar entre ladder y
+  perfil se deja para una comprobación manual, fuera de este bloque.
+
+### Salto del recálculo (F3b)
+
+`recomputeScores()` es la parte más cara de una pasada y, cuando no ha cambiado nada, escribía
+exactamente lo mismo. Desde F3b el worker se lo salta y deja `scoringSkipped = true` en el resumen y
+en `Setting["sync.lastRun"]`.
+
+**La lista cerrada** (`shouldRecomputeScores()` en `src/lib/aoe4world/sync.ts`) — se recalcula si
+cualquiera se cumple:
+
+| Señal | De dónde sale |
+|---|---|
+| No hay `scoring.lastRun` legible | `readScoringLastRun()` |
+| `cacheVersion` distinta de la del código | `SCORING_CACHE_VERSION` |
+| `ruleSetVersion` distinta de la del código | `RULESET_VERSION` |
+| La pasada anterior falló al recalcular | `scoringError` del rastro anterior |
+| Partidas tocadas | `inserted + updated + resolvedByRefetch + abandoned > 0` |
+| Summaries rellenados | `summaries.fetched > 0` (cambian APM, edad y aldeanos) |
+| Pool de mapas nuevo | `mapPool.status === "updated"` (`por-tierra-y-agua`) |
+| Metadatos de jugador cambiados | `ladder.playersChanged + perfiles cambiados` |
+| Cambio en el número de aprobados | `playersRanked` de `scoring.lastRun` frente al roster |
+
+- **La primera pasada tras desplegar F3b siempre recalcula**: el rastro anterior no lleva
+  `cacheVersion` (o lleva otra) y eso es `true` por la segunda fila de la tabla. Subir
+  `SCORING_CACHE_VERSION` es lo que hay que hacer si un cambio del motor añade una dependencia que no
+  esté en la tabla.
+- **`playersChanged` cuenta solo lo que lee la vista de objetivos**: `aoe4WorldName`, `avatarUrl` y
+  `rankLevel`. No cuentan los sellos de caché (`ladderUpdatedAt`, `profileCheckedAt`), que se escriben
+  en cada pasada, ni elo, racha, partidas de la ladder o Twitch, que cambian demasiado.
+- **El número de aprobados entra en la lista** porque aprobar y rechazar **no** recalculan en su
+  propia petición (no cabe en el presupuesto de CPU): antes lo arreglaba la pasada siguiente y, sin
+  esta señal, un rechazo dejaría al jugador en la clasificación hasta la siguiente partida.
+- **La configuración la recalculan sus escritores**, no el worker: el ruleset (panel y
+  `npm run db:window`), los cortes de división (`npm run alerts:cutoffs`), los eventos puntuales y el
+  revert/restore de una partida. El pool de mapas es la excepción y se detecta por
+  `mapPool.status === "updated"`.
+- **Saltárselo no es un fallo**: `scoring = null`, `scoringError = null` y `scoring.lastRun` no se
+  toca. La clasificación publicada sigue siendo la última que se calculó.
+
+**Medición en la preview** (seis pasadas ociosas, 0 partidas nuevas, 2 peticiones de API cada una):
+CPU del Worker con mediana **658 ms** (media 727, p95/máx 1.028) y `scoring.durationMs` de 228–589 ms
+con mediana ~351 ms. F3b quita esa parte en las pasadas sin novedades; el resto (Prisma, masivo y
+ladder) sigue ahí y es lo que hay que medir en la siguiente ronda.
+
 Hay **dos relojes**, y el primario no es GitHub:
 
 | Reloj | Qué es | Frecuencia real |
@@ -160,6 +309,11 @@ pestaña es para comportamientos de jugadores, no para salud de procesos). Tres 
 
 El rastro lleva `lastSuccessAt`, que **no avanza si la pasada sale a medias**: responde "¿desde cuándo
 está roto?". No hay histórico de pasadas: solo la última y el marcador de la última buena.
+
+Bajo el titular, la tarjeta de `/admin` añade el detalle del relleno (`backfillPending` con
+`backfillStalled`: completo, en curso, atascado o sin medir), los **errores de lote** por encima de
+los fallos por jugador —un lote caído explica hasta 50 de ellos— y, al pie, el `apiNotice` de
+AoE4World como nota. El `gamesCursor` se guarda en el rastro pero no se pinta.
 
 Los contadores del rastro son del **torneo**, no de filas tocadas. `newMatches` cuenta las partidas que
 **entran a contar** para el torneo en la pasada: las que se importan ya resueltas y cumplen la regla
@@ -418,7 +572,7 @@ credenciales el paso no existe** (no falla): el formulario no pinta el botón y 
 | `DISCORD_OAUTH_SECRET` | Firma de la cookie `discord_link` (20 min). Sin ella se usa `CRON_SECRET`; no hay respaldo en el código | Sí, en producción |
 | `DISCORD_REDIRECT_URI` | URI registrada en Discord. Si falta, se deriva del origen + `/api/discord/oauth/callback` | No, pero conviene fijarla |
 | `DISCORD_INVITE_URL` | Invitación de respaldo si el auto-unión falla | No |
-| `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord | No (valores por defecto) |
+| `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord; el `User-Agent` debe ser **ASCII** (sin tildes) | No (valores por defecto) |
 | `DISCORD_CHECK_MAX_PER_RUN` | Tope de cuentas comprobadas por pasada (10) | No |
 | `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas de la lista de miembros por refresco (20) y horas de caché (12) | No |
 | `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa de los **hitos de la edición** (comienzo, final, recordatorios y cierre de inscripciones) y manda el **informe diario de clasificación** | Sí, para avisar |
@@ -435,12 +589,25 @@ Van en el panel del Worker **y además** en *Build variables and secrets* del tr
 2. **OAuth2 → Redirects**: `https://laligahispana.es/api/discord/oauth/callback` (y el del
    `workers.dev` del Preview si se prueba ahí).
 3. **Crear el bot** y copiar su token.
-4. **Invitar el bot al servidor** con los permisos `CREATE_INSTANT_INVITE` (meter a quien se inscribe) y
-   `MANAGE_ROLES` (poner y quitar el rol de participante), y **colocar su rol por encima** del rol de
-   participante (Configuración del servidor → Roles). Sin `CREATE_INSTANT_INVITE`, el `PUT …/members`
-   responde 403 y **la inscripción no se bloquea**: se acepta con `joined: false` y se enseña el
-   `DISCORD_INVITE_URL`. Sin `MANAGE_ROLES` o con el rol por debajo, el paso del rol responde 403 y el
-   rastro lo dice ([ver abajo](#rol-de-participante-en-discord)).
+4. **Invitar el bot al servidor** con **solo estos cuatro permisos** (no usa ningún otro):
+
+   | Permiso | Para qué |
+   |---|---|
+   | `View Channels` (`VIEW_CHANNEL`) | Ver el canal de avisos |
+   | `Send Messages` (`SEND_MESSAGES`) | Hitos, informe diario y avisos globales |
+   | `Create Instant Invite` (`CREATE_INSTANT_INVITE`) | Auto-unión al inscribirse (`PUT …/members`) |
+   | `Manage Roles` (`MANAGE_ROLES`) | Poner y quitar el rol de participante |
+
+   Los **privados no necesitan permiso** (`POST /users/@me/channels` no pide ninguno). No hacen falta
+   `Read Message History`, `Manage Messages`, `Embed Links`, `Mention Everyone` ni nada de moderación.
+   La invitación con esos cuatro es
+   `https://discord.com/oauth2/authorize?client_id=<CLIENT_ID>&scope=bot&permissions=268438529`.
+
+   **Sin `CREATE_INSTANT_INVITE`**, el `PUT …/members` responde 403 y **la inscripción no se bloquea**:
+   se acepta con `joined: false` y se enseña el `DISCORD_INVITE_URL`. **Sin `MANAGE_ROLES`, o con el rol
+   del bot por debajo** del de participante, el paso del rol responde 403 y el rastro lo dice
+   ([ver abajo](#rol-de-participante-en-discord)). La jerarquía **no la salta `ADMINISTRATOR`**: hay que
+   subir el rol del bot (Configuración del servidor → Roles).
 5. **Activar el intent privilegiado `GUILD_MEMBERS`** (Bot → Privileged Gateway Intents → SERVER
    MEMBERS INTENT). Es manual y no se puede pedir por API; es lo que permite leer la **lista de
    miembros** del servidor, que comprueba a todos de una vez y **enlaza la cuenta de las altas de
@@ -450,6 +617,25 @@ Van en el panel del Worker **y además** en *Build variables and secrets* del tr
 
 Los scopes `identify` y `guilds.join` no se configuran en el portal: los pone el código al construir
 la URL de autorización.
+
+### Por qué parece que el bot necesita `ADMINISTRATOR`
+
+`ADMINISTRATOR` no añade ninguna acción que el bot use: concede todos los permisos **y salta las
+sobrescrituras de canal**. Si el bot solo funciona con él, lo que falta es un permiso al que los
+permisos del servidor no llegan:
+
+1. **Sobrescrituras del canal de avisos.** Si el canal es privado, el bot necesita `VIEW_CHANNEL` y
+   `SEND_MESSAGES` **en ese canal** (Editar canal → Permisos → rol del bot). `ADMINISTRATOR` las salta;
+   los permisos del servidor, no. Un `403` con «Missing Access» es esto.
+2. **Los permisos están en un rol que el bot no lleva.** El bot usa su propio rol (el que se crea con su
+   nombre al invitarlo) y los que se le asignen; un rol nuevo con permisos que nadie le ha puesto al bot
+   no hace nada.
+3. **Falta `MANAGE_ROLES` o el rol del bot está por debajo** del de participante. Un `403` con «Missing
+   Permissions» al publicar suele ser falta de `SEND_MESSAGES` en el canal; al poner el rol, falta
+   `MANAGE_ROLES` o sobra altura del rol de participante.
+
+`ADMINISTRATOR` **no** salta la jerarquía de roles: si lo que falla es poner el rol de participante y el
+rol del bot está por debajo, seguirá fallando con él.
 
 ### Dónde mirar si falla
 
@@ -492,10 +678,11 @@ from "Player" where discordUsername is not null group by 1 having count(*) > 1;
 
 ## Alertas de comportamiento
 
-El motor vigila **10 reglas**: **6 de patrón** sobre las clasificatorias (partidas cortas, rival
-repetido y compañero repetido, cada uno en racha y en total), **3 de estado** (historial no público,
-partidas de ladder que no llegan, y Discord fuera del servidor) y **1 condicional** (participante sin
-canal de directo, solo si la edición exige retransmisión).
+El motor vigila **14 reglas**: **6 de patrón** sobre las clasificatorias (partidas cortas, rival
+repetido y compañero repetido, cada uno en racha y en total), **4 de estado** (historial no público,
+partidas de ladder que no llegan, Discord fuera del servidor y partidas sin resumen que revisar), **3 de
+partida desde el resumen** (sin aldeanos en el arranque, sin crecimiento militar y sin obtener recursos)
+y **1 condicional** (participante sin canal de directo, solo si la edición exige retransmisión).
 
 ```bash
 npm test                       # el motor, con secuencias sintéticas y SIN base de datos
@@ -507,16 +694,36 @@ npm run alerts:cutoffs -- --show
 ```
 
 - La parte pura está en `tests/unit/lib/alerts/`: `compute.test.ts` (reglas sobre secuencias),
-  `rules.test.ts` (umbrales, frases y claves de dedupe) y `division-cutoffs.test.ts`.
+  `rules.test.ts` (umbrales, frases y claves de dedupe), `division-cutoffs.test.ts`,
+  `report-archive.test.ts` (los CSV y su entrecomillado) y `zip.test.ts` (estructura del ZIP).
 - **Umbrales** en `Setting["alerts.ruleset"]` (versión 1, con `DEFAULT_ALERTS_RULESET` de respaldo):
-  partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10 y compañero repetido 7. `window` y
-  `modes` **no** se duplican: se leen del ruleset de puntuación, con el mismo `rankedMatchWhere()` y
-  el corte de inscripción.
+  partidas cortas < 180 s, rachas de 2 y 3, acumulados cada 5/10 y compañero repetido 7. Los cuatro del
+  resumen: primer aldeano antes de **300 s**, **300 s** de gracia militar, **300 s** seguidos sin máximo
+  militar después de la gracia y **120 s** seguidos sin recolectar. `window` y `modes` **no** se
+  duplican: se leen del ruleset de puntuación, con el mismo `rankedMatchWhere()` y el corte de
+  inscripción.
+- **Un documento antiguo del ruleset sigue valiendo**: las cuatro claves nuevas no suben la versión, así
+  que el documento que ya está en producción (versión 1, siete claves) se completa con los valores por
+  defecto en vez de descartarse.
 - **Qué partidas mira**: exactamente las que puntúan. Además del filtro de `rankedMatchWhere()` aplica
   en memoria la condición de equipo del motor de puntos, porque no cabe en un `where` de Prisma.
 - **Cuándo se evalúa**: en `syncApprovedPlayers()`, después de `recomputeScores()`, **solo los
-  jugadores tocados**; y también al revertir o restaurar una partida, al cerrar el torneo
+  jugadores tocados** —los que han cambiado partidas **y** los que han tenido un summary leído o una
+  partida sin revisar, porque un resumen rellenado para una partida vieja también mueve sus alertas—; y
+  también al revertir o restaurar una partida, al cerrar el torneo
   (`Setting["alerts.tournamentClose"]` lo marca) y a mano.
+- **Las tres reglas del resumen son una alerta por partida y regla** (`MATCH_DETECTED`, anclada al
+  `gameId`): el jugador que no hizo aldeanos en tres partidas tiene tres alertas, no una. Se evalúan
+  solo con `summaryAnomalies` legible; si el `buildOrder` no se pudo leer, la de aldeanos **no se
+  evalúa**, porque "no lo sé" no es "no hizo ninguno"; y **solo si la partida duró al menos la ventana
+  de aldeanos** (300 s), porque una partida más corta no llegó a jugar esos primeros minutos y no se
+  puede decir que no los hiciera. El tramo militar descuenta la gracia inicial (el explorador arranca la
+  puntuación en 13 y no hacer un máximo nuevo al principio es normal).
+- **`SUMMARY_NOT_REVIEWED` es de estado y una por jugador**: cuenta las partidas que pasaron la ventana
+  de revisión del resumen sin respuesta concluyente, tras haberse intentado, y lleva en `details` sus
+  `gameId` (hasta 20) y el último intento. Reevaluarla cada pasada no inserta nada nuevo. Distingue dos
+  casos que conviene no confundir: `HISTORY_NOT_PUBLIC` afirma que el historial está **cerrado** porque
+  el sondeo lo confirmó; `SUMMARY_NOT_REVIEWED` dice que **no se pudo confirmar** nada.
 - **`NO_STREAM_CHANNEL`** es la única **condicional**: se evalúa solo si
   `Setting["edition.config"].streamingRequired` está activo, y avisa de los participantes aprobados
   **sin ningún canal** (`twitchChannel`, `youtubeChannel`, `kickChannel` y `twitchUrl` vacíos). No mira
@@ -524,14 +731,24 @@ npm run alerts:cutoffs -- --show
   cada pasada no inserta nada. Apagar el interruptor no borra las alertas ya escritas. Al **encenderlo**,
   los avisos aparecen en la siguiente evaluación que cubra a cada jugador: una pasada sin partidas
   nuevas evalúa a todos los aprobados, y el informe de alertas fuerza una completa.
-- **Informe**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) es un CSV para Excel con
-  alertas disparadas y rachas abiertas, y llama a `evaluateAlerts({ full: true })` antes.
+- **Solo se publica la edición activa**: la pestaña y el informe filtran
+  `Alert.createdAt >= window.from` de la ventana del ruleset de puntos, sin cota superior. Las filas
+  anteriores se conservan en `Alert` (*append-only*) pero dejan de mostrarse al avanzar la ventana, así
+  que la vista se reinicia con cada torneo sin borrar nada. No hay tope superior porque las alertas
+  de cierre (`STREAK_AT_TOURNAMENT_END`) se escriben **después** de `window.to` y un
+  `createdAt <= window.to` las ocultaría.
+- **Informe**: `GET /admin/alertas/reporte` (detrás de `requireAdmin()`) devuelve un ZIP con tres
+  CSV estándar (coma, RFC 4180, BOM UTF-8 y CRLF): `resumen.csv` con la cabecera de la tanda en dos
+  columnas `Campo,Valor`, `alertas-disparadas.csv` y `rachas-abiertas.csv`, las dos con la misma
+  cabecera de doce columnas. Un bloque sin filas sale con su cabecera y nada más. Antes llama a
+  `evaluateAlerts({ full: true })`.
 - **Idempotente**: `createMany({ skipDuplicates: true })` sobre `dedupeKey`; repetirlo no crea nada.
 - **Dos reglas retiradas**: `TEAMMATE_ELO_GAP` (brecha de elo) y `LOW_DIVISION_TEAM_GAME` (equipo en
   una división muy distinta) **ya no se calculan**: su caso pasó a ser la condición de equipo de la
   puntuación (una partida con un compañero a dos escalones o más no cuenta, ver
   [`PUNTUACION.md`](./PUNTUACION.md)). Sus valores del enum, sus etiquetas y sus frases se quedan
-  porque hay filas históricas de `Alert` que el panel sigue pintando.
+  porque hay filas históricas de `Alert` en la tabla, y las que caen en la edición activa se siguen
+  pintando.
 - Un fallo del motor **no** mueve `lastSuccessAt`.
 
 ## Cortes de división
@@ -623,31 +840,49 @@ Cinco objetivos —`ansioso`, los tres `avance-relampago-*` y `defensor-del-pueb
 que **no están en el listado de partidas**: los APM, el minuto al que se pasó de edad y cuántos aldeanos
 se perdieron. Eso solo lo publica el **resumen** de cada partida, una ruta del **sitio** de AoE4World
 (no de su API), y lo rellena el worker en su pasada (`backfillMatchSummaries()`,
-`src/lib/sync-summaries.ts`).
+`src/lib/sync-summaries.ts`). Del mismo resumen salen las **tres alertas por partida** de
+[Alertas de comportamiento](#alertas-de-comportamiento).
 
 | Qué | Cuánto |
 |---|---|
 | Petición | Una por partida a `…/players/{profileId}/games/{gameId}/summary?camelize=true`, con el `User-Agent` del proyecto |
-| Partidas por pasada | **20** (`SUMMARY_MAX_PER_RUN`); el resto, a la siguiente |
+| Partidas por pasada | **10** (`SUMMARY_MAX_PER_RUN`; `AOE4WORLD_SUMMARY_MAX_PER_RUN`) |
+| Ritmo | **2 s** entre peticiones (`AOE4WORLD_SUMMARY_MIN_INTERVAL_MS`) |
 | Orden | De la partida **más nueva a la más vieja**, con el histórico rellenándose por detrás |
-| Reintento | Un fallo se reintenta pasada la hora; sin resolver, una partida **no** se reintenta después de **24 h** |
-| Columnas | Las ocho del resumen en `Match` (`apm` … `summaryCheckedAt`, ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
+| Reintento | Un fallo se reintenta pasada **1 h** (`AOE4WORLD_SUMMARY_RETRY_DELAY_MS`) |
+| Ventana de revisión | **24 h** (`AOE4WORLD_SUMMARY_REVIEW_WINDOW_HOURS`): pasada esa edad sin respuesta concluyente, la partida deja de pedirse y se avisa de que quedó **sin revisar** |
+| Columnas | Las ocho métricas del resumen (`apm` … `mountedVillagersLost`), `summaryAnomalies` y las dos marcas de control (ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
 
 - **Qué partidas**: exactamente las que puntúan (el mismo `rankedMatchSql()` que la clasificación) y de
   un jugador que no tenga el historial cerrado. El filtro `historyPublic is distinct from false` deja
   pasar el "sin comprobar" y descarta a quien consta que no publica partidas.
-- **Un `404` es concluyente**: la partida no tiene resumen, se apunta en `summaryCheckedAt` y no se
-  vuelve a preguntar. Un fallo de red, un `5xx` o un `200` ilegible **no escriben nada** —ni métricas ni
-  la marca—, así que la partida vuelve a la cola: no saber no es "no hay".
-- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las ocho columnas significa "no hay
+- **Dos marcas, dos significados**: `summaryCheckedAt` es una respuesta **concluyente** (200 o 404) y
+  saca la partida de la cola para siempre; `summaryLastAttemptAt` es **cualquier intento** (200, 404,
+  fallo o 429) y es lo que sostiene el reintento de una hora y la detección de lo no revisado. `null` en
+  la primera = nunca se resolvió; `null` en la segunda = nunca se intentó.
+- **Un `404` es concluyente**: la partida no tiene resumen, se apunta en las dos marcas y no se vuelve a
+  preguntar. Un fallo de red, un `5xx` o un `200` ilegible **no escriben métricas** —solo
+  `summaryLastAttemptAt`—, así que la partida vuelve a la cola pasada la hora: no saber no es "no hay".
+- **Un `429` corta la pasada.** No es un bache: es AoE4World pidiendo bajar el ritmo, así que se apunta
+  el intento, se deja el resto de la cola para la pasada siguiente y se avisa en el rastro
+  (`summariesError`). Seguir pidiendo sería la peor respuesta posible.
+- **Aviso de no revisadas**: una partida que se intentó y pasó la ventana de 24 h sin resolución se
+  descarta de la cola, pero no se olvida: se cuenta por jugador y el motor escribe
+  `SUMMARY_NOT_REVIEWED`, una alerta de estado con las partidas y el último intento en `details`. El
+  caso de **perfil privado confirmado** sigue siendo `HISTORY_NOT_PUBLIC`; este es el respaldo de lo que
+  no se pudo confirmar.
+- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las ocho métricas significa "no hay
   resumen", nunca "cero". Una partida sin resumen no cumple ninguna hazaña y **corta** la racha de
   `ansioso` (ver [`OBJETIVOS.md`](./OBJETIVOS.md#logros-cobra-quien-cumple)).
+- **`summaryAnomalies`** guarda la evidencia compacta para las alertas (si el `buildOrder` se pudo leer,
+  el primer aldeano y los dos tramos sin progreso). No sustituye a las métricas ni se escribe nunca sin
+  un 200: es un resumen de cuatro datos, no el payload.
 - Con `AOE4WORLD_MOCK=1` **no sale a la red**: se sirve una fixture determinista por partida, con la
-  misma forma que el resumen de verdad, para que el lector y los objetivos se ejerciten en las
-  simulaciones.
+  misma forma que el resumen de verdad (series incluidas), para que los lectores, los objetivos y las
+  alertas se ejerciten en las simulaciones.
 - Dónde mirar: `summariesError` en el rastro (`[sync] Summaries de partida: …`), con cuántos se han
-  guardado, cuántos no tienen resumen y cuántos quedan para la pasada siguiente. **No** mueve
-  `lastSuccessAt`: un resumen que no llega solo deja unos objetivos a medias.
+  guardado, cuántos no tienen resumen, **cuántos quedaron sin revisar** y cuántos esperan a la pasada
+  siguiente. **No** mueve `lastSuccessAt`: un resumen que no llega solo deja unos objetivos a medias.
 
 ## Transparencia del historial
 
@@ -811,6 +1046,73 @@ noticia.
 - **Sin cuenta resoluble no hay privado**, y sin canal no hay global; los dos son **independientes** y
   ninguno es un fallo. Sin `DISCORD_BOT_TOKEN` no se avisa de nada (solo queda el log).
 
+## Eventos puntuales
+
+Una **ventana con multiplicador**: durante el evento, cada victoria clasificatoria paga
+`pointsPerWin × (multiplier − 1)` puntos de bono (x2, x3…). Las reglas de qué cuenta y cómo se
+suma están en `docs/PUNTUACION.md`; aquí solo está la operativa. El catálogo se edita en el
+panel (`/admin/administracion/eventos`) y se **bloquea** cuando empieza la ventana del torneo
+(`window.from`): a partir de ahí, mover un evento cambiaría puntos ya publicados.
+
+| Qué | Dónde |
+|---|---|
+| Eventos | `Setting["edition.events"]` (nombre, descripción, `from`/`to`, multiplicador y `discordRequired`) |
+| Snapshot de elegibilidad | `Setting["edition.events.state"]` (`checkedAt`, `checkedPlayerIds`, `eligiblePlayerIds` por evento) |
+| Memoria de avisos | `Setting["edition.events.announcements"]` (`sent`: `${eventId}:24h`/`12h`/`1h` → instante) |
+| Dónde mirar | `announceError` (avisos) y `discordError` (elegibilidad) en `Setting["sync.lastRun"]`. Ninguno mueve `lastSuccessAt` |
+
+### Avisos
+
+El worker manda **tres recordatorios** por evento, dentro de su tramo y nunca atrasados:
+
+| Aviso | Cuándo (`now`) |
+|---|---|
+| 24 h | `[inicio − 24 h, inicio − 12 h)` |
+| 12 h | `[inicio − 12 h, inicio − 1 h)` |
+| 1 h | `[inicio − 1 h, inicio)` |
+
+- **Un evento ya empezado no genera recordatorios**: su información va en el aviso de comienzo.
+- **Un tramo saltado no se recupera**: si la pasada de las 24 h no ocurre, no se manda al día
+  siguiente; sale el tramo en el que estemos. Un aviso ya anotado no se repite.
+- El texto lleva el nombre, la ventana en hora de Madrid, el multiplicador, la descripción si la
+  hay y, si el evento lo pide, que solo cobran quienes estén en el servidor de Discord.
+- Se menciona al rol de participante (`DISCORD_PARTICIPANT_ROLE_ID`) con
+  `allowed_mentions` restringido a ese rol: no se pinguea a todo el mundo. **Sin ese rol no se
+  manda nada** y el aviso queda pendiente; el motivo va en `announceError`.
+- **El aviso de comienzo del torneo incluye un resumen de los eventos** (nombre, ventana,
+  multiplicador y requisito de Discord). Si no cabe en un mensaje de 2000 caracteres, el aviso
+  de inicio sale entero y el resumen en un segundo mensaje; la marca del comienzo se pone solo
+  cuando han salido los dos. Sin eventos, el mensaje de inicio no cambia. Los dos mensajes salen
+  con `allowed_mentions` vacío (`suppressMentions`): el nombre de un evento lo escribe el panel y
+  un `@everyone` dentro de él no puede pingear al servidor.
+
+### Snapshot de Discord
+
+Si un evento tiene `discordRequired`, el bono solo lo cobran quienes estén en el servidor, y
+quiénes son se decide **al empezar el evento** (`syncEditionEventEligibility()`, antes del
+recálculo de la clasificación).
+
+- **La primera pasada dentro del evento comprueba a todos los aprobados** y fuerza la lectura
+  de la lista de miembros, ignorando su caché de 12 h: el snapshot es la foto del momento de
+  empezar.
+- **Las pasadas siguientes solo comprueban a los aprobados que faltan** (altas a mitad de
+  evento). A quien ya se comprobó no se le vuelve a preguntar, y **nadie sale de
+  `eligiblePlayerIds`**: la elegibilidad crece, no se revisa.
+- El roster resuelve presencias sin una petición por jugador; una ausencia se confirma con
+  `GET /guilds/{id}/members/{user_id}`. Las confirmaciones por cuenta se acotan con
+  `DISCORD_CHECK_MAX_PER_RUN` y lo que queda se reintenta en la pasada siguiente.
+- **Sin `discordUserId`** el jugador se cuenta como comprobado y **no elegible**: sin cuenta
+  enlazada no hay manera de probar que es quien está en el servidor.
+- Un veredicto **`unknown`** (timeout, `401`, `5xx`, roster ilegible) **no se marca**: se
+  reintenta. No saber no es "no está", y aquí además sería "no cobra".
+- Esta comprobación **no crea alertas** `DISCORD_NOT_IN_GUILD`: de eso se encarga la
+  comprobación de pertenencia. Solo decide quién cobra.
+- **Sin snapshot no hay bono**: si el evento empieza y termina entre dos pasadas del cron, no
+  hay comprobación retroactiva y sus victorias no pagan extra. Es una limitación conocida del
+  cron de 5–10 minutos.
+- Sin `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` no se escribe nada y el motivo va en
+  `discordError`: el evento que exige Discord no repartirá bono hasta que se configure.
+
 ## Simulaciones
 
 ### Con fixtures (mock de AoE4World)
@@ -866,12 +1168,30 @@ reales).
 
 ```bash
 npm run verify:sync          # normalización con datos de ejemplo (no necesita BBDD)
-npm run verify:sync -- --db  # además comprueba el guardado y borra lo que crea
+npm run verify:sync -- --db  # además comprueba el guardado y restaura el estado de producción
 ```
 
-`--db` usa un jugador de prueba (`profileId` 9000001) que **borra al terminar siempre**, incluso si
-una comprobación falla. Solo se niega a arrancar si ese jugador ya existía de una ejecución anterior
-que murió sin limpiar; entonces hay que borrarlo desde el panel o a mano por su `profileId`.
+`--db` usa dos jugadores de prueba (`profileId` 9000001 y 9000020) y un ruleset de prueba con una
+ventana que cubre el presente. Antes de tocar nada guarda `sync.gamesCursor`, `sync.lastRun`, las
+columnas `windowComplete`/`backfillPage`/`windowCheckedAt`/`profileCheckedAt` de **todos** los
+aprobados y el ruleset; en un `finally` borra los jugadores de prueba (con sus partidas, puntuaciones
+y claves de `Setting`) y restaura todo, incluso si una comprobación falla. Cubre también F2b: ventana
+caducada recheckada, ventana reciente no recheckada, `0` que la desactiva y prioridad del pendiente
+con `BACKFILL_MAX_PLAYERS=1`. Solo se niega a arrancar si alguno de esos
+`profileId` ya existía de una ejecución anterior.
+
+### Medidas de AoE4World
+
+```bash
+npm run verify:aoe4world -- --sample 10   # muestra de 10 para páginas y paridad
+npm run verify:aoe4world -- --all         # mide todos los aprobados
+npm run verify:aoe4world -- --sample 5 --no-parity
+```
+
+Mide el roster y la ladder, recorre el histórico dentro de la ventana del ruleset, compara la paridad
+con `Match`, mide la semántica de `updated_at`, comprueba el envelope masivo de `/games` y publica el
+rastro del sincronizador. **Solo lee**; `--recalc` es la excepción: ejecuta `recomputeScores()`
+(idempotente) y avisa antes de escribir.
 
 ## Cuando la base de datos no responde
 
@@ -898,6 +1218,7 @@ npm run db:security -- --check   # comprueba RLS; aplica con db:security si sale
 npm run countries:seed           # publica la lista de países del formulario
 npm run db:window                # publica la ventana de fechas del torneo (recomendado)
 npm run alerts:cutoffs           # deriva los cortes de división de la condición de equipo
+npm run backfill:objective-leads # reconstruye el historial de liderazgos de la edición
 npm run db:cron                  # programa el reloj cada 10 minutos
 ```
 
@@ -910,6 +1231,10 @@ npm run db:cron                  # programa el reloj cada 10 minutos
 - `alerts:cutoffs` deriva los cortes de división de la condición de equipo. Sin ellos la condición no
   se aplica (las partidas de equipo cuentan) y el rastro del recálculo lo avisa: no rompe nada, pero
   el torneo puntuaría de más.
+- `backfill:objective-leads` solo hace falta al desplegar el registro de liderazgos (`ObjectiveLeadEvent`)
+  con una edición ya jugada: reconstruye la secuencia de pérdidas y ganancias desde las partidas
+  contadas, con el `finishedAt` de cada partida. Es idempotente, toma el cerrojo del recálculo y
+  `-- --dry-run` lo enseña sin escribir. Si la edición empieza después del despliegue, no hace falta.
 - Variables del panel: las `NEXT_PUBLIC_*` y los secretos de servidor en las dos listas de build, y
   `YOUTUBE_API_KEY` y las de Discord en los dos sitios (Worker y build). Detalle en
   [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md#variables-los-dos-sitios-del-panel).

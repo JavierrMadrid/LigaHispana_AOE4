@@ -94,12 +94,13 @@ export type TotalAlertRule =
  *
  * No tienen racha ni acumulado: se comprueba una cosa (el historial de partidas del
  * jugador, la ladder por delante de lo que nos llega, si su cuenta de Discord está en
- * el servidor, si tiene algún canal de directo) y, mientras siga siendo cierto, el
- * mismo hecho. Las tres primeras se evalúan en `src/lib/history-checks.ts` y
- * `src/lib/discord/check.ts`, desde el worker del sincronizador, porque no leen
- * `Match` sino columnas de `Player`, una ruta del sitio de AoE4World y la API de
- * Discord; la del canal la evalúa `evaluateAlerts()` (`src/lib/alerts/evaluate.ts`),
- * que ya lee a los aprobados en cada pasada.
+ * el servidor, si tiene algún canal de directo, si quedaron partidas sin resumen que
+ * revisar) y, mientras siga siendo cierto, el mismo hecho. Las tres primeras se
+ * evalúan en `src/lib/history-checks.ts` y `src/lib/discord/check.ts`, desde el
+ * worker del sincronizador, porque no leen `Match` sino columnas de `Player`, una
+ * ruta del sitio de AoE4World y la API de Discord; la del canal y la del resumen sin
+ * revisar las evalúa `computePlayerAlerts()` (`src/lib/alerts/compute.ts`), que ya
+ * lee las clasificatorias de cada aprobado en cada pasada.
  *
  * Su `dedupeKey` es estable por (regla, tipo, jugador) —sin partida ancla ni número—,
  * porque si no, reevaluarlas cada 10 minutos insertaría una fila nueva cada 12 horas
@@ -108,17 +109,38 @@ export type TotalAlertRule =
  * `NO_STREAM_CHANNEL` es la única **condicional**: solo se evalúa si la edición
  * declara la retransmisión obligatoria (`Setting["edition.config"]`). Apagarla no
  * borra las alertas ya escritas: `Alert` es *append-only*.
+ *
+ * `SUMMARY_NOT_REVIEWED` es el respaldo del perfil privado: `HISTORY_NOT_PUBLIC`
+ * afirma que el historial está cerrado **porque el sondeo lo confirmó**, y esta
+ * avisa de lo contrario, de las partidas que se intentaron leer y nunca dieron una
+ * respuesta concluyente. Son dos hechos distintos y por eso son dos reglas.
  */
 export type StateAlertRule =
   | "HISTORY_NOT_PUBLIC"
   | "MISSING_LADDER_MATCHES"
   | "DISCORD_NOT_IN_GUILD"
-  | "NO_STREAM_CHANNEL";
+  | "NO_STREAM_CHANNEL"
+  | "SUMMARY_NOT_REVIEWED";
 
-export type AlertsRuleName = StreakAlertRule | TotalAlertRule | StateAlertRule;
+/**
+ * Reglas que miran **una partida concreta** y se disparan por partida.
+ *
+ * Las tres salen del interior de la partida (`Match.summaryAnomalies`, leído del
+ * resumen): no creó aldeanos en el arranque, la puntuación militar estuvo sin subir
+ * una ventana seguida, o no recolectó recursos una ventana seguida. Su clave de
+ * dedupe lleva la partida ancla, así que hay **una alerta por partida y regla**; con
+ * la clave de estado, una sola fila taparía todos los hallazgos del jugador.
+ */
+export type MatchAlertRule = "NO_VILLAGERS_FIRST_MINUTES" | "NO_MILITARY_GAP" | "NO_RESOURCES_GAP";
+
+export type AlertsRuleName = StreakAlertRule | TotalAlertRule | StateAlertRule | MatchAlertRule;
 
 export type AlertKindName =
-  "STREAK_CLOSED" | "STREAK_AT_TOURNAMENT_END" | "TOTAL_REACHED" | "STATE_DETECTED";
+  | "STREAK_CLOSED"
+  | "STREAK_AT_TOURNAMENT_END"
+  | "TOTAL_REACHED"
+  | "STATE_DETECTED"
+  | "MATCH_DETECTED";
 
 /* -------------------------------------------------------------------------- */
 /* Las etiquetas                                                               */
@@ -156,21 +178,27 @@ export const ALERT_RULE_LABELS = {
   MISSING_LADDER_MATCHES: "Partidas de ladder que no nos llegan",
   DISCORD_NOT_IN_GUILD: "Discord sin estar en el servidor",
   NO_STREAM_CHANNEL: "Participante sin canal de directo",
+  SUMMARY_NOT_REVIEWED: "Partidas sin resumen que revisar",
+  NO_VILLAGERS_FIRST_MINUTES: "Sin aldeanos en el arranque",
+  NO_MILITARY_GAP: "Sin crecimiento militar",
+  NO_RESOURCES_GAP: "Sin obtener recursos",
 } as const satisfies Record<AlertsRuleName, string>;
 
 /**
  * Cuándo se detectó, en español, con el mismo criterio que `ALERT_RULE_LABELS`: el
  * enum describe el dato y el mapa lo traduce una sola vez.
  *
- * `STATE_DETECTED` es el cuarto valor y no es de la misma familia que los otros tres:
- * no es una racha ni un acumulado, es un **estado comprobado**. Por eso se traduce
- * como "Estado comprobado" y no como "Racha" o "Acumulado".
+ * `STATE_DETECTED` no es de la misma familia que los tres primeros: no es una racha
+ * ni un acumulado, es un **estado comprobado**. Por eso se traduce como "Estado
+ * comprobado" y no como "Racha" o "Acumulado". `MATCH_DETECTED` tampoco: es el
+ * hallazgo de **una partida**, y se traduce como "Hallazgo en una partida".
  */
 export const ALERT_KIND_LABELS = {
   STREAK_CLOSED: "Racha rota",
   STREAK_AT_TOURNAMENT_END: "Racha cerrada por fin de torneo",
   TOTAL_REACHED: "Acumulado alcanzado",
   STATE_DETECTED: "Estado comprobado",
+  MATCH_DETECTED: "Hallazgo en una partida",
 } as const satisfies Record<AlertKindName, string>;
 
 export type AlertsThresholds = {
@@ -188,6 +216,23 @@ export type AlertsThresholds = {
   repeatedTeammateStreak: number;
   /** R3: partidas con el mismo compañero en total, un único aviso al llegar. */
   repeatedTeammateTotal: number;
+  /**
+   * Segundos del arranque en los que tiene que haber salido el primer aldeano.
+   * Si no sale ninguno, la partida avisa (`NO_VILLAGERS_FIRST_MINUTES`).
+   */
+  noVillagersFirstSeconds: number;
+  /** Gracia al principio de la partida en la que el militar puede no crecer. */
+  noMilitaryGraceSeconds: number;
+  /**
+   * Ventana seguida, **después de la gracia**, sin que la puntuación militar haga
+   * un máximo nuevo, para avisar (`NO_MILITARY_GAP`).
+   */
+  noMilitaryGapSeconds: number;
+  /**
+   * Ventana seguida sin que suba la suma de recursos recolectados, para avisar
+   * (`NO_RESOURCES_GAP`).
+   */
+  noResourcesGapSeconds: number;
 };
 
 export type AlertsRuleset = {
@@ -203,6 +248,14 @@ export type AlertsRuleset = {
  * acumulados cada 5 y cada 10 y 7 partidas con el mismo compañero. Se cambian en
  * `Setting["alerts.ruleset"]` sin desplegar, igual que los puntos por victoria del
  * motor de puntuación.
+ *
+ * Los cuatro últimos son los del resumen de partida: primer aldeano antes de los 5
+ * minutos, 5 minutos de gracia y 5 seguidos sin máximo militar, y 2 seguidos sin
+ * recolectar. **No suben `ALERTS_RULESET_VERSION`**: un documento guardado con la
+ * versión 1 y solo las siete claves antiguas sigue siendo válido, y las nuevas se
+ * completan con estos valores. Subir la versión invalidaría el documento entero —es
+ * el criterio de `mergeAlertsRuleset()`— y eso borraría la configuración de la
+ * organización para añadir cuatro claves que tienen un valor razonable por defecto.
  */
 export const DEFAULT_ALERTS_RULESET: AlertsRuleset = {
   version: ALERTS_RULESET_VERSION,
@@ -215,6 +268,10 @@ export const DEFAULT_ALERTS_RULESET: AlertsRuleset = {
     repeatedOpponentTotalStep: 10,
     repeatedTeammateStreak: 3,
     repeatedTeammateTotal: 7,
+    noVillagersFirstSeconds: 300,
+    noMilitaryGraceSeconds: 300,
+    noMilitaryGapSeconds: 300,
+    noResourcesGapSeconds: 120,
   },
 };
 
@@ -238,6 +295,10 @@ const THRESHOLD_KEYS = [
   "repeatedOpponentTotalStep",
   "repeatedTeammateStreak",
   "repeatedTeammateTotal",
+  "noVillagersFirstSeconds",
+  "noMilitaryGraceSeconds",
+  "noMilitaryGapSeconds",
+  "noResourcesGapSeconds",
 ] as const satisfies readonly (keyof AlertsThresholds)[];
 
 export type AlertsRulesetMergeResult = {
@@ -253,6 +314,11 @@ export type AlertsRulesetMergeResult = {
  * de que una `version` que no es la del código invalida el documento entero: si
  * el documento describe otra estructura, aplicar "lo que se parezca" sería peor
  * que usar los valores por defecto y decirlo.
+ *
+ * Un documento de la versión 1 escrito **antes** de las cuatro reglas del resumen
+ * (solo las siete claves antiguas) se acepta tal cual: las claves que no vienen se
+ * quedan con su valor por defecto. No es "aplicar lo que se parezca", es que faltar
+ * una clave no cambia la estructura del documento, solo su contenido.
  */
 export function mergeAlertsRuleset(stored: unknown): AlertsRulesetMergeResult {
   const warnings: string[] = [];
@@ -428,6 +494,30 @@ export type AlertAnchorDetail = {
   discordHttpStatus?: number | null;
   /** Miembros que tenía el roster cuando se comprobó, si la comprobación salió de él. */
   discordRosterMembers?: number;
+
+  /* Reglas de partida desde el resumen (`MATCH_DETECTED`). */
+
+  /**
+   * Primer instante en que terminó un aldeano, en segundos de partida
+   * (`NO_VILLAGERS_FIRST_MINUTES`). `null` = la lista era legible y no había
+   * ninguno, que es lo que dispara la regla.
+   */
+  firstVillagerSeconds?: number | null;
+  /** Inicio del tramo sin máximo militar (`NO_MILITARY_GAP`). */
+  militaryNoGrowthFromSeconds?: number;
+  /** Fin de ese tramo. */
+  militaryNoGrowthToSeconds?: number;
+  /** Inicio del tramo sin recolectar (`NO_RESOURCES_GAP`). */
+  noResourceGainFromSeconds?: number;
+  /** Fin de ese tramo. */
+  noResourceGainToSeconds?: number;
+
+  /* Evidencia de `SUMMARY_NOT_REVIEWED`. */
+
+  /** Las partidas que quedaron sin revisar, de la más reciente a la más antigua. */
+  unreviewedGameIds?: string[];
+  /** El intento más reciente de esas partidas, en ISO-8601 UTC. */
+  summaryLastAttemptAt?: string;
 };
 
 export type AlertTriggerInput = {
@@ -506,6 +596,14 @@ export type TriggeredAlert = {
  * escribió la primera vez. `rules.test.ts` lo fija con una prueba explícita,
  * porque es una propiedad que se rompe sin que nada falle.
  *
+ * ## `MATCH_DETECTED` es lo contrario
+ *
+ * Un hallazgo dentro de una partida **sí** tiene remate y su remate es la partida:
+ * `MATCH_DETECTED` cae en la rama `partida:<anchorGameId>`, así que hay una fila
+ * por partida y regla —si el jugador tuvo tres partidas sin aldeanos, son tres
+ * alertas— y reevaluarlas no duplica ninguna. Con la clave de estado, la primera
+ * partida taparía todas las demás.
+ *
  * El prefijo de versión existe para que un cambio en la forma de la clave no
  * choque con lo ya escrito: si algún día la clave cambia de ingredientes, sube
  * el prefijo y se vuelve a evaluar desde cero en lugar de saltarse filas.
@@ -542,6 +640,21 @@ export function alertDedupeKey(input: {
 /** `1 partida` y `3 partidas`: el plural no es un detalle de estilo en un informe. */
 export function partidas(count: number): string {
   return count === 1 ? "1 partida" : `${count} partidas`;
+}
+
+/**
+ * Segundos en minutos, como se lee en un informe: "5 minutos", "1,5 minutos".
+ *
+ * Se redondea a un decimal y con **coma** porque el texto está en español, y solo
+ * se quita el decimal cuando es exacto: "5 minutos" y no "5,0 minutos". Los
+ * umbrales del ruleset son segundos y quien los retoca puede poner 330, así que la
+ * frase no puede asumir que son múltiplos de 60.
+ */
+export function minutos(seconds: number): string {
+  const value = seconds / 60;
+  const text = Number.isInteger(value) ? String(value) : value.toFixed(1).replace(".", ",");
+
+  return `${text} ${value === 1 ? "minuto" : "minutos"}`;
 }
 
 /**
@@ -598,6 +711,20 @@ export function alertSummary(input: AlertTriggerInput): string {
     // ningún canal, y si es un olvido o una decisión no se sabe desde aquí.
     case "NO_STREAM_CHANNEL":
       return "Su ficha no tiene ningún canal de directo";
+    // Las cuatro siguientes son las del resumen. Las tres primeras describen **lo
+    // que se vio dentro de una partida**, sin adjetivos y sin causa: "no hizo
+    // aldeanos" es un hecho del resumen, no una acusación, y la revisión decide qué
+    // significa. La del final es de estado y dice lo que no se pudo hacer.
+    case "NO_VILLAGERS_FIRST_MINUTES":
+      return `No hizo ningún aldeano en los primeros ${minutos(input.threshold)}.`;
+    case "NO_MILITARY_GAP":
+      return `Pasó ${minutos(input.count)} seguidos sin progreso militar.`;
+    case "NO_RESOURCES_GAP":
+      return `Pasó ${minutos(input.count)} seguidos sin obtener recursos.`;
+    case "SUMMARY_NOT_REVIEWED":
+      return input.count === 1
+        ? "1 partida no se ha podido revisar por falta de resumen"
+        : `${input.count} partidas no se han podido revisar por falta de resumen`;
   }
 }
 

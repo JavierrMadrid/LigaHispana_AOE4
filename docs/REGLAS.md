@@ -33,6 +33,30 @@ Lo que hace falta para inscribirse.
 | Toda solicitud queda **pendiente de aprobación**: la organización la aprueba o la rechaza. | Organización |
 | Las inscripciones se hacen **hasta la fecha de cierre que publica la organización**. | Organización |
 
+### Eventos puntuales
+
+Ventanas con **multiplicador de puntos**. Se definen **antes de que empiece el torneo**: desde la fecha
+de inicio del torneo el calendario queda cerrado y no se puede crear, editar ni borrar ningún evento.
+El calendario completo se publica en `/reglas`: nombre, instrucciones, fechas en hora de Madrid,
+multiplicador y requisito de Discord.
+
+| Regla | Cómo se controla |
+|---|---|
+| Un evento es una **ventana de fechas** dentro del torneo con un **multiplicador entero**, `x2` o mayor. | Panel (Administración → Eventos) |
+| El multiplicador se aplica **solo a los puntos por victoria**: no toca las derrotas, los objetivos ni las partidas que no cuentan. | Motor |
+| Cobra el multiplicador toda partida clasificatoria que **empiece** dentro de la ventana. | Motor |
+| Dos eventos **no pueden solaparse** ni salirse de la ventana del torneo. | Panel (validación al guardar) |
+| Un evento puede exigir **estar en el servidor de Discord**: solo cobran el multiplicador quienes estén dentro cuando empieza el evento. A quien se aprueba con el evento ya en marcha se le comprueba al aprobarse, y la elegibilidad no se revisa: solo crece. | Motor |
+| El evento se anuncia en el banner de la web pública mientras su ventana está en curso. | Web |
+
+El bot avisa por Discord **24, 12 y 1 hora antes** de cada evento, y el aviso de comienzo del torneo
+incluye el resumen del calendario. La operativa de los avisos está en
+[`docs/OPERACION.md`](./OPERACION.md#eventos-puntuales).
+
+El bono de un evento es **permanente** en la clasificación: no es una competición que se decide al
+cierre, sino una ventana que se juega y se cobra. Cómo se suma a la puntuación está en
+[`docs/PUNTUACION.md`](./PUNTUACION.md).
+
 ### Normas
 
 De obligado cumplimiento dentro del torneo. El incumplimiento de cualquiera de ellas es **motivo de

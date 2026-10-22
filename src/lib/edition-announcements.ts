@@ -7,8 +7,11 @@ import {
   isDiscordAnnounceConfigured,
   type DiscordConfig,
 } from "@/lib/discord/env";
-import { createDiscordHttpClient, type DiscordHttpClient } from "@/lib/discord/http";
+import { postChannelMessage, type ChannelMessageOptions } from "@/lib/discord/channel";
+import { createDiscordHttpClient } from "@/lib/discord/http";
 import { readEditionConfig } from "@/lib/edition";
+import { startAnnouncementMessages } from "@/lib/edition-event-announcements";
+import { readEditionEvents } from "@/lib/edition-events";
 import { formatTournamentWindow, formatUtcDay } from "@/lib/format";
 import { isRecord } from "@/lib/json";
 import { windowBounds, type ScoringWindow } from "@/lib/ranked-match";
@@ -493,31 +496,15 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : `Error desconocido: ${String(error)}`;
 }
 
-/**
- * Manda un mensaje al canal de avisos.
- *
- * Es la única llamada de este módulo, y por eso no hay un cliente propio: reutiliza el
- * de `discord/http.ts`, que ya sabe de la base de la API, del `User-Agent` y del
- * timeout, y que **no reintenta** —una pasada del worker cada cinco minutos es un
- * reintento mucho mejor que tres seguidos dentro de la misma invocación—.
- *
- * El `content` va como JSON y nunca lleva el token: el cliente ya deja el token en la
- * cabecera y no lo escribe en ningún mensaje de error.
- *
- * Es **exportada** porque el informe diario de clasificación
- * (`src/lib/standings-report.ts`) manda al mismo canal y con la misma forma: tener la
- * petición definida una vez evita que un cambio en una de las dos se olvide en la otra.
+/*
+ * La petición vive en `discord/channel.ts` y se reexporta aquí porque este es el
+ * módulo desde el que la usan el informe diario de clasificación
+ * (`src/lib/standings-report.ts`) y los avisos de administración
+ * (`src/lib/admin-notice-send.ts`). Está allí para que los avisos de los eventos
+ * (`edition-event-announcements.ts`) puedan usarla sin que los dos módulos de avisos
+ * se importen en círculo.
  */
-export async function postChannelMessage(
-  client: DiscordHttpClient,
-  config: DiscordConfig & { botToken: string; announceChannelId: string },
-  content: string,
-): Promise<void> {
-  await client.request("POST", `/channels/${config.announceChannelId}/messages`, {
-    authorization: `Bot ${config.botToken}`,
-    json: { content },
-  });
-}
+export { postChannelMessage, type ChannelMessageOptions } from "@/lib/discord/channel";
 
 /** Lo que ha pasado con los avisos en una pasada del worker. */
 export type AnnounceRunResult = {
@@ -589,13 +576,30 @@ export async function announceEditionWindow(
   const client = createDiscordHttpClient(config);
   const sent: AnnouncementMilestone[] = [];
 
+  // El resumen de los eventos puntuales solo se lee cuando toca el aviso de comienzo
+  // (issue 60): en el resto de hitos no se toca esa fila de `Setting`.
+  const eventos = due.includes("start") ? (await readEditionEvents()).events : [];
+
   for (const milestone of due) {
+    const texto = announcementText(milestone, edition.name, window, registration.closesAt);
+
+    // El aviso de comienzo lleva el resumen de los eventos si los hay, y si el texto
+    // completo no cabe en un mensaje se manda el resumen aparte. La marca del hito se
+    // pone **después** de que hayan salido todos: si el segundo falla, el comienzo se
+    // repite en la pasada siguiente (duplicar el inicio es preferible a perder el
+    // resumen de los eventos para siempre).
+    const mensajes = milestone === "start" ? startAnnouncementMessages(texto, eventos) : [texto];
+
+    // El aviso de comienzo es el único que lleva texto escrito en el panel (el nombre
+    // de cada evento), y por eso el único que sale sin menciones: un `@everyone` dentro
+    // de un nombre no puede pingear al servidor. Los de eventos ya van acotados a su rol.
+    const opciones: ChannelMessageOptions =
+      milestone === "start" ? { suppressMentions: true } : {};
+
     try {
-      await postChannelMessage(
-        client,
-        config,
-        announcementText(milestone, edition.name, window, registration.closesAt),
-      );
+      for (const mensaje of mensajes) {
+        await postChannelMessage(client, config, mensaje, opciones);
+      }
     } catch (error) {
       // La marca del plazo abierto ya se ha decidido y se guarda aunque el envío falle:
       // no es el resultado de un mensaje, es el estado del plazo, y perderla sería no

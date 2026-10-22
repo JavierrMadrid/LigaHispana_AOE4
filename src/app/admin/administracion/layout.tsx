@@ -22,8 +22,9 @@ export default async function AdministrationLayout({
           <p className="mt-1 max-w-[70ch] text-sm text-muted">
             Los ajustes que solo puede tocar la cuenta de superadministración: quién
             entra al panel, la configuración de la edición, las reglas de puntuación,
-            quién puede inscribirse, el banner de donaciones y las pruebas del canal
-            de avisos. Cada cambio queda anotado en el historial de acciones.
+            el calendario de eventos, quién puede inscribirse, el banner de donaciones
+            y las pruebas del canal de avisos. Cada cambio queda anotado en el
+            historial de acciones.
           </p>
         </div>
 

@@ -20,7 +20,7 @@ import { OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
 import { MatchHistoryFilters } from "./match-history-filters";
 
 export const metadata: Metadata = {
-  title: { absolute: "Historial de partidas · Admin" },
+  title: { absolute: "Historial de puntos · Admin" },
 };
 
 /** `1 punto` / `2 puntos`: el plural importa en un registro que se lee. */
@@ -45,13 +45,19 @@ const RESULT_STYLES = {
 } as const;
 
 /**
- * La marca de una fila de objetivo cumplido, en la misma columna.
+ * La marca de una fila de objetivo, en la misma columna: «Objetivo» para un logro
+ * cumplido y «Liderazgo» para un cambio de poseedor de una competición.
  *
  * Un hito no es ni una victoria ni una derrota, pero desde fuera es lo que la
  * fila viene a contar, así que ocupa el mismo sitio y con el **oro de los
  * objetivos**: el mismo con el que el sitio viste las tarjetas de `/objetivos` y
  * el detalle desplegado en la clasificación. Así el panel se lee con el código
  * del resto de la web en vez de con una taxonomía propia.
+ *
+ * El rótulo sí se separa en dos, porque la columna es la que permite recorrer el
+ * historial de un vistazo: «Objetivo» en una fila de pérdida dejaría la columna
+ * sin decir que la competición cambió de manos, y «Liderazgo» cubre las dos
+ * formas —ganada y perdida— sin partir la columna en tres píldoras.
  */
 const OBJECTIVE_STYLE = "border-accent/40 text-accent";
 
@@ -68,11 +74,16 @@ function formatLabel(row: AdminMatchHistoryRow): string {
 }
 
 /**
- * La frase de una fila de objetivo cumplido.
+ * La frase de una fila de objetivo: logro cumplido o cambio de poseedor.
  *
  * El verbo va en pasado y sin gritar: el hito ya ocurrió en la fecha de la fila, no
  * es una celebración. No repite los puntos ni el grupo porque los pinta la línea
  * secundaria, y decirlos dos veces en la misma celda sobraría.
+ *
+ * Un **logro** se cumple una vez (`cumplió`); una **competición** se gana y se
+ * pierde cuantas veces cambie de manos, así que su verbo es el del instante de la
+ * fila —`ahora lidera` o `ya no lidera`, el mismo para todas las competiciones— y
+ * decirle "cumplió" a la fila de la pérdida afirmaría lo contrario de lo que pasó.
  *
  * Un objetivo repetible enseña sus repeticiones pegadas al rótulo
  * (`20 x Imparable`), el mismo formato que la clasificación: la tabla apunta una sola
@@ -80,7 +91,17 @@ function formatLabel(row: AdminMatchHistoryRow): string {
  * `imparable` ya va por veinte días o `victorias` por veinticuatro victorias.
  */
 function describeObjective(playerName: string, objective: AdminObjectiveEvent): string {
-  return `${playerName} cumplió «${objectiveTitle(objective)}»`;
+  const titulo = `«${objectiveTitle(objective)}»`;
+
+  if (objective.lead === "GAINED") {
+    return `${playerName} ahora lidera ${titulo}`;
+  }
+
+  if (objective.lead === "LOST") {
+    return `${playerName} ya no lidera ${titulo}`;
+  }
+
+  return `${playerName} cumplió ${titulo}`;
 }
 
 /**
@@ -105,9 +126,10 @@ function describeObjective(playerName: string, objective: AdminObjectiveEvent): 
  * marca de revertida, en la misma columna, es la que aclara que esos puntos se
  * quitaron a mano.
  *
- * Un **objetivo cumplido** no tiene resultado de partida, así que se delega antes
- * de llegar a las ramas de `result`: sin esa salida temprana, `result === null`
- * haría que un hito se describiera como "una partida sin resultado resuelto".
+ * Un **objetivo** —logro cumplido o cambio de poseedor— no tiene resultado de
+ * partida, así que se delega antes de llegar a las ramas de `result`: sin esa
+ * salida temprana, `result === null` haría que un hito se describiera como "una
+ * partida sin resultado resuelto".
  */
 function describeResult(row: AdminMatchHistoryRow): string {
   if (row.objective !== null) {
@@ -165,38 +187,36 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
 
   const players =
     playersRead.status === "ok"
-      ? playersRead.data.map((player) => ({ id: player.id, name: player.name }))
+      ? playersRead.data
+          // El historial enseña las ganancias de los aprobados, las mismas que la web;
+          // ofrecer en el filtro a quien no está en el torneo solo llevaría a una lista
+          // vacía.
+          .filter((player) => player.status === "APPROVED")
+          .map((player) => ({ id: player.id, name: player.name }))
       : [];
 
   const query = {
     playerId: single(params.playerId),
     from: single(params.from),
     to: single(params.to),
-    resultado: single(params.resultado),
     sort: single(params.sort),
     dir: single(params.dir),
     pageSize: single(params.pageSize),
   };
   const hasFilters =
-    query.playerId !== undefined ||
-    query.from !== undefined ||
-    query.to !== undefined ||
-    query.resultado !== undefined;
-
-  // El filtro de resultado solo excluye los objetivos si es un valor real: el DAL
-  // trata cualquier otra cosa como si no filtrara, y el mensaje de la tabla no puede
-  // decir que se dejaron fuera los hitos cuando no se dejó fuera nada.
-  const resultFilter = query.resultado === "WIN" || query.resultado === "LOSS";
+    query.playerId !== undefined || query.from !== undefined || query.to !== undefined;
 
   return (
     <div className="flex flex-col gap-6">
       <section>
-        <h1 className="text-2xl font-semibold">Historial de partidas</h1>
+        <h1 className="text-2xl font-semibold">Historial de puntos</h1>
         <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Partidas clasificatorias y objetivos cumplidos, de lo más reciente a lo
-          más antiguo; los objetivos que se resuelven en caliente se apuntan cuando
-          termina el torneo. Revertir los puntos de una partida no la borra: la
-          marca como no puntuable y se puede restaurar.
+          Las mismas ganancias que el historial público —victorias que suman, logros
+          cumplidos y cambios de poseedor de las competiciones—, de todos los
+          participantes y de lo más reciente a lo más antiguo. Los logros se apuntan
+          cuando termina el torneo; los cambios de poseedor salen en cuanto la
+          sincronización los detecta. Revertir los puntos de una partida no la borra:
+          la marca como no puntuable y se puede restaurar.
         </p>
       </section>
 
@@ -214,17 +234,13 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
               <EmptyState
                 title={
                   hasFilters
-                    ? resultFilter
-                      ? "Ninguna partida coincide con los filtros"
-                      : "Ni partidas ni objetivos coinciden con los filtros"
-                    : "Todavía no hay partidas ni objetivos cumplidos"
+                    ? "Ninguna ganancia coincide con los filtros"
+                    : "Todavía no hay ganancias"
                 }
                 body={
                   hasFilters
-                    ? resultFilter
-                      ? "Prueba con otro jugador o amplía el rango de fechas. El filtro de fechas incluye el día final completo."
-                      : "Prueba con otro jugador o amplía el rango de fechas. Los objetivos se filtran por la fecha en que se cumplieron y el día final entra completo."
-                    : "Aquí aparecerán las partidas que cuentan para la clasificación y los objetivos cumplidos, de lo más reciente a lo más antiguo."
+                    ? "Prueba con otro jugador o amplía el rango de fechas. El filtro incluye el día final completo."
+                    : "Aquí aparecerán las victorias que suman, los logros cumplidos y los cambios de poseedor de las competiciones, de lo más reciente a lo más antiguo."
                 }
               />
             ) : (
@@ -232,10 +248,12 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                 <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
                   <table className="w-full text-left text-sm">
                     <caption className="sr-only">
-                      Partidas clasificatorias y objetivos cumplidos: fecha, resultado o
-                      marca de objetivo, descripción con los puntos que aporta y, en las
-                      partidas, la acción de revertir o restaurar sus puntos. Por debajo
-                      de la pantalla mediana la fecha se lee dentro de la descripción.
+                      Victorias que suman, logros cumplidos y cambios de poseedor
+                      de las competiciones: fecha, resultado o marca de objetivo,
+                      descripción con sus puntos —de cambio de poseedor son
+                      informativos— y, en las partidas, la acción de revertir o
+                      restaurar sus puntos. Por debajo de la pantalla mediana la
+                      fecha se lee dentro de la descripción.
                     </caption>
                     <thead className="bg-surface text-muted">
                       <tr>
@@ -247,14 +265,12 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                           query={query}
                           className="hidden w-44 px-4 py-3 font-medium md:table-cell"
                         />
-                        <SortableHeaderLink
-                          column="resultado"
-                          label="Resultado"
-                          sort={history.data.sort}
-                          basePath="/admin/historial"
-                          query={query}
-                          className="w-28 px-4 py-3 font-medium"
-                        />
+                        <th
+                          scope="col"
+                          className="w-28 bg-surface px-4 py-3 font-medium"
+                        >
+                          Resultado
+                        </th>
                         {/* La descripción es una frase montada en la interfaz y las
                             acciones no son un dato ordenable. */}
                         <th
@@ -276,9 +292,11 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                         const reverted = row.revertedAt !== null;
                         // Tres clases de fila, tres fondos: la partida normal va
                         // limpia, la revertida se apaga en gris y el objetivo se
-                        // tiñe del oro de la liga. El chip y el icono confirman lo
-                        // que el fondo ya insinúa, para que el color no sea la
-                        // única señal.
+                        // tiñe del oro de la liga. Los liderazgos —ganados o
+                        // perdidos— comparten el oro del objetivo: es la misma
+                        // clase de hecho, y lo que las separa lo llevan el chip y
+                        // el verbo. El chip y el icono confirman lo que el fondo
+                        // ya insinúa, para que el color no sea la única señal.
                         const rowClassName =
                           row.objective !== null
                             ? "bg-accent/[0.06]"
@@ -303,7 +321,7 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                                 <span
                                   className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${OBJECTIVE_STYLE}`}
                                 >
-                                  Objetivo
+                                  {row.objective.lead !== null ? "Liderazgo" : "Objetivo"}
                                 </span>
                               ) : row.result === null ? (
                                 <span className="text-xs text-muted">—</span>
@@ -344,7 +362,12 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
                                   <p className="mt-0.5 text-xs text-muted">
                                     {OBJECTIVE_GROUP_LABELS[row.objective.group]} ·{" "}
                                     <span className="font-medium tabular-nums text-accent">
-                                      +{puntos(row.points)}
+                                      {/* El signo lo decide la interfaz: `−` marca la
+                                          pérdida de un liderazgo, cuyo importe es
+                                          informativo. El signo menos tipográfico se
+                                          alinea con las cifras tabulares. */}
+                                      {row.objective.lead === "LOST" ? "−" : "+"}
+                                      {puntos(row.points)}
                                     </span>
                                   </p>
                                 </>

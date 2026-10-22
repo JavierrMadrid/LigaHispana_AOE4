@@ -34,11 +34,18 @@ function single(value: string | string[] | undefined): string | undefined {
  * "Reglas" las toma de los umbrales vivos, para que el copy no mienta si la organización
  * retoca `Setting["alerts.ruleset"]`.
  *
+ * ## Alcance
+ *
+ * Solo se listan las alertas de la **edición activa** (`createdAt >= window.from`): las
+ * ediciones anteriores se conservan en la tabla pero no se muestran. Por eso ni el
+ * encabezado ni el estado vacío dicen "no hay alertas" sin más —una edición recién
+ * abierta arranca sin filas visibles aunque la tabla tenga miles de la anterior—.
+ *
  * ## Filtros y orden
  *
  * La tabla tiene los mismos filtros que el historial —jugador, rango de fechas— más los
- * dos propios de las alertas: **regla** (los once valores del enum, dos de ellos de reglas
- * retiradas que solo existen en filas del histórico) y **tipo** (las cuatro clases
+ * dos propios de las alertas: **regla** (los dieciséis valores del enum, dos de ellos de
+ * reglas retiradas que solo existen en filas del histórico) y **tipo** (las cinco clases
  * de hallazgo). Todos viven en la URL, junto con el orden por columna
  * (`fecha`, `jugador`, `regla`, `sujeto`, `conteo`). No hay filtro por sujeto, partida,
  * detalle ni conteo: el sujeto es un rival que puede no estar en la liga (no hay lista de
@@ -119,9 +126,9 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
           <h1 className="text-2xl font-semibold">Alertas</h1>
           <p className="mt-1 max-w-[70ch] text-sm text-muted">
             Comportamientos anómalos detectados en las partidas clasificatorias y avisos
-            sobre el estado del historial de los participantes, de lo más reciente a lo
-            más antiguo. El informe descargable incluye además las rachas que siguen
-            abiertas.
+            sobre el estado del historial de los participantes de la edición activa, de
+            lo más reciente a lo más antiguo. El informe descargable incluye además las
+            rachas que siguen abiertas en esta edición.
           </p>
         </div>
 
@@ -154,13 +161,13 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
             <EmptyState
               title={
                 hasFilters
-                  ? "Ninguna alerta coincide con los filtros"
-                  : "Todavía no hay alertas"
+                  ? "Ninguna alerta de esta edición coincide con los filtros"
+                  : "Todavía no hay alertas en esta edición"
               }
               body={
                 hasFilters
                   ? "Prueba con otro jugador, otra regla o amplía el rango de fechas. El filtro de fechas incluye el día final completo."
-                  : "El motor crea un aviso cuando una racha se rompe, se alcanza un umbral o cambia un estado comprobado (como el historial de partidas no público). Aquí aparecerán, de lo más reciente a lo más antiguo."
+                  : "El motor crea un aviso cuando una racha se rompe, se alcanza un umbral o cambia un estado comprobado (como el historial de partidas no público). Aquí aparecerán, de lo más reciente a lo más antiguo. Las alertas de ediciones anteriores se conservan, pero no se listan."
               }
             />
           ) : (
@@ -168,11 +175,11 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
               <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
                 <table className="w-full text-left text-sm">
                   <caption className="sr-only">
-                    Alertas de comportamiento: fecha, jugador, regla, sujeto de la alerta
-                    (rival o compañero), partida que la ancla con su fecha e id, detalle
-                    del hallazgo y número de partidas. Por debajo de la pantalla grande la
-                    fecha, el jugador, la regla, el sujeto y la partida se leen bajo el
-                    detalle.
+                    Alertas de comportamiento de la edición activa: fecha, jugador, regla,
+                    sujeto de la alerta (rival o compañero), partida que la ancla con su
+                    fecha e id, detalle del hallazgo y número de partidas. Por debajo de la
+                    pantalla grande la fecha, el jugador, la regla, el sujeto y la partida
+                    se leen bajo el detalle.
                   </caption>
                   <thead className="bg-surface text-muted">
                     <tr>

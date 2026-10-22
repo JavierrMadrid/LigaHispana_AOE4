@@ -7,6 +7,8 @@ import {
   countdownTarget,
   describeMode,
   describeTeamSize,
+  formatEventWindow,
+  formatMadridDateTime,
   formatRelativeTime,
   formatTournamentWindow,
   kickChannelUrl,
@@ -40,6 +42,15 @@ describe("formatRelativeTime", () => {
   it("a partir de un minuto cuenta en minutos u horas", () => {
     expect(formatRelativeTime(hace(12 * 60), AHORA)).toContain("12");
     expect(formatRelativeTime(hace(3 * 3_600), AHORA)).toContain("3");
+  });
+
+  it("a partir de un día desglosa días y horas", () => {
+    // Decir "hace 53 h" obliga a dividir mentalmente; el día y la hora se leen de un
+    // vistazo.
+    expect(formatRelativeTime(hace(24 * 3_600), AHORA)).toBe("hace 1 día");
+    expect(formatRelativeTime(hace(25 * 3_600), AHORA)).toBe("hace 1 día y 1 hora");
+    expect(formatRelativeTime(hace(49 * 3_600), AHORA)).toBe("hace 2 días y 1 hora");
+    expect(formatRelativeTime(hace(47 * 3_600), AHORA)).toBe("hace 1 día y 23 horas");
   });
 
   it("a partir de una semana da la fecha, que es lo único situable", () => {
@@ -350,5 +361,63 @@ describe("teamSizesFromRawJson", () => {
     // Si se dejaran, el recuento de bandos se desplazaría y `describeTeamSize`
     // compararía los equipos equivocados.
     expect(teamSizesFromRawJson({ teams: ["basura", [1, 2, 3], {}] })).toEqual([3]);
+  });
+});
+
+describe("formatMadridDateTime", () => {
+  it("pinta el instante en hora de Madrid, no en la del proceso", () => {
+    // Septiembre es horario de verano (+2): las 18:30 UTC son las 20:30 en Madrid.
+    expect(formatMadridDateTime(new Date("2026-09-20T18:30:00.000Z"))).toBe(
+      "20 de septiembre de 2026 a las 20:30",
+    );
+  });
+
+  it("respeta el horario de invierno (+1)", () => {
+    expect(formatMadridDateTime("2026-01-15T07:05:00.000Z")).toBe(
+      "15 de enero de 2026 a las 08:05",
+    );
+  });
+
+  it("un valor que no es una fecha se pinta como `null`, no como Invalid Date", () => {
+    expect(formatMadridDateTime("no es una fecha")).toBeNull();
+    expect(formatMadridDateTime(new Date("no"))).toBeNull();
+  });
+});
+
+describe("formatEventWindow", () => {
+  it("un evento del mismo día de Madrid se lee de hora a hora", () => {
+    expect(
+      formatEventWindow({
+        from: "2026-09-20T16:00:00.000Z",
+        to: "2026-09-20T20:00:00.000Z",
+      }),
+    ).toBe("20 de septiembre de 2026, de 18:00 a 22:00 (hora de Madrid)");
+  });
+
+  it("un evento de varios días dice las dos fechas completas", () => {
+    expect(
+      formatEventWindow({
+        from: "2026-09-20T16:00:00.000Z",
+        to: "2026-09-22T20:00:00.000Z",
+      }),
+    ).toBe(
+      "Del 20 de septiembre de 2026 a las 18:00 al 22 de septiembre de 2026 a las 22:00 (hora de Madrid)",
+    );
+  });
+
+  it("compara el día de Madrid, no el de UTC", () => {
+    // Las 22:30 UTC del 20 son las 00:30 del 21 en Madrid, y las 23:30 UTC, la 01:30:
+    // para quien lo juega es una sola noche.
+    expect(
+      formatEventWindow({
+        from: "2026-09-20T22:30:00.000Z",
+        to: "2026-09-20T23:30:00.000Z",
+      }),
+    ).toBe("21 de septiembre de 2026, de 00:30 a 01:30 (hora de Madrid)");
+  });
+
+  it("una fecha ilegible devuelve `null`", () => {
+    expect(formatEventWindow({ from: "no", to: "2026-09-20T20:00:00.000Z" })).toBeNull();
+    expect(formatEventWindow({ from: "2026-09-20T20:00:00.000Z", to: "no" })).toBeNull();
   });
 });

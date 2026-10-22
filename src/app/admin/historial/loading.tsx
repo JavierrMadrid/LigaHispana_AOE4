@@ -1,5 +1,5 @@
 /**
- * Esqueleto de carga del historial de partidas.
+ * Esqueleto de carga del historial de puntos.
  *
  * Se reserva la forma real —titular, barra de filtros y tabla— con las mismas
  * cajas de `surface`/`line`, para que el listado no salte al llegar los datos.
@@ -11,7 +11,7 @@ export default function Loading() {
       aria-live="polite"
       className="flex animate-pulse flex-col gap-6 motion-reduce:animate-none"
     >
-      <span className="sr-only">Cargando el historial de partidas</span>
+      <span className="sr-only">Cargando el historial de puntos</span>
 
       <div aria-hidden="true" className="flex flex-col gap-2">
         <span className="h-8 w-56 rounded bg-surface-raised" />

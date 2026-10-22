@@ -471,6 +471,42 @@ export function objectiveCloseness(progress: ObjectiveClosenessInput): number {
 }
 
 /**
+ * Distancia al líder de una competición, ya formateada según la métrica, y si esa
+ * distancia es un empate. Un `null` (sin puesto o ya primero) no se pinta.
+ *
+ * **Nunca devuelve un 0**: con empate a métrica la resta bruta es 0 —el desempate
+ * (victorias totales, antigüedad) es lo que te deja segundo—, pero un 0 no dice
+ * nada de lo que hace falta, así que la cifra que se pinta es la que haría falta
+ * para **adelantar** al primero: una unidad. `tied` marca ese caso para que el
+ * texto diga el empate en vez de «te separan».
+ *
+ * Recibe los tres datos sueltos —y no el objetivo entero— para no depender de
+ * `ParticipantObjective`: sirve igual en la ficha que en cualquier otro sitio que
+ * tenga la posición y la distancia de un ranking.
+ */
+export type LeaderDistance = {
+  /** La distancia formateada en la unidad de la métrica; nunca un 0. */
+  text: string;
+  /** Empate a métrica con el primero: la resta es 0 y hace falta 1 para pasarle. */
+  tied: boolean;
+};
+
+export function leaderDistance(
+  distance: number | null,
+  position: number | null,
+  metric: ObjectiveMetric,
+): LeaderDistance | null {
+  if (distance === null || position === null || position === 1) {
+    return null;
+  }
+
+  const tied = distance === 0;
+  const gap = tied ? 1 : distance;
+
+  return { text: `${gap} ${metricUnit(metric, gap)}`, tied };
+}
+
+/**
  * Ordena objetivos por su **porcentaje de consecución**, de mayor a menor: el
  * más avanzado, primero. Es el orden de las tarjetas de un carrusel de
  * subobjetivos, donde interesa ver antes lo que está a punto de caer (y, con un
