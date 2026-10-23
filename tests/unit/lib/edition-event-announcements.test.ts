@@ -19,14 +19,14 @@ import {
 import type { EditionEvent } from "@/lib/edition-events";
 
 /**
- * Los avisos de los eventos puntuales: qué tramo toca, qué se dice y cómo se guarda la
+ * Los avisos de los eventos puntuales: qué aviso toca, qué se dice y cómo se guarda la
  * memoria, más el resumen que acompaña al aviso de comienzo del torneo.
  *
  * Todo es **puro**: los tramos son comparaciones de fechas, el texto se compone con el
  * nombre y las fechas del evento, y la memoria se lee y se escribe con un cliente
- * falso. Lo que se fija es lo que no puede fallar: que un recordatorio salga una sola
- * vez, que un evento ya empezado no genere nada y que el aviso de inicio no se parta
- * por la mitad.
+ * falso. Lo que se fija es lo que no puede fallar: que un aviso salga una sola vez, que
+ * un evento en curso mande el inicio y no un recordatorio, que uno terminado mande solo
+ * el fin y que el aviso de inicio del torneo no se parta por la mitad.
  */
 
 const INICIO = "2026-09-20T17:00:00.000Z";
@@ -52,7 +52,7 @@ function antesDeEmpezar(horas: number): Date {
   return new Date(new Date(INICIO).getTime() - horas * 3_600_000);
 }
 
-describe("dueEventAnnouncements: los tres tramos", () => {
+describe("dueEventAnnouncements: los tres recordatorios", () => {
   it("a 24 horas o menos, y antes de las 12, toca el de 24 h", () => {
     expect(dueEventAnnouncements([evento()], NADA, antesDeEmpezar(24))).toEqual([
       { event: evento(), milestone: "24h", key: "clasico:24h" },
@@ -80,21 +80,19 @@ describe("dueEventAnnouncements: los tres tramos", () => {
     ).toEqual([{ event: evento(), milestone: "1h", key: "clasico:1h" }]);
   });
 
-  it("más de 24 horas antes no toca nada, y al empezar tampoco", () => {
+  it("más de 24 horas antes no toca nada", () => {
     expect(dueEventAnnouncements([evento()], NADA, antesDeEmpezar(25))).toEqual([]);
-    expect(
-      dueEventAnnouncements([evento()], NADA, new Date(new Date(INICIO).getTime() + 60_000)),
-    ).toEqual([]);
   });
 
-  it("un evento ya empezado no genera recordatorios", () => {
-    expect(
-      dueEventAnnouncements(
-        [evento({ from: "2026-09-20T10:00:00.000Z", to: "2026-09-20T12:00:00.000Z" })],
-        NADA,
-        new Date(INICIO),
-      ),
-    ).toEqual([]);
+  it("un evento en curso no genera recordatorios: su aviso es el de inicio", () => {
+    const enCurso = evento({
+      from: "2026-09-20T16:00:00.000Z",
+      to: "2026-09-20T18:00:00.000Z",
+    });
+
+    expect(dueEventAnnouncements([enCurso], NADA, new Date(INICIO))).toEqual([
+      { event: enCurso, milestone: "start", key: "clasico:start" },
+    ]);
   });
 
   it("un aviso ya anotado no se repite", () => {
@@ -132,6 +130,75 @@ describe("dueEventAnnouncements: los tres tramos", () => {
   });
 });
 
+describe("dueEventAnnouncements: el inicio y el fin", () => {
+  /** De 16:00 a 18:00 UTC: a las 17:00 está en curso y a las 18:00 ya ha terminado. */
+  const EN_CURSO = evento({ from: "2026-09-20T16:00:00.000Z", to: "2026-09-20T18:00:00.000Z" });
+
+  it("al empezar sale el aviso de inicio", () => {
+    expect(dueEventAnnouncements([evento()], NADA, new Date(INICIO))).toEqual([
+      { event: evento(), milestone: "start", key: "clasico:start" },
+    ]);
+  });
+
+  it("un evento en curso manda el inicio aunque la pasada llegue tarde", () => {
+    expect(dueEventAnnouncements([EN_CURSO], NADA, new Date(INICIO))).toEqual([
+      { event: EN_CURSO, milestone: "start", key: "clasico:start" },
+    ]);
+  });
+
+  it("al terminar sale el aviso de fin, y sigue saliendo si llega tarde", () => {
+    expect(
+      dueEventAnnouncements([EN_CURSO], NADA, new Date("2026-09-20T18:00:00.000Z")),
+    ).toEqual([{ event: EN_CURSO, milestone: "end", key: "clasico:end" }]);
+
+    expect(
+      dueEventAnnouncements([EN_CURSO], NADA, new Date("2026-09-23T09:00:00.000Z")),
+    ).toEqual([{ event: EN_CURSO, milestone: "end", key: "clasico:end" }]);
+  });
+
+  it("un evento perdido entero manda solo el fin, nunca el inicio atrasado", () => {
+    expect(
+      dueEventAnnouncements([EN_CURSO], NADA, new Date("2026-09-20T19:00:00.000Z")),
+    ).toEqual([{ event: EN_CURSO, milestone: "end", key: "clasico:end" }]);
+  });
+
+  it("un inicio o un fin ya anotados no se repiten", () => {
+    const conInicio: EditionEventsAnnouncementsMemory = {
+      ...NADA,
+      sent: { "clasico:start": "2026-09-20T16:00:00.000Z" },
+    };
+    const conFin: EditionEventsAnnouncementsMemory = {
+      ...NADA,
+      sent: { "clasico:end": "2026-09-20T18:00:00.000Z" },
+    };
+
+    expect(dueEventAnnouncements([EN_CURSO], conInicio, new Date(INICIO))).toEqual([]);
+    expect(
+      dueEventAnnouncements([EN_CURSO], conFin, new Date("2026-09-20T19:00:00.000Z")),
+    ).toEqual([]);
+  });
+
+  it("ordena por el inicio del evento y da como mucho un aviso por evento", () => {
+    const enCurso = evento({
+      id: "en-curso",
+      name: "En curso",
+      from: "2026-09-20T15:00:00.000Z",
+      to: "2026-09-20T17:30:00.000Z",
+    });
+    const proximo = evento({
+      id: "proximo",
+      name: "Próximo",
+      from: "2026-09-20T18:00:00.000Z",
+      to: "2026-09-20T20:00:00.000Z",
+    });
+
+    expect(dueEventAnnouncements([proximo, enCurso], NADA, new Date(INICIO))).toEqual([
+      { event: enCurso, milestone: "start", key: "en-curso:start" },
+      { event: proximo, milestone: "1h", key: "proximo:1h" },
+    ]);
+  });
+});
+
 describe("eventAnnouncementText", () => {
   it("lleva el nombre, la ventana en Madrid y el multiplicador", () => {
     const texto = eventAnnouncementText(evento({ multiplier: 3 }), "24h");
@@ -155,6 +222,39 @@ describe("eventAnnouncementText", () => {
     expect(
       eventAnnouncementText(evento({ description: "Solo mapas acuáticos." }), "12h"),
     ).toContain("Solo mapas acuáticos.");
+  });
+});
+
+describe("eventAnnouncementText: el inicio y el fin", () => {
+  it("el inicio dice que ya está en marcha y lleva lo accionable", () => {
+    const texto = eventAnnouncementText(
+      evento({ multiplier: 3, discordRequired: true, description: "Solo mapas acuáticos." }),
+      "start",
+    );
+
+    expect(texto).toContain("Clásico de otoño");
+    expect(texto).toContain("ya está en marcha");
+    expect(texto).not.toContain("Empieza en");
+    expect(texto).toContain("20 de septiembre de 2026");
+    expect(texto).toContain("hora de Madrid");
+    expect(texto).toContain("x3");
+    expect(texto).toContain("servidor de Discord");
+    expect(texto).toContain("Solo mapas acuáticos.");
+  });
+
+  it("el fin lleva el nombre y la ventana, sin repetir lo que ya no es accionable", () => {
+    const texto = eventAnnouncementText(
+      evento({ discordRequired: true, description: "Solo mapas acuáticos." }),
+      "end",
+    );
+
+    expect(texto).toContain("Clásico de otoño");
+    expect(texto).toContain("ha terminado");
+    expect(texto).toContain("20 de septiembre de 2026");
+    expect(texto).toContain("hora de Madrid");
+    expect(texto).not.toContain("multiplica");
+    expect(texto).not.toContain("Discord");
+    expect(texto).not.toContain("Solo mapas acuáticos.");
   });
 });
 
@@ -236,8 +336,10 @@ describe("parseEventsAnnouncementsMemory", () => {
 });
 
 describe("markEventAnnouncementSent y eventAnnouncementKey", () => {
-  it("la clave une el id del evento y el tramo", () => {
+  it("la clave une el id del evento y el hito", () => {
     expect(eventAnnouncementKey("clasico", "1h")).toBe("clasico:1h");
+    expect(eventAnnouncementKey("clasico", "start")).toBe("clasico:start");
+    expect(eventAnnouncementKey("clasico", "end")).toBe("clasico:end");
   });
 
   it("anota el aviso sin tocar los demás", () => {

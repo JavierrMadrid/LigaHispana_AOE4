@@ -2747,10 +2747,11 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se han podido enviar los avisos del torneo: ${announceError}`);
   }
 
-  // Los recordatorios de los **eventos puntuales** (24/12/1 h antes) van junto a los
-  // hitos de la edición, con el mismo tratamiento: un fallo no para la pasada, el
-  // motivo se suma a `announceError` y el aviso que no salió queda pendiente. Sin
-  // eventos, o sin ninguno en su tramo, no se lee la configuración de Discord.
+  // Los avisos de los **eventos puntuales** (recordatorios de 24/12/1 h, inicio y
+  // fin) van junto a los hitos de la edición, con el mismo tratamiento: un fallo no
+  // para la pasada, el motivo se suma a `announceError` y el aviso que no salió queda
+  // pendiente. Sin eventos, o sin ninguno con un aviso pendiente, no se lee la
+  // configuración de Discord.
   try {
     const eventos = await announceEditionEvents();
 

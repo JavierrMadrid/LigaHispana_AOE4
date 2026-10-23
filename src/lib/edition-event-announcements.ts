@@ -10,24 +10,33 @@ import { isRecord } from "@/lib/json";
 import { readEditionEvents, type EditionEvent } from "@/lib/edition-events";
 
 /**
- * Los avisos de los eventos puntuales de la edición (issue 60).
+ * Los avisos de los eventos puntuales de la edición (issues 60 y 144).
  *
  * ## Qué avisa, y cuándo
  *
  * El worker, en su pasada, mira la lista de eventos (`Setting["edition.events"]`) y
- * manda un recordatorio al canal 24, 12 y 1 hora antes de que empiece cada uno:
+ * manda al canal cinco mensajes por evento: tres recordatorios antes de que empiece y
+ * los dos avisos de su ciclo de vida, al empezar y al terminar.
  *
  * | Aviso | Cuándo (`now`) |
  * |---|---|
  * | `24h` | `[start − 24 h, start − 12 h)` |
  * | `12h` | `[start − 12 h, start − 1 h)` |
  * | `1h` | `[start − 1 h, start)` |
+ * | `start` | `[start, end)` |
+ * | `end` | `[end, ∞)` |
  *
- * Un evento ya empezado **no** genera recordatorios: para entonces lo que vale es el
- * aviso de comienzo del torneo, que lleva el resumen de todos los eventos. Y si una
- * pasada se salta un tramo entero (una caída, un despliegue), ese aviso **no se manda
- * atrasado**: solo sale el del tramo en el que estamos, que es el mismo criterio que
- * los recordatorios de la edición.
+ * Los recordatorios no han cambiado: si una pasada se salta un tramo entero (una
+ * caída, un despliegue), ese aviso **no se manda atrasado**: solo sale el del tramo en
+ * el que estamos, que es el mismo criterio que los recordatorios de la edición.
+ *
+ * Los dos avisos de ciclo de vida sí toleran la tardanza, porque la información sigue
+ * siendo cierta cuando llegan: `start` sale en la primera pasada con
+ * `start <= now < end` aunque el evento lleve horas en marcha —por eso el texto dice
+ * «ya está en marcha» y no «empieza ahora»—, y `end` sale en la primera pasada con
+ * `now >= end` aunque el cierre llegue tarde. Un evento que terminó antes de que
+ * llegara la pasada **no** manda el inicio atrasado: con `now >= end` solo sale el
+ * fin, porque anunciar un evento en curso cuando ya no lo está sería mentir.
  *
  * ## La memoria, aparte de la de la edición
  *
@@ -35,12 +44,13 @@ import { readEditionEvents, type EditionEvent } from "@/lib/edition-events";
  * documento, para no mezclar dos ciclos de vida: la memoria de la edición se escribe
  * desde que se publica la ventana, y la de los eventos depende de una lista que se
  * puede crear y borrar antes del torneo. La forma es un mapa `sent` de
- * `${eventId}:${milestone}` → instante en que se mandó; un documento roto se lee como
- * vacío, que como mucho repite un recordatorio.
+ * `${eventId}:${milestone}` → instante en que se mandó, con los cinco avisos en el
+ * mismo mapa (`${eventId}:start`, `${eventId}:end` y los tres recordatorios); un
+ * documento roto se lee como vacío, que como mucho repite un aviso.
  *
  * ## La mención
  *
- * Los recordatorios mencionan al rol de participante (`DISCORD_PARTICIPANT_ROLE_ID`)
+ * Todos los avisos mencionan al rol de participante (`DISCORD_PARTICIPANT_ROLE_ID`)
  * con `<@&id>` y `allowed_mentions` restringido a ese rol: avisar de un evento no
  * puede acabar pingueando a todo el servidor. **Sin rol configurado no se manda
  * nada** y el aviso queda pendiente: una mención rota no es un aviso, y el rol ya está
@@ -67,8 +77,21 @@ export const EDITION_EVENTS_ANNOUNCEMENTS_KEY = "edition.events.announcements";
 /** Versión de la forma del documento de memoria. */
 export const EDITION_EVENTS_ANNOUNCEMENTS_VERSION = 1;
 
-/** Los tres avisos de cada evento, de más a menos antelación. */
-export const EVENT_ANNOUNCEMENT_MILESTONES = ["24h", "12h", "1h"] as const;
+/** Los tres recordatorios de cada evento, de más a menos antelación. */
+export const EVENT_REMINDER_MILESTONES = ["24h", "12h", "1h"] as const;
+
+/** Los avisos de ciclo de vida: el evento empieza y el evento termina. */
+export const EVENT_LIFECYCLE_MILESTONES = ["start", "end"] as const;
+
+/** Todos los avisos de un evento: los tres recordatorios y los dos del ciclo de vida. */
+export const EVENT_ANNOUNCEMENT_MILESTONES = [
+  ...EVENT_REMINDER_MILESTONES,
+  ...EVENT_LIFECYCLE_MILESTONES,
+] as const;
+
+export type EventReminderMilestone = (typeof EVENT_REMINDER_MILESTONES)[number];
+
+export type EventLifecycleMilestone = (typeof EVENT_LIFECYCLE_MILESTONES)[number];
 
 export type EventAnnouncementMilestone = (typeof EVENT_ANNOUNCEMENT_MILESTONES)[number];
 
@@ -85,7 +108,8 @@ const HOUR_MS = 3_600_000;
 /**
  * Lo que se ha avisado ya.
  *
- * `sent` es `Record<`${eventId}:${milestone}`, ISO>`. El id del evento es estable (el
+ * `sent` lleva una marca `ISO` por cada aviso, con la clave
+ * `${eventId}:${milestone}`: los cinco comparten mapa. El id del evento es estable (el
  * panel lo conserva al editar), así que la clave sobrevive a un cambio de nombre o de
  * fechas: mover un evento no vuelve a mandar los avisos que ya salieron.
  */
@@ -111,8 +135,8 @@ export type EventsAnnouncementsClient = Pick<Prisma.TransactionClient, "setting"
  * La memoria guardada, leída **sin lanzar**.
  *
  * Un documento que no se entiende devuelve la memoria vacía: como mucho se repite un
- * recordatorio, que es preferible a callarse los avisos porque la fila tenía otra
- * forma. Es el mismo contrato que `parseAnnouncementsMemory()`.
+ * aviso, que es preferible a callarse los avisos porque la fila tenía otra forma. Es el
+ * mismo contrato que `parseAnnouncementsMemory()`.
  */
 export function parseEventsAnnouncementsMemory(
   value: unknown,
@@ -134,7 +158,7 @@ export function parseEventsAnnouncementsMemory(
   return { version: EDITION_EVENTS_ANNOUNCEMENTS_VERSION, sent };
 }
 
-/** La clave con la que se anota un aviso: el id del evento y el tramo. */
+/** La clave con la que se anota un aviso: el id del evento y el hito. */
 export function eventAnnouncementKey(
   eventId: string,
   milestone: EventAnnouncementMilestone,
@@ -156,8 +180,8 @@ export function markEventAnnouncementSent(
   return { ...memory, sent: { ...memory.sent, [key]: sentAt } };
 }
 
-/** Qué tramo corresponde a un tiempo restante hasta el inicio, o `null` si no hay. */
-function milestoneFor(remainingMs: number): EventAnnouncementMilestone | null {
+/** Qué recordatorio corresponde a un tiempo restante hasta el inicio, o `null` si no hay. */
+function milestoneFor(remainingMs: number): EventReminderMilestone | null {
   if (remainingMs > 12 * HOUR_MS && remainingMs <= 24 * HOUR_MS) {
     return "24h";
   }
@@ -182,12 +206,13 @@ export type DueEventAnnouncement = {
 };
 
 /**
- * Qué recordatorios tocan ahora, ordenados por el inicio del evento.
+ * Qué avisos tocan ahora, ordenados por el inicio del evento.
  *
  * Pura: entran los eventos, la memoria y el ahora, y sale la lista de avisos por dar.
- * Los tres tramos son los del docblock del módulo y **no se solapan**, así que un
- * instante cae como mucho en uno. Un evento cuyo inicio ya pasó no genera nada, y uno
- * ya anunciado no se repite.
+ * Hay **como mucho un aviso por evento y pasada**, porque los cinco tramos no se
+ * solapan: los tres recordatorios cubren `[start − 24 h, start)` y los del ciclo de
+ * vida, `[start, end)` y `[end, ∞)`. Un evento terminado nunca genera su aviso de
+ * inicio atrasado, y uno ya anunciado no se repite.
  */
 export function dueEventAnnouncements(
   events: readonly EditionEvent[],
@@ -202,10 +227,34 @@ export function dueEventAnnouncements(
 
   for (const event of ordenados) {
     const startMs = new Date(event.from).getTime();
+    const endMs = new Date(event.to).getTime();
 
-    // Solo eventos que **aún no han empezado**: un evento en curso no tiene
-    // recordatorio, y el de inicio del torneo ya ha salido.
-    if (!Number.isFinite(startMs) || startMs <= nowMs) {
+    if (!Number.isFinite(startMs)) {
+      continue;
+    }
+
+    // El cierre manda sobre todo lo demás: si el evento ya terminó, solo sale el fin.
+    // Anunciar «ya está en marcha» cuando ya no lo está sería mentir, así que el
+    // inicio atrasado de un evento perdido no se manda nunca.
+    if (Number.isFinite(endMs) && nowMs >= endMs) {
+      const key = eventAnnouncementKey(event.id, "end");
+
+      if (memory.sent[key] === undefined) {
+        due.push({ event, milestone: "end", key });
+      }
+
+      continue;
+    }
+
+    // En curso: el aviso de inicio no depende de ningún tramo, así que una pasada
+    // tardía lo manda igual. El texto («ya está en marcha») sigue siendo cierto.
+    if (nowMs >= startMs) {
+      const key = eventAnnouncementKey(event.id, "start");
+
+      if (memory.sent[key] === undefined) {
+        due.push({ event, milestone: "start", key });
+      }
+
       continue;
     }
 
@@ -245,22 +294,33 @@ function discordRequirementText(event: EditionEvent): string | null {
 }
 
 /**
- * El texto de un recordatorio, en español y **puro**.
+ * El texto de un aviso, en español y **puro**.
  *
- * Lleva el nombre, la ventana en hora de Madrid (`formatEventWindow()`), el
- * multiplicador y, si el evento lo pide, el requisito de Discord. La descripción, si
- * la hay, va tal cual: es lo que la organización escribió para los participantes.
+ * Los recordatorios y el inicio llevan el nombre, la ventana en hora de Madrid
+ * (`formatEventWindow()`), el multiplicador y, si el evento lo pide, el requisito de
+ * Discord. La descripción, si la hay, va tal cual: es lo que la organización escribió
+ * para los participantes. El inicio dice «ya está en marcha» y no «empieza ahora»
+ * porque puede salir en una pasada tardía, con el evento ya empezado.
+ *
+ * El fin cierra el evento con lo justo: el nombre y la ventana. Lo que ya no se puede
+ * jugar no necesita repetir el multiplicador ni el requisito.
  */
 export function eventAnnouncementText(
   event: EditionEvent,
   milestone: EventAnnouncementMilestone,
 ): string {
+  if (milestone === "end") {
+    return `Evento puntual «${event.name}»: ha terminado. Su ventana fue: ${eventWindowText(event)}.`;
+  }
+
   const cuando =
-    milestone === "24h"
-      ? "Empieza en 24 horas o menos."
-      : milestone === "12h"
-        ? "Empieza en 12 horas o menos."
-        : "Empieza en 1 hora o menos.";
+    milestone === "start"
+      ? "ya está en marcha."
+      : milestone === "24h"
+        ? "Empieza en 24 horas o menos."
+        : milestone === "12h"
+          ? "Empieza en 12 horas o menos."
+          : "Empieza en 1 hora o menos.";
 
   const partes = [
     `Evento puntual «${event.name}»: ${cuando}`,
@@ -434,15 +494,15 @@ export type EventsAnnounceRunResult = {
 };
 
 /**
- * El paso del worker: manda los recordatorios que toquen y anota los que hayan salido.
+ * El paso del worker: manda los avisos que toquen y anota los que hayan salido.
  *
  * **Nunca lanza por Discord.** Un fallo del envío sale en `error` con los avisos que sí
  * se mandaron ya anotados, y el que falló queda pendiente para la siguiente pasada. Un
  * fallo de la **base** sí se propaga, como en `announceEditionWindow()`: quien llama
  * (el sincronizador) lo recoge y lo deja en el rastro.
  *
- * Sin eventos, o sin ninguno en su tramo, sale antes de leer la configuración de
- * Discord y sin crear ningún cliente HTTP.
+ * Sin eventos, o sin ninguno con un aviso pendiente, sale antes de leer la
+ * configuración de Discord y sin crear ningún cliente HTTP.
  */
 export async function announceEditionEvents(
   options: { config?: DiscordConfig; now?: Date } = {},
@@ -471,9 +531,9 @@ export async function announceEditionEvents(
     };
   }
 
-  // La mención no es opcional: un recordatorio de evento sin ping al rol de
-  // participantes no avisa a quien tiene que enterarse. Sin rol, el aviso queda
-  // pendiente en vez de salir roto.
+  // La mención no es opcional: un aviso de evento sin ping al rol de participantes no
+  // avisa a quien tiene que enterarse. Sin rol, el aviso queda pendiente en vez de
+  // salir roto.
   if (config.participantRoleId === null) {
     return {
       sent: [],

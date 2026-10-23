@@ -8,8 +8,8 @@ import type { DiscordHttpClient } from "@/lib/discord/http";
  * El envío al canal de avisos y las menciones que autoriza.
  *
  * Lo que se fija aquí es lo que no puede fallar por un descuido: que un mensaje sin
- * menciones no lleve `allowed_mentions` (para no cambiar lo que ya sale), que los
- * recordatorios de eventos sigan pudiendo pingear a su rol, y que el aviso de comienzo
+ * menciones no lleve `allowed_mentions` (para no cambiar lo que ya sale), que los avisos
+ * de eventos sigan pudiendo pingear a su rol, y que el aviso de comienzo
  * —el único con texto escrito en el panel— no pueda pingear a nadie aunque un nombre de
  * evento traiga un `@everyone`. El cliente es falso: ni red ni token.
  */

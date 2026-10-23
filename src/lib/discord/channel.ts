@@ -9,7 +9,7 @@ import type { DiscordHttpClient } from "./http";
  *
  * Vive aquí y no en `edition-announcements.ts` —de donde se sigue exportando, para no
  * romper a sus llamadores— porque ahora lo usan **dos** módulos de avisos: los hitos de
- * la edición y los recordatorios de los eventos puntuales
+ * la edición y los avisos de los eventos puntuales
  * (`edition-event-announcements.ts`). Si la petición viviera en el primero, los dos
  * módulos se importarían en círculo; con ella aquí, cada uno importa la petición y
  * nadie importa al otro.
