@@ -22,13 +22,64 @@
  */
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RAIZ = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const PREFIX = "CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_";
+
+/**
+ * Proyecto Supabase de desarrollo. El deploy manual compila con `.env.local`, que
+ * apunta a desarrollo; este guard evita publicar ese bundle en produccion. Se
+ * busca la referencia en el artefacto ya construido, no en el entorno: asi
+ * tambien caza un build hecho antes de exportar las variables de produccion.
+ */
+const DEV_SUPABASE_REF = "zuagaoymnwnewmuxfyfp";
+const EXTENSIONES_TEXTO = new Set([".js", ".mjs", ".cjs", ".json", ".html", ".txt", ".css", ".map"]);
+
+function buscarRefDesarrollo(dir) {
+  let entradas;
+
+  try {
+    entradas = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  for (const entrada of entradas) {
+    const ruta = resolve(dir, entrada.name);
+
+    if (entrada.isDirectory()) {
+      const encontrado = buscarRefDesarrollo(ruta);
+
+      if (encontrado !== null) {
+        return encontrado;
+      }
+
+      continue;
+    }
+
+    if (!EXTENSIONES_TEXTO.has(extname(entrada.name))) {
+      continue;
+    }
+
+    try {
+      if (statSync(ruta).size > 5 * 1024 * 1024) {
+        continue;
+      }
+
+      if (readFileSync(ruta, "utf8").includes(DEV_SUPABASE_REF)) {
+        return ruta;
+      }
+    } catch {
+      // Un fichero ilegible no debe impedir el despliegue; el guard es best-effort.
+    }
+  }
+
+  return null;
+}
 
 /** Lee un `.env`/`.dev.vars` sencillo: `CLAVE=valor`, `#` de comentario, comillas opcionales. */
 function leerVars(path) {
@@ -79,6 +130,19 @@ if (process.env[`${PREFIX}HYPERDRIVE`] === undefined) {
     `[deploy] No hay ninguna ${PREFIX}<BINDING> en .dev.vars ni en el entorno, y el bloque ` +
       "`hyperdrive` de wrangler.jsonc esta activo: el despliegue fallara al emular el binding.",
   );
+}
+
+const archivoConDesarrollo = buscarRefDesarrollo(resolve(RAIZ, ".open-next"));
+
+if (archivoConDesarrollo !== null) {
+  console.error(
+    `[deploy] El build contiene la configuracion de Supabase de desarrollo (${archivoConDesarrollo}).`,
+  );
+  console.error(
+    "[deploy] Exporta NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY de produccion " +
+      "antes de compilar, o despliega con Workers Builds. No se publica nada.",
+  );
+  process.exit(1);
 }
 
 /**
