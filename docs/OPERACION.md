@@ -605,7 +605,7 @@ credenciales el paso no existe** (no falla): el formulario no pinta el botón y 
 | `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord; el `User-Agent` debe ser **ASCII** (sin tildes) | No (valores por defecto) |
 | `DISCORD_CHECK_MAX_PER_RUN` | Tope de cuentas comprobadas por pasada (10) | No |
 | `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas de la lista de miembros por refresco (20) y horas de caché (12) | No |
-| `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa de los **hitos de la edición** (comienzo, final, recordatorios y cierre de inscripciones) y manda el **informe diario de clasificación** | Sí, para avisar |
+| `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa de los **hitos de la edición** (comienzo, final, recordatorios y cierre de inscripciones), de los **eventos puntuales** (recordatorios, inicio y fin) y manda el **informe diario de clasificación** | Sí, para avisar |
 | `DISCORD_PARTICIPANT_ROLE_ID` | Rol que el bot pone a los **participantes aprobados** y quita a quien deja de estarlo | Sí, para el rol |
 | `DISCORD_ROLE_MAX_PER_RUN` | Tope de operaciones con el rol por pasada (10) | No |
 
@@ -990,9 +990,10 @@ cuentas**: `discordUserId`, o el `@usuario` resuelto por la lista de miembros.
 
 ## Avisos del torneo en Discord
 
-El bot manda mensajes a un canal (`DISCORD_ANNOUNCE_CHANNEL_ID`). Son de tres clases: los **hitos de la
-edición** (esta sección), el **informe diario de clasificación** y los **avisos de las acciones de
-administración** (las dos subsecciones de abajo). Los hitos los manda el worker en su pasada
+El bot manda mensajes a un canal (`DISCORD_ANNOUNCE_CHANNEL_ID`). Son de cuatro clases: los **hitos de
+la edición** (esta sección), los **avisos de los eventos puntuales** (recordatorios, inicio y fin; ver
+[Eventos puntuales](#eventos-puntuales)), el **informe diario de clasificación** y los **avisos de las
+acciones de administración** (las dos subsecciones de abajo). Los hitos los manda el worker en su pasada
 (`announceEditionWindow()`): mira la ventana del ruleset (`Setting["scoring.ruleset"].window`) y la fecha
 de cierre de inscripciones (`Setting["registration.closesAt"]`).
 
@@ -1088,24 +1089,35 @@ panel (`/admin/administracion/eventos`) y se **bloquea** cuando empieza la venta
 |---|---|
 | Eventos | `Setting["edition.events"]` (nombre, descripción, `from`/`to`, multiplicador y `discordRequired`) |
 | Snapshot de elegibilidad | `Setting["edition.events.state"]` (`checkedAt`, `checkedPlayerIds`, `eligiblePlayerIds` por evento) |
-| Memoria de avisos | `Setting["edition.events.announcements"]` (`sent`: `${eventId}:24h`/`12h`/`1h` → instante) |
+| Memoria de avisos | `Setting["edition.events.announcements"]` (`sent`: `${eventId}:24h`/`12h`/`1h`/`start`/`end` → instante) |
 | Dónde mirar | `announceError` (avisos) y `discordError` (elegibilidad) en `Setting["sync.lastRun"]`. Ninguno mueve `lastSuccessAt` |
 
 ### Avisos
 
-El worker manda **tres recordatorios** por evento, dentro de su tramo y nunca atrasados:
+El worker manda **cinco avisos** por evento: tres recordatorios antes de que empiece y
+los dos de su ciclo de vida.
 
-| Aviso | Cuándo (`now`) |
-|---|---|
-| 24 h | `[inicio − 24 h, inicio − 12 h)` |
-| 12 h | `[inicio − 12 h, inicio − 1 h)` |
-| 1 h | `[inicio − 1 h, inicio)` |
+| Aviso | Cuándo (`now`) | ¿Atrasado? |
+|---|---|---|
+| 24 h | `[inicio − 24 h, inicio − 12 h)` | No: un tramo saltado no se recupera |
+| 12 h | `[inicio − 12 h, inicio − 1 h)` | No |
+| 1 h | `[inicio − 1 h, inicio)` | No |
+| Inicio | `[inicio, fin)` | Sí: si el evento sigue en curso, sale igual |
+| Fin | `[fin, ∞)` | Sí: el cierre se manda igual |
 
-- **Un evento ya empezado no genera recordatorios**: su información va en el aviso de comienzo.
-- **Un tramo saltado no se recupera**: si la pasada de las 24 h no ocurre, no se manda al día
+- **Los recordatorios son de tramo**: si la pasada de las 24 h no ocurre, no se manda al día
   siguiente; sale el tramo en el que estemos. Un aviso ya anotado no se repite.
-- El texto lleva el nombre, la ventana en hora de Madrid, el multiplicador, la descripción si la
-  hay y, si el evento lo pide, que solo cobran quienes estén en el servidor de Discord.
+- **El inicio y el fin toleran la tardanza**: el inicio sale en la primera pasada con el evento
+  en curso (`inicio <= now < fin`), aunque lleve horas en marcha —el texto dice «ya está en
+  marcha», no «empieza ahora»— y el fin sale en la primera pasada con `now >= fin`, aunque el
+  cierre llegue tarde por una caída o un despliegue.
+- **Un evento terminado no manda el inicio atrasado**: con `now >= fin` solo sale el fin. Un
+  evento que se perdió entero se cierra sin anunciar su comienzo.
+- **Como mucho un aviso por evento y pasada**, en orden de inicio del evento.
+- El texto del recordatorio y del inicio lleva el nombre, la ventana en hora de Madrid, el
+  multiplicador, la descripción si la hay y, si el evento lo pide, que solo cobran quienes estén
+  en el servidor de Discord. El del fin cierra con el nombre y la ventana, sin repetir lo que ya
+  no es accionable.
 - Se menciona al rol de participante (`DISCORD_PARTICIPANT_ROLE_ID`) con
   `allowed_mentions` restringido a ese rol: no se pinguea a todo el mundo. **Sin ese rol no se
   manda nada** y el aviso queda pendiente; el motivo va en `announceError`.
