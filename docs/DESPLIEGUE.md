@@ -68,10 +68,10 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
   `TURNSTILE_SECRET_KEY` de producción: degrada sin ellos.
 - Las `NEXT_PUBLIC_*` se compilan dentro del bundle. Cambiarlas exige un build nuevo, y los Previews
   ya existentes **no se actualizan solos**: hay que redesplegarlos o borrarlos.
-- **Estado actual (23-oct-2026)**: la creación automática de Previews está desactivada
-  (`previews_enabled: false`) hasta que el cambio de `previews.hyperdrive` esté en `main`. Si no, una
-  rama sin ese cambio usaría el Hyperdrive de producción con el Auth de desarrollo. El Preview manual
-  de `feat/143-entorno-pruebas` sigue vivo; se reactiva al mergear el cambio.
+- La build de *Previews Base* comprueba que `previews.hyperdrive` apunte al proyecto de desarrollo
+  (`ligahispana-aoe4-dev`). Si una rama antigua conserva el id de producción, el build falla con un
+  mensaje claro en vez de desplegar un Preview que escribiría en producción. Para arreglarlo, rebasa
+  la rama sobre `main`/`v0.8` o trae el cambio de `wrangler.jsonc`.
 
 ### GitHub Actions
 
