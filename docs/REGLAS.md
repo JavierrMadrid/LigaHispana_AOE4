@@ -105,7 +105,12 @@ Facultades internas para gestionar el torneo.
 | Regla | Cómo se controla |
 |---|---|
 | **Aprobar, rechazar y editar** participantes. | Panel |
-| **Revertir o restaurar** una partida: deja de contar sin borrarla, de forma reversible. | Panel |
+| **Expulsar** a un participante: deja de puntuar y conserva todos sus datos; se puede revertir. | Panel |
+| **Anular** partidas ganadas: dejan de contar sin borrarlas; se pueden revertir. | Panel |
 | **Versionar el reglamento**: un cambio de estructura sube la versión y recalcula la clasificación. | Panel |
 | Publicar el **premio base** de la edición y la **campaña de donaciones** de la comunidad, que se suma a él. | Panel (configuración de la edición) |
 | Dejar **registro** de cada acción en el panel. | Panel |
+
+Cada expulsión o anulación queda registrada como **actuación administrativa**, con su **razón pública**
+y su autor, y se anuncia en el canal de avisos de Discord (además de por privado a la persona afectada).
+La información privada del expediente no se publica.

@@ -407,9 +407,9 @@ export type RecordAdminActionInput = AdminActionEntry & {
  * Escribe una fila de `AdminAction` y devuelve su `id`.
  *
  * Recibe el cliente para poder participar en la transacción de quien llama: es lo que
- * hace que el rastro y el cambio no puedan separarse. Devolver el `id` es porque la
- * compensación de un revert fallido necesita borrar **su** fila y solo la de ella
- * (ver `setMatchReverted` en `src/app/admin/actions.ts`).
+ * hace que el rastro y el cambio no puedan separarse. El `id` se devuelve por si una
+ * compensación necesita borrar la fila que acaba de escribir; hoy no queda ninguna que
+ * lo use, pero la firma no cambia el contrato del rastro.
  */
 export async function recordAdminAction(
   client: AdminActionWriter,

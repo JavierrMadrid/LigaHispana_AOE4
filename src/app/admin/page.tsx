@@ -6,7 +6,7 @@ import { SyncNowButton } from "@/app/admin/sync-now-button";
 import { EmptyState } from "@/components/empty-state";
 import { PendingButton } from "@/components/pending-button";
 import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
-import { requireAdmin } from "@/lib/auth";
+import { getAdminAccess, requireAdmin } from "@/lib/auth";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
@@ -52,6 +52,10 @@ function backfillDetail(pending: number, stalled: boolean | null): string {
  */
 export default async function AdminPage() {
   await requireAdmin();
+
+  // El acceso ya está resuelto y memoizado por `requireAdmin()`; se lee para
+  // ofrecer la reversión de una expulsión solo a quien puede crearla.
+  const access = await getAdminAccess();
 
   const [totalPlayers, approvedPlayers, pendingPlayers, scoreTotals, syncHealth] =
     await Promise.all([
@@ -337,7 +341,11 @@ export default async function AdminPage() {
             body="La base de datos no ha respondido. Vuelve a intentarlo en unos minutos para ver el listado."
           />
         ) : (
-          <ParticipantsBrowser participants={participants} countries={countries} />
+          <ParticipantsBrowser
+            participants={participants}
+            countries={countries}
+            canReverse={access === "superadmin"}
+          />
         )}
       </section>
     </div>

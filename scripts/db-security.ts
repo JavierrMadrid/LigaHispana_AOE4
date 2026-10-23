@@ -98,6 +98,8 @@ const TABLES = [
   "ObjectiveEvent",
   "ObjectiveLeadEvent",
   "Admin",
+  "AdminAct",
+  "AdminActMatch",
 ] as const;
 
 const ROLES_CLIENTE = "anon, authenticated";

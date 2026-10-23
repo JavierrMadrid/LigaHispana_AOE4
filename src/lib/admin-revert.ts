@@ -52,17 +52,18 @@ import { deletePlayerSyncState } from "@/lib/settings";
  *
  * La clasificación se recalcula después de confirmar el cambio, y si falla se **avisa**
  * en vez de compensar. Es el mismo criterio que la baja de un jugador (`deletePlayer`)
- * y no el del revert de puntos (`setMatchReverted`): lo que se ha deshecho está escrito
- * y es coherente consigo mismo, y la clasificación que se queda es la anterior, que la
- * próxima pasada del sincronizador vuelve a poner al día —el recálculo es lo último que
- * hace cada pasada—. Compensar aquí obligaría a deshacer la marca de la original y
- * borrar la fila `ACTION_REVERTED` para dejar un estado que el cron arregla solo.
+ * y el de una actuación administrativa (`createAdminActRecord`): lo que se ha deshecho
+ * está escrito y es coherente consigo mismo, y la clasificación que se queda es la
+ * anterior, que la próxima pasada del sincronizador vuelve a poner al día —el recálculo
+ * es lo último que hace cada pasada—. Compensar aquí obligaría a deshacer la marca de
+ * la original y borrar la fila `ACTION_REVERTED` para dejar un estado que el cron
+ * arregla solo.
  *
  * ## Lo que comparte con las acciones que ya deshacían algo
  *
  * `countsWithoutRevertMark()`, `deletePlayerCascade()` y `recomputeWithWarning()` viven
- * aquí y las usan también `setMatchReverted()` y `deletePlayer()`
- * (`src/app/admin/actions.ts`): la reversión y las acciones de siempre tienen que hacer
+ * aquí y las usan también `deletePlayer()` y la actuación de anulación
+ * (`createAdminActRecord()`): la reversión y las acciones de siempre tienen que hacer
  * **exactamente lo mismo**, y la alternativa era una segunda copia de cada regla.
  */
 
@@ -347,8 +348,8 @@ export async function revertAdminAction(
   const aviso = outcome.recompute ? await recomputeWithWarning("admin/revertAdminAction") : "";
 
   // Las alertas son un informe derivado y *append-only*, y se reevalúan **después** del
-  // recálculo y solo para el jugador cuyas partidas han cambiado: es lo mismo que hace
-  // `setMatchReverted`, y un fallo suyo no deja nada a medias.
+  // recálculo y solo para el jugador cuyas partidas han cambiado: es el mismo criterio
+  // que `createAdminActRecord`, y un fallo suyo no deja nada a medias.
   if (outcome.reevaluatePlayerId !== undefined) {
     await reevaluatePlayerAlerts(outcome.reevaluatePlayerId);
   }
@@ -490,6 +491,8 @@ function statusLabel(status: PlayerStatus): string {
       return "aprobado";
     case PlayerStatus.REJECTED:
       return "rechazado";
+    case PlayerStatus.BANNED:
+      return "expulsado";
   }
 }
 
@@ -497,7 +500,8 @@ function statusLabel(status: PlayerStatus): string {
 function readPlayerStatus(value: unknown): PlayerStatus | null {
   return value === PlayerStatus.PENDING ||
     value === PlayerStatus.APPROVED ||
-    value === PlayerStatus.REJECTED
+    value === PlayerStatus.REJECTED ||
+    value === PlayerStatus.BANNED
     ? value
     : null;
 }
@@ -517,6 +521,11 @@ function readPlayerStatus(value: unknown): PlayerStatus | null {
  *
  * Si el jugador ya no está, el alta **ya está deshecha**: se dice y no se escribe ni el
  * rastro, porque no hay cambio que compensar.
+ *
+ * **No se borra por debajo de una actuación vigente.** Si el jugador está `BANNED` o
+ * tiene una expulsión o anulación sin revertir, deshacer el alta dejaría el expediente
+ * huérfano (`AdminAct.playerId = null`) y ya no se podría revertir. Es la misma guarda
+ * que la baja del panel: primero se revierte desde Actuaciones.
  */
 async function revertPlayerCreated(
   action: RevertibleAction,
@@ -525,11 +534,29 @@ async function revertPlayerCreated(
 ): Promise<BranchResult> {
   const player = await db.player.findUnique({
     where: { id: targetId },
-    select: { id: true, profileId: true },
+    select: { id: true, name: true, profileId: true, status: true },
   });
 
   if (player === null) {
     return { ok: false, message: "Ese jugador ya no está en el panel, así que el alta ya estaba deshecha." };
+  }
+
+  if (player.status === PlayerStatus.BANNED) {
+    return {
+      ok: false,
+      message: `No se puede deshacer el alta: ${player.name} está expulsado. Revierte primero la expulsión desde Actuaciones.`,
+    };
+  }
+
+  const activeActs = await db.adminAct.count({
+    where: { playerId: player.id, revertedAt: null, kind: { not: "REVERSAL" } },
+  });
+
+  if (activeActs > 0) {
+    return {
+      ok: false,
+      message: `No se puede deshacer el alta: ${player.name} tiene actuaciones vigentes. Revierte primero la expulsión o la anulación desde Actuaciones.`,
+    };
   }
 
   await db.$transaction(async (tx) => {

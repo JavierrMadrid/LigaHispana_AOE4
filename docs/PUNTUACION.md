@@ -15,7 +15,8 @@ Una partida puntúa si cumple **todo** esto:
   nunca, ni a favor ni en contra.
 - **Dentro de la ventana** del torneo (ver abajo).
 - **Posterior al corte de inscripción** del jugador (ver abajo).
-- **No revertida** por la organización: la marca es reversible y la partida sigue en el histórico.
+- **No anulada por una actuación de la organización**: la marca es reversible y la partida sigue en el
+  histórico.
 - **Equipo equilibrado** (solo partidas por equipos): ningún compañero está a **dos escalones o
   más** de división del jugador (ver abajo).
 - El jugador está `APPROVED`.
@@ -50,7 +51,7 @@ cero escalones tanto si es `gold_3` como si es `gold_1`.
 - Los cortes rating → división se derivan a mano con `npm run alerts:cutoffs` y se cachean en
   `Setting["alerts.divisionCutoffs"]`. Sin ellos la comprobación no se aplica (ver arriba), así que
   conviene derivarlos antes de que el torneo empiece a puntuar en serio.
-- Estas partidas **no salen en el historial**: no son una ganancia y no hay puntos que revertir. El
+- Estas partidas **no salen en el historial**: no son una ganancia y no hay puntos que anular. El
   historial del panel enseña las mismas ganancias que el público.
 
 ### La ventana
@@ -92,7 +93,7 @@ entrar. `registeredAt` es la fecha del envío del alta (no la de la aprobación)
 |---|---|
 | Victoria clasificatoria | `pointsPerWin` del ruleset (hoy **2**) |
 | Derrota clasificatoria | 0 (cuenta para las partidas jugadas y los ratios, no para la suma) |
-| Partida en curso, abandonada, revertida o de equipo desequilibrado | 0 |
+| Partida en curso, abandonada, anulada o de equipo desequilibrado | 0 |
 
 - Se guarda partida a partida en `Match.points`, así que el punto base por victoria es auditable; el
   bono de un evento puntual no vive ahí (ver [Eventos puntuales](#eventos-puntuales)).
@@ -136,7 +137,7 @@ paga un extra. No es un objetivo ni una competición: es un multiplicador sobre 
 
 - **Solo victorias.** El multiplicador no toca derrotas, objetivos ni partidas que no cuentan. La
   partida es la misma que puntúa para todo lo demás: modo del ruleset, resuelta, dentro de la ventana,
-  después del corte de inscripción, no revertida, equipo equilibrado y jugador aprobado.
+  después del corte de inscripción, no anulada, equipo equilibrado y jugador aprobado.
 - **Se cuenta por `Match.startedAt`**, en `[from, to)`: una victoria que empieza justo en `to` ya no
   cobra el evento.
 - **Fórmula por jugador y evento:** `victorias dentro del evento × pointsPerWin × (multiplier - 1)`.

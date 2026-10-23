@@ -29,6 +29,14 @@ enum PlayerStatus {
   PENDING
   APPROVED
   REJECTED
+  /// Expulsado por una actuación administrativa (`AdminAct` de tipo `BAN`).
+  ///
+  /// Es un estado **reversible** y conserva todos los datos del participante: no es
+  /// la baja destructiva (`deletePlayer`). Un `BANNED` no puntúa (el motor solo
+  /// publica `APPROVED`) y no puede recibir una segunda expulsión vigente; para
+  /// devolverlo al torneo hay que revertir la actuación. Va al final por la regla de
+  /// `ALTER TYPE … ADD VALUE`.
+  BANNED
 }
 
 enum MatchResult {
@@ -66,6 +74,21 @@ enum AdminActionType {
   ADMIN_REACTIVATED
   ACTION_REVERTED
   CONFIG_CHANGED
+}
+
+/// Qué hizo una **actuación administrativa** (`AdminAct`).
+///
+/// Es un historial aparte de `AdminAction`: una actuación tiene una sola acción, una
+/// razón pública y, opcionalmente, información privada. Las tres clases no se pueden
+/// reducir a dos: una expulsión no cambia partidas, una anulación no cambia el estado
+/// del jugador y una reversión no crea ni quita nada, solo deshace otra actuación.
+///
+/// `REVERSAL` es **final**: una reversión no se puede revertir. Los valores nuevos van
+/// al final, como en todos los enums de Postgres.
+enum AdminActKind {
+  BAN
+  MATCH_ANNULMENT
+  REVERSAL
 }
 
 /// Qué comportamiento anómalo de un participante ha detectado el motor.
@@ -456,6 +479,9 @@ model Player {
   objectiveEvents ObjectiveEvent[]
   leadEvents      ObjectiveLeadEvent[]
   alerts          Alert[]
+  // Actuaciones administrativas del jugador. La relación es `SetNull`: una actuación
+  // sobrevive al borrado del jugador con la foto de `playerName`/`profileId`.
+  adminActs       AdminAct[]
 
   // Cola del relleno: quién está aprobado, quién tiene la ventana pendiente y
   // por qué página va. El orden de las columnas es el de la consulta de
@@ -554,6 +580,9 @@ model Match {
   revertedAt        DateTime?
   rawJson           Json
   createdAt         DateTime     @default(now())
+
+  // Vínculos de las actuaciones que anularon esta partida (`AdminAct`).
+  adminActMatches   AdminActMatch[]
 
   // La unicidad es por jugador, no global: en un torneo individual dos
   // participantes pueden jugar la misma partida y cada uno necesita su fila
@@ -1012,4 +1041,108 @@ model Alert {
   // orden, y para contar cuántas alertas de cada regla ha tenido.
   @@index([createdAt])
   @@index([playerId, rule])
+}
+
+/// Una **actuación administrativa**: la unidad con la que la organización expulsa a
+/// un participante, anula partidas ganadas o revierte actuaciones anteriores.
+///
+/// Es un historial **aparte de `AdminAction`**, no una fila más de aquella tabla: la
+/// actuación tiene razón pública (la que se anuncia en Discord), información privada
+/// (que nunca sale del panel), autor y fecha, y además se aplica en el momento. Los
+/// `AdminAction` siguen siendo el rastro técnico de cada cambio; la actuación es el
+/// expediente que lo explica.
+///
+/// ## Una acción por actuación
+///
+/// `kind` decide qué se hizo y solo se puede hacer una cosa: una expulsión y una
+/// anulación del mismo jugador son **dos actuaciones**. El único caso que selecciona
+/// varias filas es la reversión, que puede deshacer varias actuaciones vigentes del
+/// mismo participante a la vez.
+///
+/// ## La razón pública y la privada
+///
+/// `publicReason` es obligatoria y es lo único que se manda a Discord (canal y DM).
+/// `privateInfo` es opcional y **no sale del panel ni se loguea**: el aviso público no
+/// la recibe por tipo (ver `src/lib/admin-acts.ts`), así que no se puede filtrar por
+/// descuido. `summary` es una frase ya redactada en español, como
+/// `AdminAction.summary`, y no contiene información privada.
+///
+/// ## El borrado del jugador
+///
+/// `playerId` es nullable y `SetNull`: una actuación sobrevive a que se borre el
+/// jugador, con la foto de `playerName`/`profileId` del momento. Eso conserva el
+/// historial de una expulsión que luego se revierte y el jugador se da de baja.
+model AdminAct {
+  id String @id @default(cuid())
+
+  kind AdminActKind
+
+  /// `Player.id`, o `null` si el jugador se ha borrado después.
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  /// Foto del nombre y del perfil en el momento de la actuación: es lo que queda si
+  /// la relación con `Player` se pone a `null`.
+  playerName String
+  profileId  Int
+
+  /// Frase ya redactada en español (`adminActSummary()`); el panel la pinta tal cual.
+  summary String
+
+  /// Razón pública obligatoria: es lo único que se manda en el canal y en el DM.
+  publicReason String
+  /// Información privada opcional: nunca sale del panel ni se loguea.
+  privateInfo  String?
+
+  /// Correo del usuario de Supabase Auth que la creó.
+  actorEmail String
+
+  /// Partidas anuladas, o en una reversión el total de partidas afectadas por las
+  /// actuaciones revertidas (unión, sin repetir).
+  matchCount Int @default(0)
+
+  /// Estado que tenía el jugador antes de una expulsión. `null` en los otros tipos.
+  /// Es lo que restaura la reversión.
+  statusBefore PlayerStatus?
+
+  /// Cuándo la revirtió otra actuación. `null` = sigue vigente. En una `REVERSAL`
+  /// siempre es `null`: una reversión es final y no se revierte.
+  revertedAt      DateTime?
+  revertedByEmail String?
+
+  /// La actuación de reversión que la deshizo, si existe. Autorrelación con
+  /// `SetNull`: la reversión es una fila más de este mismo historial.
+  reversedByActId String?
+  reversedByAct   AdminAct?  @relation("AdminActReversal", fields: [reversedByActId], references: [id], onDelete: SetNull)
+  reverses        AdminAct[] @relation("AdminActReversal")
+
+  /// Partidas anuladas por esta actuación (vacío en una expulsión o una reversión).
+  matches AdminActMatch[]
+
+  createdAt DateTime @default(now())
+
+  // Listado por fecha (lo más reciente primero), filtro por tipo y por jugador, y
+  // estado vigente/revertido. El último sostiene la autorrelación.
+  @@index([createdAt])
+  @@index([kind, createdAt])
+  @@index([playerId, createdAt])
+  @@index([revertedAt, kind])
+  @@index([reversedByActId])
+}
+
+/// Qué partidas anuló una actuación (`AdminAct` de tipo `MATCH_ANNULMENT`).
+///
+/// Es la lista de vínculos, no una copia de la partida: los datos se leen en vivo de
+/// `Match`. El `Cascade` en los dos lados es deliberado: si se borra la actuación o la
+/// partida, el vínculo no puede quedarse apuntando a nada.
+model AdminActMatch {
+  actId String
+  act   AdminAct @relation(fields: [actId], references: [id], onDelete: Cascade)
+
+  matchId String
+  match   Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@id([actId, matchId])
+  // La consulta "qué actuaciones anularon esta partida" y el `Cascade` desde `Match`.
+  @@index([matchId])
 }

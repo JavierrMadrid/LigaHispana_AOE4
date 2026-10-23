@@ -277,6 +277,10 @@ npm run db:window                # ventana de fechas del torneo (opcional, recom
 En producción, los mismos comandos se ejecutan **de forma deliberada** con la URL de producción; no
 se heredan del entorno de desarrollo. `db:cron` es **solo de producción**.
 
+- Las actuaciones administrativas (`AdminAct` y `AdminActMatch`) son tablas nuevas: su primer
+  `db:push` también exige `npm run db:security -- --check`, porque una tabla nace accesible para los
+  roles de cliente. Si la comprobación falla, `npm run db:security`.
+
 - La variable de Hyperdrive en la build del trigger, o el despliegue no publica.
 - Las `NEXT_PUBLIC_*` y los secretos de servidor, en la lista de build que corresponda.
 - El detalle operativo de estos comandos está en [`docs/OPERACION.md`](./OPERACION.md#requisitos-operativos-de-un-despliegue).
