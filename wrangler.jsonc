@@ -199,19 +199,29 @@
   // `assets`, `compatibility_*` y `migrations` se quedan arriba, y los Cron Triggers no
   // se replican: apuntan a produccion, luego un Preview no puede disparar el sync.
   //
-  // `HYPERDRIVE` apunta a la misma base de produccion, y a proposito: el Preview sirve
-  // para mirar la interfaz de verdad (streams, clasificaciones) y sin base no hay nada
-  // que ver. Es trafico de lectura en su mayor parte; las escrituras se quedan sin
-  // autenticacion porque los secretos del panel no se heredan, y
-  // `WORKER_SELF_REFERENCE` sigue llamando al despliegue de produccion. Para aislarlo de
-  // verdad: crear otro config de Hyperdrive sobre una base de pruebas y cambiar el `id`
-  // de aqui. En plan Free no se cobra por config, el limite es el mismo (100.000
-  // consultas al dia).
+  // `HYPERDRIVE` apunta a la base del proyecto de **desarrollo**, no a produccion. El
+  // config `ligahispana-aoe4-dev` (id `9ee4c8de68e240dba17bd2aba2a0880e`) se creo con
+  // la conexion directa del proyecto de desarrollo y la cache desactivada, igual que el
+  // de produccion. Todos los Previews comparten esa base: es desechable y se rellena con
+  // `npm run mock:tournament`; los cambios de schema se aplican a mano con
+  // `npm run db:push` antes de probar la rama.
+  //
+  // Lo que **no** se declara aqui: las `NEXT_PUBLIC_SUPABASE_*` y la cadena de emulacion
+  // de Hyperdrive. Las primeras son de build y viven en la configuracion *Previews Base*
+  // de Workers Builds; la segunda es un secreto de build (el CLI solo comprueba que
+  // exista, no conecta con ella). Los secretos de runtime de los Previews (por ejemplo
+  // `SUPABASE_SERVICE_ROLE_KEY` y `SUPERADMIN_EMAIL`) tambien se configuran en *Previews
+  // Base*, nunca heredados del Worker de produccion.
+  //
+  // `WORKER_SELF_REFERENCE` sigue llamando al despliegue de produccion: un Preview no
+  // puede disparar el sync ni escribir en la base de produccion por esa via. En plan
+  // Free no se cobra por config de Hyperdrive; el limite de consultas es el mismo
+  // (100.000 al dia) y lo comparten produccion y desarrollo.
   "previews": {
     "hyperdrive": [
       {
         "binding": "HYPERDRIVE",
-        "id": "04fab935a8f34fce814ccebfc4301042"
+        "id": "9ee4c8de68e240dba17bd2aba2a0880e"
       }
     ],
     "images": {

@@ -146,14 +146,31 @@ cuenta —no la borra—, así que se puede reactivar. Quien entra con una cuent
 `/sin-acceso`. El detalle operativo está en
 [`docs/OPERACION.md`](docs/OPERACION.md#administración-del-panel).
 
+### Entornos
+
+| Entorno | Base de datos | Auth | Dónde |
+|---|---|---|---|
+| Producción | Proyecto Supabase de producción | Supabase Auth de producción | `main` → `https://laligahispana.es` |
+| Desarrollo y Previews | Proyecto Supabase de desarrollo | Supabase Auth de desarrollo | `next dev` y cada Preview |
+
+- `.env.local` apunta al proyecto de **desarrollo**. Producción no se toca desde `next dev` ni desde
+  los comandos diarios.
+- Los Previews comparten la base de desarrollo; es desechable y se rellena con fixtures.
+- Las variables de producción viven en el panel de Cloudflare y en las operaciones manuales
+  deliberadas, nunca en el entorno local. El detalle está en
+  [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md#variables-los-dos-sitios-del-panel).
+
 ### Puesta en marcha
 
 Requiere Node.js 20+ y una base de datos PostgreSQL.
 
 ```bash
 npm install          # dependencias + cliente Prisma
-cp .env.example .env # rellena DATABASE_URL
-npm run db:push      # crea las tablas
+cp .env.example .env.local  # rellena la URL del proyecto de DESARROLLO
+npm run db:push      # crea las tablas en desarrollo
+npm run countries:seed
+npm run db:window
+npm run mock:tournament   # datos de prueba
 npm run dev          # http://localhost:3000
 ```
 
@@ -166,16 +183,22 @@ npm run dev          # http://localhost:3000
 | `npm run lint` / `npm test` | ESLint y tests (Vitest). |
 | `npm run sync` | Sincroniza partidas de AoE4World. |
 | `npm run score` | Recalcula la clasificación. |
-| `npm run db:push` / `npm run db:security` | Sincroniza el schema y aplica la postura de RLS. |
-| `npm run db:cron` | Programa el reloj del torneo (Supabase Cron). |
-| `npm run mock:tournament` | Simula el torneo con fixtures locales. |
-| `npm run deploy` / `npm run preview` | Despliega el Worker (producción / local). |
+| `npm run db:push` / `npm run db:security` | Sincroniza el schema y aplica la postura de RLS en el entorno de `DATABASE_URL` (por defecto, desarrollo). |
+| `npm run db:cron` | Programa el reloj del torneo en producción (Supabase Cron). No ejecutar contra desarrollo. |
+| `npm run mock:tournament` / `npm run mock:clean` | Simula el torneo con fixtures locales y lo deshace. |
+| `npm run deploy` / `npm run preview` | Despliega el Worker (producción manual / preview local). |
 
 ### Despliegue
 
 **Producción despliega sola**: el repositorio está conectado a Cloudflare Workers Builds. Un push a
 `main` publica en `https://laligahispana.es`; un push a cualquier otra rama genera un **Preview** con
-su propia URL. GitHub Actions comprueba lint, build y tests en cada pull request.
+su propia URL, apuntando al proyecto Supabase de **desarrollo**. GitHub Actions comprueba lint, build y
+tests en cada pull request.
+
+El despliegue manual (`npm run deploy`) compila con el entorno del proceso. Como `.env.local` apunta a
+desarrollo, para publicar a producción hay que exportar antes las variables `NEXT_PUBLIC_*` de
+producción o usar Workers Builds. El detalle está en
+[`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md#despliegue-manual).
 
 ### Documentación
 
