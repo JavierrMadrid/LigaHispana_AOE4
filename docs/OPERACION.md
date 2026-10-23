@@ -5,6 +5,36 @@ comprobar que sigue viva, sus límites y cómo se prueban las simulaciones. El d
 [`docs/DESPLIEGUE.md`](./DESPLIEGUE.md), el esquema en [`docs/MODELO-DATOS.md`](./MODELO-DATOS.md)
 y las reglas en [`docs/PUNTUACION.md`](./PUNTUACION.md).
 
+## Entornos
+
+| Entorno | Base de datos | Auth | Quién lo usa |
+|---|---|---|---|
+| Producción | Proyecto Supabase de producción | Supabase Auth de producción | Worker de `main` y operaciones deliberadas. |
+| Desarrollo | Proyecto Supabase de desarrollo | Supabase Auth de desarrollo | `next dev`, scripts locales y todos los Previews. |
+
+- `.env.local` apunta a desarrollo. `npm run db:push`, `db:security`, los seeds y las simulaciones se
+  ejecutan contra desarrollo sin tocar producción.
+- Producción se opera solo de forma explícita: URL de producción en el comando o desde el panel de
+  Supabase. No se hereda del entorno local.
+- `npm run db:cron` es **solo de producción**. Con la base de desarrollo y sin `SITE_URL`, programa un
+  job que llama a `https://laligahispana.es/api/sync`.
+- Los datos de desarrollo son desechables: `npm run mock:tournament` los crea y `npm run mock:clean`
+  los borra. No copiar datos personales de producción a desarrollo.
+- Los Previews comparten la base de desarrollo. Un Preview antiguo creado antes del cambio de
+  Hyperdrive puede seguir apuntando a producción: hay que redesplegarlo o borrarlo.
+- El plan Free de Supabase pausa el proyecto de desarrollo tras una semana sin actividad. Si un Preview
+  da 500, lo primero es mirar si está pausado y reanudarlo. El workflow `dev-keepalive.yml` hace una
+  consulta diaria para evitarlo; necesita el secreto `DEV_DATABASE_URL` en el repositorio.
+
+### Acceso de lectura a producción
+
+- El rol `liga_readonly` sirve para consultas de inspección: solo `SELECT`, con `bypassrls` para leer
+  las tablas aunque RLS esté cerrada y `default_transaction_read_only = on`. No tiene `INSERT`,
+  `UPDATE`, `DELETE`, `TRUNCATE` ni `CREATE`.
+- Su URL vive en `~/.config/ligahispana-aoe4/prod-readonly.env` (permisos 600), fuera del repositorio.
+- La URL de **escritura** de producción no se guarda en el entorno de desarrollo ni se usa en los
+  scripts diarios. Para un cambio de schema en producción se ejecuta de forma deliberada y manual.
+
 ## Sincronización
 
 El worker descarga las partidas de **todos** los participantes aprobados y las guarda con
