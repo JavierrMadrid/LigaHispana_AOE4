@@ -1,0 +1,41 @@
+name: Mantener despierto desarrollo
+
+# El plan Free de Supabase pausa un proyecto tras una semana sin actividad.
+# Este workflow hace una consulta diaria contra el proyecto de DESARROLLO para
+# que los Previews no se encuentren la base pausada.
+#
+# Necesita, en el repositorio, el secreto `DEV_DATABASE_URL` (Settings > Secrets
+# and variables > Actions > Secrets) con la cadena del Session pooler de
+# desarrollo. No es la URL de produccion.
+#
+# `workflow_dispatch` permite lanzarlo a mano desde la pestaña Actions.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Comprobar que DEV_DATABASE_URL está definido
+        env:
+          DEV_DATABASE_URL: ${{ secrets.DEV_DATABASE_URL }}
+        run: |
+          if [ -z "$DEV_DATABASE_URL" ]; then
+            echo "::error::Falta el secreto DEV_DATABASE_URL en el repositorio."
+            exit 1
+          fi
+
+      - name: Consultar la base de desarrollo
+        env:
+          DEV_DATABASE_URL: ${{ secrets.DEV_DATABASE_URL }}
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+          psql "$DEV_DATABASE_URL" --no-psqlrc --set ON_ERROR_STOP=1 \
+            --command 'select count(*) from public."Player";'

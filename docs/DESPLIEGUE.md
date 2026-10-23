@@ -9,9 +9,12 @@ está en [`docs/OPERACION.md`](./OPERACION.md).
 | Entorno | Disparador | Comandos | URL |
 |---|---|---|---|
 | Producción | Push a `main` (Workers Builds) | `npx opennextjs-cloudflare build` + `npx wrangler deploy` | `https://laligahispana.es` |
-| Preview | Push a una rama que no sea `main` (Workers Builds) | `npx opennextjs-cloudflare build` + `npx wrangler preview` | `<rama>-ligahispana-aoe4.javierr-ma93.workers.dev` (`noindex`) |
+| Preview | Push a una rama que no sea `main` (Workers Builds) | `npx opennextjs-cloudflare build` + `npx wrangler preview` | `<rama>-ligahispana-aoe4.laligahispana.workers.dev` (`noindex`) |
+| Desarrollo | `npm run dev` en local | `next dev` | `http://localhost:3000` |
 | Manual | A mano, con el repositorio | `npm run deploy` / `npm run preview` | — |
 | CI | Pull request (GitHub Actions) | `npm run lint`, `npm run build`, `npm test` | — |
+
+Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `next dev` usan el proyecto de desarrollo; solo el Worker de producción usa el de producción. El detalle de variables y Hyperdrive está más abajo.
 
 - El Worker se llama **`ligahispana-aoe4`**.
 - El despliegue es **automático**: el repositorio está conectado a Workers Builds.
@@ -53,11 +56,22 @@ está en [`docs/OPERACION.md`](./OPERACION.md).
 - Configuración: `previews_enabled: true` y `previews_base_config.build_command` en el panel de Workers Builds.
 - El bloque `previews` de `wrangler.jsonc` es **obligatorio** (wrangler ≥ 4.135 lo exige). Declara
   `HYPERDRIVE` e `IMAGES`, porque los bindings no se heredan del nivel superior; los Cron Triggers no se replican.
-- `HYPERDRIVE` del Preview apunta a la **base de producción** a propósito, para poder mirar la interfaz con
-  datos reales. Consecuencia: **lo que se escriba en un Preview va a la base de producción**.
-- Runtime del Preview: **sin secretos** (no hereda los del Worker). Degrada: no se detecta YouTube en
-  directo, Turnstile se desactiva y `/api/cron/sync` no se autoriza. Las `NEXT_PUBLIC_*` sí llegan,
-  porque Next las compila dentro del bundle.
+- `HYPERDRIVE` del Preview apunta a la **base de desarrollo** (`ligahispana-aoe4-dev`, id
+  `9ee4c8de68e240dba17bd2aba2a0880e`). Producción y desarrollo son proyectos Supabase distintos:
+  **lo que se escriba en un Preview va a desarrollo**, nunca a producción.
+- Todos los Previews comparten la base de desarrollo. Es desechable: se rellena con
+  `npm run mock:tournament` y se resetea cuando haga falta. Los cambios de schema se aplican a mano
+  con `npm run db:push` antes de probar la rama.
+- Runtime del Preview: recibe la configuración **Previews Base** de Workers Builds, con las claves y
+  secretos de desarrollo (`SUPABASE_SERVICE_ROLE_KEY`, `SUPERADMIN_EMAIL`, `RATE_LIMIT_SALT`). No
+  hereda los secretos del Worker de producción. Sin `CRON_SECRET`, `DISCORD_*`, `YOUTUBE_API_KEY` ni
+  `TURNSTILE_SECRET_KEY` de producción: degrada sin ellos.
+- Las `NEXT_PUBLIC_*` se compilan dentro del bundle. Cambiarlas exige un build nuevo, y los Previews
+  ya existentes **no se actualizan solos**: hay que redesplegarlos o borrarlos.
+- **Estado actual (23-oct-2026)**: la creación automática de Previews está desactivada
+  (`previews_enabled: false`) hasta que el cambio de `previews.hyperdrive` esté en `main`. Si no, una
+  rama sin ese cambio usaría el Hyperdrive de producción con el Auth de desarrollo. El Preview manual
+  de `feat/143-entorno-pruebas` sigue vivo; se reactiva al mergear el cambio.
 
 ### GitHub Actions
 
@@ -117,13 +131,15 @@ Son **dos listas distintas y no intercambiables**:
 | Settings → Variables and Secrets (Worker) | El Worker en runtime (`ctx.env`). | Mientras el Worker esté desplegado. |
 | Build variables and secrets (Workers Builds) | El proceso de build: `next build` y `npx wrangler deploy`. | Solo durante el build. |
 
-- Hay **dos** configuraciones de build, la del trigger de `main` y la de *Previews Base*; no heredan nada
-  entre ellas, así que lo que va en una va también en la otra.
+- Hay **dos** configuraciones de build, la del trigger de `main` (producción) y la de *Previews Base*
+  (desarrollo). No heredan nada entre ellas: cada una tiene su propia lista.
 - Las build variables **no** llegan a runtime, y un Preview **no** hereda los secretos del Worker.
+
+La tabla siguiente es la de **producción**:
 
 | Variable | Worker (runtime) | Build |
 |---|---|---|
-| `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` | — | Sí (obligatoria) |
+| `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` | — | Sí (obligatoria, solo para la emulación del CLI) |
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `NEXT_PUBLIC_SITE_URL` | — | Sí (Next las sustituye por literales al compilar) |
 | `DATABASE_URL` | Sí (respaldo si no hay binding de Hyperdrive) | — |
 | `CRON_SECRET`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `YOUTUBE_API_KEY`, `DISCORD_*` | Sí (secretos) | Sí (por si un módulo de servidor las lee al importar) |
@@ -137,6 +153,23 @@ Son **dos listas distintas y no intercambiables**:
   está en [`OPERACION.md`](./OPERACION.md#discord).
 - Sin la variable de Hyperdrive en build, el `next build` termina bien y el `npx wrangler deploy` muere con
   un mensaje engañoso que habla de *developing locally*; mientras tanto, producción se queda en la versión anterior.
+
+### Previews Base (desarrollo)
+
+| Variable | Dónde | Valor |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Build | Proyecto Supabase de desarrollo. |
+| `NEXT_PUBLIC_SITE_URL` | Build | `https://laligahispana.es` (los enlaces absolutos no cambian). |
+| `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` | Build (secreto) | Cadena de emulación de desarrollo; el CLI solo comprueba que exista, no conecta con ella. |
+| `SUPABASE_SERVICE_ROLE_KEY`, `SUPERADMIN_EMAIL`, `RATE_LIMIT_SALT` | Secretos base de Previews (runtime) | Proyecto Supabase de desarrollo. |
+
+- **No** se configuran en Previews Base `DATABASE_URL`, `CRON_SECRET`, `DISCORD_*`, `YOUTUBE_API_KEY`
+  ni `TURNSTILE_SECRET_KEY` de producción. Sin ellos el Preview degrada: no manda a Discord, no
+  detecta YouTube, desactiva Turnstile y `/api/cron/sync` no se autoriza.
+- Las `NEXT_PUBLIC_*` son de build: cambiarlas exige un build nuevo. Los Previews ya existentes no se
+  actualizan solos; hay que redesplegarlos o borrarlos.
+- En local, `.env.local` apunta al proyecto de desarrollo. Las credenciales de producción no se cargan
+  en `next dev` ni en los scripts diarios; para operar contra producción se exportan de forma explícita.
 
 ### Qué sobrevive a un despliegue
 
@@ -157,19 +190,27 @@ protección quedan cero.
 
 ## Hyperdrive
 
+Hay **dos** configuraciones, una por proyecto:
+
+| Configuración | Proyecto | ID | La usa |
+|---|---|---|---|
+| `ligahispana-aoe4-db` | Producción | `04fab935a8f34fce814ccebfc4301042` | `hyperdrive` del nivel superior (Worker de producción). |
+| `ligahispana-aoe4-dev` | Desarrollo | `9ee4c8de68e240dba17bd2aba2a0880e` | `previews.hyperdrive` (Previews). |
+
 | Dónde | Cadena |
 |---|---|
 | Configuración de Hyperdrive (runtime) | **Directa**: `db.<ref>.supabase.co:5432`, sin `?sslmode=require`. El pooling lo pone Hyperdrive. |
-| Build variable del CLI (`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`) | **Session pooler** (`*.pooler.supabase.com:5432`), el mismo que el `.env` local. |
-| `.env` local (Next y scripts) | Session pooler: la directa es solo IPv6. |
+| Build variable del CLI (`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`) | **Session pooler** (`*.pooler.supabase.com:5432`) del entorno que se esté construyendo. El CLI solo comprueba que exista. |
+| `.env.local` (Next y scripts) | Session pooler del proyecto de **desarrollo**: la directa es solo IPv6. |
 
 - `src/lib/db.ts` lee `env.HYPERDRIVE.connectionString` y, si no está, cae a `DATABASE_URL`.
-- Plan Free: 100.000 consultas al día.
+- Los Previews no tienen `DATABASE_URL`: si el binding de desarrollo falla, fallan en vez de caer a producción.
+- Plan Free: 100.000 consultas al día **por cuenta**, compartidas por producción y desarrollo.
 
 ### Caché de consultas: desactivada a propósito
 
-- La configuración `ligahispana-aoe4-db` (id `04fab935a8f34fce814ccebfc4301042`, binding `HYPERDRIVE`)
-  tiene la caché de consultas **desactivada** (`caching.disabled: true`), no por defecto.
+- Las dos configuraciones, `ligahispana-aoe4-db` (producción) y `ligahispana-aoe4-dev` (desarrollo),
+  tienen la caché de consultas **desactivada** (`caching.disabled: true`), no por defecto.
 - Porqué: este panel lee inmediatamente después de escribir (aprobar, editar, borrar) y Hyperdrive
   **no invalida** las lecturas cacheadas cuando la aplicación escribe. Con la caché activa
   (`max_age` 60 s, `stale_while_revalidate` 15 s), la relectura del propio action y el re-render de
@@ -195,11 +236,11 @@ protección quedan cero.
 
 1. `NEXT_PUBLIC_SITE_URL = https://laligahispana.es` en **las dos** configuraciones de build.
 2. `SITE_URL=https://laligahispana.es npm run db:cron` (mueve el reloj al dominio).
-3. Supabase → Authentication: **URL Configuration** (*Site URL* al dominio nuevo y
-   `https://laligahispana.es/**` en *Redirect URLs*, más el de los Previews si se usan) y las
-   **plantillas de correo** de invitación y recuperación
-   ([`OPERACION.md`](./OPERACION.md#alta-por-invitación)). Sin esto, los correos siguen llevando al
-   dominio viejo o a un flujo que no llega a fijar contraseña.
+3. Supabase de **producción** → Authentication: **URL Configuration** (*Site URL* al dominio nuevo y
+   `https://laligahispana.es/**` en *Redirect URLs*) y las **plantillas de correo** de invitación y
+   recuperación ([`OPERACION.md`](./OPERACION.md#alta-por-invitación)). Sin esto, los correos siguen
+   llevando al dominio viejo o a un flujo que no llega a fijar contraseña. El proyecto de **desarrollo**
+   tiene su propia URL Configuration (localhost y los dominios de Preview).
 4. `routes` en `wrangler.jsonc`: opcional, **no** se hizo.
 
 El orden importa: primero la build variable (solo afecta a los metadatos) y después el reloj (si falla, sí se nota). El paso de Supabase no se nota hasta el siguiente correo de Auth.
@@ -215,21 +256,29 @@ npm run preview    # opennextjs-cloudflare build + preview local
   borran nunca; equivale al `keep_vars: true` de `wrangler.jsonc`).
 - Los secretos van en el panel, **nunca** en `wrangler.jsonc`.
 - Requiere `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` en `.dev.vars` (o en el entorno).
+- **Ojo con el deploy manual**: `npm run deploy` compila con el entorno del proceso, y `.env.local`
+  apunta a desarrollo. El camino normal es Workers Builds (que usa las variables de producción del
+  trigger). Para un deploy manual a producción hay que exportar antes
+  `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` y `NEXT_PUBLIC_SITE_URL` de
+  producción; si no, el bundle saldría apuntando a desarrollo. `scripts/deploy-worker.mjs` busca la
+  referencia del proyecto de desarrollo en `.open-next` y **aborta** antes de publicar si la encuentra.
 
 ## Checklist
 
-Sobre la base de datos que usa el Worker, antes de dar un despliegue por bueno:
+Antes de probar una rama (desarrollo):
 
 ```bash
-npm run db:push                  # sincroniza el schema
+npm run db:push                  # sincroniza el schema en desarrollo
 npm run db:security -- --check   # RLS; obligatorio tras un db:push que añada tablas
 npm run countries:seed           # lista de países del formulario de inscripción
 npm run db:window                # ventana de fechas del torneo (opcional, recomendado)
-npm run db:cron                  # reloj cada 10 minutos (Supabase Cron)
 ```
 
+En producción, los mismos comandos se ejecutan **de forma deliberada** con la URL de producción; no
+se heredan del entorno de desarrollo. `db:cron` es **solo de producción**.
+
 - La variable de Hyperdrive en la build del trigger, o el despliegue no publica.
-- Las `NEXT_PUBLIC_*` y los secretos de servidor, en las dos listas de build.
+- Las `NEXT_PUBLIC_*` y los secretos de servidor, en la lista de build que corresponda.
 - El detalle operativo de estos comandos está en [`docs/OPERACION.md`](./OPERACION.md#requisitos-operativos-de-un-despliegue).
 
 ## Problemas conocidos
@@ -242,6 +291,11 @@ npm run db:cron                  # reloj cada 10 minutos (Supabase Cron)
 | `ERROR Failed to copy node_modules/{...}` en rojo | Ruido del CLI de Prisma (`devDependencies`): el build termina bien. |
 | `WARN workerd compatibility_date: 2025-03-25...` | Aviso esperado; la fecha está por debajo del umbral a propósito. |
 | Un Preview sin YouTube ni Turnstile, y `/api/cron/sync` sin autorizar | Un Preview no hereda los secretos del Worker (por diseño). |
+| Un Preview da 500 y el proyecto de desarrollo está pausado | El plan Free pausa los proyectos tras una semana sin actividad. Reanudarlo en el dashboard. El workflow `dev-keepalive.yml` hace una consulta diaria; necesita el secreto `DEV_DATABASE_URL` del repositorio. |
+| Un Preview antiguo sigue viendo o escribiendo en producción | Los Previews no se actualizan solos: se crearon antes de cambiar el Hyperdrive/base config. Hay que redesplegarlo o borrarlo. |
+| `npm run deploy` publica un bundle que apunta a desarrollo | `.env.local` apunta al proyecto de desarrollo. Exportar las variables de producción antes del build manual o desplegar con Workers Builds. |
+| `npm run db:cron` contra desarrollo programa un reloj que llama a producción | Sin `SITE_URL`, el script usa `https://laligahispana.es`. Es un comando solo de producción. |
+| `npm run db:window` en una base vacía deja un `scoring.ruleset` sin versión y se ignoran las reglas guardadas | Pasa al crear la clave desde cero: el script solo añade `window`. Publicar primero el ruleset con `npm run score` y después fijar la ventana; o sembrar el documento completo. |
 | El dominio nuevo no carga para algunos visitantes | Caché DNS antigua; se resuelve sola. |
 | Una variable del panel desaparece tras un despliegue | Era una variable de **texto** y el despliegue no llevaba `keep_vars`: el archivo es la fuente de verdad y las borra. Ya está activo en `wrangler.jsonc` (y los secretos nunca se borran). |
 | El panel de admin no refleja una aprobación o edición reciente (y el historial de acciones repite la misma acción) | La caché de consultas de Hyperdrive servía `SELECT` anteriores a la escritura. La configuración va **sin caché** (`caching.disabled`) a propósito. |
