@@ -513,6 +513,40 @@ export type AdminParticipant = {
    */
   discordInGuild: boolean | null;
   /**
+   * La verificación del alta por privado de Discord (issue 119), **sin el token**.
+   *
+   * - `discordVerificationRequestedAt`: la fila está sujeta a verificación. `null` =
+   *   no lo está (filas antiguas y altas de `/participar`).
+   * - `discordVerificationSentAt`: último privado enviado, o `null`.
+   * - `discordVerifiedAt`: la persona confirmó desde su cuenta. **No** es lo mismo que
+   *   `discordUserId`: ese es lo que dice Discord y se puede resolver sin
+   *   consentimiento.
+   * - `discordDeclinedAt`: pulsó "No".
+   *
+   * El **token no sale de aquí**: permite **encontrar** la fila de la interacción, pero
+   * resolverla exige además pulsar desde la cuenta destinataria
+   * (`discordVerificationUserId`) y que siga `PENDING`, así que no se expone ni a la
+   * interfaz ni a un log (ver `docs/MODELO-DATOS.md`).
+   */
+  discordVerificationRequestedAt: Date | null;
+  discordVerificationSentAt: Date | null;
+  discordVerifiedAt: Date | null;
+  discordDeclinedAt: Date | null;
+  /**
+   * ¿La verificación está **pendiente de resolverse**?
+   *
+   * Es `PENDING` **y** sujeta **y** sin confirmar. El estado entra en la condición y
+   * no es un adorno: un `REJECTED` conserva `requestedAt` a propósito —para que una
+   * re-aprobación vuelva a exigir confirmación— y un `APPROVED` puede tenerlo sin
+   * `verifiedAt` si lo aprobó el superadministrador sin verificar. Ninguno de los dos
+   * está esperando nada, así que pintarlos como "esperando confirmación" sería falso.
+   *
+   * Derivado y no leído de la base para que la interfaz no tenga que recomponer la
+   * condición de la puerta: es la misma que decide aprobar o no en
+   * `setPlayerStatus`, y tenerla dos veces sería pedir que se desincronicen.
+   */
+  discordVerificationPending: boolean;
+  /**
    * `Player.country`: el rótulo canónico de la lista admitida
    * (`Setting["registration.countries"]`), o `null` si el alta no lo trajo. El
    * panel no lo resuelve ni lo normaliza —lo hace `parseCountry()` al validarlo—,
@@ -540,6 +574,10 @@ const PARTICIPANT_SELECT = {
   discordUserId: true,
   discordUsername: true,
   discordInGuild: true,
+  discordVerificationRequestedAt: true,
+  discordVerificationSentAt: true,
+  discordVerifiedAt: true,
+  discordDeclinedAt: true,
   country: true,
   status: true,
   avatarUrl: true,
@@ -600,6 +638,10 @@ export async function getAdminParticipants(): Promise<PublicRead<AdminParticipan
         ...player,
         matchCount: score?.matches ?? null,
         points: score?.total ?? null,
+        discordVerificationPending:
+          player.status === "PENDING" &&
+          player.discordVerificationRequestedAt !== null &&
+          player.discordVerifiedAt === null,
       };
     });
   });

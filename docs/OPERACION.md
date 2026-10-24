@@ -63,7 +63,9 @@ deja el rastro en `Setting["sync.lastRun"]`.
 **Aprobar o dar de alta no lanza una pasada.** Tanto el aprobado de una solicitud (`approvePlayer`)
 como el alta de admin (`createPlayer`) **escriben sin lanzar una pasada**: el estado (o el jugador,
 en el alta), con su línea en `AdminAction`, y el jugador entra en la clasificación en la siguiente
-pasada del cron (hasta 10 minutos) o con la llamada manual (`syncNow`). No es un olvido, es lo que
+pasada del cron (hasta 10 minutos) o con la llamada manual (`syncNow`). Tampoco lanza una pasada el
+privado de verificación del alta: se manda **después del commit** de la fila y son dos llamadas de red
+(abrir el canal y publicar), no una pasada de sincronización. No es un olvido, es lo que
 permite que el botón no se cuelgue: una pasada gasta ~500 ms de CPU y el plan Free de Cloudflare da
 10 ms por invocación, así que lanzarla dentro de la petición
 del botón mataba el *isolate* con `Worker exceeded CPU time limit` (1102) en cuanto se apilaban dos
@@ -651,6 +653,7 @@ credenciales el paso no existe** (no falla): el formulario no pinta el botón y 
 | `DISCORD_BOT_TOKEN` | Auto-unión al servidor y comprobación de pertenencia | Sí, en producción |
 | `DISCORD_GUILD_ID` | Servidor del torneo | Sí, en producción |
 | `DISCORD_OAUTH_SECRET` | Firma de la cookie `discord_link` (20 min). Sin ella se usa `CRON_SECRET`; no hay respaldo en el código | Sí, en producción |
+| `DISCORD_PUBLIC_KEY` | Clave pública Ed25519 (hex, 64 caracteres) con la que se verifica la firma de las **interacciones** del botón del privado de verificación. **No es un secreto** | Sí, en producción |
 | `DISCORD_REDIRECT_URI` | URI registrada en Discord. Si falta, se deriva del origen + `/api/discord/oauth/callback` | No, pero conviene fijarla |
 | `DISCORD_INVITE_URL` | Invitación de respaldo si el auto-unión falla | No |
 | `DISCORD_API_BASE`, `DISCORD_TIMEOUT_MS`, `DISCORD_USER_AGENT` | Cliente de Discord; el `User-Agent` debe ser **ASCII** (sin tildes) | No (valores por defecto) |
@@ -695,9 +698,81 @@ Van en el panel del Worker **y además** en *Build variables and secrets* del tr
    admin** por su `@usuario`. Sin él, el sistema funciona por el camino corto (ver abajo).
 6. Copiar el **id del servidor** a `DISCORD_GUILD_ID` y el **id del rol de participante** a
    `DISCORD_PARTICIPANT_ROLE_ID`.
+7. **Copiar la clave pública** de la aplicación (General Information → Public Key) a
+   `DISCORD_PUBLIC_KEY` y configurar **Interactions Endpoint URL** en la misma página:
+   `https://laligahispana.es/api/discord/interactions`. Discord manda un `PING` al guardar; si el
+   endpoint no está desplegado o la clave no coincide, el portal **no guarda** la URL. Es el paso que
+   activa la confirmación de altas: sin él, el botón del privado no existe y el alta de admin aprueba
+   directamente (ver [Verificación del alta de admin](#verificación-del-alta-de-admin)).
 
 Los scopes `identify` y `guilds.join` no se configuran en el portal: los pone el código al construir
 la URL de autorización.
+
+### Verificación del alta de admin
+
+Dar de alta a alguien desde el panel lo dejaba dentro sin que la persona hiciera nada. Desde la issue
+119, si la verificación está configurada, el bot le manda un **privado con dos botones** y la fila **no
+queda aprobada** hasta que confirma desde su cuenta. No hay campo nuevo en el formulario: se dispara
+solo, con el `@usuario` que ya se escribe.
+
+**Cuándo está activa.** Solo con las cuatro credenciales: `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`,
+`DISCORD_CLIENT_ID` y `DISCORD_PUBLIC_KEY` (`isDiscordVerificationConfigured()`). Sin ellas la
+funcionalidad se apaga y el alta se comporta como siempre; el endpoint de interacciones contesta `503`.
+En producción es obligatoria.
+
+**Qué pasa al dar de alta** (`createPlayer`):
+
+| Estado pedido | Qué se crea | Privado |
+|---|---|---|
+| `APPROVED` | `PENDING`, con `discordVerificationRequestedAt` | Se manda tras el commit; el mensaje del panel dice si salió o por qué no |
+| `PENDING` | `PENDING`, con `discordVerificationRequestedAt` | No; se manda al aprobar |
+| `REJECTED` | `REJECTED`, con `discordVerificationRequestedAt` | No; se manda si luego se aprueba |
+
+**Estados y la puerta.** Una fila con `discordVerificationRequestedAt` informado y `discordVerifiedAt`
+a `null` **no puede quedar `APPROVED`**. Se comprueba en las acciones, no en las consultas de
+puntuación: un `PENDING` ya queda fuera de la clasificación, de la web y del rol.
+
+| Acción | Qué hace |
+|---|---|
+| Aprobar sin privado enviado | Manda el privado y deja el alta en `PENDING`; si estaba `REJECTED`, vuelve a la cola de revisión |
+| Aprobar con el privado ya enviado | No lo duplica; dice que se espera la confirmación |
+| Aprobar sin poder resolver la cuenta o si el envío falla | **No cambia el estado** y devuelve el motivo |
+| Rechazar | `REJECTED`; limpia token y cuenta destinataria; conserva `requestedAt` y `sentAt` |
+| «Enviar verificación» / «Reenviar verificación» | Solo en `PENDING` sujeta y sin confirmar. La primera vez manda el privado (la fila aún no tiene `sentAt`); después lo reenvía y **rota el token**, con lo que los botones del privado anterior dejan de valer |
+| «Aprobar sin verificación» | **Solo el superadministrador.** Pasa a `APPROVED`, limpia `requestedAt`, token y cuenta, y deja `PLAYER_APPROVED` con `details.withoutVerification = true` («Aprobación sin verificación de …») |
+| Corregir el `@usuario` de un alta pendiente | Invalida token, cuenta destinataria y `sentAt`; conserva `requestedAt`. Al aprobar se manda uno nuevo |
+
+**El privado.** Texto en español con el nombre de la edición, el nombre del jugador y su `profileId`, y
+dos botones: «Sí, participo» (`pv:c:<token>`, verde) y «No, no participo» (`pv:d:<token>`, rojo). Las
+menciones van desactivadas para que un nombre con `@` no pingue a nadie. La cuenta se resuelve con
+`discordUserId` o, si no, con el `@usuario` contra el roster cacheado. Si esa cuenta ya está vinculada a
+**otro** participante, no se manda y se dice con quién choca.
+
+**El botón** (`POST /api/discord/interactions`). Público, sin sesión: la autenticación es la firma
+Ed25519 de Discord (clave pública + cuerpo crudo + ventana de 5 minutos) y el `application_id` tiene que
+ser el `DISCORD_CLIENT_ID`. Sí → `APPROVED` + `discordVerifiedAt`, y escribe `discordUserId` si la fila
+no lo tenía; no → `REJECTED` + `discordDeclinedAt`. Las dos van con `updateMany` condicionado al token y
+al estado: un reintento de Discord o dos pulsaciones no cuentan dos veces. Después edita el privado en el
+sitio y le quita los botones. Si el botón ya no vale, la cuenta no es la destinataria o la fila ya no
+está `PENDING`, contesta un texto genérico sin revelar datos. **No** calcula puntuación ni roles: eso lo
+hace el worker en la siguiente pasada.
+
+**Filas antiguas y `/participar`.** No se re-verifica a nadie: las filas anteriores no tienen
+`requestedAt` y no se bloquean. La inscripción pública ya prueba la cuenta por OAuth, así que escribe
+`discordVerifiedAt` al crear o reutilizar la fila y **no** manda privado.
+
+**Reversiones.** Deshacer un rechazo devolvería la fila a `APPROVED`, y si la verificación está
+pendiente la reversión **se bloquea** con un mensaje que remite a aprobar desde el panel o a «Aprobar
+sin verificación»: una reversión no puede ser una puerta de atrás sin rastro.
+
+**Dónde mirar si falla.** Log del Worker con `[discord-verification]` (envío y resolución) y
+`[discord-interactions]` (firma). Nunca se registra el token. Si el portal de Discord no guarda la URL
+de interacciones, el `PING` no ha recibido `{"type":1}`: revisa que el endpoint esté desplegado y que
+`DISCORD_PUBLIC_KEY` sea la de esa aplicación.
+
+**Prueba real.** Dar de alta a una cuenta de prueba con estado «Aprobado»: debe quedar `Pendiente` con
+el aviso de que se ha enviado el privado; al pulsar «Sí» en Discord, la fila pasa a `Aprobado` y el DM
+se edita sin botones. Con «No», a `Rechazado`.
 
 ### Por qué parece que el bot necesita `ADMINISTRATOR`
 
@@ -722,6 +797,8 @@ rol del bot está por debajo, seguirá fallando con él.
 
 - Log del Worker con prefijo `[discord]`. El motivo **nunca** va en la URL: el callback solo redirige a
   `/participar?discord=ok|cancel|error|no-config`.
+- Log del Worker con prefijo `[discord-verification]` (privado de verificación y resolución de sus
+  botones) y `[discord-interactions]` (firma del endpoint). **Nunca** aparece el token del botón.
 - `?discord=error` casi siempre es el `state` (cookie caducada u otro navegador) o un canje rechazado
   (`invalid_grant`: el `code` ya se usó o el `redirect_uri` no coincide).
 - `?discord=ok` con el formulario pidiendo la cuenta otra vez es una cookie caducada (20 min) o falta
@@ -745,8 +822,10 @@ Un roster viejo **no se usa como reserva**: si la lectura falla, se vuelve a la 
 
 ### Requisito operativo
 
-`npm run db:push` añade las columnas de Discord, el valor `DISCORD_NOT_IN_GUILD` de `AlertRule` y el
-**`@unique` de `discordUsername`**. No hace falta `db:security`: no se crea ninguna tabla.
+`npm run db:push` añade las columnas de Discord, el valor `DISCORD_NOT_IN_GUILD` de `AlertRule`, el
+**`@unique` de `discordUsername`** y, desde la issue 119, las seis columnas de la verificación del alta
+más el **`@unique` de `discordVerificationToken`**. No hace falta `db:security`: no se crea ninguna
+tabla, y las filas existentes quedan con las columnas nuevas a `null` (no se re-verifica a nadie).
 
 Si el `db push` falla por unicidad en `discordUsername`, dos filas comparten nombre sin discriminador
 (`pepito#1234` y `pepito#5678`). Hay que decidir cuál se queda con el `@usuario` y corregir o vaciar

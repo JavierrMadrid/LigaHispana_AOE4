@@ -147,10 +147,13 @@ La tabla siguiente es la de **producción**:
 | `SUPABASE_SERVICE_ROLE_KEY` | Sí (secreto) | Sí (por si un módulo de servidor la lee al importar) |
 
 - `NEXT_PUBLIC_SITE_URL = https://laligahispana.es`. Si cambia el dominio, se cambia en las dos listas.
-- `DISCORD_ANNOUNCE_CHANNEL_ID` y `DISCORD_PARTICIPANT_ROLE_ID` son **ids, no secretos**: van en la
-  lista del Worker como variables de **texto** (y por tanto solo sobreviven a un despliegue con
-  `keep_vars`, ver abajo). Los demás `DISCORD_*` son secretos. El resto de la configuración del bot
-  está en [`OPERACION.md`](./OPERACION.md#discord).
+- `DISCORD_ANNOUNCE_CHANNEL_ID`, `DISCORD_PARTICIPANT_ROLE_ID` y `DISCORD_PUBLIC_KEY` son **ids y una
+  clave pública, no secretos**: van en la lista del Worker como variables de **texto** (y por tanto
+  solo sobreviven a un despliegue con `keep_vars`, ver abajo). Los demás `DISCORD_*` son secretos.
+  `DISCORD_PUBLIC_KEY` es la clave Ed25519 (hex, 64 caracteres) con la que se verifica la firma de las
+  interacciones del botón del privado de verificación del alta; sin ella esa confirmación se apaga y el
+  endpoint `/api/discord/interactions` contesta `503`. El resto de la configuración del bot está en
+  [`OPERACION.md`](./OPERACION.md#discord).
 - Sin la variable de Hyperdrive en build, el `next build` termina bien y el `npx wrangler deploy` muere con
   un mensaje engañoso que habla de *developing locally*; mientras tanto, producción se queda en la versión anterior.
 
@@ -166,6 +169,10 @@ La tabla siguiente es la de **producción**:
 - **No** se configuran en Previews Base `DATABASE_URL`, `CRON_SECRET`, `DISCORD_*`, `YOUTUBE_API_KEY`
   ni `TURNSTILE_SECRET_KEY` de producción. Sin ellos el Preview degrada: no manda a Discord, no
   detecta YouTube, desactiva Turnstile y `/api/cron/sync` no se autoriza.
+- **La URL de interacciones es una sola por aplicación de Discord.** El portal acepta un único
+  `Interactions Endpoint URL`, así que los Previews **no pueden recibir los botones** del privado de
+  verificación: apuntan al Worker de producción. Probar esa parte requiere hacerlo contra producción o
+  con una aplicación de Discord aparte.
 - Las `NEXT_PUBLIC_*` son de build: cambiarlas exige un build nuevo. Los Previews ya existentes no se
   actualizan solos; hay que redesplegarlos o borrarlos.
 - En local, `.env.local` apunta al proyecto de desarrollo. Las credenciales de producción no se cargan

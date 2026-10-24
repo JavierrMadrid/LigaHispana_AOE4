@@ -31,6 +31,7 @@ Lo que hace falta para inscribirse.
 |---|---|
 | El alta se hace por **`profileId`** de AoE4World, con **correo** obligatorio. | Alta |
 | Toda solicitud queda **pendiente de aprobación**: la organización la aprueba o la rechaza. | Organización |
+| El **alta de la organización** se confirma con la persona: el bot le manda un **privado de Discord** con «Sí, participo» / «No, no participo». Hasta que confirma, el alta no queda aprobada y no aparece en la clasificación; un «no» la deja rechazada. | Organización (y el bot) |
 | Las inscripciones se hacen **hasta la fecha de cierre que publica la organización**. | Organización |
 
 ### Eventos puntuales
@@ -105,6 +106,7 @@ Facultades internas para gestionar el torneo.
 | Regla | Cómo se controla |
 |---|---|
 | **Aprobar, rechazar y editar** participantes. | Panel |
+| Aprobar un alta **sin la confirmación de la persona**: solo el superadministrador, con confirmación explícita y registro en el historial («Aprobación sin verificación»). | Panel |
 | **Expulsar** a un participante: deja de puntuar y conserva todos sus datos; se puede revertir. | Panel |
 | **Anular** partidas ganadas: dejan de contar sin borrarlas; se pueden revertir. | Panel |
 | **Versionar el reglamento**: un cambio de estructura sube la versión y recalcula la clasificación. | Panel |

@@ -24,6 +24,7 @@ const CONFIG: DiscordConfig & { botToken: string; announceChannelId: string } = 
   redirectUri: null,
   inviteUrl: null,
   linkSecret: null,
+  publicKey: null,
   apiBase: "https://discord.com/api/v10",
   timeoutMs: 8_000,
   userAgent: "test",

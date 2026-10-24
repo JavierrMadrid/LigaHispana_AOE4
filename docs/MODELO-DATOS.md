@@ -80,6 +80,12 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `discordUsername` | `String?` **único** | `@usuario` en forma canónica: sin arroba y en minúsculas. |
 | `discordInGuild` | `Boolean?` | `null` = sin comprobar; un `false` solo se escribe ante una respuesta de Discord. |
 | `discordCheckedAt` | `DateTime?` | Cuándo se comprobó lo anterior (caché de 12 h). |
+| `discordVerificationRequestedAt` | `DateTime?` | La fila está **sujeta** a la verificación del alta (issue 119). `null` = no lo está: filas antiguas y altas de `/participar`. Se escribe en toda alta de admin con la verificación configurada y **no se limpia** al rechazar, para que una re-aprobación vuelva a exigir confirmación. |
+| `discordVerificationSentAt` | `DateTime?` | Último privado de verificación enviado. `null` = no se ha mandado (o se invalidó al corregir el `@usuario`). |
+| `discordVerificationToken` | `String?` **único** | Token aleatorio de los botones (`pv:c:<token>` / `pv:d:<token>`). Se rota al reenviar, se invalida al corregir el `@usuario` y se limpia al resolver. **No se expone**: permite **encontrar** la fila, pero resolverla exige además pulsar desde la cuenta destinataria (`discordVerificationUserId`) y que siga `PENDING`. |
+| `discordVerificationUserId` | `String?` | Cuenta de Discord a la que se mandó el privado; la interacción comprueba que quien pulsa es esa cuenta. No es una FK ni tiene unicidad: es el destinatario del mensaje, no una identidad vinculada. |
+| `discordVerifiedAt` | `DateTime?` | La persona **confirmó** desde su cuenta. No confundir con `discordUserId`: ese es "lo que dice Discord" y puede estar resuelto sin consentimiento. Es lo que hace que la puerta deje aprobar. |
+| `discordDeclinedAt` | `DateTime?` | Cuándo pulsó "No". |
 | `status` | `PlayerStatus` | `PENDING` por defecto. `BANNED` lo pone una actuación de expulsión y solo se sale revirtiéndola. |
 | `registeredAt` | `DateTime?` | Cuándo se **inscribió** (no cuándo se aprobó). Define el corte `max(window.from, registeredAt)`. `null` = cuenta desde el inicio de la ventana; sin *backfill*. |
 | `elo`, `rankLevel`, `streak`, `ladderGamesCount` | `Int`/`String`/`Int`/`Int?` | De la ladder (`GET /leaderboards/rm_solo`). `rankLevel` es el literal (`gold_2`), no la división resuelta. `streak` con signo. |
@@ -95,10 +101,17 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `windowCheckedAt` | `DateTime?` | Cuándo se completó por última vez el recorrido de la ventana, incluidos los rechecks de F2b. `null` = nunca. |
 | `createdAt`, `updatedAt` | `DateTime` | |
 
+Regla de la puerta (issue 119): una fila con `discordVerificationRequestedAt` informado y
+`discordVerifiedAt` a `null` **no puede quedar `APPROVED`**, salvo la aprobación explícita sin
+verificación del superadministrador. Se comprueba en las Server Actions, no en las consultas de
+puntuación: un `PENDING` ya queda fuera de la clasificación, de la web y del rol.
+
 Índices: `id` (pk), `profileId` (único) y `(status, windowComplete, backfillPage)` para la cola del
-relleno (`status` filtra; `windowComplete` y `backfillPage` ordenan, con los pendientes primero). Los dos únicos de Discord
-son **restricciones**, no filtros: sostienen "una cuenta y un `@usuario` no están en dos
-participantes".
+relleno (`status` filtra; `windowComplete` y `backfillPage` ordenan, con los pendientes primero). Los
+únicos de Discord (`discordUserId` y `discordUsername`) son **restricciones**, no filtros: sostienen
+"una cuenta y un `@usuario` no están en dos participantes". El de `discordVerificationToken` existe
+porque es la única forma de encontrar la fila desde el `custom_id` de un botón: la interacción de
+Discord no manda ningún otro identificador.
 
 > Las tres columnas de la ventana y su índice ya están aplicados en producción con el `db:push` de F2.
 
@@ -483,6 +496,7 @@ aparece en una consulta, no se crea.**
 |---|---|---|
 | `Player` | `id` (pk), `profileId` (único) | Ficha por id o por `profileId`. |
 | `Player` | `discordUserId`, `discordUsername` (únicos) | Restricciones, no filtros. |
+| `Player` | `discordVerificationToken` (único) | Única forma de encontrar la fila desde la interacción de Discord: la petición solo trae el `custom_id` del botón. |
 | `Player` | `(status, windowComplete, backfillPage)` | Candidatos al relleno: aprobados con la ventana pendiente, por página. |
 | `Match` | único `(playerId, gameId)` | Dedupe del worker. |
 | `Match` | `(playerId, startedAt)` | Partidas de un jugador por fecha. |

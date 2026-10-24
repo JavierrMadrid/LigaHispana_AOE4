@@ -1,14 +1,16 @@
 import type { Metadata } from "next";
-import { approvePlayer, rejectPlayer } from "@/app/admin/actions";
 import { ParticipantsBrowser } from "@/app/admin/participants-browser";
 import { PlayerForm } from "@/app/admin/player-form";
+import { PlayerStatusActions } from "@/app/admin/player-status-actions";
+import { VerificationBadge } from "@/app/admin/participant-verification";
 import { SyncNowButton } from "@/app/admin/sync-now-button";
+import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { EmptyState } from "@/components/empty-state";
-import { PendingButton } from "@/components/pending-button";
 import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
 import { getAdminAccess, requireAdmin } from "@/lib/auth";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
+import { isDiscordVerificationConfigured } from "@/lib/discord/env";
 import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
 import { RULESET_VERSION } from "@/lib/scoring";
 import { readRegistrationOpen } from "@/lib/settings";
@@ -260,45 +262,50 @@ export default async function AdminPage() {
           <p className="mt-1 text-sm text-muted">
             Aprueba o rechaza para que la clasificación refleje el estado real.
           </p>
+          {/* La primera frase es la corrección de la issue 119: aprobar un alta
+              sujeta a verificación **no** la aprueba, manda el privado y la deja
+              pendiente. El resto sigue siendo verdad para las dos clases de alta:
+              aprobar no trae partidas ni recalcula en el momento. */}
           <p className="mt-2 border-t border-line pt-2 text-xs text-muted">
-            Aprobar solo guarda el estado: no trae partidas ni recalcula en el momento. El jugador
-            entra en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos) o al
-            pulsar «Sincronizar ahora», con 0 puntos y 0 partidas hasta que tenga partidas
-            clasificatorias.
+            Aprobar no siempre aprueba: si el alta está sujeta a verificación por Discord,
+            el bot manda un privado a la persona y el alta sigue pendiente hasta que
+            confirme. Solo entonces entra en la clasificación, en la próxima pasada del
+            sincronizador (hasta 10 minutos) o al pulsar «Sincronizar ahora», con 0 puntos
+            y 0 partidas hasta que tenga partidas clasificatorias.
           </p>
 
-          <ul className="mt-4 flex flex-col gap-2">
-            {pending.map((player) => (
-              <li
-                key={player.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <p className="break-words font-medium text-foreground">{player.name}</p>
-                  <p className="mt-0.5 break-all text-xs text-muted">
-                    AoE4World {player.profileId}
-                    {player.contactEmail !== null ? ` · ${player.contactEmail}` : ""}
-                    {player.twitchChannel !== null ? ` · Twitch ${player.twitchChannel}` : ""}
-                  </p>
-                </div>
+          {/* La banda de avisos va una sola vez por cola y por encima de las filas:
+              los botones de cada fila son los mismos del listado
+              (`PlayerStatusActions`), y su éxito se pinta ahí porque la fila
+              afectada deja de estar pendiente y desaparece de esta lista. */}
+          <div className="mt-4">
+            <ActionFeedbackProvider>
+              <ul className="flex flex-col gap-2">
+                {pending.map((player) => (
+                  <li
+                    key={player.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="break-words font-medium text-foreground">{player.name}</p>
+                      <p className="mt-0.5 break-all text-xs text-muted">
+                        AoE4World {player.profileId}
+                        {player.contactEmail !== null ? ` · ${player.contactEmail}` : ""}
+                        {player.twitchChannel !== null ? ` · Twitch ${player.twitchChannel}` : ""}
+                      </p>
+                      <VerificationBadge player={player} className="mt-1" />
+                    </div>
 
-                <div className="flex items-center gap-2">
-                  <form action={approvePlayer}>
-                    <input type="hidden" name="playerId" value={player.id} />
-                    <PendingButton className="h-10 rounded-md border border-win/40 px-3 text-xs text-win transition-colors hover:bg-win/10 disabled:cursor-not-allowed disabled:opacity-50">
-                      Aprobar
-                    </PendingButton>
-                  </form>
-                  <form action={rejectPlayer}>
-                    <input type="hidden" name="playerId" value={player.id} />
-                    <PendingButton className="h-10 rounded-md border border-line-strong px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50">
-                      Rechazar
-                    </PendingButton>
-                  </form>
-                </div>
-              </li>
-            ))}
-          </ul>
+                    <PlayerStatusActions
+                      player={player}
+                      canReverse={access === "superadmin"}
+                      align="start"
+                    />
+                  </li>
+                ))}
+              </ul>
+            </ActionFeedbackProvider>
+          </div>
         </section>
       ) : null}
 
@@ -327,7 +334,11 @@ export default async function AdminPage() {
             </svg>
           </summary>
           <div className="mt-3">
-            <PlayerForm countries={countries} disabled={!registrationOpen} />
+            <PlayerForm
+              countries={countries}
+              disabled={!registrationOpen}
+              discordVerificationEnabled={isDiscordVerificationConfigured()}
+            />
           </div>
         </details>
       </section>

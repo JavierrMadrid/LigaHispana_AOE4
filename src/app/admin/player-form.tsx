@@ -14,10 +14,11 @@ const initialState: PlayerFormState = { error: null, message: null };
  * validación en servidor y un único mensaje de error que sustituye al formulario
  * sin decir nada del fallo real, que se queda en el log.
  *
- * El botón dice lo que está pasando de verdad, que ya no es solo guardar: si el
- * jugador queda aprobado, la acción le trae las partidas de AoE4World y recalcula
- * la clasificación. Son varios segundos contra una API externa, y un "Guardando…"
- * sin más invita a pensar que se ha colgado.
+ * Desde la issue 119 el alta **no** trae partidas ni recalcula: escribe la fila y,
+ * cuando la verificación por Discord está configurada, manda el privado. El estado
+ * que se elija manda: «Aprobado» no aprueba, deja el alta pendiente hasta que la
+ * persona confirme, y por eso la pista del campo de estado lo dice en vez de dejar
+ * que se descubra después.
  *
  * Con el plazo cerrado (`disabled`) el formulario entero se apaga y una nota
  * explica por qué, en vez de desaparecer: el panel es una herramienta y un bloque
@@ -29,10 +30,17 @@ const initialState: PlayerFormState = { error: null, message: null };
 export function PlayerForm({
   countries,
   disabled = false,
+  discordVerificationEnabled = false,
 }: {
   countries: string[];
   /** El plazo cerrado bloquea el alta; el servidor lo rechaza igualmente. */
   disabled?: boolean;
+  /**
+   * `isDiscordVerificationConfigured()` leído en el servidor. Decide si se explica
+   * la puerta del privado en el campo de estado: sin configurar, el alta se aprueba
+   * como siempre y anunciar una confirmación que no va a llegar sería mentir.
+   */
+  discordVerificationEnabled?: boolean;
 }) {
   const [state, formAction, pending] = useActionState(createPlayer, initialState);
 
@@ -173,18 +181,35 @@ export function PlayerForm({
           />
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted">Estado</span>
+        <div className="flex flex-col gap-1 text-sm">
+          <label htmlFor="alta-estado" className="text-muted">
+            Estado
+          </label>
           <select
+            id="alta-estado"
             name="status"
             defaultValue="APPROVED"
+            aria-describedby={
+              discordVerificationEnabled ? "alta-estado-hint" : undefined
+            }
             className="h-10 rounded-md border border-line bg-background px-3 text-foreground"
           >
             <option value="APPROVED">Aprobado</option>
             <option value="PENDING">Pendiente</option>
             <option value="REJECTED">Rechazado</option>
           </select>
-        </label>
+          {/* Fuera del `<label>` y enlazada con `aria-describedby`, como la pista
+              del usuario de Discord: así no forma parte del nombre accesible del
+              campo. Solo se pinta con la verificación configurada; sin ella no hay
+              privado que esperar. */}
+          {discordVerificationEnabled ? (
+            <span id="alta-estado-hint" className="text-xs leading-relaxed text-muted">
+              Si eliges Aprobado, el alta quedará pendiente hasta que la persona confirme
+              por privado de Discord. Si eliges Pendiente, el privado se enviará al
+              aprobarla.
+            </span>
+          ) : null}
+        </div>
 
         {state.error !== null ? (
           <p role="alert" className="text-sm text-loss sm:col-span-2">
@@ -209,7 +234,7 @@ export function PlayerForm({
             disabled={pending}
             className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {pending ? "Guardando y trayendo sus partidas…" : "Añadir jugador"}
+            {pending ? "Dando de alta…" : "Añadir jugador"}
           </button>
         </div>
       </fieldset>

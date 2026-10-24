@@ -347,6 +347,49 @@ model Player {
   // Cuándo se comprobó lo anterior: es el plazo de la caché y, con
   // `discordUserId === null`, la señal de que esa fila nunca se ha comprobado.
   discordCheckedAt DateTime?
+
+  // --- Verificación del alta por privado de Discord (issue 119) ---
+  //
+  // El alta de admin ya no deja a nadie dentro sin más: si la verificación está
+  // configurada, el bot manda un privado con dos botones y la fila **no puede
+  // quedar `APPROVED`** hasta que la persona confirme desde su cuenta. Estas
+  // columnas son la máquina de estados de esa puerta, y son nullable porque
+  // **las filas anteriores no la tienen**: `requestedAt = null` es "esta fila no
+  // está sujeta a verificación", que es justo lo que hace que ni las altas
+  // antiguas ni las de `/participar` (que ya prueba la cuenta por OAuth) se
+  // bloqueen.
+  //
+  // `requestedAt` es la **llave de la puerta**: se escribe en toda alta de admin
+  // cuando la verificación está configurada y **no se limpia** al rechazar, para
+  // que una re-aprobación vuelva a exigir confirmación. Solo la aprobación
+  // explícita sin verificación del superadministrador la pone a `null`.
+  discordVerificationRequestedAt DateTime?
+  // Último privado de verificación enviado. `null` = todavía no se ha mandado (o
+  // se ha invalidado al corregir el `@usuario`), y entonces aprobar dispara el
+  // envío en vez de esperar confirmación.
+  discordVerificationSentAt      DateTime?
+  // Token aleatorio que llevan los botones (`pv:c:<token>` / `pv:d:<token>`). Es
+  // `@unique` porque es la **única** forma de encontrar la fila desde la
+  // interacción: Discord solo devuelve el `custom_id`. Se rota al reenviar, se
+  // invalida al corregir el `@usuario` y se limpia al resolverse. **No se expone
+  // nunca**: el token permite **encontrar** la fila, pero no basta para resolverla
+  // —hace falta pulsar desde la cuenta destinataria (`discordVerificationUserId`) y
+  // que la fila siga `PENDING`—, y aun así no sale ni en la capa de datos del panel
+  // ni en un log.
+  discordVerificationToken       String?         @unique
+  // Cuenta de Discord a la que se mandó el privado. La interacción comprueba que
+  // quien pulsa es esta persona; sin esa comparación, reenviar el mensaje a otro
+  // canal dejaría los botones en manos de cualquiera.
+  discordVerificationUserId      String?
+  // Cuándo confirmó la persona desde su cuenta. **No confundir con
+  // `discordUserId`**: ese es "lo que dice Discord" (OAuth o roster) y puede
+  // estar resuelto sin que nadie haya consentido nada; este es la prueba de que
+  // la persona pulsó "Sí, participo". Es lo que hace que la puerta deje pasar.
+  discordVerifiedAt              DateTime?
+  // Cuándo pulsó "No, no participo". Queda como rastro de que la baja fue una
+  // decisión de la persona y no de la organización.
+  discordDeclinedAt              DateTime?
+
   status           PlayerStatus @default(PENDING)
 
   // Cuándo se **inscribió** la persona, no cuándo la aprobó la organización:
