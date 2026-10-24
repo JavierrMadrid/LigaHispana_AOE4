@@ -61,18 +61,11 @@ export type AdminNoticeTarget = {
 };
 
 /** Lo que hay que avisar, tal y como lo pide la acción. */
-export type AdminNoticeRequest =
-  | {
-      kind: "player-removed";
-      player: AdminNoticeTarget & { status: PlayerStatus };
-      matchCount: number;
-    }
-  | {
-      kind: "match-points-reverted";
-      player: AdminNoticeTarget;
-      gameId: string;
-      points: number;
-    };
+export type AdminNoticeRequest = {
+  kind: "player-removed";
+  player: AdminNoticeTarget & { status: PlayerStatus };
+  matchCount: number;
+};
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : `Error desconocido: ${String(error)}`;
@@ -85,7 +78,7 @@ function toErrorMessage(error: unknown): string {
  * fallo leyendo el roster sale como aviso y deja la cuenta en `null`: perder el privado
  * es preferible a que un error de la caché tumbe el aviso global.
  */
-async function resolveDiscordAccount(player: AdminNoticeTarget): Promise<string | null> {
+export async function resolveDiscordAccount(player: AdminNoticeTarget): Promise<string | null> {
   if (player.discordUserId !== null) {
     return player.discordUserId;
   }
@@ -114,7 +107,7 @@ async function resolveDiscordAccount(player: AdminNoticeTarget): Promise<string 
 }
 
 /** Abre el canal privado con una cuenta (`POST /users/@me/channels`) y devuelve su id. */
-async function openDmChannel(
+export async function openDmChannel(
   client: DiscordHttpClient,
   botToken: string,
   userId: string,
@@ -134,7 +127,7 @@ async function openDmChannel(
 }
 
 /** Publica en un canal concreto (el del privado, que no es el de avisos). */
-async function postToChannel(
+export async function postToChannel(
   client: DiscordHttpClient,
   botToken: string,
   channelId: string,
@@ -148,22 +141,12 @@ async function postToChannel(
 
 /** El `AdminNotice` del módulo puro a partir de lo que ha pedido la acción. */
 function toNotice(request: AdminNoticeRequest, editionName: string): AdminNotice {
-  if (request.kind === "player-removed") {
-    return {
-      kind: "player-removed",
-      editionName,
-      name: request.player.name,
-      status: request.player.status,
-      matchCount: request.matchCount,
-    };
-  }
-
   return {
-    kind: "match-points-reverted",
+    kind: "player-removed",
     editionName,
     name: request.player.name,
-    gameId: request.gameId,
-    points: request.points,
+    status: request.player.status,
+    matchCount: request.matchCount,
   };
 }
 

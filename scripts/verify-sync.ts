@@ -514,11 +514,12 @@ async function checkNormalization(): Promise<void> {
     );
   });
 
-  await check("revertir y devolver usan el mismo criterio: que la partida cuente", () => {
-    // Réplica de la guarda de `setMatchReverted()`. El criterio es el mismo en los
-    // dos sentidos, y tiene que seguir siéndolo: invertido al restaurar, ninguna
-    // partida clasificatoria se podía devolver. La guarda se pregunta siempre con
-    // `revertedAt: null`, que es lo que la deja decidir por las otras cuatro
+  await check("anular y devolver usan el mismo criterio: que la partida cuente", () => {
+    // Réplica de la guarda de `countsWithoutRevertMark()`, la que usa la anulación
+    // para no ofrecer ni aceptar una partida que hoy no puntúa. El criterio es el
+    // mismo en los dos sentidos, y tiene que seguir siéndolo: invertido al restaurar,
+    // ninguna partida clasificatoria se podía devolver. La guarda se pregunta siempre
+    // con `revertedAt: null`, que es lo que la deja decidir por las otras cuatro
     // condiciones, y con el `registeredAt` del dueño, que es la quinta.
     const clasificatoria = {
       mode: "rm_team",

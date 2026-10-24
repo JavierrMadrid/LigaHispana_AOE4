@@ -52,8 +52,12 @@ banner aparece por encima de ese aviso, con el multiplicador, las fechas y el re
 lleva al calendario de Reglas.
 
 La organización tiene además un **panel de administración** para aprobar participantes, revisar
-partidas y alertas, gestionar el torneo y publicar la campaña de donaciones. El **superadministrador**
-configura además la **edición**: su nombre y su premio base, la marca (emblema y color de acento) que se
+partidas y alertas, gestionar el torneo y publicar la campaña de donaciones. La pestaña
+**Actuaciones** es el expediente de la organización: registra **expulsiones**, **anulaciones de
+partidas ganadas** y **reversiones**, cada una con su razón pública —que se anuncia en el canal de
+avisos y por privado al participante— y, si hace falta, una información privada que nunca sale del
+panel. Una reversión es final y no se puede revertir. El **superadministrador** configura además la
+**edición**: su nombre y su premio base, la marca (emblema y color de acento) que se
 aplica a la web pública, si la retransmisión es obligatoria, las reglas de puntuación (ventana,
 familias, puntos y objetivos desactivados) y los **eventos puntuales**, todo sin desplegar. También
 puede **deshacer** lo que hicieron los admins regulares.
@@ -135,16 +139,23 @@ El panel de administración (`/admin`) es solo para la organización, y tiene **
 
 - **Superadministrador**: la cuenta cuyo correo está en `SUPERADMIN_EMAIL`. Es única y puede, además
   de todo lo de un admin, invitar a otros admins, darlos de baja y reactivarlos, **deshacer** lo que
-  hicieron los admins regulares desde el historial de `/admin/acciones` y mandar un aviso de prueba al
-  canal de Discord del torneo.
+  hicieron los admins regulares desde el historial de `/admin/acciones`, **revertir actuaciones
+  administrativas** y mandar un aviso de prueba al canal de Discord del torneo.
 - **Admin**: cualquier cuenta de la tabla `Admin` que esté **activa**. No puede tocar la lista de
-  admins.
+  admins ni revertir actuaciones; sí puede crear **expulsiones** y **anulaciones de partidas**.
+
+La pestaña **Actuaciones** (`/admin/actuaciones`) es el expediente de esas decisiones: cada fila
+guarda una sola acción, su razón pública, la información privada opcional, el autor y la fecha. La
+expulsión deja al participante en estado **Expulsado** y solo se levanta revirtiéndola; la anulación
+marca partidas ganadas que dejan de sumar; la reversión deshace una o varias actuaciones vigentes y
+es **final**. Todo se anuncia en el canal de avisos y por privado al participante, sin la
+información privada.
 
 Lo del superadministrador vive en la pestaña **Administración**, que solo él ve y que se organiza en
 subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Puntuación**,
 **Eventos** (el calendario con multiplicador), **Inscripciones** (el plazo y los países admitidos),
-**Donaciones** y **Avisos** (la prueba del canal de Discord). El resto del panel es igual para los dos
-papeles.
+**Donaciones** y **Avisos** (la prueba del canal de Discord). Fuera de Administración y de la
+reversión de actuaciones, el panel es igual para los dos papeles.
 
 El alta es **por invitación**: se escribe el correo en el panel y la persona recibe un enlace para
 fijar su contraseña (pasa por `/auth/confirm` y termina en `/login/establecer-contrasena`); un enlace

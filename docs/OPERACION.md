@@ -223,8 +223,8 @@ cualquiera se cumple:
   propia petición (no cabe en el presupuesto de CPU): antes lo arreglaba la pasada siguiente y, sin
   esta señal, un rechazo dejaría al jugador en la clasificación hasta la siguiente partida.
 - **La configuración la recalculan sus escritores**, no el worker: el ruleset (panel y
-  `npm run db:window`), los cortes de división (`npm run alerts:cutoffs`), los eventos puntuales y el
-  revert/restore de una partida. El pool de mapas es la excepción y se detecta por
+  `npm run db:window`), los cortes de división (`npm run alerts:cutoffs`), los eventos puntuales y las
+  actuaciones que anulan o revierten partidas. El pool de mapas es la excepción y se detecta por
   `mapPool.status === "updated"`.
 - **Saltárselo no es un fallo**: `scoring = null`, `scoringError = null` y `scoring.lastRun` no se
   toca. La clasificación publicada sigue siendo la última que se calculó.
@@ -435,8 +435,8 @@ de admins**. Hay dos papeles, con una regla cada uno.
 
 | Papel | Quién | Qué puede |
 |---|---|---|
-| Superadministrador | El correo de `SUPERADMIN_EMAIL`, y solo ese | Todo lo de un admin, más la configuración de la edición y las opciones de inscripción y donaciones, invitar, dar de baja y reactivar admins, deshacer sus acciones y mandar el aviso de prueba del bot |
-| Admin | Una fila **activa** de la tabla `Admin` | El panel entero salvo la gestión de admins, la reversión, la configuración de la edición y las opciones de inscripción y donaciones |
+| Superadministrador | El correo de `SUPERADMIN_EMAIL`, y solo ese | Todo lo de un admin, más la configuración de la edición y las opciones de inscripción y donaciones, invitar, dar de baja y reactivar admins, deshacer sus acciones, **revertir actuaciones administrativas** y mandar el aviso de prueba del bot |
+| Admin | Una fila **activa** de la tabla `Admin` | El panel entero salvo la gestión de admins, la reversión de actuaciones, la configuración de la edición y las opciones de inscripción y donaciones. Puede **crear expulsiones y anulaciones** |
 
 - El superadministrador **no tiene fila**: se reconoce por la variable de entorno. Sin
   `SUPERADMIN_EMAIL`, **nadie** lo es (la app arranca igual y avisa una vez en el log), y la gestión
@@ -515,8 +515,8 @@ marca dice que la acción ya no está vigente.
 |---|---|---|
 | `PLAYER_APPROVED` / `PLAYER_REJECTED` | Devuelve al jugador el estado que tenía antes | Sí, aprobando o rechazando otra vez |
 | `PLAYER_EDITED` | Devuelve a cada campo el valor anterior, validado otra vez | Sí, editando otra vez |
-| `MATCH_POINTS_REVERTED` / `MATCH_POINTS_RESTORED` | Quita o vuelve a poner la marca de la partida | Sí, con el revert/restore del historial |
-| `PLAYER_CREATED` | **Borra al jugador** y todo lo suyo, con su cursor de sincronización | **No**: es irreversible |
+| `MATCH_POINTS_REVERTED` / `MATCH_POINTS_RESTORED` | Quita o vuelve a poner la marca de la partida. Son **legado**: el panel ya no ofrece revertir/restaurar una partida suelta; las anulaciones se hacen con una actuación | Solo desde el historial de acciones, para deshacer lo antiguo |
+| `PLAYER_CREATED` | **Borra al jugador** y todo lo suyo, con su cursor de sincronización. Se rechaza si está `BANNED` o tiene actuaciones vigentes: primero se revierten | **No**: es irreversible |
 
 - **Solo los tipos revertibles** (`isRevertibleActionType()`, `src/lib/admin-revert.ts`) y **una acción
   ya revertida no se revierte dos veces**. `PLAYER_REMOVED` no está: el dato ya no existe. Tampoco
@@ -530,6 +530,57 @@ marca dice que la acción ya no está vigente.
   escribe nada: la reversión es todo o nada.
 - **Deshacer un alta es la excepción irreversible**: borra al jugador, sus partidas y su cursor de
   sincronización, con el mismo tratamiento que la baja del panel. La interfaz pide confirmación.
+- **Los cambios de puntos de una partida sueltos son legado**: `revertMatchPoints` y `restoreMatchPoints`
+  ya no existen. Las anulaciones de ahora son actuaciones (`AdminAct`) con razón pública, y se revierten
+  desde Actuaciones, no desde el historial de acciones. Las filas antiguas de
+  `MATCH_POINTS_REVERTED`/`MATCH_POINTS_RESTORED` se conservan para poder consultarlas y deshacerlas.
+
+## Actuaciones administrativas
+
+Una **actuación** es el expediente con el que la organización sanciona o corrige el torneo. Tiene una
+sola acción, una razón pública y, opcionalmente, información privada; se aplica al guardar y se anuncia
+en Discord. Vive en `AdminAct` (`/admin/actuaciones`) y es un historial **aparte** de `AdminAction`.
+
+| Tipo | Qué hace | Quién puede crearla | Al revertirla |
+|---|---|---|---|
+| **Expulsión** (`BAN`) | Pone `Player.status = BANNED`. Conserva todos los datos; no es la baja destructiva | Cualquier admin | Restaura el estado que tenía antes (`statusBefore`) |
+| **Anulación de partidas** (`MATCH_ANNULMENT`) | Marca `Match.revertedAt` en victorias que hoy puntúan. La fila sigue en el historial | Cualquier admin | Quita la marca de esas partidas |
+| **Reversión** (`REVERSAL`) | Deshace una o varias actuaciones vigentes del mismo jugador | **Solo el superadministrador** | **No se revierte**: es final |
+
+- **Una acción por actuación.** Una expulsión y una anulación del mismo jugador son dos actuaciones. La
+  reversión es la única que selecciona varias filas, siempre del mismo participante y nunca una
+  `REVERSAL`.
+- **Qué partidas se pueden anular.** Solo **victorias** (`WIN`) que **hoy puntúan**: no revertidas, dentro
+  de la ventana y del corte de inscripción, con el ruleset actual y con el equipo equilibrado. Las
+  derrotas no se anulan.
+- **La expulsión requiere un `APPROVED`** y no admite una segunda expulsión vigente. El estado `BANNED`
+  bloquea aprobar, rechazar y borrar: la única salida es revertir la expulsión.
+- **Se aplica al guardar.** El cambio y la actuación van en la misma transacción, con guardas
+  condicionales para que dos admins no se pisen. Después se recalcula la clasificación y se reevalúan las
+  alertas del jugador.
+- **Si el recálculo falla, no se compensa.** La actuación queda aplicada y la respuesta avisa de que la
+  clasificación se pondrá al día en la próxima pasada del sincronizador. Es el mismo criterio que la
+  baja de un jugador.
+- **La razón pública es obligatoria** (máx. 600 caracteres). **La información privada es opcional** (máx.
+  4000) y **nunca** sale del panel: ni al canal, ni al DM, ni al log. El aviso recibe un tipo que no la
+  admite.
+- **Sin token, canal o cuenta de Discord, la actuación se aplica igual**: el aviso es *best-effort* y no
+  bloquea ni puede hacer fallar la operación.
+
+### Avisos de las actuaciones
+
+Cada actuación se anuncia **siempre** que se aplica, con la razón pública y sin información privada:
+
+| Qué | Cómo |
+|---|---|
+| Canal | `DISCORD_ANNOUNCE_CHANNEL_ID`, con `postChannelMessage()` |
+| Privado | `POST /users/@me/channels` + publicar. Necesita cuenta resoluble (`discordUserId`, o el `@usuario` contra el roster cacheado) |
+| Texto | `adminActChannelText()` / `adminActDmText()` (`src/lib/admin-acts.ts`), con el nombre de la edición y el enlace público si existe; truncado a 2000 caracteres |
+| Dónde mirar | Errores en el log con el prefijo `[admin-act-notice]` |
+
+- El envío va **después** del commit y de intentar el recálculo, con `ctx.waitUntil()` en el Worker (o se
+  deja correr fuera). Un fallo de Discord no cambia lo que ve el administrador ni el estado del torneo.
+- El **DM solo lleva la razón pública**, igual que el canal. La información privada se queda en el panel.
 
 ## Configurar la edición
 
@@ -740,8 +791,8 @@ npm run alerts:cutoffs -- --show
 - **Cuándo se evalúa**: en `syncApprovedPlayers()`, después de `recomputeScores()`, **solo los
   jugadores tocados** —los que han cambiado partidas **y** los que han tenido un summary leído o una
   partida sin revisar, porque un resumen rellenado para una partida vieja también mueve sus alertas—; y
-  también al revertir o restaurar una partida, al cerrar el torneo
-  (`Setting["alerts.tournamentClose"]` lo marca) y a mano.
+  también al aplicar una actuación que anula o revierte partidas o cambia el estado del jugador, al
+  cerrar el torneo (`Setting["alerts.tournamentClose"]` lo marca) y a mano.
 - **Las tres reglas del resumen son una alerta por partida y regla** (`MATCH_DETECTED`, anclada al
   `gameId`): el jugador que no hizo aldeanos en tres partidas tiene tres alertas, no una. Se evalúan
   solo con `summaryAnomalies` legible; si el `buildOrder` no se pudo leer, la de aldeanos **no se
@@ -990,12 +1041,14 @@ cuentas**: `discordUserId`, o el `@usuario` resuelto por la lista de miembros.
 
 ## Avisos del torneo en Discord
 
-El bot manda mensajes a un canal (`DISCORD_ANNOUNCE_CHANNEL_ID`). Son de cuatro clases: los **hitos de
+El bot manda mensajes a un canal (`DISCORD_ANNOUNCE_CHANNEL_ID`). Son de cinco clases: los **hitos de
 la edición** (esta sección), los **avisos de los eventos puntuales** (recordatorios, inicio y fin; ver
-[Eventos puntuales](#eventos-puntuales)), el **informe diario de clasificación** y los **avisos de las
-acciones de administración** (las dos subsecciones de abajo). Los hitos los manda el worker en su pasada
-(`announceEditionWindow()`): mira la ventana del ruleset (`Setting["scoring.ruleset"].window`) y la fecha
-de cierre de inscripciones (`Setting["registration.closesAt"]`).
+[Eventos puntuales](#eventos-puntuales)), el **informe diario de clasificación**, los **avisos de las
+acciones de administración** (las dos subsecciones de abajo) y los **avisos de las actuaciones
+administrativas** (ver [Actuaciones administrativas](#avisos-de-las-actuaciones)). Los hitos los manda el
+worker en su pasada (`announceEditionWindow()`): mira la ventana del ruleset
+(`Setting["scoring.ruleset"].window`) y la fecha de cierre de inscripciones
+(`Setting["registration.closesAt"]`).
 
 | Hito | Cuándo |
 |---|---|
@@ -1052,23 +1105,24 @@ hace el worker en su pasada (`announceDailyStandings()`, en `src/lib/standings-r
 
 ### Avisos de las acciones de administración
 
-Cuando la organización quita algo del torneo, el bot lo cuenta: un **privado** a la persona afectada y un
-**mensaje global** al canal de avisos. Lo hace la propia Server Action, después de la transacción
-(`dispatchAdminNotice()`, `src/lib/admin-notice-send.ts`).
+Cuando la organización quita algo del torneo con una **baja de participante**, el bot lo cuenta: un
+**privado** a la persona afectada y un **mensaje global** al canal de avisos. Lo hace la propia Server
+Action, después de la transacción (`dispatchAdminNotice()`, `src/lib/admin-notice-send.ts`).
 
 | Acción | Cuándo avisa |
 |---|---|
 | **Baja de participante** (`deletePlayer`, `PLAYER_REMOVED`) | siempre |
-| **Invalidar los puntos de una partida** (`revertMatchPoints`, `MATCH_POINTS_REVERTED`) | solo al invalidar; restaurar puntos no avisa |
 
-No avisan **restaurar** puntos, **deshacer** una acción ni aprobar o rechazar: no quitan nada ni son
-noticia.
+No avisan **deshacer** una acción ni aprobar o rechazar: no quitan nada ni son noticia. Las
+**actuaciones administrativas** (expulsiones, anulaciones y reversiones) tienen su propio aviso, con
+razón pública y sin información privada: ver
+[la sección de actuaciones](#avisos-de-las-actuaciones).
 
 | Qué | Cómo |
 |---|---|
 | Privado (DM) | `POST /users/@me/channels` + publicar. Necesita `discordUserId`; si solo hay `@usuario`, se resuelve contra el roster cacheado |
 | Global | Al canal de avisos, por `postChannelMessage()`. Corto, sin decir quién lo hizo (eso está en el historial del panel) |
-| Texto de la baja | «Retirado del torneo» solo si estaba `APPROVED`; si era una solicitud (`PENDING`/`REJECTED`), «solicitud descartada» |
+| Texto de la baja | «Retirado del torneo» si estaba `APPROVED`; si era una solicitud (`PENDING`/`REJECTED`), «solicitud descartada». Un `BANNED` no llega aquí: la baja se rechaza y hay que revertir primero la expulsión |
 
 - **No bloquea la acción y no puede hacerla fallar**: el aviso se aplaza con `ctx.waitUntil()` (o se deja
   correr fuera del Worker), va después de la transacción —si el cambio falla no hay nada que avisar— y un

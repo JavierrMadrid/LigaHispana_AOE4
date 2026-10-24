@@ -48,6 +48,7 @@ const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
   { id: "APPROVED", label: "Aprobados" },
   { id: "PENDING", label: "Pendientes" },
   { id: "REJECTED", label: "Rechazados" },
+  { id: "BANNED", label: "Expulsados" },
 ];
 
 const CELL = "px-4 py-3 align-top";
@@ -66,12 +67,14 @@ type SortKey = "name" | "aoe4WorldName" | "country" | "status" | "matchCount" | 
 /**
  * Orden de los estados, calcado del que aplica el servidor (`status asc`): en
  * Postgres el enum se ordena por el orden de declaración (`PENDING`, `APPROVED`,
- * `REJECTED`), que es el que deja la cola de solicitudes primero.
+ * `REJECTED`, `BANNED`), que es el que deja la cola de solicitudes primero y a
+ * los expulsados, que no piden nada, al final.
  */
 const STATUS_ORDER: Record<PlayerStatus, number> = {
   PENDING: 0,
   APPROVED: 1,
   REJECTED: 2,
+  BANNED: 3,
 };
 
 /**
@@ -156,9 +159,11 @@ function comparePlayers(
 export function ParticipantsBrowser({
   participants,
   countries,
+  canReverse,
 }: {
   participants: AdminParticipant[];
   countries: string[];
+  canReverse: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("ALL");
@@ -172,6 +177,7 @@ export function ParticipantsBrowser({
       APPROVED: 0,
       PENDING: 0,
       REJECTED: 0,
+      BANNED: 0,
     };
 
     for (const player of participants) {
@@ -443,7 +449,12 @@ export function ParticipantsBrowser({
                 </thead>
                 <tbody className="divide-y divide-line">
                   {paged.map((player) => (
-                    <ParticipantRow key={player.id} player={player} countries={countries} />
+                    <ParticipantRow
+                      key={player.id}
+                      player={player}
+                      countries={countries}
+                      canReverse={canReverse}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -504,9 +515,11 @@ export function ParticipantsBrowser({
 function ParticipantRow({
   player,
   countries,
+  canReverse,
 }: {
   player: AdminParticipant;
   countries: string[];
+  canReverse: boolean;
 }) {
   const hasChannels =
     player.twitchChannel !== null ||
@@ -637,42 +650,72 @@ function ParticipantRow({
       </td>
 
       <td className={`${CELL} text-right`}>
-        {/* `flex-nowrap` y `whitespace-nowrap` en los botones: las cuatro acciones
-            (Editar, Aprobar, Rechazar y Eliminar) se leen en una sola línea, que
-            es como se comparan entre filas. Antes se partían en dos cuando la
-            tabla se estrechaba, y una fila con el botón de borrar en su propia
-            línea se lee peor que una que se desplaza. */}
-        <div className="flex flex-nowrap items-center justify-end gap-2">
-          {/* Editar va primero y en tono neutro: es la acción que se usa a
-              diario, y el filete tenue la deja cerca del nombre sin competir con
-              aprobar, rechazar o eliminar, que sí cambian el estado o borran. */}
-          <PlayerEditDialog player={player} countries={countries} />
+        {player.status === "BANNED" ? (
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <PlayerEditDialog player={player} countries={countries} />
 
-          {player.status !== "APPROVED" ? (
-            <StatusForm action={approvePlayer} playerId={player.id} label="Aprobar" tone="approve" />
-          ) : null}
+              <Link
+                href={`/admin/actuaciones?playerId=${player.id}&state=active`}
+                className="inline-flex h-10 items-center rounded-md border border-line px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+              >
+                Ver actuaciones
+              </Link>
 
-          {player.status !== "REJECTED" ? (
-            <StatusForm action={rejectPlayer} playerId={player.id} label="Rechazar" tone="neutral" />
-          ) : null}
+              {canReverse ? (
+                <Link
+                  href={`/admin/actuaciones/nueva?accion=REVERSAL&participante=${player.id}`}
+                  className="inline-flex h-10 items-center rounded-md border border-accent/40 px-3 text-xs text-accent transition-colors hover:bg-accent/10"
+                >
+                  Revertir expulsión
+                </Link>
+              ) : null}
+            </div>
 
-          <ConfirmAction
-            action={deletePlayer}
-            fields={{ playerId: player.id }}
-            title="Eliminar jugador"
-            body={
-              <>
-                Se eliminará a {player.name} (AoE4World {player.profileId}) y todas sus
-                partidas. Esta acción no se puede deshacer.
-              </>
-            }
-            triggerLabel="Eliminar"
-            triggerClassName="h-10 rounded-md border border-loss/40 px-3 text-xs text-loss transition-colors hover:bg-loss/10"
-            confirmLabel="Eliminar jugador"
-            confirmPendingLabel="Eliminando…"
-            confirmClassName="bg-loss text-accent-ink hover:brightness-110"
-          />
-        </div>
+            <p className="max-w-[24rem] text-right text-xs leading-relaxed text-muted">
+              Expulsado: se levanta con una actuación de reversión.
+              {canReverse ? null : " Solo el superadministrador puede revertirla."} No
+              se puede aprobar, rechazar ni eliminar mientras la expulsión siga
+              vigente.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-nowrap items-center justify-end gap-2">
+            {/* Editar va primero y en tono neutro: es la acción que se usa a
+                diario, y el filete tenue la deja cerca del nombre sin competir con
+                aprobar, rechazar o eliminar, que sí cambian el estado o borran. */}
+            <PlayerEditDialog player={player} countries={countries} />
+
+            {player.status !== "APPROVED" ? (
+              <StatusForm action={approvePlayer} playerId={player.id} label="Aprobar" tone="approve" />
+            ) : null}
+
+            {player.status !== "REJECTED" ? (
+              <StatusForm action={rejectPlayer} playerId={player.id} label="Rechazar" tone="neutral" />
+            ) : null}
+
+            <ConfirmAction
+              action={deletePlayer}
+              fields={{ playerId: player.id }}
+              title="Eliminar jugador"
+              body={
+                <>
+                  Se eliminará a {player.name} (AoE4World {player.profileId}) y todas sus
+                  partidas. Esta acción no se puede deshacer.
+                  <span className="mt-2 block text-xs text-muted">
+                    Si tiene actuaciones vigentes, la baja se rechazará hasta que se
+                    reviertan desde Actuaciones.
+                  </span>
+                </>
+              }
+              triggerLabel="Eliminar"
+              triggerClassName="h-10 rounded-md border border-loss/40 px-3 text-xs text-loss transition-colors hover:bg-loss/10"
+              confirmLabel="Eliminar jugador"
+              confirmPendingLabel="Eliminando…"
+              confirmClassName="bg-loss text-accent-ink hover:brightness-110"
+            />
+          </div>
+        )}
       </td>
     </tr>
   );

@@ -19,21 +19,26 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `ObjectiveLeadEvent` | Un cambio de poseedor de una **competición** (append-only). | `id` |
 | `Alert` | Un comportamiento anómalo detectado (append-only). | `id`; único `dedupeKey` |
 | `AdminAction` | Una acción del panel (append-only). | `id` |
+| `AdminAct` | Una **actuación administrativa**: expulsión, anulación o reversión, con razón pública. | `id` |
+| `AdminActMatch` | Qué partidas anuló una actuación. | pk `(actId, matchId)` |
 | `Admin` | Una cuenta con acceso al panel de administración. | `id`; `email` único |
 | `RateLimitCounter` | Un contador de frecuencia por IP hasheada. | `key` |
 | `Setting` | Configuración y memoria de los procesos. | `key` |
 
 Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent`, `ObjectiveLeadEvent` y `Alert` apuntan a
-`Player` con `onDelete: Cascade`. El resto de tablas son independientes.
+`Player` con `onDelete: Cascade`. `AdminAct` apunta a `Player` con `onDelete: SetNull` (la actuación
+sobrevive al borrado del jugador con la foto de nombre y perfil), y `AdminActMatch` cae en cascada
+con `AdminAct` y con `Match`. El resto de tablas son independientes.
 
 ## Enums
 
 | Enum | Valores |
 |---|---|
-| `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED` |
+| `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED`, `BANNED` |
 | `MatchResult` | `WIN`, `LOSS` |
 | `ObjectiveLeadKind` | `LOST`, `GAINED` (en ese orden, y no es decorativo: ver abajo) |
 | `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
+| `AdminActKind` | `BAN`, `MATCH_ANNULMENT`, `REVERSAL` |
 | `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión), `NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP`, `NO_RESOURCES_GAP`, `SUMMARY_NOT_REVIEWED` |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED`, `MATCH_DETECTED` |
 
@@ -45,6 +50,10 @@ una competición: `LOST` va declarado antes que `GAINED` a propósito, porque Po
 por su orden de declaración y así un `orderBy` de `kind` con el **mismo sentido** que el resto de la
 consulta deja la ganancia delante en descendente (el estado que queda: el nuevo poseedor). No hay
 que reordenarlo; el que se añada va al final.
+
+`PlayerStatus.BANNED` es un estado **reversible**: lo pone una actuación administrativa (`AdminAct` de
+tipo `BAN`) y solo se sale de él revirtiéndola. No es la baja destructiva (`deletePlayer`): conserva
+todos los datos del participante y el motor lo trata como no aprobado (solo publica `APPROVED`).
 
 Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con un compañero) y
 `LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
@@ -71,7 +80,7 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `discordUsername` | `String?` **único** | `@usuario` en forma canónica: sin arroba y en minúsculas. |
 | `discordInGuild` | `Boolean?` | `null` = sin comprobar; un `false` solo se escribe ante una respuesta de Discord. |
 | `discordCheckedAt` | `DateTime?` | Cuándo se comprobó lo anterior (caché de 12 h). |
-| `status` | `PlayerStatus` | `PENDING` por defecto. |
+| `status` | `PlayerStatus` | `PENDING` por defecto. `BANNED` lo pone una actuación de expulsión y solo se sale revirtiéndola. |
 | `registeredAt` | `DateTime?` | Cuándo se **inscribió** (no cuándo se aprobó). Define el corte `max(window.from, registeredAt)`. `null` = cuenta desde el inicio de la ventana; sin *backfill*. |
 | `elo`, `rankLevel`, `streak`, `ladderGamesCount` | `Int`/`String`/`Int`/`Int?` | De la ladder (`GET /leaderboards/rm_solo`). `rankLevel` es el literal (`gold_2`), no la división resuelta. `streak` con signo. |
 | `ladderLastGameAt` | `DateTime?` | `last_game_at` de la ladder. Va por delante de lo que importamos: solo sirve para la alerta `MISSING_LADDER_MATCHES`. |
@@ -335,6 +344,57 @@ dice la marca es que ya no está vigente. Qué tipos se pueden deshacer y qué h
 
 Índices: `(createdAt)` (paginación, lo más reciente primero) y `(type, createdAt)` (filtro por tipo).
 
+## `AdminAct`
+
+Una **actuación administrativa**: la unidad con la que la organización expulsa a un participante,
+anula partidas ganadas o revierte actuaciones anteriores. Es un historial **aparte de `AdminAction`**:
+la actuación tiene razón pública (la que se anuncia), información privada (que no sale del panel),
+autor y fecha, y se aplica en el momento. `AdminAction` sigue siendo el rastro técnico de cada cambio;
+`AdminAct` es el expediente que lo explica.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `kind` | `AdminActKind` | `BAN`, `MATCH_ANNULMENT` o `REVERSAL`. Una actuación tiene **una sola** acción. |
+| `playerId` | `String?` | FK a `Player.id` con `SetNull`: la actuación sobrevive al borrado del jugador. |
+| `playerName`, `profileId` | `String`, `Int` | Foto del momento, la que queda si `playerId` pasa a `null`. |
+| `summary` | `String` | Frase ya redactada en español (`adminActSummary()`). No lleva información privada. |
+| `publicReason` | `String` | Obligatoria (máx. 600 caracteres). Es lo único que se manda a Discord. |
+| `privateInfo` | `String?` | Opcional (máx. 4000). **Nunca** sale del panel ni se loguea. |
+| `actorEmail` | `String` | Correo del usuario de Supabase Auth que la creó. |
+| `matchCount` | `Int` | Partidas anuladas; en una reversión, la unión de las afectadas por lo revertido. |
+| `statusBefore` | `PlayerStatus?` | Estado que tenía el jugador antes de una expulsión. Es lo que restaura la reversión. `null` en los otros tipos. |
+| `revertedAt`, `revertedByEmail` | `DateTime?`, `String?` | Marca de que otra actuación la revirtió. `null` = vigente. En una `REVERSAL` siempre es `null`. |
+| `reversedByActId` | `String?` | La actuación de reversión que la deshizo. Autorrelación con `SetNull`. |
+| `createdAt` | `DateTime` | |
+
+Índices: `(createdAt)` (listado), `(kind, createdAt)` (filtro por tipo), `(playerId, createdAt)`
+(filtro por jugador y `SetNull`), `(revertedAt, kind)` (vigentes/revertidas) y `(reversedByActId)`
+(autorrelación). Son las consultas del listado y del detalle, no índices preventivos.
+
+La **reversión es final**: una `REVERSAL` no se puede revertir, y un objetivo de reversión tiene que
+ser una actuación vigente que no sea `REVERSAL`. Una expulsión y una anulación del mismo jugador son
+**dos** actuaciones; la única que selecciona varias filas es la reversión, y siempre del mismo
+participante.
+
+El **borrado del jugador** se rechaza mientras tenga actuaciones vigentes y revertibles
+(`revertedAt null` y `kind != REVERSAL`) o esté `BANNED`: primero se revierte, después se decide la
+baja. Las actuaciones históricas quedan con `playerId = null` y su foto de nombre y perfil.
+
+## `AdminActMatch`
+
+Qué partidas anuló una actuación (`MATCH_ANNULMENT`). Es la lista de vínculos, no una copia de la
+partida: los datos se leen en vivo de `Match`.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `actId` | `String` | FK a `AdminAct.id`, cascada. |
+| `matchId` | `String` | FK a `Match.id`, cascada. |
+
+Clave primaria `(actId, matchId)` e índice `(matchId)` para "qué actuaciones anularon esta partida" y
+para la cascada desde `Match`. Una reversión de una anulación quita `Match.revertedAt`; los vínculos se
+quedan, porque son el historial de qué actuación hizo qué.
+
 ## `Admin`
 
 Las cuentas con acceso al panel. Hasta esta tabla, **cualquier** usuario de Supabase Auth era admin
@@ -434,6 +494,8 @@ aparece en una consulta, no se crea.**
 | `ObjectiveLeadEvent` | `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` | Feed paginado por ventanas (cohorte, rango de fecha y orden del merge); filtro por jugador y cascada. |
 | `Alert` | `dedupeKey` (único), `createdAt`, `(playerId, rule)` | Idempotencia, listado, detalle por jugador. |
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
+| `AdminAct` | `createdAt`, `(kind, createdAt)`, `(playerId, createdAt)`, `(revertedAt, kind)`, `(reversedByActId)` | Listado y filtros por tipo, jugador y estado; autorrelación de la reversión. |
+| `AdminActMatch` | pk `(actId, matchId)`, `(matchId)` | Vínculos de una anulación; cascada desde `Match`. |
 | `Admin` | `email` (único), `authUserId` (único) | Acceso al panel por correo y vínculo con Auth. |
 | `RateLimitCounter` | `key` (pk) | El `INSERT ... ON CONFLICT`. |
 
@@ -449,6 +511,7 @@ aparece en una consulta, no se crea.**
 | `/historial` y el historial de un participante (`/detalle-jugador/<id>/historial`) | Las mismas tablas, pero solo ganancias: `Match` victorias clasificatorias con puntos (o revertidas) de `Player.status = APPROVED`, y `ObjectiveEvent` de los aprobados, más los `ObjectiveLeadEvent` de la edición activa; paginados por ventanas | `(mode, startedAt)`, `(playerId, startedAt)`, `(achievedAt, objectiveId)`, `(playerId, achievedAt)`, `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` |
 | Relleno de la ventana (F2/F2b) | `Player where status = APPROVED and (windowComplete = false or (windowComplete = true and (windowCheckedAt is null or windowCheckedAt < now − RECHECK_MAX_AGE_DAYS))) order by windowComplete, backfillPage, profileId`; y el `count` de `windowComplete = false` para `backfillPending` | `(status, windowComplete, backfillPage)` |
 | `/admin/alertas` | `Alert` de la edición activa (`createdAt >= window.from`) `[por jugador/regla] order by createdAt` | `createdAt`, `(playerId, rule)` |
+| `/admin/actuaciones` | `AdminAct` por fecha descendente, filtrada por tipo, jugador o estado | `createdAt`, `(kind, createdAt)`, `(playerId, createdAt)`, `(revertedAt, kind)` |
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
 | Motor (recálculo) | `Match where mode = any(...) and startedAt en ventana and result/finishedAt no nulos` | `(mode, startedAt)` |
@@ -461,7 +524,7 @@ marca de revertida y la condición de equipo de las partidas por equipos) y lo r
 
 ## RLS y privilegios
 
-Postura **cerrada**, aplicada a las diez tablas de `public`:
+Postura **cerrada**, aplicada a las doce tablas de `public`:
 
 | Paso | Qué |
 |---|---|
@@ -470,7 +533,7 @@ Postura **cerrada**, aplicada a las diez tablas de `public`:
 | 3 | **Ningún `grant`** a `anon` ni a `authenticated`. |
 | 4 | Comprobar con `npm run db:security -- --check`. |
 
-Estado real: RLS activa y 0 políticas en las diez tablas, y sin permisos para `anon` ni
+Estado real: RLS activa y 0 políticas en las doce tablas, y sin permisos para `anon` ni
 `authenticated`. `service_role` conserva sus permisos y su `BYPASSRLS`: es un rol de infraestructura
 de Supabase, no un cliente del torneo. Consecuencia en la Data API: **`401 permission denied`** (el
 permiso de tabla se comprueba antes que RLS). No se "arregla" concediendo `SELECT`; si algún día
@@ -481,7 +544,8 @@ hace falta servir una tabla, sería con una vista `security_invoker = true` y un
 - Antes de activar RLS, el script comprueba que el rol de `DATABASE_URL` tenga `BYPASSRLS`; si no,
   se niega a aplicar nada (la web dejaría de ver datos en silencio).
 - La lista de tablas del script es **explícita**: al añadir una tabla hay que añadirla ahí, porque
-  una tabla nueva nace con los permisos por defecto de Supabase. `Admin` ya está en esa lista.
+  una tabla nueva nace con los permisos por defecto de Supabase. `Admin`, `AdminAct` y `AdminActMatch`
+  ya están en esa lista.
 
 ## Cambios de esquema
 

@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
-import { revertMatchPoints, restoreMatchPoints } from "@/app/admin/actions";
-import { ActionFeedbackProvider } from "@/components/action-feedback";
-import { ConfirmAction } from "@/components/confirm-action";
+import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PageSizeSelect } from "@/components/page-size-select";
@@ -121,10 +119,10 @@ function describeObjective(playerName: string, objective: AdminObjectiveEvent): 
  * API no dio el nombre del rival, la frase sigue siendo correcta sin él ("ganó la
  * partida") en vez de quedarse a medias ("ganó a ").
  *
- * Una partida revertida se describe sin cifra: el motor ya le ha puesto los puntos a
- * cero, así que afirmar "sin puntos" confundiría el estado actual con lo que valía. La
- * marca de revertida, en la misma columna, es la que aclara que esos puntos se
- * quitaron a mano.
+ * Una partida anulada por la organización se describe sin cifra: el motor ya le ha
+ * puesto los puntos a cero, así que afirmar "sin puntos" confundiría el estado
+ * actual con lo que valía. La marca de anulada, en la misma columna, es la que
+ * aclara que esos puntos se quitaron a mano.
  *
  * Un **objetivo** —logro cumplido o cambio de poseedor— no tiene resultado de
  * partida, así que se delega antes de llegar a las ramas de `result`: sin esa
@@ -215,8 +213,15 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
           cumplidos y cambios de poseedor de las competiciones—, de todos los
           participantes y de lo más reciente a lo más antiguo. Los logros se apuntan
           cuando termina el torneo; los cambios de poseedor salen en cuanto la
-          sincronización los detecta. Revertir los puntos de una partida no la borra:
-          la marca como no puntuable y se puede restaurar.
+          sincronización los detecta. Anular partidas con una actuación no las borra:
+          las marca como no puntuables y se restauran desde{" "}
+          <Link
+            href="/admin/actuaciones"
+            className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
+          >
+            Actuaciones
+          </Link>
+          .
         </p>
       </section>
 
@@ -226,243 +231,189 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
           body="La base de datos no ha respondido. Vuelve a intentarlo en unos minutos."
         />
       ) : (
-        <ActionFeedbackProvider>
-          <div className="flex flex-col gap-4">
-            <MatchHistoryFilters players={players} />
+        <div className="flex flex-col gap-4">
+          <MatchHistoryFilters players={players} />
 
-            {history.data.rows.length === 0 ? (
-              <EmptyState
-                title={
-                  hasFilters
-                    ? "Ninguna ganancia coincide con los filtros"
-                    : "Todavía no hay ganancias"
-                }
-                body={
-                  hasFilters
-                    ? "Prueba con otro jugador o amplía el rango de fechas. El filtro incluye el día final completo."
-                    : "Aquí aparecerán las victorias que suman, los logros cumplidos y los cambios de poseedor de las competiciones, de lo más reciente a lo más antiguo."
-                }
-              />
-            ) : (
-              <>
-                <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
-                  <table className="w-full text-left text-sm">
-                    <caption className="sr-only">
-                      Victorias que suman, logros cumplidos y cambios de poseedor
-                      de las competiciones: fecha, resultado o marca de objetivo,
-                      descripción con sus puntos —de cambio de poseedor son
-                      informativos— y, en las partidas, la acción de revertir o
-                      restaurar sus puntos. Por debajo de la pantalla mediana la
-                      fecha se lee dentro de la descripción.
-                    </caption>
-                    <thead className="bg-surface text-muted">
-                      <tr>
-                        <SortableHeaderLink
-                          column="fecha"
-                          label="Fecha"
-                          sort={history.data.sort}
-                          basePath="/admin/historial"
-                          query={query}
-                          className="hidden w-44 px-4 py-3 font-medium md:table-cell"
-                        />
-                        <th
-                          scope="col"
-                          className="w-28 bg-surface px-4 py-3 font-medium"
-                        >
-                          Resultado
-                        </th>
-                        {/* La descripción es una frase montada en la interfaz y las
-                            acciones no son un dato ordenable. */}
-                        <th
-                          scope="col"
-                          className="bg-surface px-4 py-3 font-medium lg:sticky lg:top-0 lg:z-10"
-                        >
-                          Descripción
-                        </th>
-                        <th
-                          scope="col"
-                          className="bg-surface px-4 py-3 text-right font-medium lg:sticky lg:top-0 lg:z-10"
-                        >
-                          Acciones
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-line">
-                      {history.data.rows.map((row) => {
-                        const reverted = row.revertedAt !== null;
-                        // Tres clases de fila, tres fondos: la partida normal va
-                        // limpia, la revertida se apaga en gris y el objetivo se
-                        // tiñe del oro de la liga. Los liderazgos —ganados o
-                        // perdidos— comparten el oro del objetivo: es la misma
-                        // clase de hecho, y lo que las separa lo llevan el chip y
-                        // el verbo. El chip y el icono confirman lo que el fondo
-                        // ya insinúa, para que el color no sea la única señal.
-                        const rowClassName =
-                          row.objective !== null
-                            ? "bg-accent/[0.06]"
-                            : reverted
-                              ? "bg-surface/40"
-                              : undefined;
+          {history.data.rows.length === 0 ? (
+            <EmptyState
+              title={
+                hasFilters
+                  ? "Ninguna ganancia coincide con los filtros"
+                  : "Todavía no hay ganancias"
+              }
+              body={
+                hasFilters
+                  ? "Prueba con otro jugador o amplía el rango de fechas. El filtro incluye el día final completo."
+                  : "Aquí aparecerán las victorias que suman, los logros cumplidos y los cambios de poseedor de las competiciones, de lo más reciente a lo más antiguo."
+              }
+            />
+          ) : (
+            <>
+              <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-line lg:max-h-[70vh] lg:overflow-y-auto">
+                <table className="w-full text-left text-sm">
+                  <caption className="sr-only">
+                    Victorias que suman, logros cumplidos y cambios de poseedor
+                    de las competiciones: fecha, resultado o marca de objetivo y
+                    descripción con sus puntos —de cambio de poseedor son
+                    informativos—. Una partida anulada por la organización se marca
+                    como tal y no suma. Por debajo de la pantalla mediana la fecha se
+                    lee dentro de la descripción.
+                  </caption>
+                  <thead className="bg-surface text-muted">
+                    <tr>
+                      <SortableHeaderLink
+                        column="fecha"
+                        label="Fecha"
+                        sort={history.data.sort}
+                        basePath="/admin/historial"
+                        query={query}
+                        className="hidden w-44 px-4 py-3 font-medium md:table-cell"
+                      />
+                      <th
+                        scope="col"
+                        className="w-28 bg-surface px-4 py-3 font-medium"
+                      >
+                        Resultado
+                      </th>
+                      {/* La descripción es una frase montada en la interfaz y las
+                          acciones no son un dato ordenable. */}
+                      <th
+                        scope="col"
+                        className="bg-surface px-4 py-3 font-medium lg:sticky lg:top-0 lg:z-10"
+                      >
+                        Descripción
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {history.data.rows.map((row) => {
+                      const reverted = row.revertedAt !== null;
+                      // Tres clases de fila, tres fondos: la partida normal va
+                      // limpia, la anulada se apaga en gris y el objetivo se
+                      // tiñe del oro de la liga. Los liderazgos —ganados o
+                      // perdidos— comparten el oro del objetivo: es la misma
+                      // clase de hecho, y lo que las separa lo llevan el chip y
+                      // el verbo. El chip y el icono confirman lo que el fondo
+                      // ya insinúa, para que el color no sea la única señal.
+                      const rowClassName =
+                        row.objective !== null
+                          ? "bg-accent/[0.06]"
+                          : reverted
+                            ? "bg-surface/40"
+                            : undefined;
 
-                        return (
-                          <tr key={row.id} className={rowClassName}>
-                            <td className="hidden whitespace-nowrap px-4 py-3 align-top text-muted md:table-cell">
+                      return (
+                        <tr key={row.id} className={rowClassName}>
+                          <td className="hidden whitespace-nowrap px-4 py-3 align-top text-muted md:table-cell">
+                            <time
+                              dateTime={row.startedAt.toISOString()}
+                              title={formatAbsoluteTime(row.startedAt)}
+                              className="tabular-nums"
+                            >
+                              {formatAbsoluteTime(row.startedAt)}
+                            </time>
+                          </td>
+
+                          <td className="px-4 py-3 align-top">
+                            {row.objective !== null ? (
+                              <span
+                                className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${OBJECTIVE_STYLE}`}
+                              >
+                                {row.objective.lead !== null ? "Liderazgo" : "Objetivo"}
+                              </span>
+                            ) : row.result === null ? (
+                              <span className="text-xs text-muted">—</span>
+                            ) : (
+                              <span
+                                className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${
+                                  RESULT_STYLES[row.result]
+                                }`}
+                              >
+                                {RESULT_LABELS[row.result]}
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3 align-top">
+                            {/* La fecha es una columna secundaria: por debajo de `md`
+                                se lee aquí, bajo la descripción, en vez de forzar
+                                el scroll horizontal de una tabla de tres columnas. */}
+                            <p className="mb-1 text-xs text-muted md:hidden">
                               <time
                                 dateTime={row.startedAt.toISOString()}
-                                title={formatAbsoluteTime(row.startedAt)}
                                 className="tabular-nums"
                               >
                                 {formatAbsoluteTime(row.startedAt)}
                               </time>
-                            </td>
-
-                            <td className="px-4 py-3 align-top">
-                              {row.objective !== null ? (
-                                <span
-                                  className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${OBJECTIVE_STYLE}`}
-                                >
-                                  {row.objective.lead !== null ? "Liderazgo" : "Objetivo"}
-                                </span>
-                              ) : row.result === null ? (
-                                <span className="text-xs text-muted">—</span>
-                              ) : (
-                                <span
-                                  className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${
-                                    RESULT_STYLES[row.result]
-                                  }`}
-                                >
-                                  {RESULT_LABELS[row.result]}
-                                </span>
-                              )}
-                            </td>
-
-                            <td className="px-4 py-3 align-top">
-                              {/* La fecha es una columna secundaria: por debajo de `md`
-                                  se lee aquí, bajo la descripción, en vez de forzar
-                                  el scroll horizontal de una tabla de tres columnas. */}
-                              <p className="mb-1 text-xs text-muted md:hidden">
-                                <time
-                                  dateTime={row.startedAt.toISOString()}
-                                  className="tabular-nums"
-                                >
-                                  {formatAbsoluteTime(row.startedAt)}
-                                </time>
-                              </p>
-                              {row.objective !== null ? (
-                                <>
-                                  <p className="flex items-start gap-2">
-                                    <ObjectiveIcon
-                                      option={row.objective}
-                                      className="mt-0.5 size-5 shrink-0"
-                                    />
-                                    <span className="text-foreground">
-                                      {describeResult(row)}
-                                    </span>
-                                  </p>
-                                  <p className="mt-0.5 text-xs text-muted">
-                                    {OBJECTIVE_GROUP_LABELS[row.objective.group]} ·{" "}
-                                    <span className="font-medium tabular-nums text-accent">
-                                      {/* El signo lo decide la interfaz: `−` marca la
-                                          pérdida de un liderazgo, cuyo importe es
-                                          informativo. El signo menos tipográfico se
-                                          alinea con las cifras tabulares. */}
-                                      {row.objective.lead === "LOST" ? "−" : "+"}
-                                      {puntos(row.points)}
-                                    </span>
-                                  </p>
-                                </>
-                              ) : (
-                                <>
-                                  <p
-                                    title={`Partida ${row.gameId}`}
-                                    className={reverted ? "text-muted" : "text-foreground"}
-                                  >
+                            </p>
+                            {row.objective !== null ? (
+                              <>
+                                <p className="flex items-start gap-2">
+                                  <ObjectiveIcon
+                                    option={row.objective}
+                                    className="mt-0.5 size-5 shrink-0"
+                                  />
+                                  <span className="text-foreground">
                                     {describeResult(row)}
+                                  </span>
+                                </p>
+                                <p className="mt-0.5 text-xs text-muted">
+                                  {OBJECTIVE_GROUP_LABELS[row.objective.group]} ·{" "}
+                                  <span className="font-medium tabular-nums text-accent">
+                                    {/* El signo lo decide la interfaz: `−` marca la
+                                        pérdida de un liderazgo, cuyo importe es
+                                        informativo. El signo menos tipográfico se
+                                        alinea con las cifras tabulares. */}
+                                    {row.objective.lead === "LOST" ? "−" : "+"}
+                                    {puntos(row.points)}
+                                  </span>
+                                </p>
+                              </>
+                            ) : (
+                              <>
+                                <p
+                                  title={`Partida ${row.gameId}`}
+                                  className={reverted ? "text-muted" : "text-foreground"}
+                                >
+                                  {describeResult(row)}
+                                </p>
+                                <p className="mt-0.5 text-xs text-muted">
+                                  {formatLabel(row)}
+                                  {row.map !== null ? ` · ${row.map}` : ""}
+                                </p>
+                                {reverted && row.revertedAt !== null ? (
+                                  <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                                    <span className="inline-block rounded-full border border-line-strong px-2 py-0.5 font-medium">
+                                      Anulada por la organización
+                                    </span>
+                                    <span>el {formatAbsoluteTime(row.revertedAt)}</span>
                                   </p>
-                                  <p className="mt-0.5 text-xs text-muted">
-                                    {formatLabel(row)}
-                                    {row.map !== null ? ` · ${row.map}` : ""}
-                                  </p>
-                                  {reverted && row.revertedAt !== null ? (
-                                    <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-                                      <span className="inline-block rounded-full border border-line-strong px-2 py-0.5 font-medium">
-                                        Puntos revertidos
-                                      </span>
-                                      <span>el {formatAbsoluteTime(row.revertedAt)}</span>
-                                    </p>
-                                  ) : null}
-                                </>
-                              )}
-                            </td>
+                                ) : null}
+                              </>
+                            )}
+                          </td>
 
-                            <td className="px-4 py-3 text-right align-top">
-                              {row.objective !== null ? (
-                                // Un hito no tiene nada que revertir ni restaurar:
-                                // esas acciones son de `Match`.
-                                <span className="text-xs text-muted">—</span>
-                              ) : reverted ? (
-                                <ConfirmAction
-                                  action={restoreMatchPoints}
-                                  fields={{ matchId: row.id }}
-                                  title="Restaurar puntos"
-                                  body={
-                                    <>
-                                      La partida {row.gameId} de {row.playerName} volverá a
-                                      contar en la clasificación con los puntos que le
-                                      correspondan.
-                                    </>
-                                  }
-                                  triggerLabel="Restaurar"
-                                  triggerClassName="h-10 rounded-md border border-line-strong px-3 text-xs text-foreground transition-colors hover:border-accent/60 hover:text-accent"
-                                  confirmLabel="Restaurar puntos"
-                                  confirmPendingLabel="Restaurando…"
-                                  confirmClassName="bg-accent text-accent-ink hover:bg-accent-strong"
-                                />
-                              ) : row.points > 0 ? (
-                                <ConfirmAction
-                                  action={revertMatchPoints}
-                                  fields={{ matchId: row.id }}
-                                  title="Revertir puntos"
-                                  body={
-                                    <>
-                                      La partida {row.gameId} de {row.playerName} dejará de
-                                      puntuar y saldrá de la clasificación, de los ratios
-                                      y de los objetivos. Sigue en el histórico y se puede
-                                      restaurar.
-                                    </>
-                                  }
-                                  triggerLabel="Revertir"
-                                  triggerClassName="h-10 rounded-md border border-loss/40 px-3 text-xs text-loss transition-colors hover:bg-loss/10"
-                                  confirmLabel="Revertir puntos"
-                                  confirmPendingLabel="Revirtiendo…"
-                                  confirmClassName="bg-loss text-accent-ink hover:brightness-110"
-                                />
-                              ) : (
-                                <span className="text-xs text-muted">—</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <PageSizeSelect />
-                  <Pagination
-                    page={history.data.page}
-                    pageCount={history.data.pageCount}
-                    shown={history.data.rows.length}
-                    total={history.data.total}
-                    basePath="/admin/historial"
-                    query={query}
-                  />
-                </div>
-              </>
-            )}
-          </div>
-        </ActionFeedbackProvider>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <PageSizeSelect />
+                <Pagination
+                  page={history.data.page}
+                  pageCount={history.data.pageCount}
+                  shown={history.data.rows.length}
+                  total={history.data.total}
+                  basePath="/admin/historial"
+                  query={query}
+                />
+              </div>
+            </>
+          )}
+        </div>
       )}
     </div>
   );

@@ -5,17 +5,10 @@ import type { SyncSummary } from "@/lib/aoe4world/sync";
 import type { ManualSyncLock } from "@/lib/manual-sync";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@/generated/prisma/client";
-import { AdminActionType, MatchResult, PlayerStatus } from "@/generated/prisma/enums";
-import { puntos, recordAdminAction } from "@/lib/admin-actions";
+import { AdminActionType, PlayerStatus } from "@/generated/prisma/enums";
+import { recordAdminAction } from "@/lib/admin-actions";
 import { dispatchAdminNotice } from "@/lib/admin-notice-send";
-import {
-  countsWithoutRevertMark,
-  deletePlayerCascade,
-  recomputeWithWarning,
-  type MatchForScoring,
-} from "@/lib/admin-revert";
-import { reevaluatePlayerAlerts } from "@/lib/alerts/evaluate";
-import { readDivisionCutoffs } from "@/lib/alerts/settings";
+import { deletePlayerCascade, recomputeWithWarning } from "@/lib/admin-revert";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { requireAdmin, requireSuperadmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
@@ -35,7 +28,7 @@ import {
 import { parseProfileId } from "@/lib/player-input";
 import { rankedMatchWhere, parseMadridLocalInstant } from "@/lib/ranked-match";
 import { registrationClosedMessage } from "@/lib/registration-open";
-import { readRuleset, recomputeScores } from "@/lib/scoring";
+import { readRuleset } from "@/lib/scoring";
 import {
   readMatcherinoDonations,
   readRegistrationState,
@@ -870,6 +863,18 @@ async function setPlayerStatus(playerId: string, status: PlayerStatus) {
     return;
   }
 
+  // A un expulsado no se le aprueba ni se le rechaza desde aquí: la única salida es
+  // revertir la actuación, que restaura el estado que tenía antes. La acción no
+  // devuelve estado (los botones son un `<form>` sin diálogo), así que el motivo queda
+  // en el log y la interfaz deshabilita los botones para ese estado.
+  if (player.status === PlayerStatus.BANNED) {
+    console.warn(
+      `[admin/${status}] No se cambia el estado de ${player.name}: está expulsado por una actuación. Hay que revertirla desde Actuaciones.`,
+    );
+
+    return;
+  }
+
   // `const` a propósito: se usa dentro de un cierre (la transacción) y TypeScript
   // solo estrecha un `let` si no puede haber sido reasignado entre medias.
   const fila = player;
@@ -1265,9 +1270,9 @@ export async function setMatcherinoDonations(
  * posterior del mismo perfil creyera que ya tenía el histórico y solo pidiera
  * partidas desde esa fecha, importando cero.
  *
- * **A diferencia del revert, aquí un fallo del recálculo no se compensa**, y es a
- * propósito: el jugador ya está borrado y no se puede deshacer un borrado sin
- * inventar un "deshacer" que nadie pidió. Pero tampoco queda nada incoherente: los
+ * **A diferencia de una actuación que anula partidas, aquí un fallo del recálculo no
+ * se compensa**, y es a propósito: el jugador ya está borrado y no se puede deshacer un
+ * borrado sin inventar un "deshacer" que nadie pidió. Pero tampoco queda nada incoherente: los
  * puntos de cada jugador son de sus propias partidas, así que quitar a un jugador no
  * cambia los totales de los demás, y su fila de `PlayerScore` ya no existe. Lo único
  * pendiente es el rastro de `scoring.lastRun`, que se rellena en la siguiente
@@ -1289,6 +1294,11 @@ export async function setMatcherinoDonations(
  * definición de partida clasificatoria no incluye el estado y que lo pone quien
  * consulta. La baja trata con un APPROVED, pero añadirlo como condición sería una
  * sexta regla que las otras traducciones no tienen.
+ *
+ * **La baja se rechaza si hay una actuación vigente o el jugador está `BANNED`.** El
+ * expediente se revierte primero y después se decide la baja: borrar por debajo de una
+ * expulsión o de una anulación dejaría el registro describiendo algo que ya no existe.
+ * Las actuaciones históricas no se pierden (`AdminAct.playerId` pasa a `null`).
  */
 export async function deletePlayer(
   _prevState: AdminActionResult,
@@ -1306,6 +1316,13 @@ export async function deletePlayer(
     name: string;
     profileId: number;
     matchCount: number;
+    /**
+     * Actuaciones **vigentes y revertibles** del jugador. Con una sola, la baja se
+     * rechaza: el expediente tiene que revertirse primero, y así no se borra a quien
+     * está expulsado ni se deja una anulación apuntando a un jugador que ya no existe.
+     * Las reversiones no cuentan: son finales y no bloquean nada.
+     */
+    activeActs: number;
     /** Columnas capturadas antes del borrado: la fila desaparece en la transacción. */
     status: PlayerStatus;
     discordUserId: string | null;
@@ -1330,18 +1347,24 @@ export async function deletePlayer(
       encontrado = null;
     } else {
       const ruleset = await readRuleset();
-      const matchCount = await db.match.count({
-        where: {
-          playerId: row.id,
-          ...rankedMatchWhere(ruleset.modes, ruleset.window, row.registeredAt),
-        },
-      });
+      const [matchCount, activeActs] = await Promise.all([
+        db.match.count({
+          where: {
+            playerId: row.id,
+            ...rankedMatchWhere(ruleset.modes, ruleset.window, row.registeredAt),
+          },
+        }),
+        db.adminAct.count({
+          where: { playerId: row.id, revertedAt: null, kind: { not: "REVERSAL" } },
+        }),
+      ]);
 
       encontrado = {
         id: row.id,
         name: row.name,
         profileId: row.profileId,
         matchCount,
+        activeActs,
         status: row.status,
         discordUserId: row.discordUserId,
         discordUsername: row.discordUsername,
@@ -1360,6 +1383,26 @@ export async function deletePlayer(
   // `const` a propósito: se usa dentro de un cierre (la transacción) y TypeScript
   // solo estrecha un `let` si no puede haber sido reasignado entre medias.
   const player = encontrado;
+
+  // La baja es destructiva y no se puede deshacer, así que no puede convivir con una
+  // actuación vigente: la expulsión se revierte, la anulación se revierte y después se
+  // decide la baja. El historial de actuaciones no se pierde (`playerId` pasa a
+  // `null`), pero el jugador sí.
+  if (player.status === PlayerStatus.BANNED) {
+    return {
+      status: "error",
+      message:
+        "Ese jugador está expulsado. Revierte primero la expulsión desde Actuaciones; borrarlo ahora dejaría el expediente sin efecto.",
+    };
+  }
+
+  if (player.activeActs > 0) {
+    return {
+      status: "error",
+      message:
+        "Ese jugador tiene actuaciones vigentes. Revierte primero la expulsión o la anulación desde Actuaciones; después se puede borrar.",
+    };
+  }
 
   try {
     await db.$transaction(async (tx) => {
@@ -1412,305 +1455,6 @@ export async function deletePlayer(
       await recomputeWithWarning("admin/deletePlayer"),
     ),
   };
-}
-
-/* -------------------------------------------------------------------------- */
-/* Puntos de una partida                                                       */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Vuelve a dejar la partida como estaba y borra la fila de `AdminAction` que esta
- * misma acción acaba de escribir.
- *
- * Es la compensación del revert, y va en **una** transacción para que el estado
- * final sea coherente: o la partida vuelve a puntuar y no queda rastro del intento,
- * o no se toca nada.
- *
- * Devuelve si se pudo. Un `false` significa que la base está en mal estado, y eso hay
- * que decirlo: es el único caso en el que el sistema queda en un estado que nadie
- * puede ver —una partida marcada cuya clasificación todavía la cuenta— y por eso el
- * mensaje de la acción lo dice en voz alta en vez de fingir que no ha pasado nada.
- */
-async function deshacerMarcaDePartida(
-  matchId: string,
-  revertedAt: Date | null,
-  actionId: string,
-): Promise<boolean> {
-  try {
-    await db.$transaction(async (tx) => {
-      await tx.match.update({ where: { id: matchId }, data: { revertedAt } });
-      await tx.adminAction.delete({ where: { id: actionId } });
-    });
-
-    return true;
-  } catch (error) {
-    logDatabaseFailure("admin/deshacerMarca", error);
-
-    return false;
-  }
-}
-
-/**
- * Marca una partida como revertida (o quita la marca) y recalcula la clasificación.
- *
- * ## Por qué la marca y el recálculo no van en la misma transacción
- *
- * `recomputeScores()` es el motor entero: ruleset, `UPDATE` de `Match.points`,
- * objetivos, agregado y `PlayerScore`, con su cerrojo `pg_advisory_xact_lock` y su
- * plazo de 60 s. Meterlo en la transacción de la acción obligaría a mantener ese
- * cerrojo durante una escritura que no lo necesita (un `UPDATE` de una sola fila) y a
- * que el panel quedara detrás del cron cada vez que coincidieran. Se hacen seguidas,
- * y el estado intermedio dura lo que tarda el motor.
- *
- * ## Por qué un fallo del recálculo se compensa en vez de propagarse
- *
- * Porque `recomputeScores()` es **atómico**: si falla, su transacción ha deshecho todo
- * lo que escribía (`Match.points`, `PlayerScore`, `scoring.lastRun`), de modo que la
- * base está exactamente como estaba. Lo único que queda fuera de esa transacción es
- * la marca que se acaba de poner, y por eso la compensación deshace **esa** y borra
- * **su** fila de `AdminAction`: el estado final es el de antes del clic.
- *
- * La alternativa —propagar el error y dejar la partida marcada— dejaría el torneo en
- * un estado que nadie puede ver desde ningún sitio: el historial de acciones diría
- * "revertidos 2 puntos", la pestaña de partidas la mostraría marcada y la
- * clasificación pública seguiría contando esos 2 puntos. Y no durarían mucho: el
- * cron lo arreglaría en su siguiente pasada, pero mientras dure es una clasificación
- * que no cuadra con los datos que el propio panel enseña.
- *
- * Si la compensación **tampoco** sale (base caída de verdad) no hay más remedio que
- * decirlo, y el mensaje lo dice: la acción devuelve error y avisa de que la marca ha
- * quedado puesta y hay que revisarla a mano.
- */
-async function setMatchReverted(
-  formData: FormData,
-  revert: boolean,
-): Promise<AdminActionResult> {
-  const admin = await requireAdmin();
-  const scope = revert ? "admin/revertMatchPoints" : "admin/restoreMatchPoints";
-  const matchId = readField(formData, "matchId");
-
-  if (!matchId) {
-    return { status: "error", message: "No se ha podido saber qué partida hay que cambiar." };
-  }
-
-  let encontrada:
-    | (MatchForScoring & {
-        /** Columnas de Discord del jugador, capturadas para el aviso de la acción. */
-        playerDiscord: { discordUserId: string | null; discordUsername: string | null };
-      })
-    | null;
-
-  try {
-    const row = await db.match.findUnique({
-      where: { id: matchId },
-      select: {
-        id: true,
-        gameId: true,
-        points: true,
-        revertedAt: true,
-        playerId: true,
-        mode: true,
-        result: true,
-        startedAt: true,
-        finishedAt: true,
-        rawJson: true,
-        player: {
-          select: {
-            name: true,
-            profileId: true,
-            registeredAt: true,
-            discordUserId: true,
-            discordUsername: true,
-          },
-        },
-      },
-    });
-
-    encontrada =
-      row === null
-        ? null
-        : {
-            id: row.id,
-            gameId: row.gameId,
-            points: row.points,
-            revertedAt: row.revertedAt,
-            playerId: row.playerId,
-            mode: row.mode,
-            result: row.result,
-            startedAt: row.startedAt,
-            finishedAt: row.finishedAt,
-            // Sale en la fila plana, no como `player.registeredAt`, porque
-            // `countsAsRanked()` lo toma como un dato más de la partida y no como
-            // una relación.
-            registeredAt: row.player.registeredAt,
-            rawJson: row.rawJson,
-            playerName: row.player.name,
-            playerProfileId: row.player.profileId,
-            playerDiscord: {
-              discordUserId: row.player.discordUserId,
-              discordUsername: row.player.discordUsername,
-            },
-          };
-  } catch (error) {
-    logDatabaseFailure(scope, error);
-
-    return { status: "error", message: SAVE_FAILED_MESSAGE };
-  }
-
-  if (encontrada === null) {
-    return { status: "error", message: "Esa partida ya no existe." };
-  }
-
-  if (revert && encontrada.revertedAt !== null) {
-    return { status: "error", message: "La partida ya estaba revertida." };
-  }
-
-  if (!revert && encontrada.revertedAt === null) {
-    return { status: "error", message: "La partida no estaba revertida." };
-  }
-
-  // `const` a propósito: se usa dentro de un cierre (la transacción) y TypeScript
-  // solo estrecha un `let` si no puede haber sido reasignado entre medias.
-  const match = encontrada;
-
-  /**
-   * La guarda: solo tiene sentido tocar la marca de una partida que **cuenta**. Al
-   * revertir, porque es lo que se le quita; al restaurar, porque es lo que vuelve. La
-   * pregunta y su porqué viven en `countsWithoutRevertMark()`
-   * (`src/lib/admin-revert.ts`), que es la misma que usa la reversión de una acción de
-   * puntos: las dos tienen que decidir igual.
-   *
-   * Los cortes y el ruleset se leen **una vez por clic** y se le pasan: la guarda es la
-   * regla entera, condición de equipos incluida, y sin los cortes la partida cuenta
-   * (como en el motor), así que la guarda no puede bloquear un revert que sí toca.
-   */
-  const ruleset = await readRuleset();
-  const cutoffs = await readDivisionCutoffs();
-
-  if (!countsWithoutRevertMark(match, ruleset, cutoffs)) {
-    return {
-      status: "error",
-      message: revert
-        ? "Esa partida no es clasificatoria con las reglas actuales, así que no puntúa y no hay nada que revertir."
-        : "Esa partida no era clasificatoria con las reglas actuales, así que restaurar sus puntos no cambia la clasificación.",
-    };
-  }
-
-  /**
-   * Los puntos que la partida tiene o recupera, según la dirección del cambio.
-   *
-   * En el `revert` es `Match.points`, que es justo lo que se está quitando. En el
-   * `restore` **no** se puede leer de ahí, porque el motor puso esa fila a `0` al
-   * revertirla: lo que vuelve a contar es lo que le corresponde según el ruleset
-   * activo, que es la misma fórmula que escribe `recomputeScores()`. Con un ruleset
-   * retocado entre medias, además, es el valor que de verdad va a aparecer.
-   *
-   * Va en el mismo valor para el rastro (`summary` y `details`) y para el mensaje que
-   * ve quien lo pulsa, porque son la misma cifra contada desde dos sitios: si se
-   * calcularan por separado, el historial y el mensaje acabarían discrepando.
-   */
-  const puntosDeLaPartida =
-    revert ? match.points : match.result === MatchResult.WIN ? ruleset.pointsPerWin : 0;
-
-  const marca = revert ? new Date() : null;
-  let actionId: string;
-
-  try {
-    actionId = await db.$transaction(async (tx) => {
-      await tx.match.update({ where: { id: match.id }, data: { revertedAt: marca } });
-
-      return recordAdminAction(tx, {
-        type: revert
-          ? AdminActionType.MATCH_POINTS_REVERTED
-          : AdminActionType.MATCH_POINTS_RESTORED,
-        actorEmail: actorEmail(admin),
-        targetId: match.id,
-        playerName: match.playerName,
-        profileId: match.playerProfileId,
-        gameId: match.gameId,
-        points: puntosDeLaPartida,
-      });
-    });
-  } catch (error) {
-    logDatabaseFailure(scope, error);
-
-    return { status: "error", message: SAVE_FAILED_MESSAGE };
-  }
-
-  try {
-    await recomputeScores();
-  } catch (error) {
-    logDatabaseFailure(`${scope}/recompute`, error);
-
-    const compensado = await deshacerMarcaDePartida(match.id, match.revertedAt, actionId);
-
-    return {
-      status: "error",
-      message: compensado
-        ? "No se ha podido recalcular la clasificación, así que el cambio se ha deshecho: la partida sigue como estaba."
-        : "No se ha podido recalcular la clasificación ni deshacer el cambio: la partida ha quedado marcada y hay que revisarla a mano. El motivo está en el log del servidor.",
-    };
-  }
-
-  // La partida ya no cuenta (o vuelve a contar) y eso cambia el conjunto de
-  // clasificatorias del jugador, así que sus rachas y sus acumulados también
-  // cambian. Va **después** del recálculo y fuera de su compensación a propósito:
-  // las alertas son un informe derivado y append-only, y un fallo suyo no deja
-  // nada a medias —lo que no habría pasado si se evaluaran antes de confirmar el
-  // cambio—. Si falla, la siguiente pasada del sincronizador lo arregla, y lo
-  // dice `reevaluatePlayerAlerts` en el log.
-  await reevaluatePlayerAlerts(match.playerId);
-
-  revalidatePath("/admin");
-
-  // Solo la **invalidación** avisa: restaurar los puntos devuelve lo que se quitó y no es
-  // noticia. Va después del recálculo (si hubiera fallado, se habría deshecho el cambio)
-  // y sin bloquear, como el resto de avisos de administración.
-  if (revert) {
-    dispatchAdminNotice({
-      kind: "match-points-reverted",
-      player: {
-        name: match.playerName,
-        discordUserId: match.playerDiscord.discordUserId,
-        discordUsername: match.playerDiscord.discordUsername,
-      },
-      gameId: match.gameId,
-      points: puntosDeLaPartida,
-    });
-  }
-
-  return {
-    status: "success",
-    message: revert
-      ? frase(
-          `Se han revertido ${puntos(puntosDeLaPartida)} de la partida ${match.gameId} de ${match.playerName}.`,
-          "La partida sigue en el histórico y se pueden volver a poner.",
-        )
-      : `Se han restaurado ${puntos(puntosDeLaPartida)} de la partida ${match.gameId} de ${match.playerName}.`,
-  };
-}
-
-/**
- * Deja de puntuar una partida sin borrarla.
- *
- * La fila se queda en el histórico marcada con `revertedAt`, el motor la excluye de
- * los puntos, del agregado y de los objetivos, y el worker de sincronización no la
- * toca: una partida borrada volvería a aparecer en su siguiente pasada. Es reversible
- * con `restoreMatchPoints`.
- */
-export async function revertMatchPoints(
-  _prevState: AdminActionResult,
-  formData: FormData,
-): Promise<AdminActionResult> {
-  return setMatchReverted(formData, true);
-}
-
-/** Quita la marca de `revertMatchPoints` y devuelve los puntos al torneo. */
-export async function restoreMatchPoints(
-  _prevState: AdminActionResult,
-  formData: FormData,
-): Promise<AdminActionResult> {
-  return setMatchReverted(formData, false);
 }
 
 /* -------------------------------------------------------------------------- */

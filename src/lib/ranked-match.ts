@@ -985,8 +985,8 @@ export function rankedMatchSql(
  * que no quede una forma de llamar a la regla sin decir de qué jugador se trata: un
  * `null` explícito ("corta en `window.from`") es una decisión, y un valor por
  * defecto sería indistinguible de haberse olvidado. Los dos consumidores reales lo
- * tienen a mano —`setMatchReverted()` carga `player.registeredAt` en el mismo
- * `findUnique` que trae el nombre, y `verify-sync` lo lee del jugador de muestra—.
+ * tienen a mano —`getAdminActMatchCandidates()` carga `player.registeredAt` en la misma
+ * lectura que trae las partidas, y `verify-sync` lo lee del jugador de muestra—.
  *
  * ## Por qué el contexto de equipos también es obligatorio
  *
