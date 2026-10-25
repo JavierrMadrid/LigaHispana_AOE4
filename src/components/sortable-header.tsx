@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
  * Cabecera ordenable compartida por las tablas del panel.
  *
  * La misma interacción —pulsar una columna para recorrer los tres estados de
- * orden— aparece en el historial de partidas, las alertas, el historial de
+ * orden— aparece en el historial de puntos, las alertas, el historial de
  * acciones y el listado de participantes. Vive aquí una sola vez para que el
  * ciclo, el `aria-sort` y el chevron no se reimplementen cuatro veces y para que
  * una tabla no pueda quedar con un comportamiento distinto de las demás.

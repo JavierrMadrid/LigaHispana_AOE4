@@ -31,7 +31,32 @@ Lo que hace falta para inscribirse.
 |---|---|
 | El alta se hace por **`profileId`** de AoE4World, con **correo** obligatorio. | Alta |
 | Toda solicitud queda **pendiente de aprobación**: la organización la aprueba o la rechaza. | Organización |
+| El **alta de la organización** se confirma con la persona: el bot le manda un **privado de Discord** con «Sí, participo» / «No, no participo». Hasta que confirma, el alta no queda aprobada y no aparece en la clasificación; un «no» la deja rechazada. | Organización (y el bot) |
 | Las inscripciones se hacen **hasta la fecha de cierre que publica la organización**. | Organización |
+
+### Eventos puntuales
+
+Ventanas con **multiplicador de puntos**. Se definen **antes de que empiece el torneo**: desde la fecha
+de inicio del torneo el calendario queda cerrado y no se puede crear, editar ni borrar ningún evento.
+El calendario completo se publica en `/reglas`: nombre, instrucciones, fechas en hora de Madrid,
+multiplicador y requisito de Discord.
+
+| Regla | Cómo se controla |
+|---|---|
+| Un evento es una **ventana de fechas** dentro del torneo con un **multiplicador entero**, `x2` o mayor. | Panel (Administración → Eventos) |
+| El multiplicador se aplica **solo a los puntos por victoria**: no toca las derrotas, los objetivos ni las partidas que no cuentan. | Motor |
+| Cobra el multiplicador toda partida clasificatoria que **empiece** dentro de la ventana. | Motor |
+| Dos eventos **no pueden solaparse** ni salirse de la ventana del torneo. | Panel (validación al guardar) |
+| Un evento puede exigir **estar en el servidor de Discord**: solo cobran el multiplicador quienes estén dentro cuando empieza el evento. A quien se aprueba con el evento ya en marcha se le comprueba al aprobarse, y la elegibilidad no se revisa: solo crece. | Motor |
+| El evento se anuncia en el banner de la web pública mientras su ventana está en curso. | Web |
+
+El bot avisa por Discord **24, 12 y 1 hora antes** de cada evento, y el aviso de comienzo del torneo
+incluye el resumen del calendario. La operativa de los avisos está en
+[`docs/OPERACION.md`](./OPERACION.md#eventos-puntuales).
+
+El bono de un evento es **permanente** en la clasificación: no es una competición que se decide al
+cierre, sino una ventana que se juega y se cobra. Cómo se suma a la puntuación está en
+[`docs/PUNTUACION.md`](./PUNTUACION.md).
 
 ### Normas
 
@@ -81,7 +106,13 @@ Facultades internas para gestionar el torneo.
 | Regla | Cómo se controla |
 |---|---|
 | **Aprobar, rechazar y editar** participantes. | Panel |
-| **Revertir o restaurar** una partida: deja de contar sin borrarla, de forma reversible. | Panel |
+| Aprobar un alta **sin la confirmación de la persona**: solo el superadministrador, con confirmación explícita y registro en el historial («Aprobación sin verificación»). | Panel |
+| **Expulsar** a un participante: deja de puntuar y conserva todos sus datos; se puede revertir. | Panel |
+| **Anular** partidas ganadas: dejan de contar sin borrarlas; se pueden revertir. | Panel |
 | **Versionar el reglamento**: un cambio de estructura sube la versión y recalcula la clasificación. | Panel |
 | Publicar el **premio base** de la edición y la **campaña de donaciones** de la comunidad, que se suma a él. | Panel (configuración de la edición) |
 | Dejar **registro** de cada acción en el panel. | Panel |
+
+Cada expulsión o anulación queda registrada como **actuación administrativa**, con su **razón pública**
+y su autor, y se anuncia en el canal de avisos de Discord (además de por privado a la persona afectada).
+La información privada del expediente no se publica.

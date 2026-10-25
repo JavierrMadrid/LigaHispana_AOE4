@@ -3,16 +3,17 @@ import "server-only";
 /**
  * El feed mezclado del historial: las piezas puras que comparten el panel y la web.
  *
- * El feed es el mismo en las dos pantallas —victorias clasificatorias y objetivos
- * cumplidos, mezclados en un solo listado paginado en servidor y de lo más reciente a
- * lo más antiguo—, así que la aritmética que decide **qué ventana de cada mitad hay que
- * traer** y **cómo se recorta la página** no puede vivir en una sola de ellas. Vivía en
- * `src/lib/admin.ts` y sale aparte cuando el historial público (`/historial`,
- * `getPointHistory()` en `src/lib/public.ts`) empieza a paginar el mismo feed.
+ * El feed es el mismo en las dos pantallas —victorias clasificatorias, objetivos
+ * cumplidos y cambios de poseedor, mezclados en un solo listado paginado en servidor y
+ * de lo más reciente a lo más antiguo—, así que la aritmética que decide **qué ventana de
+ * cada fuente hay que traer** y **cómo se recorta la página** no puede vivir en una sola
+ * de ellas. Vivía en `src/lib/admin.ts` y sale aparte cuando el historial público
+ * (`/historial`, `getPointHistory()` en `src/lib/public.ts`) empieza a paginar el mismo
+ * feed.
  *
- * Lo que **no** es común se queda en cada pantalla: el orden por resultado y el
- * desempate por clave del panel (`historyComparator()`), el orden fijo de la web
- * (`comparePointHistory()`) y las consultas. Aquí solo está lo que tiene que decir lo
+ * Lo que **no** es común se queda en cada pantalla: el desempate por clave del panel
+ * (`historyComparator()`), el orden fijo de la web (`comparePointHistory()`) y las
+ * consultas. Aquí solo está lo que tiene que decir lo
  * mismo en las dos, porque una divergencia no se vería en una captura: se vería como
  * una fila que sale dos veces o que no sale, y solo al recorrer el historial entero.
  */
@@ -27,7 +28,8 @@ import "server-only";
 export type HistoryFeedRow = {
   /**
    * La fecha de la fila, y por lo que se ordena el feed: `Match.startedAt` en una
-   * partida y `ObjectiveEvent.achievedAt` en un objetivo cumplido.
+   * partida, `ObjectiveEvent.achievedAt` en un logro cumplido y `ObjectiveLeadEvent.at`
+   * en un cambio de poseedor.
    */
   startedAt: Date;
   /** `null` en una partida; no `null` en un objetivo cumplido. */
@@ -65,67 +67,83 @@ export function compareFeedInstants(a: HistoryFeedRow, b: HistoryFeedRow): numbe
   return aEsPartida ? -1 : 1;
 }
 
+/** Ventana de una fuente: cuántas filas saltar y cuántas traer. */
+export type HistoryFeedWindow = { skip: number; take: number };
+
 /**
- * El hueco que hay que traer de partidas para servir una página del feed mezclado.
+ * La ventana que hay que pedir a cada fuente para servir una página del feed.
  *
- * Con `skip` el desplazamiento de la página **en el feed** y `eventosAntes` los
- * objetivos que pasan el filtro (los que van delante de la página en el peor caso):
+ * `totals[i]` es el número de filas de la fuente `i` **después de aplicar los filtros**,
+ * y no una estimación: la exactitud de la aritmética depende de que el recuento y la
+ * consulta vean lo mismo. Devuelve, en el mismo orden, la ventana de cada fuente y
+ * `offset`, el índice del inicio de la página dentro de la **unión ordenada** de las
+ * ventanas. Quien llama pide cada ventana con `skip`/`take`, concatena, ordena con el
+ * comparador y recorta `[offset, offset + pageSize)`.
  *
- * - `skipPartidas`: de dónde se leen las partidas. En el peor caso, los `eventosAntes`
- *   objetivos van todos antes de la página, así que la primera fila de la página está,
- *   como mucho, en la posición `skip - eventosAntes` de la lista de partidas. Antes de
- *   ese punto no hace falta traer nada.
- * - `takePartidas`: cuántas. `skip + pageSize - skipPartidas`, y **no** `pageSize` a
- *   secas: si la página tiene objetivos intercalados, con `pageSize` saldrían menos
- *   filas de las que la página pide.
- * - `desde`: el índice de la lista combinada que corresponde al inicio de la página. La
- *   combinada empieza en la partida número `skipPartidas`, así que lo que se ha dejado
- *   atrás son `skipPartidas` filas; con `skip < eventosAntes` no se ha saltado ninguna
- *   partida y el índice es `skip` directamente.
+ * ## La aritmética
  *
- * **No depende del eje del orden**, y por eso el orden por resultado del panel no
- * necesita otro hueco: solo cuenta cuántas filas del otro lado del merge caben en las
- * `skip` posiciones anteriores. Lo que sí necesita cualquier eje es que el comparador
- * sea un orden total y que las dos mitades lleguen en ese mismo orden.
+ * Sea `total` la suma de las fuentes. Una fila de la fuente `i` no puede tener delante
+ * más de `total - totals[i]` filas de las demás, así que si su índice dentro de la fuente
+ * es `j`, su posición en el feed está entre `j` y `j + (total - totals[i])`. Una fila de
+ * la página empieza en la posición `skip` o después, luego `j >= skip - (total -
+ * totals[i])`; las primeras `start = max(0, skip - others)` filas de la fuente son
+ * **seguro** anteriores a la página y se pueden saltar. Y como la página termina antes de
+ * `skip + pageSize`, tampoco hace falta nada a partir de `min(totals[i], skip +
+ * pageSize)` en cada fuente.
+ *
+ * `offset` es `skip` menos las filas que se han saltado. Todas las filas saltadas van
+ * antes de la página, así que las que faltan para llegar a `skip` son las que quedan
+ * antes de ella dentro de las ventanas; de ahí el índice. La unión conserva el orden del
+ * feed porque cada fuente llega ordenada con el mismo comparador. Por eso la ventana es
+ * **exacta** y no aproximada: con los recuentos reales, la unión contiene la página
+ * entera y no se cuela ninguna fila de fuera.
+ *
+ * **No depende del eje del orden**: solo cuenta cuántas filas de las demás fuentes caben
+ * en las `skip` posiciones anteriores. Lo que sí necesita cualquier eje es que el
+ * comparador sea un orden total y que todas las fuentes lleguen ya ordenadas con él.
  *
  * Exportado para `npm run verify:sync`, que pagina el feed entero con esta aritmética y
  * comprueba que ninguna fila se repite ni se pierde.
  */
-export function historyHole(
+export function historyFeedWindows(
   skip: number,
   pageSize: number,
-  eventosAntes: number,
-): { skipPartidas: number; takePartidas: number; desde: number } {
-  const skipPartidas = Math.max(0, skip - eventosAntes);
+  totals: readonly number[],
+): { windows: HistoryFeedWindow[]; offset: number } {
+  const total = totals.reduce((sum, n) => sum + n, 0);
+  const end = Math.min(total, skip + pageSize);
+  let omitted = 0;
 
-  return {
-    skipPartidas,
-    takePartidas: skip + pageSize - skipPartidas,
-    desde: skip - skipPartidas,
-  };
+  const windows = totals.map((sourceTotal) => {
+    const others = total - sourceTotal;
+    const start = Math.min(sourceTotal, Math.max(0, skip - others));
+    omitted += start;
+
+    return { skip: start, take: Math.max(0, Math.min(sourceTotal, end) - start) };
+  });
+
+  return { windows, offset: skip - omitted };
 }
 
 /**
- * La página del feed: el hueco de `historyHole()`, el merge y el recorte.
+ * La página del feed: el merge de las ventanas y el recorte.
  *
- * `partidas` es la ventana que ha traído la consulta (a partir de
- * `historyHole().skipPartidas` y con `takePartidas` filas) y `objetivos` van **todos**:
- * son pocos —un objetivo por jugador y por objetivo del catálogo— y hace falta su
- * recuento para saber cuántas filas del otro lado caben delante de la página.
+ * `sources` son las ventanas ya recortadas por `historyFeedWindows()`, en el mismo orden
+ * de fuentes con el que se calcularon. Se concatenan y se ordenan; `offset` es el índice
+ * del inicio de la página dentro de esa unión (ver `historyFeedWindows()`).
  *
- * El comparador lo pasa quien llama porque el eje es suyo: el panel puede ordenar por
- * fecha o por resultado y la web siempre por fecha. Lo que **no** puede es ser parcial
- * (ver `compareFeedInstants()`): el merge ordena la concatenación de las dos mitades, así
- * que con un orden que dejara empates, dos páginas consecutivas podrían solaparse.
+ * El comparador lo pasa quien llama porque el eje es suyo: el panel ordena por fecha en
+ * los dos sentidos y la web siempre de lo más reciente a lo más antiguo. Lo que **no**
+ * puede es ser parcial
+ * (ver `compareFeedInstants()`): el merge ordena la concatenación de las fuentes, así que
+ * con un orden que dejara empates, dos páginas consecutivas podrían solaparse.
  */
 export function historyFeedPage<T extends HistoryFeedRow>(
-  partidas: readonly T[],
-  objetivos: readonly T[],
-  options: { skip: number; pageSize: number; compare: (a: T, b: T) => number },
+  sources: readonly (readonly T[])[],
+  options: { offset: number; pageSize: number; compare: (a: T, b: T) => number },
 ): T[] {
-  // `desde` es el índice de la lista combinada que corresponde a la posición `skip` del
-  // feed, según el mismo docblock de `historyHole()`.
-  const { desde } = historyHole(options.skip, options.pageSize, objetivos.length);
-
-  return [...partidas, ...objetivos].sort(options.compare).slice(desde, desde + options.pageSize);
+  return sources
+    .flat()
+    .sort(options.compare)
+    .slice(options.offset, options.offset + options.pageSize);
 }

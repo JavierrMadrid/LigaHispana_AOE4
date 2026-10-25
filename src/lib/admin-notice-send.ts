@@ -7,13 +7,16 @@ import {
   adminNoticePlan,
   type AdminNotice,
 } from "@/lib/admin-notices";
+import {
+  openDmChannel,
+  postToChannel,
+  resolveDiscordAccount,
+  type DiscordDmTarget,
+} from "@/lib/discord/dm";
 import { getDiscordConfig } from "@/lib/discord/env";
-import { createDiscordHttpClient, type DiscordHttpClient } from "@/lib/discord/http";
-import { matchRosterUsername } from "@/lib/discord/membership";
-import { readDiscordRosterCache } from "@/lib/discord/roster-cache";
+import { createDiscordHttpClient } from "@/lib/discord/http";
 import { readEditionConfig } from "@/lib/edition";
 import { postChannelMessage } from "@/lib/edition-announcements";
-import { isRecord } from "@/lib/json";
 import { readCloudflareContext } from "@/lib/runtime-env";
 import { readPublicOrigin } from "@/lib/site-url";
 
@@ -54,116 +57,35 @@ import { readPublicOrigin } from "@/lib/site-url";
  */
 
 /** La persona afectada, con lo que hace falta para resolver su cuenta de Discord. */
-export type AdminNoticeTarget = {
-  name: string;
-  discordUserId: string | null;
-  discordUsername: string | null;
-};
+export type AdminNoticeTarget = DiscordDmTarget;
+
+/**
+ * Las tres piezas de un privado se comparten con la verificación de altas
+ * (`src/lib/discord/dm.ts`); se reexportan porque ya las importaban los avisos de
+ * las actuaciones (`admin-act-notice-send.ts`) y no hay razón para cambiar su sitio
+ * de importación.
+ */
+export { openDmChannel, postToChannel, resolveDiscordAccount };
 
 /** Lo que hay que avisar, tal y como lo pide la acción. */
-export type AdminNoticeRequest =
-  | {
-      kind: "player-removed";
-      player: AdminNoticeTarget & { status: PlayerStatus };
-      matchCount: number;
-    }
-  | {
-      kind: "match-points-reverted";
-      player: AdminNoticeTarget;
-      gameId: string;
-      points: number;
-    };
+export type AdminNoticeRequest = {
+  kind: "player-removed";
+  player: AdminNoticeTarget & { status: PlayerStatus };
+  matchCount: number;
+};
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : `Error desconocido: ${String(error)}`;
 }
 
-/**
- * La cuenta de Discord de una persona, o `null` si no se puede resolver.
- *
- * `discordUserId` manda; si no lo hay, se busca el `@usuario` en el roster cacheado. Un
- * fallo leyendo el roster sale como aviso y deja la cuenta en `null`: perder el privado
- * es preferible a que un error de la caché tumbe el aviso global.
- */
-async function resolveDiscordAccount(player: AdminNoticeTarget): Promise<string | null> {
-  if (player.discordUserId !== null) {
-    return player.discordUserId;
-  }
-
-  if (player.discordUsername === null) {
-    return null;
-  }
-
-  try {
-    const cache = await readDiscordRosterCache();
-
-    if (cache === null) {
-      return null;
-    }
-
-    const encontrado = matchRosterUsername(player.discordUsername, cache.members);
-
-    return typeof encontrado === "object" ? encontrado.id : null;
-  } catch (error) {
-    console.warn(
-      `[admin-notice] No se ha podido resolver la cuenta de @${player.discordUsername}: ${toErrorMessage(error)}`,
-    );
-
-    return null;
-  }
-}
-
-/** Abre el canal privado con una cuenta (`POST /users/@me/channels`) y devuelve su id. */
-async function openDmChannel(
-  client: DiscordHttpClient,
-  botToken: string,
-  userId: string,
-): Promise<string> {
-  const payload = await client.request("POST", "/users/@me/channels", {
-    authorization: `Bot ${botToken}`,
-    json: { recipient_id: userId },
-  });
-
-  const id = isRecord(payload) ? payload["id"] : null;
-
-  if (typeof id !== "string" || id === "") {
-    throw new Error("Discord no ha devuelto el canal del mensaje privado.");
-  }
-
-  return id;
-}
-
-/** Publica en un canal concreto (el del privado, que no es el de avisos). */
-async function postToChannel(
-  client: DiscordHttpClient,
-  botToken: string,
-  channelId: string,
-  content: string,
-): Promise<void> {
-  await client.request("POST", `/channels/${channelId}/messages`, {
-    authorization: `Bot ${botToken}`,
-    json: { content },
-  });
-}
-
 /** El `AdminNotice` del módulo puro a partir de lo que ha pedido la acción. */
 function toNotice(request: AdminNoticeRequest, editionName: string): AdminNotice {
-  if (request.kind === "player-removed") {
-    return {
-      kind: "player-removed",
-      editionName,
-      name: request.player.name,
-      status: request.player.status,
-      matchCount: request.matchCount,
-    };
-  }
-
   return {
-    kind: "match-points-reverted",
+    kind: "player-removed",
     editionName,
     name: request.player.name,
-    gameId: request.gameId,
-    points: request.points,
+    status: request.player.status,
+    matchCount: request.matchCount,
   };
 }
 

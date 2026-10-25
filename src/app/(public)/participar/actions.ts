@@ -345,10 +345,23 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
   // `discordUsername` sale de la cookie, ya normalizada por el callback. Se escribe
   // tal cual porque su unicidad es la que impide que dos participantes acaben con el
   // mismo `@usuario` (y el `P2002` de esa columna sale como su propio estado).
+  //
+  // Y el vínculo OAuth **prueba la cuenta**: la persona ha pasado por Discord antes
+  // de enviar el formulario, así que `discordVerifiedAt` se escribe aquí y la puerta
+  // de verificación del alta de admin (issue 119) no la bloquea. No se pone
+  // `discordVerificationRequestedAt` ni se manda ningún privado: no hay nada que
+  // preguntar. El token y la cuenta destinataria se limpian porque una
+  // reinscripción de un `REJECTED` puede reutilizar una fila que los tuviera.
   const discord =
     input.discordUserId === null
       ? {}
-      : { discordUserId: input.discordUserId, discordUsername: input.discordUsername };
+      : {
+          discordUserId: input.discordUserId,
+          discordUsername: input.discordUsername,
+          discordVerifiedAt: new Date(),
+          discordVerificationToken: null,
+          discordVerificationUserId: null,
+        };
 
   try {
     if (input.existing) {

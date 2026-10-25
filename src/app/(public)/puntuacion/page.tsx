@@ -15,7 +15,7 @@ import { getEditionConfig, getObjectives, getTournamentWindow } from "@/lib/publ
 export const metadata: Metadata = {
   title: "Puntuación",
   description:
-    "Cómo se reparten los puntos de la Liga Hispana de Age of Empires IV: cuánto vale cada victoria clasificatoria, qué cuenta como partida, los objetivos especiales y los desempates.",
+    "Cómo se reparten los puntos de la Liga Hispana de Age of Empires IV: cuánto vale cada victoria clasificatoria y cómo la multiplica un evento puntual, qué cuenta como partida, los objetivos especiales y los desempates.",
 };
 
 const SECTIONS: readonly DocSection[] = [
@@ -204,17 +204,30 @@ export default async function ScoringPage() {
             </ul>
             <div className="mt-5 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
               <p>
+                Durante un evento puntual, esa victoria multiplica sus puntos por el
+                multiplicador del evento. El multiplicador solo afecta a los puntos por
+                victoria: el calendario y los requisitos de cada evento están en{" "}
+                <Link
+                  href="/reglas#eventos"
+                  className="text-accent underline underline-offset-4 hover:text-accent-strong"
+                >
+                  Reglas
+                </Link>
+                .
+              </p>
+              <p>
                 Una victoria vale lo mismo en 1vs1 que en partidas por equipos.
               </p>
               <p>
-                El total de un jugador es la suma de sus objetivos: los{" "}
+                El total de un jugador suma tres partes: los{" "}
                 <strong className="font-semibold text-foreground">permanentes</strong>{" "}
-                (los logros que ya ha conseguido, con Victorias dentro) y los{" "}
+                (los logros que ya ha conseguido, con Victorias dentro), los{" "}
                 <strong className="font-semibold text-foreground">temporales</strong>{" "}
-                (las competiciones, que se deciden al cierre).
+                (las competiciones, que se deciden al cierre) y el bono de los
+                eventos puntuales, que va con los permanentes.
               </p>
               <p>
-                Cada punto queda registrado: el{" "}
+                El{" "}
                 <Link
                   href="/historial"
                   className="text-accent underline underline-offset-4 hover:text-accent-strong"
@@ -223,8 +236,9 @@ export default async function ScoringPage() {
                 </Link>{" "}
                 enseña qué ha sumado cada victoria clasificatoria y cada objetivo
                 cumplido, de lo más reciente a lo más antiguo, con filtros por
-                participante y por fechas. Una ganancia revertida por la organización
-                no cuenta y aparece ahí tachada y marcada.
+                participante y por fechas. El bono de los eventos puntuales no aparece
+                ahí: se suma al total de la clasificación. Una ganancia revertida por la
+                organización no cuenta y aparece en el historial tachada y marcada.
               </p>
             </div>
           </section>

@@ -80,6 +80,19 @@ describe("adminActionSummary", () => {
     ).toBe("Aprobación de Vortix (AoE4World 5364911)");
   });
 
+  it("la aprobación sin verificación se distingue de la normal", () => {
+    expect(
+      adminActionSummary({
+        type: AdminActionType.PLAYER_APPROVED,
+        name: "Vortix",
+        profileId: 5364911,
+        statusBefore: "PENDING",
+        statusAfter: "APPROVED",
+        withoutVerification: true,
+      }),
+    ).toBe("Aprobación sin verificación de Vortix (AoE4World 5364911)");
+  });
+
   it("PLAYER_REJECTED dice quién y con qué perfil", () => {
     expect(
       adminActionSummary({
@@ -215,6 +228,25 @@ describe("adminActionDetails", () => {
       profileId: 5364911,
       statusBefore: "PENDING",
       statusAfter: "APPROVED",
+    });
+  });
+
+  it("la aprobación sin verificación deja la marca en `details`", () => {
+    expect(
+      adminActionDetails({
+        type: AdminActionType.PLAYER_APPROVED,
+        name: "Vortix",
+        profileId: 5364911,
+        statusBefore: "PENDING",
+        statusAfter: "APPROVED",
+        withoutVerification: true,
+      }),
+    ).toEqual({
+      name: "Vortix",
+      profileId: 5364911,
+      statusBefore: "PENDING",
+      statusAfter: "APPROVED",
+      withoutVerification: true,
     });
   });
 

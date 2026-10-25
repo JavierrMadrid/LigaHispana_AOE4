@@ -8,6 +8,7 @@ import {
   classificatoryWhere,
   countsAsRanked,
   countsWithinWindow,
+  editionStarted,
   formatMadridLocalInstant,
   isRankedMode,
   parseMadridLocalInstant,
@@ -298,6 +299,31 @@ describe("scoringCutoff", () => {
     // anterior a `to`, la partida de justo en `to` no cuenta igual.
     expect(countsWithinWindow(new Date(VENTANA.to!), VENTANA, dentro)).toBe(false);
     expect(countsWithinWindow(new Date("2026-10-14T23:59:59.999Z"), VENTANA, dentro)).toBe(true);
+  });
+});
+
+describe("editionStarted", () => {
+  // El predicado que congela el panel: lo comparten los eventos puntuales
+  // (`editionEventsLocked()`) y el ruleset de puntuación.
+  it("no ha empezado un milisegundo antes de `window.from`", () => {
+    expect(editionStarted(VENTANA, new Date("2026-09-14T23:59:59.999Z"))).toBe(false);
+  });
+
+  it("ha empezado justo en `window.from`, que es inclusive", () => {
+    expect(editionStarted(VENTANA, new Date("2026-09-15T00:00:00.000Z"))).toBe(true);
+  });
+
+  it("ha empezado en cualquier instante posterior", () => {
+    expect(editionStarted(VENTANA, new Date("2026-09-20T12:00:00.000Z"))).toBe(true);
+    // El `to` de la ventana no tiene nada que ver con el inicio: una edición con el
+    // fin ya pasado sigue "empezada", que es lo que la deja cerrada.
+    expect(editionStarted(VENTANA, new Date("2030-01-01T00:00:00.000Z"))).toBe(true);
+  });
+
+  it("una fecha de inicio ilegible no bloquea: se prefiere poder arreglarla", () => {
+    const rota: ScoringWindow = { from: "esto no es una fecha", to: null };
+
+    expect(editionStarted(rota, new Date("2026-09-20T12:00:00.000Z"))).toBe(false);
   });
 });
 

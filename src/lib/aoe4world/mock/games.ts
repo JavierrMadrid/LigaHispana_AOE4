@@ -329,6 +329,48 @@ export function mockGamesForPlayer(profileId: number): MockGame[] {
   );
 }
 
+/**
+ * Las partidas de cada id pedido, con una entrada por id aunque no tenga ninguna.
+ *
+ * Es la materia prima del endpoint masivo `GET /games?profile_ids=…`, que pide
+ * varios jugadores a la vez. Aquí **no** se deduplica la unión: una partida
+ * compartida por dos ids aparece en los dos arrays, y es el handler del endpoint
+ * quien la cuenta una sola vez al construir la página. Separar las dos cosas deja
+ * esta función como el espejo exacto de `mockGamesForPlayer()` y evita que el
+ * mock invente una semántica de unión que la API no tiene.
+ */
+export function mockGamesForPlayers(profileIds: readonly number[]): Map<number, MockGame[]> {
+  const byProfile = new Map<number, MockGame[]>();
+
+  for (const profileId of profileIds) {
+    if (!byProfile.has(profileId)) {
+      byProfile.set(profileId, mockGamesForPlayer(profileId));
+    }
+  }
+
+  return byProfile;
+}
+
+/** Instante de inicio de una partida, que en las vivas se calcula contra `now`. */
+export function mockGameStartedAtMs(game: MockGame, now: Date): number {
+  return game.live ? now.getTime() - game.startedAtOffsetMs : game.startedAtMs;
+}
+
+/**
+ * Instante de `updated_at` con el que serializa el mock.
+ *
+ * Las partidas en vivo todavía no tienen duración, así que su `updated_at` cae
+ * en el inicio; las terminadas lo hacen al terminar. Es la misma regla que usa
+ * `serializeMockGame()`, y por eso vive aquí: el filtro `updated_since` del
+ * endpoint masivo tiene que ordenar y filtrar por el valor que luego se publica,
+ * no por una segunda copia de la fórmula.
+ */
+export function mockGameUpdatedAtMs(game: MockGame, now: Date): number {
+  const startedAtMs = mockGameStartedAtMs(game, now);
+
+  return game.durationSeconds === null ? startedAtMs : startedAtMs + game.durationSeconds * 1000;
+}
+
 export type MockCareerStats = {
   gamesCount: number;
   winsCount: number;
@@ -409,9 +451,9 @@ type MockGamePayload = {
  * en `{ player: {...} }`, `detail` lo deja plano.
  */
 export function serializeMockGame(game: MockGame, now: Date, form: "listing" | "detail"): MockGamePayload {
-  const startedAtMs = game.live ? now.getTime() - game.startedAtOffsetMs : game.startedAtMs;
+  const startedAtMs = mockGameStartedAtMs(game, now);
   const startedAt = new Date(startedAtMs);
-  const updatedMs = game.durationSeconds === null ? startedAtMs : startedAtMs + game.durationSeconds * 1000;
+  const updatedMs = mockGameUpdatedAtMs(game, now);
 
   const flatSide = (side: MockGameSide): FlatSidePayload => ({
     profile_id: side.profileId,

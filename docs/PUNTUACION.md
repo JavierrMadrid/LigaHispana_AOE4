@@ -15,7 +15,8 @@ Una partida puntúa si cumple **todo** esto:
   nunca, ni a favor ni en contra.
 - **Dentro de la ventana** del torneo (ver abajo).
 - **Posterior al corte de inscripción** del jugador (ver abajo).
-- **No revertida** por la organización: la marca es reversible y la partida sigue en el histórico.
+- **No anulada por una actuación de la organización**: la marca es reversible y la partida sigue en el
+  histórico.
 - **Equipo equilibrado** (solo partidas por equipos): ningún compañero está a **dos escalones o
   más** de división del jugador (ver abajo).
 - El jugador está `APPROVED`.
@@ -50,8 +51,8 @@ cero escalones tanto si es `gold_3` como si es `gold_1`.
 - Los cortes rating → división se derivan a mano con `npm run alerts:cutoffs` y se cachean en
   `Setting["alerts.divisionCutoffs"]`. Sin ellos la comprobación no se aplica (ver arriba), así que
   conviene derivarlos antes de que el torneo empiece a puntuar en serio.
-- En el historial del panel (`/admin/historial`) estas partidas **se siguen listando**, con 0 puntos:
-  es el recorrido del jugador, igual que las revertidas.
+- Estas partidas **no salen en el historial**: no son una ganancia y no hay puntos que anular. El
+  historial del panel enseña las mismas ganancias que el público.
 
 ### La ventana
 
@@ -92,9 +93,10 @@ entrar. `registeredAt` es la fecha del envío del alta (no la de la aprobación)
 |---|---|
 | Victoria clasificatoria | `pointsPerWin` del ruleset (hoy **2**) |
 | Derrota clasificatoria | 0 (cuenta para las partidas jugadas y los ratios, no para la suma) |
-| Partida en curso, abandonada, revertida o de equipo desequilibrado | 0 |
+| Partida en curso, abandonada, anulada o de equipo desequilibrado | 0 |
 
-- Se guarda partida a partida en `Match.points`, así que el total es auditable.
+- Se guarda partida a partida en `Match.points`, así que el punto base por victoria es auditable; el
+  bono de un evento puntual no vive ahí (ver [Eventos puntuales](#eventos-puntuales)).
 - **Sin ponderación por formato**: una victoria en 2v2 vale lo mismo que en 1v1. El ruleset admite un
   `pointsByMode` si algún día hiciera falta.
 
@@ -105,9 +107,10 @@ paga `ruleset.pointsPerWin` por victoria. `pointsPerWin` es la **única fuente**
 victoria —un `objectives["victorias"]` guardado en `Setting` se ignora—, así que no puede haber dos
 cifras distintas de lo mismo.
 
-Con eso, **todo punto de un jugador sale de sus objetivos**: `PlayerScore.total` es la suma de los
-objetivos de esa fila. `Match.points` y `byMode[*].points` se conservan como **auditoría** (y para
-`/admin/historial`), pero no se suman aparte: hacerlo contaría dos veces las victorias.
+Con eso, **todo punto base de un jugador sale de sus objetivos**: `PlayerScore.total` es la suma de
+los objetivos de esa fila más el bono de los eventos puntuales (ver abajo). `Match.points` y
+`byMode[*].points` se conservan como **auditoría** (y para `/admin/historial`), pero no se suman
+aparte: hacerlo contaría dos veces las victorias.
 
 ## Permanentes y temporales
 
@@ -116,15 +119,43 @@ La clasificación publica el total partido en dos columnas, y las dos suman **si
 
 | Columna | Qué la compone |
 |---|---|
-| **Permanentes** | Los **logros** ya conseguidos (`kind: "achievement"`), que se cobran al cumplirlos y no se pierden. Las victorias están aquí, porque son el objetivo `victorias`. |
+| **Permanentes** | Los **logros** ya conseguidos (`kind: "achievement"`), que se cobran al cumplirlos y no se pierden. Las victorias están aquí, porque son el objetivo `victorias`, y también el **bono de los eventos puntuales**. |
 | **Temporales** | Las **competiciones** (`kind: "competition"`), que se deciden al cierre y pueden cambiar de dueño. |
 
 El motor guarda, por objetivo cobrado, su importe real y sus repeticiones (`breakdown.objectives.awards`),
 así que el total es exacto. Para repartirlo entre las dos columnas, las competiciones salen de sumar su
-precio de catálogo —su precio es fijo— recortado al total, y los logros son **el resto** hasta el total:
-`imparable` reparte 1 punto por día con tope, `victorias` paga por victoria, y sumar precios de logros se
-quedaría con puntos que aquella fila no cobró. De ahí sale exacto también `imparable`. La diferencia
-entre competición y logro está en [`OBJETIVOS.md`](./OBJETIVOS.md).
+precio de catálogo —su precio es fijo— recortado al total de objetivos, y los logros son **el resto**
+hasta el total de la fila, que ya incluye el bono de eventos: `imparable` reparte 1 punto por día con
+tope, `victorias` paga por victoria, y sumar precios de logros se quedaría con puntos que aquella fila
+no cobró. De ahí sale exacto también `imparable`. Como el bono de eventos tampoco es una competición,
+cae en la misma columna de permanentes. La diferencia entre competición y logro está en [`OBJETIVOS.md`](./OBJETIVOS.md).
+
+## Eventos puntuales
+
+Un **evento** es una ventana de tiempo dentro de la edición durante la que cada victoria clasificatoria
+paga un extra. No es un objetivo ni una competición: es un multiplicador sobre el punto base.
+
+- **Solo victorias.** El multiplicador no toca derrotas, objetivos ni partidas que no cuentan. La
+  partida es la misma que puntúa para todo lo demás: modo del ruleset, resuelta, dentro de la ventana,
+  después del corte de inscripción, no anulada, equipo equilibrado y jugador aprobado.
+- **Se cuenta por `Match.startedAt`**, en `[from, to)`: una victoria que empieza justo en `to` ya no
+  cobra el evento.
+- **Fórmula por jugador y evento:** `victorias dentro del evento × pointsPerWin × (multiplier - 1)`.
+  El punto base (`pointsPerWin`) ya se cobra por el objetivo `victorias`, así que el evento añade
+  únicamente la diferencia del multiplicador (`x2` = un punto base más por victoria).
+- **`Match.points` no cambia**: sigue siendo el punto base por victoria. El bono se guarda aparte en
+  `PlayerScore.breakdown.events` (`points` y `awards` por evento) y `PlayerScore.total` lo suma al total
+  de objetivos.
+- **Permanente.** Una vez jugada la ventana, el bono se queda en el total: no cambia de dueño al cierre
+  como una competición. En la clasificación pública cae en la columna de **permanentes**.
+- **Elegibilidad de Discord.** Si el evento la exige (`discordRequired`), solo cobran quienes estaban en
+  el servidor al empezar; a quien se aprueba con el evento en marcha se le comprueba al aprobarse. La
+  comprobación se congela en `Setting["edition.events.state"]`: a quien ya se comprobó no se le vuelve a
+  preguntar y nadie pierde la elegibilidad. **Sin snapshot no hay bono** para ese evento. La comprobación
+  y los avisos del bot no son parte del motor de puntuación.
+- **Configuración.** Los eventos viven en `Setting["edition.events"]`, se crean y editan **antes** de
+  `window.from`, caen dentro de la ventana del torneo, no se solapan y cumplen `to > from`. El detalle de
+  las claves está en [`MODELO-DATOS.md`](./MODELO-DATOS.md).
 
 ## Desempates de la clasificación
 
@@ -198,8 +229,15 @@ u objetivos desactivados— recalcula la clasificación al guardar; si el recál
 quedan guardadas y el aviso lo dice (la clasificación se pone al día en la siguiente pasada). El
 detalle operativo está en [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
 
-Forma del desglose (`PlayerScore.breakdown`): las dos familias siempre presentes, con ceros si no
-aplican.
+**Con la edición empezada solo se puede cerrar la ventana.** Desde `window.from` (`editionStarted()`)
+quedan congelados `window.from`, las familias de ladder, los puntos por victoria, el recuento de civs
+aleatorias, los puntos de objetivos y los objetivos desactivados: cambiarlos reescribiría una
+clasificación que ya está publicada. Lo único que se puede fijar o cambiar es `window.to`, que es cómo
+se cierra la edición. El bloqueo está en el servidor (`saveScoringRuleset`); la pantalla esconde los
+campos congelados y solo deja fijar el fin.
+
+Forma del desglose (`PlayerScore.breakdown`): las dos familias y el bloque de eventos, con ceros si no
+aplican. Una fila escrita antes de que existieran los eventos no trae `events`.
 
 ```json
 {
@@ -217,11 +255,16 @@ aplican.
       "loco-por-ganar": { "points": 50, "count": 1 },
       "rey-1v1": { "points": 240, "count": 1 }
     }
+  },
+  "events": {
+    "points": 0,
+    "awards": {}
   }
 }
 ```
 
-- `objectives.points` es el total de la fila: todo punto de un jugador sale de sus objetivos.
+- `objectives.points` es el total de los objetivos de la fila; el del jugador es eso más `events.points`
+  (ver [Eventos puntuales](#eventos-puntuales)).
 - `awards` guarda, por id cobrado, el **importe real** y las **repeticiones** (`count`), que es lo que
   permite publicar `2 x Imparable +2` sin rehacer la cuenta desde el catálogo. Va aparte de `earned` (los
   ids, en orden) y **falta** en las filas escritas antes de que existiera: quien lo lea cae al precio de
@@ -234,7 +277,7 @@ Jugador con 140 clasificatorias y 84 victorias (60 %):
 
 - Objetivos: las 84 victorias del objetivo `victorias` (84 × 2 = **168 puntos**) más 185 puntos de los
   demás objetivos.
-- Total: **353 puntos**.
+- Total: **353 puntos**, sin haber jugado ningún evento puntual.
 
 Los objetivos rompen empates y premian el estilo; con 2 puntos por victoria, completarlos pesa más que
 sumar victorias en el total de un jugador fuerte.

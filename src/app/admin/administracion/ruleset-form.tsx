@@ -57,6 +57,17 @@ type RulesetFormProps = {
    */
   windowFrom: string;
   windowTo: string;
+  /**
+   * ¿Ha empezado ya la edición? Con la ventana en marcha los puntos y las reglas
+   * están congelados y solo queda fijar el fin (`editionStarted()` en el servidor).
+   * La pantalla lo usa para no ofrecer lo que la acción va a rechazar.
+   */
+  locked: boolean;
+  /**
+   * La fecha de inicio de la ventana en hora de Madrid, ya formateada, o `null` si
+   * el instante guardado no se puede leer. Solo se usa para explicar el bloqueo.
+   */
+  windowStartLabel: string | null;
 };
 
 /**
@@ -73,6 +84,27 @@ function objectivePointTexts(groups: ObjectiveGroupBlock[]): Record<string, stri
     ),
   );
 }
+
+/**
+ * Las reglas de puntuación, en el estado que toque.
+ *
+ * Son dos formularios distintos, no uno con campos deshabilitados: con la edición
+ * en marcha la acción rechaza **cualquier** envío que traiga un campo congelado,
+ * aunque lleve el valor que ya estaba, así que un campo deshabilitado no basta —
+ * deshabilitado no viaja, pero un `readonly` sí—. Cada estado monta sus propios
+ * hooks dentro de su componente, y este despachador no tiene ninguno: así no hay
+ * forma de que cambie el orden en que se llaman.
+ */
+export function RulesetForm({ locked, ...props }: RulesetFormProps) {
+  return locked ? <LockedRulesetForm {...props} /> : <EditableRulesetForm {...props} />;
+}
+
+/**
+ * Lo que reciben los dos formularios: el documento y los campos de la ventana, ya
+ * sin el estado —lo decidió el despachador—. Cada uno toma de aquí lo que le sirve
+ * (`windowFrom` no lo usa el bloqueado, que ya no lo manda).
+ */
+type RulesetFormStateProps = Omit<RulesetFormProps, "locked">;
 
 /**
  * Las reglas de puntuación: ventana, familias, puntos, civ aleatoria y objetivos.
@@ -97,13 +129,13 @@ function objectivePointTexts(groups: ObjectiveGroupBlock[]): Record<string, stri
  * algo nuevo —cada render suyo trae objetos nuevos— el formulario lo vuelve a
  * adoptar, porque React resetea los campos al terminar una Server Action.
  */
-export function RulesetForm({
+function EditableRulesetForm({
   ruleset,
   modeOptions,
   groups,
   windowFrom: serverWindowFrom,
   windowTo: serverWindowTo,
-}: RulesetFormProps) {
+}: RulesetFormStateProps) {
   const [state, formAction, pending] = useActionState(saveScoringRuleset, initialState);
 
   const [windowFrom, setWindowFrom] = useState(serverWindowFrom);
@@ -307,5 +339,129 @@ export function RulesetForm({
         <StatusLine state={state} pending={pending} />
       </div>
     </form>
+  );
+}
+
+type LockedRulesetFormProps = RulesetFormStateProps;
+
+/**
+ * Las reglas de puntuación con la edición ya empezada: lectura de lo congelado y un
+ * solo ajuste vivo, el fin de la ventana.
+ *
+ * El formulario **no manda** ningún campo congelado —ni el inicio, ni los puntos por
+ * victoria, ni las familias, ni la civ aleatoria, ni los objetivos, ni sus puntos—:
+ * la acción rechaza el envío entero en cuanto ve uno, aunque venga con el valor que
+ * ya estaba (ver `touchesLockedRulesetFields()`). Por eso no hay campos
+ * deshabilitados ni ocultos: los congelados se enseñan como resumen de lectura y no
+ * viajan.
+ *
+ * Lo único que hay que devolver al DOM después de guardar es el `to`, que es el mismo
+ * patrón que en el formulario editable: React resetea los campos al terminar una
+ * Server Action y el estado del cliente no cambia, así que el render del servidor es
+ * el que devuelve el valor a su sitio.
+ */
+function LockedRulesetForm({
+  ruleset,
+  modeOptions,
+  groups,
+  windowTo: serverWindowTo,
+  windowStartLabel,
+}: LockedRulesetFormProps) {
+  const [state, formAction, pending] = useActionState(saveScoringRuleset, initialState);
+  const [windowTo, setWindowTo] = useState(serverWindowTo);
+
+  // El `to` vuelve al campo después de guardar, igual que en el formulario editable:
+  // React resetea los controlados al terminar la acción y este render los devuelve.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reaplica al DOM el fin que el servidor acaba de guardar
+    setWindowTo(serverWindowTo);
+  }, [serverWindowTo]);
+
+  const disabled = new Set(ruleset.disabledObjectives);
+  const totalObjectives = groups.reduce((total, group) => total + group.objectives.length, 0);
+  const activeObjectives = groups.reduce(
+    (total, group) =>
+      total + group.objectives.filter((objective) => !disabled.has(objective.id)).length,
+    0,
+  );
+
+  // El rótulo sale de `modeOptions` —la misma lista que pinta las casillas—, y una
+  // familia que no tenga rótulo se enseña con su valor crudo en vez de desaparecer.
+  const scoringModes = ruleset.modes
+    .map((mode) => modeOptions.find((option) => option.value === mode)?.label ?? mode)
+    .join(", ");
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
+        <strong className="font-semibold text-foreground">
+          Las reglas de puntuación están cerradas
+        </strong>
+        .{" "}
+        {windowStartLabel !== null
+          ? `La edición empezó el ${windowStartLabel}`
+          : "La edición ya ha empezado"}{" "}
+        y, desde ese momento, cambiar los puntos o los objetivos movería una
+        clasificación ya publicada. Solo se puede fijar o cambiar la fecha de fin de
+        la ventana.
+      </p>
+
+      <div className="rounded-lg border border-line bg-surface p-4">
+        <h3 className="text-base font-medium">Reglas congeladas</h3>
+        <dl className="mt-3 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-xs text-muted">Puntos por victoria</dt>
+            <dd className="mt-0.5 tabular-nums text-foreground">{ruleset.pointsPerWin}</dd>
+          </div>
+
+          <div>
+            <dt className="text-xs text-muted">Familias de ladder que puntúan</dt>
+            <dd className="mt-0.5 text-foreground">
+              {scoringModes === "" ? "Ninguna" : scoringModes}
+            </dd>
+          </div>
+
+          <div>
+            <dt className="text-xs text-muted">Objetivos activos</dt>
+            <dd className="mt-0.5 tabular-nums text-foreground">
+              {activeObjectives} de {totalObjectives}
+            </dd>
+          </div>
+
+          <div>
+            <dt className="text-xs text-muted">Civilizaciones aleatorias</dt>
+            <dd className="mt-0.5 text-foreground">
+              {ruleset.countRandomizedCivs
+                ? "Cuentan para los objetivos de civilización"
+                : "No cuentan para los objetivos de civilización"}
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
+        <div className="max-w-md">
+          <TextField
+            name="windowTo"
+            label="Fin de la ventana (opcional)"
+            type="datetime-local"
+            value={windowTo}
+            onChange={setWindowTo}
+            hint="Fecha y hora local de Madrid, exclusiva; se guarda en UTC. Déjalo vacío para una ventana abierta: el fin se fija más tarde sin tocar nada más."
+          />
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-4">
+          <button
+            type="submit"
+            disabled={pending}
+            className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {pending ? "Guardando…" : "Guardar el fin de la ventana"}
+          </button>
+          <StatusLine state={state} pending={pending} />
+        </div>
+      </form>
+    </div>
   );
 }

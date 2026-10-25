@@ -14,7 +14,7 @@ type AlertFiltersProps = {
 /**
  * Filtros de la tabla de alertas: jugador, regla, tipo y rango de fechas.
  *
- * Es la misma pieza que la barra del historial de partidas y con el mismo
+ * Es la misma pieza que la barra del historial de puntos y con el mismo
  * comportamiento, porque es el mismo problema: la fuente de verdad es la URL (el
  * servidor pagina y filtra con `searchParams`), así que cada control navega al
  * cambiar en lugar de guardar estado propio, y al tocar cualquier filtro se quita

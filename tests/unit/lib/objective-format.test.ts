@@ -9,6 +9,7 @@ import {
   formatMapPool,
   hasNoCap,
   hasReachedTarget,
+  leaderDistance,
   objectiveCloseness,
   objectiveStandingsView,
   objectiveTitle,
@@ -668,5 +669,52 @@ describe("contenderShareOfObjective: qué mide la barra", () => {
     const noCap = option("victorias", "achievement", null);
 
     expect(contenderShareOfObjective(noCap, contender(12), 24)).toBe(0.5);
+  });
+});
+
+describe("leaderDistance: lo que separa del primero, nunca un 0", () => {
+  /** Singular y plural esperados de cada métrica, escritos a mano: el test no
+   *  reutiliza la tabla del módulo, o comprobaría la implementación consigo misma. */
+  const UNITS: Record<ObjectiveMetric, [string, string]> = {
+    partidas: ["partida", "partidas"],
+    victorias: ["victoria", "victorias"],
+    racha: ["victoria seguida", "victorias seguidas"],
+    "racha-partidas": ["partida seguida", "partidas seguidas"],
+    dias: ["día", "días"],
+    civilizaciones: ["civilización", "civilizaciones"],
+    mapas: ["mapa", "mapas"],
+  };
+
+  const METRICS = Object.keys(UNITS) as ObjectiveMetric[];
+
+  it("sin puesto, sin distancia o ya primero no hay distancia que pintar", () => {
+    expect(leaderDistance(null, 2, "victorias")).toBeNull();
+    expect(leaderDistance(3, null, "victorias")).toBeNull();
+    expect(leaderDistance(0, 1, "victorias")).toBeNull();
+    expect(leaderDistance(5, 1, "dias")).toBeNull();
+  });
+
+  it("con empate a métrica devuelve una unidad y marca el empate", () => {
+    for (const metric of METRICS) {
+      const gap = leaderDistance(0, 2, metric);
+
+      expect(gap).not.toBeNull();
+      expect(gap?.tied).toBe(true);
+      expect(gap?.text).toBe(`1 ${UNITS[metric][0]}`);
+    }
+  });
+
+  it("una distancia mayor que cero es la resta tal cual, sin marcar empate", () => {
+    expect(leaderDistance(3, 2, "victorias")).toEqual({ text: "3 victorias", tied: false });
+    expect(leaderDistance(7, 4, "partidas")).toEqual({ text: "7 partidas", tied: false });
+  });
+
+  it("la unidad es la de la métrica, en singular y en plural", () => {
+    for (const metric of METRICS) {
+      const [singular, plural] = UNITS[metric];
+
+      expect(leaderDistance(1, 3, metric)?.text).toBe(`1 ${singular}`);
+      expect(leaderDistance(2, 3, metric)?.text).toBe(`2 ${plural}`);
+    }
   });
 });

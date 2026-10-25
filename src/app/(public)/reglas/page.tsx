@@ -7,17 +7,23 @@ import {
   SectionIndexAside,
   type DocSection,
 } from "@/components/section-index";
-import { getEditionConfig, getMatcherinoDonations } from "@/lib/public";
+import { formatEventWindow } from "@/lib/format";
+import {
+  getEditionConfig,
+  getEditionEvents,
+  getMatcherinoDonations,
+} from "@/lib/public";
 
 export const metadata: Metadata = {
   title: "Reglas",
   description:
-    "El reglamento de la Liga Hispana de Age of Empires IV: formato, condiciones de participación, normas de obligado cumplimiento y organización del torneo.",
+    "El reglamento de la Liga Hispana de Age of Empires IV: formato, condiciones de participación, eventos puntuales, normas de obligado cumplimiento y organización del torneo.",
 };
 
 const SECTIONS: readonly DocSection[] = [
   { id: "formato", label: "Formato" },
   { id: "participacion", label: "Participación" },
+  { id: "eventos", label: "Eventos" },
   { id: "normas", label: "Normas" },
   { id: "organizacion", label: "Organización" },
 ];
@@ -29,19 +35,30 @@ const SECTIONS: readonly DocSection[] = [
 export const dynamic = "force-dynamic";
 
 export default async function RulesPage() {
-  // Las dos lecturas son ligeras y van en paralelo. Con la base caída llega
+  // Las lecturas son ligeras y van en paralelo. Con la base caída llega
   // `"degraded"` y no se inventa nada: sin premio no se pinta premio, sin campaña
-  // no se pinta la línea de donaciones y, sin configuración, la retransmisión se
+  // no se pinta la línea de donaciones, sin eventos no se inventa un calendario
+  // (se dice que no se han podido leer) y, sin configuración, la retransmisión se
   // queda como estaba (la norma existe y la controla la organización).
-  const [editionRead, donationsRead] = await Promise.all([
+  const [editionRead, donationsRead, eventsRead] = await Promise.all([
     getEditionConfig(),
     getMatcherinoDonations(),
+    getEditionEvents(),
   ]);
 
   const edition = editionRead.status === "ok" ? editionRead.data : null;
   const streamingRequired = edition?.streamingRequired ?? false;
   const prize = edition !== null && edition.prize.amount !== null ? edition.prize : null;
   const donationsPublished = donationsRead.status === "ok" && donationsRead.data.enabled;
+
+  // El calendario se lee en orden de inicio. La lista guardada conserva el orden en
+  // que se publicó cada evento, que no tiene por qué ser el cronológico.
+  const events =
+    eventsRead.status === "ok"
+      ? [...eventsRead.data].sort(
+          (a, b) => new Date(a.from).getTime() - new Date(b.from).getTime(),
+        )
+      : [];
 
   return (
     // Conserva el ancho anterior (`max-w-6xl`): el contenedor público subió a
@@ -82,7 +99,7 @@ export default async function RulesPage() {
               </p>
               <p>
                 Se juega en la misma ladder <em>ranked</em> del juego. No hay que
-                jugar amistosas ni apuntarse a eventos: basta con jugar partidas{" "}
+                jugar amistosas ni apuntarse a nada: basta con jugar partidas{" "}
                 <em>ranked</em> con la cuenta dada de alta.
               </p>
               <p>
@@ -131,7 +148,105 @@ export default async function RulesPage() {
                 </strong>{" "}
                 del torneo; la propia inscripción incluye el botón para entrar.
               </li>
+              <li>
+                Si la organización da de alta a alguien, el bot le manda un{" "}
+                <strong className="font-semibold text-foreground">
+                  privado de Discord para confirmar que participa
+                </strong>
+                . Hasta que la persona confirme desde su cuenta, el alta no queda
+                aprobada y no aparece en la clasificación; si responde que no, queda
+                rechazada.
+              </li>
             </ul>
+          </section>
+
+          <section id="eventos" className="scroll-mt-24">
+            <SectionHeading title="Eventos" />
+            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
+              <p>
+                La organización puede programar{" "}
+                <strong className="font-semibold text-foreground">
+                  eventos puntuales
+                </strong>
+                : ventanas de tiempo dentro del torneo en las que una victoria
+                clasificatoria paga un multiplicador. Se publican antes de que empiece
+                el torneo: desde la fecha de inicio del torneo, el calendario queda
+                cerrado.
+              </p>
+              <p>
+                El multiplicador se aplica{" "}
+                <strong className="font-semibold text-foreground">
+                  solo a los puntos por victoria
+                </strong>
+                . Las derrotas siguen sin sumar y los objetivos conservan su valor.
+                Cuenta toda partida clasificatoria que empiece dentro de la ventana.
+              </p>
+              <p>
+                Algunos eventos exigen{" "}
+                <strong className="font-semibold text-foreground">
+                  estar en el servidor de Discord
+                </strong>{" "}
+                del torneo: solo cobran el multiplicador quienes estén dentro cuando
+                empieza el evento. A quien se aprueba con el evento ya en marcha se le
+                comprueba al aprobarse.
+              </p>
+              <p>
+                El bot del torneo avisa en Discord 24, 12 y 1 hora antes de cada evento,
+                y el aviso de comienzo del torneo incluye el calendario.
+              </p>
+            </div>
+
+            {eventsRead.status !== "ok" ? (
+              <p className="mt-5 max-w-[68ch] rounded-lg border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-muted">
+                No se han podido leer los eventos de esta edición. Vuelve a intentarlo
+                en unos minutos.
+              </p>
+            ) : events.length === 0 ? (
+              <p className="mt-5 max-w-[68ch] rounded-lg border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-muted">
+                Esta edición no tiene eventos puntuales programados.
+              </p>
+            ) : (
+              <ul className="mt-5 flex max-w-[68ch] flex-col gap-3">
+                {events.map((event) => {
+                  const windowText = formatEventWindow(event);
+
+                  return (
+                    <li
+                      key={event.id}
+                      className="rounded-lg border border-line bg-surface p-4 sm:p-5"
+                    >
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                        <h3 className="font-display text-lg font-semibold text-foreground">
+                          {event.name}
+                        </h3>
+                        <p className="ml-auto font-display text-2xl font-semibold leading-none tabular-nums text-accent">
+                          <span className="sr-only">Multiplicador </span>
+                          {`x${event.multiplier}`}
+                        </p>
+                      </div>
+
+                      <p className="mt-1.5 text-sm text-muted">
+                        {windowText ?? "Las fechas de este evento no se pueden leer."}
+                      </p>
+
+                      {event.description !== null ? (
+                        <p className="mt-3 text-[15px] leading-relaxed text-muted">
+                          {event.description}
+                        </p>
+                      ) : null}
+
+                      {event.discordRequired ? (
+                        <p className="mt-3">
+                          <span className="inline-block rounded-full border border-accent/40 px-2 py-0.5 text-xs text-accent">
+                            Requiere estar en Discord al empezar
+                          </span>
+                        </p>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </section>
 
           <section id="normas" className="scroll-mt-24">

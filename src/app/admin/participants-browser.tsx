@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { PlayerStatus } from "@/generated/prisma/enums";
-import { approvePlayer, deletePlayer, rejectPlayer } from "@/app/admin/actions";
+import { deletePlayer } from "@/app/admin/actions";
 import type { AdminParticipant } from "@/lib/admin";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { ChannelLinks } from "@/components/channel-links";
@@ -14,7 +14,6 @@ import {
   PAGE_SIZE_OPTIONS,
   readPageSize,
 } from "@/components/page-size-select";
-import { PendingButton } from "@/components/pending-button";
 import {
   SortableHeaderButton,
   nextSortState,
@@ -22,6 +21,8 @@ import {
 } from "@/components/sortable-header";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { PlayerEditDialog } from "./player-edit-dialog";
+import { PlayerStatusActions } from "./player-status-actions";
+import { VerificationBadge } from "./participant-verification";
 import { PLAYER_STATUS_LABELS, PLAYER_STATUS_STYLES } from "./participant-status";
 
 /** Búsqueda y estado no distinguen acentos ni mayúsculas: "josé" encuentra "Jose". */
@@ -48,6 +49,7 @@ const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
   { id: "APPROVED", label: "Aprobados" },
   { id: "PENDING", label: "Pendientes" },
   { id: "REJECTED", label: "Rechazados" },
+  { id: "BANNED", label: "Expulsados" },
 ];
 
 const CELL = "px-4 py-3 align-top";
@@ -66,12 +68,14 @@ type SortKey = "name" | "aoe4WorldName" | "country" | "status" | "matchCount" | 
 /**
  * Orden de los estados, calcado del que aplica el servidor (`status asc`): en
  * Postgres el enum se ordena por el orden de declaración (`PENDING`, `APPROVED`,
- * `REJECTED`), que es el que deja la cola de solicitudes primero.
+ * `REJECTED`, `BANNED`), que es el que deja la cola de solicitudes primero y a
+ * los expulsados, que no piden nada, al final.
  */
 const STATUS_ORDER: Record<PlayerStatus, number> = {
   PENDING: 0,
   APPROVED: 1,
   REJECTED: 2,
+  BANNED: 3,
 };
 
 /**
@@ -156,9 +160,11 @@ function comparePlayers(
 export function ParticipantsBrowser({
   participants,
   countries,
+  canReverse,
 }: {
   participants: AdminParticipant[];
   countries: string[];
+  canReverse: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("ALL");
@@ -172,6 +178,7 @@ export function ParticipantsBrowser({
       APPROVED: 0,
       PENDING: 0,
       REJECTED: 0,
+      BANNED: 0,
     };
 
     for (const player of participants) {
@@ -369,7 +376,10 @@ export function ParticipantsBrowser({
                   participante aprobado sin partidas clasificatorias muestra 0. Un jugador
                   sin cuenta de Discord aparece como Sin Discord, y su pertenencia se marca
                   como En el servidor, Fuera del servidor o Sin comprobar. Las columnas de
-                  jugador, perfil, país, estado, partidas y puntos se pueden ordenar.
+                  jugador, perfil, país, estado, partidas y puntos se pueden ordenar. Junto
+                  al estado se indica el de la verificación del alta por privado de
+                  Discord: Esperando confirmación, Verificación sin enviar, Verificado,
+                  Rechazó la participación o Aprobado sin verificar.
                 </caption>
                 <thead className="bg-surface text-muted">
                   <tr>
@@ -443,7 +453,12 @@ export function ParticipantsBrowser({
                 </thead>
                 <tbody className="divide-y divide-line">
                   {paged.map((player) => (
-                    <ParticipantRow key={player.id} player={player} countries={countries} />
+                    <ParticipantRow
+                      key={player.id}
+                      player={player}
+                      countries={countries}
+                      canReverse={canReverse}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -504,9 +519,11 @@ export function ParticipantsBrowser({
 function ParticipantRow({
   player,
   countries,
+  canReverse,
 }: {
   player: AdminParticipant;
   countries: string[];
+  canReverse: boolean;
 }) {
   const hasChannels =
     player.twitchChannel !== null ||
@@ -526,6 +543,7 @@ function ParticipantRow({
                 nombre, en vez de comprimir nueve columnas en un móvil. */}
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted lg:hidden">
               <StatusBadge status={player.status} />
+              <VerificationBadge player={player} />
               <ProfileLink player={player} />
               {player.country !== null ? <span>{player.country}</span> : null}
               {player.discordUsername !== null ? (
@@ -610,10 +628,13 @@ function ParticipantRow({
       </td>
 
       <td className={`${CELL} hidden lg:table-cell`}>
-        <StatusBadge status={player.status} />
-        {player.status !== "APPROVED" ? (
-          <span className="mt-1 block text-xs text-muted">Fuera de la clasificación</span>
-        ) : null}
+        <div className="flex flex-col items-start gap-1">
+          <StatusBadge status={player.status} />
+          <VerificationBadge player={player} />
+          {player.status !== "APPROVED" ? (
+            <span className="text-xs text-muted">Fuera de la clasificación</span>
+          ) : null}
+        </div>
       </td>
 
       <td className={`${CELL} hidden text-right tabular-nums lg:table-cell`}>
@@ -637,42 +658,70 @@ function ParticipantRow({
       </td>
 
       <td className={`${CELL} text-right`}>
-        {/* `flex-nowrap` y `whitespace-nowrap` en los botones: las cuatro acciones
-            (Editar, Aprobar, Rechazar y Eliminar) se leen en una sola línea, que
-            es como se comparan entre filas. Antes se partían en dos cuando la
-            tabla se estrechaba, y una fila con el botón de borrar en su propia
-            línea se lee peor que una que se desplaza. */}
-        <div className="flex flex-nowrap items-center justify-end gap-2">
-          {/* Editar va primero y en tono neutro: es la acción que se usa a
-              diario, y el filete tenue la deja cerca del nombre sin competir con
-              aprobar, rechazar o eliminar, que sí cambian el estado o borran. */}
-          <PlayerEditDialog player={player} countries={countries} />
+        {player.status === "BANNED" ? (
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <PlayerEditDialog player={player} countries={countries} canReverse={canReverse} />
 
-          {player.status !== "APPROVED" ? (
-            <StatusForm action={approvePlayer} playerId={player.id} label="Aprobar" tone="approve" />
-          ) : null}
+              <Link
+                href={`/admin/actuaciones?playerId=${player.id}&state=active`}
+                className="inline-flex h-10 items-center rounded-md border border-line px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground"
+              >
+                Ver actuaciones
+              </Link>
 
-          {player.status !== "REJECTED" ? (
-            <StatusForm action={rejectPlayer} playerId={player.id} label="Rechazar" tone="neutral" />
-          ) : null}
+              {canReverse ? (
+                <Link
+                  href={`/admin/actuaciones/nueva?accion=REVERSAL&participante=${player.id}`}
+                  className="inline-flex h-10 items-center rounded-md border border-accent/40 px-3 text-xs text-accent transition-colors hover:bg-accent/10"
+                >
+                  Revertir expulsión
+                </Link>
+              ) : null}
+            </div>
 
-          <ConfirmAction
-            action={deletePlayer}
-            fields={{ playerId: player.id }}
-            title="Eliminar jugador"
-            body={
-              <>
-                Se eliminará a {player.name} (AoE4World {player.profileId}) y todas sus
-                partidas. Esta acción no se puede deshacer.
-              </>
-            }
-            triggerLabel="Eliminar"
-            triggerClassName="h-10 rounded-md border border-loss/40 px-3 text-xs text-loss transition-colors hover:bg-loss/10"
-            confirmLabel="Eliminar jugador"
-            confirmPendingLabel="Eliminando…"
-            confirmClassName="bg-loss text-accent-ink hover:brightness-110"
-          />
-        </div>
+            <p className="max-w-[24rem] text-right text-xs leading-relaxed text-muted">
+              Expulsado: se levanta con una actuación de reversión.
+              {canReverse ? null : " Solo el superadministrador puede revertirla."} No
+              se puede aprobar, rechazar ni eliminar mientras la expulsión siga
+              vigente.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {/* Editar va primero y en tono neutro: es la acción que se usa a
+                diario, y el filete tenue la deja cerca del nombre sin competir con
+                aprobar, rechazar o eliminar, que sí cambian el estado o borran.
+                Los botones de estado (aprobar, rechazar, reenviar la verificación)
+                van juntos en `PlayerStatusActions`, que es el mismo componente que
+                usa la cola de pendientes: un alta sujeta a verificación no puede
+                ofrecer «Aprobar» aquí y «Reenviar» allí. */}
+            <PlayerEditDialog player={player} countries={countries} canReverse={canReverse} />
+
+            <PlayerStatusActions player={player} canReverse={canReverse} />
+
+            <ConfirmAction
+              action={deletePlayer}
+              fields={{ playerId: player.id }}
+              title="Eliminar jugador"
+              body={
+                <>
+                  Se eliminará a {player.name} (AoE4World {player.profileId}) y todas sus
+                  partidas. Esta acción no se puede deshacer.
+                  <span className="mt-2 block text-xs text-muted">
+                    Si tiene actuaciones vigentes, la baja se rechazará hasta que se
+                    reviertan desde Actuaciones.
+                  </span>
+                </>
+              }
+              triggerLabel="Eliminar"
+              triggerClassName="h-10 rounded-md border border-loss/40 px-3 text-xs text-loss transition-colors hover:bg-loss/10"
+              confirmLabel="Eliminar jugador"
+              confirmPendingLabel="Eliminando…"
+              confirmClassName="bg-loss text-accent-ink hover:brightness-110"
+            />
+          </div>
+        )}
       </td>
     </tr>
   );
@@ -746,39 +795,6 @@ function DiscordGuildBadge({ inGuild }: { inGuild: boolean | null }) {
     >
       {state.label}
     </span>
-  );
-}
-
-/**
- * Fórmula de aprobar o rechazar. Es un `<form>` de una Server Action, con el
- * `playerId` en un campo oculto; el botón se deshabilita mientras la acción
- * viaja para que dos clics seguidos no la envíen dos veces.
- */
-function StatusForm({
-  action,
-  playerId,
-  label,
-  tone,
-}: {
-  action: (formData: FormData) => Promise<void>;
-  playerId: string;
-  label: string;
-  tone: "approve" | "neutral";
-}) {
-  const style =
-    tone === "approve"
-      ? "border-win/40 text-win hover:bg-win/10"
-      : "border-line-strong text-muted hover:bg-surface-raised hover:text-foreground";
-
-  return (
-    <form action={action}>
-      <input type="hidden" name="playerId" value={playerId} />
-      <PendingButton
-        className={`h-10 whitespace-nowrap rounded-md border px-3 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${style}`}
-      >
-        {label}
-      </PendingButton>
-    </form>
   );
 }
 

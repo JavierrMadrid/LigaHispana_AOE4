@@ -1,14 +1,37 @@
 "use client";
 
-import { useActionState, useId, useState } from "react";
-import { updatePlayer, type PlayerFormState } from "./actions";
+import { useActionState, useId, useState, useTransition } from "react";
+import {
+  approvePlayerWithoutVerification,
+  resendPlayerVerification,
+  updatePlayer,
+  type AdminActionResult,
+  type PlayerFormState,
+} from "./actions";
 import { CONTACT_EMAIL_MAX_LENGTH, DISCORD_USERNAME_FIELD_MAX_LENGTH } from "@/lib/player-input";
 import type { AdminParticipant } from "@/lib/admin";
 import { useActionFeedback } from "@/components/action-feedback";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Modal } from "@/components/modal";
+import { formatMadridDateTime } from "@/lib/format";
+import {
+  VerificationBadge,
+  canApproveWithoutVerification,
+  canResendVerification,
+  describeVerification,
+  verificationFacts,
+} from "./participant-verification";
 
 const initialState: PlayerFormState = { error: null, message: null };
+
+/** Lo que se dice si una acción de verificación falla sin mensaje propio. */
+const GENERIC_ERROR = "No se ha podido completar la acción.";
+
+const VERIFICATION_RESEND_CLASS =
+  "h-10 whitespace-nowrap rounded-md border border-accent/40 px-3 text-xs text-accent transition-colors hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-60";
+
+const VERIFICATION_SKIP_CLASS =
+  "h-10 whitespace-nowrap rounded-md border border-line-strong px-3 text-xs text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60";
 
 /** Los siete campos que `updatePlayer` reescribe, ya como texto de formulario. */
 type EditFields = {
@@ -69,13 +92,29 @@ function fieldsDiffer(a: EditFields, b: EditFields): boolean {
  * Al cerrar, si hay algo escrito se pide confirmación con `ConfirmDialog`, el
  * mismo que usan las acciones destructivas del panel. La mecánica de la capa
  * —foco, `Esc`, clic en el fondo y scroll bloqueado— es la de `Modal`.
+ *
+ * ## La verificación del alta (issue 119)
+ *
+ * El diálogo es donde el estado de la verificación se lee entero: las fechas del
+ * privado, de la confirmación y del rechazo, más las dos acciones que caben cuando
+ * la fila sigue esperando («Reenviar verificación» y, para el superadministrador,
+ * «Aprobar sin verificación»).
+ *
+ * Esa sección va **fuera** del `<form>` de edición, y no es un detalle de estilo:
+ * un formulario dentro de otro no es HTML válido y el navegador desarma el de
+ * fuera al enviar el de dentro. Sus botones no envían nada por sí mismos: arman un
+ * `FormData` con el `playerId` y llaman a la acción dentro de una transición, que
+ * es lo que da el `disabled` mientras viaja.
  */
 export function PlayerEditDialog({
   player,
   countries,
+  canReverse = false,
 }: {
   player: AdminParticipant;
   countries: string[];
+  /** `getAdminAccess() === "superadmin"`: habilita «Aprobar sin verificación». */
+  canReverse?: boolean;
 }) {
   const report = useActionFeedback();
   const titleId = useId();
@@ -83,6 +122,12 @@ export function PlayerEditDialog({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [fields, setFields] = useState<EditFields>(() => fieldsFrom(player));
   const [feedback, setFeedback] = useState<PlayerFormState>(initialState);
+  const [verificationBusy, startVerification] = useTransition();
+  const [confirmSkip, setConfirmSkip] = useState(false);
+  const [verificationFeedback, setVerificationFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
 
   const [, formAction, pending] = useActionState(runAction, initialState);
 
@@ -114,6 +159,8 @@ export function PlayerEditDialog({
   function openDialog() {
     setFields(fieldsFrom(player));
     setFeedback(initialState);
+    setVerificationFeedback(null);
+    setConfirmSkip(false);
     setOpen(true);
   }
 
@@ -124,7 +171,7 @@ export function PlayerEditDialog({
   // `Esc`, clic en el fondo y la X pasan por aquí: si hay cambios sin guardar,
   // se pide confirmación en vez de descartarlos en silencio.
   function requestClose() {
-    if (pending) {
+    if (pending || verificationBusy) {
       return;
     }
 
@@ -140,6 +187,56 @@ export function PlayerEditDialog({
     setConfirmDiscard(false);
     setOpen(false);
   }
+
+  /**
+   * Las dos acciones de la verificación, sin `<form>` propio.
+   *
+   * El resultado se pinta donde se está mirando: reenviar **no** cierra el
+   * diálogo —la fila sigue pendiente—, así que su mensaje se queda en la sección;
+   * aprobar sin verificación sí lo cierra, y entonces el aviso viaja a la banda,
+   * que es la que sobrevive al cierre.
+   */
+  function runVerification(kind: "resend" | "approve-without") {
+    const formData = new FormData();
+    formData.set("playerId", player.id);
+
+    startVerification(async () => {
+      const result: AdminActionResult =
+        kind === "resend"
+          ? await resendPlayerVerification(formData)
+          : await approvePlayerWithoutVerification(formData);
+
+      if (result.status === "error") {
+        setVerificationFeedback({
+          tone: "error",
+          message: result.message ?? GENERIC_ERROR,
+        });
+
+        return;
+      }
+
+      if (kind === "approve-without") {
+        setOpen(false);
+        setConfirmDiscard(false);
+
+        if (result.message !== null) {
+          report({ tone: "success", message: result.message });
+        }
+
+        return;
+      }
+
+      setVerificationFeedback({
+        tone: "success",
+        message: result.message ?? `Se ha reenviado el privado a ${player.name}.`,
+      });
+    });
+  }
+
+  const verification = describeVerification(player);
+  const verificationEvents = verificationFacts(player);
+  const canResend = canResendVerification(player);
+  const canSkip = canApproveWithoutVerification(player, canReverse);
 
   /**
    * Países del desplegable. Son los de la lista viva más, si hace falta, el que
@@ -169,7 +266,7 @@ export function PlayerEditDialog({
       <Modal
         open={open}
         onClose={requestClose}
-        closeDisabled={pending}
+        closeDisabled={pending || verificationBusy}
         labelledBy={titleId}
         closeLabel="Cerrar la edición"
         className="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-lg border border-line bg-surface p-0 text-foreground"
@@ -181,6 +278,134 @@ export function PlayerEditDialog({
           <p className="mt-1 text-sm text-muted">
             {player.name} · AoE4World {player.profileId}
           </p>
+
+          {/* El estado de la verificación va arriba, no al pie: es lo que se
+              consulta antes de tocar los campos, y los botones del formulario se
+              quedan al final, que es donde se busca «Guardar». Los botones de esta
+              sección viven **fuera** del `<form>` de edición a propósito: dos
+              formularios anidados no son HTML válido y el navegador desarma el de
+              fuera al enviar el de dentro. No envían nada: llaman a la acción desde
+              una transición, con el `playerId` en un `FormData` armado a mano. */}
+          <section
+            aria-labelledby={`${titleId}-verification`}
+            className="mt-4 rounded-md border border-line bg-background px-3 py-3"
+          >
+            <h3
+              id={`${titleId}-verification`}
+              className="text-sm font-medium text-foreground"
+            >
+              Verificación de Discord
+            </h3>
+
+            <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
+              {verification !== null ? (
+                <>
+                  <VerificationBadge player={player} />
+                  <p className="text-xs leading-relaxed text-muted">{verification.hint}</p>
+                </>
+              ) : player.discordVerifiedAt !== null ? (
+                /* Alta de `/participar`: la cuenta se verificó en el paso de OAuth de
+                   la inscripción, no en el privado de confirmación del alta, que solo
+                   existe para las altas de la organización. */
+                <p className="text-xs leading-relaxed text-muted">
+                  La cuenta se verificó al inscribirse con Discord. Esta ficha no está
+                  sujeta al privado de confirmación del alta, así que no hay nada que
+                  reenviar.
+                </p>
+              ) : (
+                <p className="text-xs leading-relaxed text-muted">
+                  Sin verificación: esta ficha no está sujeta al privado de confirmación.
+                </p>
+              )}
+            </div>
+
+            {verificationEvents.length > 0 ? (
+              <dl className="mt-2.5 flex flex-col gap-1 text-xs">
+                {verificationEvents.map((fact) => (
+                  <div key={fact.key} className="flex flex-wrap gap-x-1.5">
+                    <dt className="text-muted">{fact.label}:</dt>
+                    <dd className="text-foreground">{formatMadridDateTime(fact.at)}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+
+            {canResend || canSkip ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {canResend ? (
+                  <button
+                    type="button"
+                    disabled={verificationBusy}
+                    onClick={() => runVerification("resend")}
+                    className={VERIFICATION_RESEND_CLASS}
+                  >
+                    {player.discordVerificationSentAt === null
+                      ? "Enviar verificación"
+                      : "Reenviar verificación"}
+                  </button>
+                ) : null}
+
+                {canSkip && !confirmSkip ? (
+                  <button
+                    type="button"
+                    disabled={verificationBusy}
+                    onClick={() => {
+                      setConfirmSkip(true);
+                      setVerificationFeedback(null);
+                    }}
+                    className={VERIFICATION_SKIP_CLASS}
+                  >
+                    Aprobar sin verificación
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* La confirmación de la renuncia se despliega aquí y no en otra capa:
+                un diálogo dentro de otro diálogo rompe la trampa de foco y el `Esc`
+                de la capa nativa. */}
+            {confirmSkip ? (
+              <div className="mt-3 rounded-md border border-accent/40 bg-accent/5 px-3 py-3">
+                <p className="text-xs leading-relaxed text-muted">
+                  El alta de {player.name} quedará aprobada sin que la persona haya
+                  confirmado por privado, y entrará en la clasificación en la próxima
+                  pasada del sincronizador. Queda registrado en el historial como
+                  «Aprobación sin verificación».
+                </p>
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={verificationBusy}
+                    onClick={() => runVerification("approve-without")}
+                    className="h-10 rounded-md bg-accent px-3 text-xs font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Aprobar sin verificación
+                  </button>
+                  <button
+                    type="button"
+                    disabled={verificationBusy}
+                    onClick={() => setConfirmSkip(false)}
+                    className="h-10 rounded-md border border-line px-3 text-xs text-foreground transition-colors hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {verificationFeedback !== null ? (
+              <p
+                role={verificationFeedback.tone === "error" ? "alert" : "status"}
+                className={`mt-3 rounded-md border px-3 py-2 text-xs leading-relaxed ${
+                  verificationFeedback.tone === "error"
+                    ? "border-loss/40 bg-loss/5 text-loss"
+                    : "border-accent/40 bg-accent/5 text-foreground"
+                }`}
+              >
+                {verificationFeedback.message}
+              </p>
+            ) : null}
+          </section>
 
           <form action={formAction} className="mt-4 flex flex-col gap-4">
             <input type="hidden" name="playerId" value={player.id} />

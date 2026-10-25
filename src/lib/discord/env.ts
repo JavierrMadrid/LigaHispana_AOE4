@@ -28,7 +28,9 @@ import { readRuntimeEnv } from "@/lib/runtime-env";
  * **inscribirse**— e `isDiscordCheckConfigured()` —lo que hace falta para
  * **comprobar** la pertenencia al servidor— porque no es lo mismo: sin credenciales
  * de OAuth la inscripción sigue sin Discord, y sin token de bot no hay nada que
- * comprobar aunque el vínculo exista.
+ * comprobar aunque el vínculo exista. Desde la issue 119 hay una tercera,
+ * `isDiscordVerificationConfigured()`, que apaga la confirmación del alta por privado
+ * cuando falta la clave pública o el `clientId`.
  *
  * **En producción las dos son obligatorias** (ver `docs/OPERACION.md`), y el secreto
  * de firma es parte de la primera: sin él el vínculo no se puede habilitar, porque una
@@ -38,7 +40,7 @@ import { readRuntimeEnv } from "@/lib/runtime-env";
 
 const DEFAULT_API_BASE = "https://discord.com/api/v10";
 const DEFAULT_TIMEOUT_MS = 8_000;
-const DEFAULT_USER_AGENT = "LigaHispanaAOE4/0.1 (inscripción Discord)";
+const DEFAULT_USER_AGENT = "LigaHispanaAOE4/0.1 (Discord)";
 
 /**
  * Vida de la cookie `discord_link`, en segundos (20 minutos).
@@ -195,6 +197,20 @@ export type DiscordConfig = {
    * comprueban antes que no sea `null`, o devuelven el fallo sin llegar a firmar.
    */
   linkSecret: string | null;
+  /**
+   * Clave pública Ed25519 de la aplicación, en hexadecimal (64 caracteres), o `null`.
+   *
+   * Es con lo que se verifica la firma `X-Signature-Ed25519` de las interacciones
+   * (los botones del privado de verificación del alta). **No es un secreto**: la
+   * clave pública está en el portal de Discord y cualquiera puede verla; lo que
+   * prueba es que la petición la firmó la aplicación, no que quien la manda sea de
+   * confianza. Por eso va en las variables normales y no entre las secretas.
+   *
+   * `null` = sin verificación de altas: el endpoint de interacciones responde 503 y
+   * el alta de admin se comporta como antes (degradación, ver `env.ts`). El día que
+   * falte en producción lo dice `docs/OPERACION.md`, no un error de arranque.
+   */
+  publicKey: string | null;
   /** Base de la API, sin barra final. */
   apiBase: string;
   /** Timeout por petición, en milisegundos. */
@@ -305,6 +321,7 @@ export function getDiscordConfig(): DiscordConfig {
     redirectUri: readString("DISCORD_REDIRECT_URI"),
     inviteUrl: readString("DISCORD_INVITE_URL"),
     linkSecret: readLinkSecret(),
+    publicKey: readString("DISCORD_PUBLIC_KEY"),
     apiBase: readString("DISCORD_API_BASE") ?? DEFAULT_API_BASE,
     timeoutMs: readPositiveInt("DISCORD_TIMEOUT_MS", DEFAULT_TIMEOUT_MS),
     userAgent: readString("DISCORD_USER_AGENT") ?? DEFAULT_USER_AGENT,
@@ -364,6 +381,41 @@ export function isDiscordCheckConfigured(
   config: DiscordConfig = getDiscordConfig(),
 ): config is DiscordConfig & { botToken: string; guildId: string } {
   return config.botToken !== null && config.guildId !== null;
+}
+
+/**
+ * ¿Se puede exigir la verificación del alta por privado?
+ *
+ * Hacen falta **cuatro** cosas y ninguna sobra: el token del bot (mandar el
+ * privado), el id del servidor (la resolución del `@usuario` se hace contra su
+ * roster), el `clientId` (es el `application_id` con el que Discord firma la
+ * interacción y hay que comprobar que la petición es para esta aplicación) y la
+ * clave pública (verificar la firma Ed25519 del botón).
+ *
+ * Es un **guard de tipo** como `isDiscordCheckConfigured()`: con `true` quedan
+ * estrechadas las cuatro, y quien compone la cabecera o verifica la firma no tiene
+ * que repetir la condición.
+ *
+ * **Sin esto la funcionalidad se apaga, no rompe.** El alta de admin se comporta
+ * como antes (aprueba directamente) y el endpoint de interacciones contesta `503`;
+ * es la misma degradación que el resto de Discord y la que permite que el proyecto
+ * arranque sin configurar nada nuevo. En producción es obligatoria (ver
+ * `docs/OPERACION.md`).
+ */
+export function isDiscordVerificationConfigured(
+  config: DiscordConfig = getDiscordConfig(),
+): config is DiscordConfig & {
+  botToken: string;
+  guildId: string;
+  clientId: string;
+  publicKey: string;
+} {
+  return (
+    config.botToken !== null &&
+    config.guildId !== null &&
+    config.clientId !== null &&
+    config.publicKey !== null
+  );
 }
 
 /**

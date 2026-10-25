@@ -93,6 +93,23 @@ function secuencia() {
 
   const startedAt = () => new Date(Date.parse(VENTANA.from) + (indice() + 1) * 3_600_000);
 
+  /**
+   * Los campos del resumen, que ninguna regla de racha mira: una partida sin
+   * `summaryAnomalies` y sin intentos no aporta nada a las reglas del resumen.
+   */
+  function sinSummary(started: Date): Pick<
+    AlertMatch,
+    "apm" | "finishedAt" | "summaryCheckedAt" | "summaryLastAttemptAt" | "summaryAnomalies"
+  > {
+    return {
+      apm: null,
+      finishedAt: new Date(started.getTime() + 30 * 60_000),
+      summaryCheckedAt: null,
+      summaryLastAttemptAt: null,
+      summaryAnomalies: null,
+    };
+  }
+
   return {
     solo(options: {
       durationSeconds?: number | null;
@@ -101,12 +118,13 @@ function secuencia() {
     } = {}): AlertMatch {
       const rival = options.opponentProfileId === undefined ? RIVAL : options.opponentProfileId;
       const nombre = options.opponentName === undefined ? "Rival Fijo" : options.opponentName;
+      const inicio = startedAt();
       const partida: AlertMatch = {
         gameId: String(800_000 + indice()),
         mode: "rm_solo",
         opponentProfileId: rival,
         opponentName: nombre,
-        startedAt: startedAt(),
+        startedAt: inicio,
         durationSeconds: options.durationSeconds === undefined ? 1800 : options.durationSeconds,
         rawJson: payload({
           indice: indice(),
@@ -114,6 +132,7 @@ function secuencia() {
           propio: [{ profileId: PERFIL_JUGADOR, name: JUGADOR.name, rating: 1500 }],
           rival: [{ profileId: rival ?? RIVAL, name: nombre ?? "Rival Fijo", rating: 1500 }],
         }),
+        ...sinSummary(inicio),
       };
 
       partidas.push(partida);
@@ -124,12 +143,13 @@ function secuencia() {
     equipo(options: {
       teammates: Array<[number | null, string, number | null]>;
     }): AlertMatch {
+      const inicio = startedAt();
       const partida: AlertMatch = {
         gameId: String(800_000 + indice()),
         mode: "rm_team",
         opponentProfileId: RIVAL_2,
         opponentName: "Rival Externo",
-        startedAt: startedAt(),
+        startedAt: inicio,
         durationSeconds: 1800,
         rawJson: payload({
           indice: indice(),
@@ -140,6 +160,7 @@ function secuencia() {
           ],
           rival: [{ profileId: RIVAL_2, name: "Rival Externo", rating: 1500 }],
         }),
+        ...sinSummary(inicio),
       };
 
       partidas.push(partida);
@@ -184,12 +205,14 @@ function evaluar(options: {
   matches: AlertMatch[];
   now?: Date;
   window?: ScoringWindow;
+  summaryReviewWindowMs?: number;
 }) {
   return computePlayerAlerts({
     player: JUGADOR,
     matches: options.matches,
     ruleset: DEFAULT_ALERTS_RULESET,
     scoring: { modes: ["rm_solo", "rm_team"], window: options.window ?? VENTANA },
+    summaryReviewWindowMs: options.summaryReviewWindowMs ?? 24 * 3_600_000,
     now: options.now ?? DURANTE,
   });
 }
@@ -465,6 +488,11 @@ describe("lo que degrada sin romper", () => {
       startedAt: new Date("2026-09-15T01:00:00.000Z"),
       durationSeconds: 1800,
       rawJson: { game_id: "no-es-un-numero", teams: "esto no es una lista" },
+      apm: null,
+      finishedAt: new Date("2026-09-15T01:30:00.000Z"),
+      summaryCheckedAt: null,
+      summaryLastAttemptAt: null,
+      summaryAnomalies: null,
     };
     const s = secuencia();
     s.conCompanero(2);
@@ -490,9 +518,363 @@ describe("lo que degrada sin romper", () => {
       startedAt: new Date("2026-09-15T01:00:00.000Z"),
       durationSeconds: 1800,
       rawJson: "no es un payload",
+      apm: null,
+      finishedAt: new Date("2026-09-15T01:30:00.000Z"),
+      summaryCheckedAt: null,
+      summaryLastAttemptAt: null,
+      summaryAnomalies: null,
     };
 
     expect(evaluar({ matches: [rota] }).unreadableMatches).toBe(0);
+  });
+});
+
+describe("las tres reglas por partida, desde el resumen", () => {
+  /** Una partida clasificatoria con el resumen que diga la prueba. */
+  function conResumen(options: {
+    gameId?: string;
+    anomalies: unknown;
+    apm?: number | null;
+    startedAt?: Date;
+    mode?: string | null;
+    durationSeconds?: number | null;
+  }): AlertMatch {
+    const base = secuencia().solo();
+
+    return {
+      ...base,
+      gameId: options.gameId ?? base.gameId,
+      mode: options.mode ?? base.mode,
+      ...(options.startedAt === undefined ? {} : { startedAt: options.startedAt }),
+      ...(options.durationSeconds === undefined
+        ? {}
+        : { durationSeconds: options.durationSeconds }),
+      apm: options.apm === undefined ? 120 : options.apm,
+      summaryAnomalies: options.anomalies,
+    };
+  }
+
+  const anomalies = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    buildOrderReadable: true,
+    firstVillagerSeconds: 21,
+    militaryNoGrowth: null,
+    noResourceGain: null,
+    ...overrides,
+  });
+
+  it("sin aldeanos en el arranque avisa, y ancla la partida", () => {
+    const match = conResumen({ anomalies: anomalies({ firstVillagerSeconds: null }) });
+
+    const alerta = de(evaluar({ matches: [match] }), "NO_VILLAGERS_FIRST_MINUTES")[0];
+
+    expect(alerta).toMatchObject({
+      kind: "MATCH_DETECTED",
+      count: 0,
+      // El umbral es el del ruleset: es lo que dispara la regla y lo que la frase
+      // necesita para decir "en los primeros N minutos".
+      threshold: DEFAULT_ALERTS_RULESET.thresholds.noVillagersFirstSeconds,
+      anchorGameId: match.gameId,
+      subjectProfileId: null,
+    });
+    expect(alerta?.summary).toBe("No hizo ningún aldeano en los primeros 5 minutos.");
+    expect(alerta?.details).toMatchObject({ firstVillagerSeconds: null });
+  });
+
+  it("un aldeano dentro del umbral no avisa, y uno justo después sí", () => {
+    const dentro = conResumen({
+      anomalies: anomalies({ firstVillagerSeconds: DEFAULT_ALERTS_RULESET.thresholds.noVillagersFirstSeconds }),
+    });
+    const fuera = conResumen({
+      anomalies: anomalies({
+        firstVillagerSeconds: DEFAULT_ALERTS_RULESET.thresholds.noVillagersFirstSeconds + 1,
+      }),
+    });
+
+    expect(de(evaluar({ matches: [dentro] }), "NO_VILLAGERS_FIRST_MINUTES")).toHaveLength(0);
+    expect(de(evaluar({ matches: [fuera] }), "NO_VILLAGERS_FIRST_MINUTES")).toHaveLength(1);
+  });
+
+  it("si el `buildOrder` no se pudo leer, la regla de aldeanos NO se evalúa", () => {
+    // Es la diferencia entre "no hizo aldeanos" y "no sabemos qué hizo": con
+    // `buildOrderReadable: false` no hay acusación posible.
+    const match = conResumen({
+      anomalies: anomalies({ buildOrderReadable: false, firstVillagerSeconds: null }),
+    });
+
+    expect(de(evaluar({ matches: [match] }), "NO_VILLAGERS_FIRST_MINUTES")).toHaveLength(0);
+  });
+
+  it("una partida que duró menos que la ventana no avisa: esos minutos no se jugaron", () => {
+    // 240 s es menos que los 300 s de la ventana, así que no se puede decir que no
+    // hiciera aldeanos "en los primeros 5 minutos".
+    const match = conResumen({
+      anomalies: anomalies({ firstVillagerSeconds: null }),
+      durationSeconds: 240,
+    });
+
+    expect(de(evaluar({ matches: [match] }), "NO_VILLAGERS_FIRST_MINUTES")).toHaveLength(0);
+  });
+
+  it("una partida que llegó a la ventana sí avisa", () => {
+    const match = conResumen({
+      anomalies: anomalies({ firstVillagerSeconds: null }),
+      durationSeconds: 360,
+    });
+
+    expect(de(evaluar({ matches: [match] }), "NO_VILLAGERS_FIRST_MINUTES")).toHaveLength(1);
+  });
+
+  it("el tramo militar cuenta solo lo que queda después de la gracia", () => {
+    const cubre = conResumen({
+      anomalies: anomalies({ militaryNoGrowth: [{ fromSeconds: 0, toSeconds: 900 }] }),
+    });
+
+    const alerta = de(evaluar({ matches: [cubre] }), "NO_MILITARY_GAP")[0];
+
+    expect(alerta).toMatchObject({
+      kind: "MATCH_DETECTED",
+      // 900 s del tramo menos 300 de gracia.
+      count: 600,
+      threshold: DEFAULT_ALERTS_RULESET.thresholds.noMilitaryGapSeconds,
+    });
+    expect(alerta?.summary).toBe("Pasó 10 minutos seguidos sin progreso militar.");
+    expect(alerta?.details).toMatchObject({
+      militaryNoGrowthFromSeconds: 0,
+      militaryNoGrowthToSeconds: 900,
+    });
+  });
+
+  it("un tramo que cabe dentro de la gracia no avisa", () => {
+    const corto = conResumen({
+      anomalies: anomalies({ militaryNoGrowth: [{ fromSeconds: 0, toSeconds: 500 }] }),
+    });
+
+    // 500 s de tramo y 300 de gracia: quedan 200, por debajo de los 300 del umbral.
+    expect(de(evaluar({ matches: [corto] }), "NO_MILITARY_GAP")).toHaveLength(0);
+  });
+
+  it("un tramo tardío no tiene gracia que descontar", () => {
+    const tarde = conResumen({
+      anomalies: anomalies({ militaryNoGrowth: [{ fromSeconds: 600, toSeconds: 1000 }] }),
+    });
+
+    const alerta = de(evaluar({ matches: [tarde] }), "NO_MILITARY_GAP")[0];
+
+    expect(alerta?.count).toBe(400);
+  });
+
+  it("mira todos los tramos: un segundo tramo corto pero tardío sí avisa", () => {
+    // El tramo más largo empieza antes de la gracia y solo deja 100 s útiles; el
+    // segundo, más corto, cuenta entero y es el que dispara la regla.
+    const partida = conResumen({
+      anomalies: anomalies({
+        militaryNoGrowth: [
+          { fromSeconds: 0, toSeconds: 400 },
+          { fromSeconds: 1000, toSeconds: 1350 },
+        ],
+      }),
+    });
+
+    const alertas = de(evaluar({ matches: [partida] }), "NO_MILITARY_GAP");
+
+    // Una sola alerta por partida, con la evidencia del tramo que la dispara.
+    expect(alertas).toHaveLength(1);
+    expect(alertas[0]).toMatchObject({
+      kind: "MATCH_DETECTED",
+      count: 350,
+      threshold: 300,
+      anchorGameId: partida.gameId,
+    });
+    expect(alertas[0]?.details).toMatchObject({
+      militaryNoGrowthFromSeconds: 1000,
+      militaryNoGrowthToSeconds: 1350,
+    });
+  });
+
+  it("si ningún tramo supera el umbral después de la gracia, no avisa", () => {
+    const partida = conResumen({
+      anomalies: anomalies({
+        militaryNoGrowth: [
+          { fromSeconds: 0, toSeconds: 400 },
+          { fromSeconds: 1000, toSeconds: 1200 },
+        ],
+      }),
+    });
+
+    // 100 s y 200 s útiles, los dos por debajo de los 300 del umbral.
+    expect(de(evaluar({ matches: [partida] }), "NO_MILITARY_GAP")).toHaveLength(0);
+  });
+
+  it("sin obtener recursos avisa con los segundos del tramo", () => {
+    const match = conResumen({
+      anomalies: anomalies({ noResourceGain: { fromSeconds: 120, toSeconds: 300 } }),
+    });
+
+    const alerta = de(evaluar({ matches: [match] }), "NO_RESOURCES_GAP")[0];
+
+    expect(alerta).toMatchObject({ kind: "MATCH_DETECTED", count: 180, threshold: 120 });
+    expect(alerta?.summary).toBe("Pasó 3 minutos seguidos sin obtener recursos.");
+    expect(alerta?.details).toMatchObject({
+      noResourceGainFromSeconds: 120,
+      noResourceGainToSeconds: 300,
+    });
+  });
+
+  it("un tramo de recursos por debajo del umbral no avisa", () => {
+    const match = conResumen({
+      anomalies: anomalies({ noResourceGain: { fromSeconds: 100, toSeconds: 200 } }),
+    });
+
+    expect(de(evaluar({ matches: [match] }), "NO_RESOURCES_GAP")).toHaveLength(0);
+  });
+
+  it("una partida sin summary legible no genera ninguna alerta por partida", () => {
+    // `null` es "no hay summary" y una forma rota es "no se pudo leer": ninguna de
+    // las dos acusa a nadie.
+    const sinResumen = conResumen({ anomalies: null, apm: null });
+    const roto = conResumen({ anomalies: { militaryNoGrowth: { fromSeconds: 900, toSeconds: 0 } } });
+
+    const evaluacion = evaluar({ matches: [sinResumen, roto] });
+
+    expect(de(evaluacion, "NO_VILLAGERS_FIRST_MINUTES")).toHaveLength(0);
+    expect(de(evaluacion, "NO_MILITARY_GAP")).toHaveLength(0);
+    expect(de(evaluacion, "NO_RESOURCES_GAP")).toHaveLength(0);
+  });
+
+  it("es una alerta por partida y regla, no una por jugador", () => {
+    // La clave de `MATCH_DETECTED` lleva la partida: dos hallazgos iguales en dos
+    // partidas son dos alertas.
+    const primera = conResumen({
+      gameId: "800-501",
+      anomalies: anomalies({ firstVillagerSeconds: null }),
+    });
+    const segunda = conResumen({
+      gameId: "800-502",
+      anomalies: anomalies({ firstVillagerSeconds: null }),
+      startedAt: new Date("2026-09-15T05:00:00.000Z"),
+    });
+
+    const alertas = de(evaluar({ matches: [primera, segunda] }), "NO_VILLAGERS_FIRST_MINUTES");
+
+    expect(alertas).toHaveLength(2);
+    expect(new Set(alertas.map((alerta) => alerta.dedupeKey)).size).toBe(2);
+    expect(alertas.map((alerta) => alerta.anchorGameId)).toEqual(["800-501", "800-502"]);
+  });
+});
+
+describe("SUMMARY_NOT_REVIEWED: las partidas que se quedaron sin revisar", () => {
+  const AHORA = new Date("2026-10-01T12:00:00.000Z");
+  const HACE_25_H = new Date(AHORA.getTime() - 25 * 3_600_000);
+  const HACE_23_H = new Date(AHORA.getTime() - 23 * 3_600_000);
+
+  function sinRevisar(options: {
+    gameId: string;
+    finishedAt: Date;
+    attemptedAt: Date | null;
+    checkedAt?: Date | null;
+    apm?: number | null;
+  }): AlertMatch {
+    const base = secuencia().solo();
+
+    return {
+      ...base,
+      gameId: options.gameId,
+      startedAt: new Date(options.finishedAt.getTime() - 30 * 60_000),
+      finishedAt: options.finishedAt,
+      apm: options.apm ?? null,
+      summaryCheckedAt: options.checkedAt ?? null,
+      summaryLastAttemptAt: options.attemptedAt,
+      summaryAnomalies: null,
+    };
+  }
+
+  it("avisa de las partidas pasada la ventana, con su recuento y sus ids", () => {
+    const match = sinRevisar({
+      gameId: "800-601",
+      finishedAt: HACE_25_H,
+      attemptedAt: new Date(HACE_25_H.getTime() + 3_600_000),
+    });
+
+    const alerta = de(evaluar({ matches: [match], now: AHORA }), "SUMMARY_NOT_REVIEWED")[0];
+
+    expect(alerta).toMatchObject({
+      kind: "STATE_DETECTED",
+      count: 1,
+      threshold: 1,
+      anchorGameId: null,
+    });
+    expect(alerta?.summary).toBe("1 partida no se ha podido revisar por falta de resumen");
+    expect(alerta?.details).toMatchObject({
+      unreviewedGameIds: ["800-601"],
+      summaryLastAttemptAt: new Date(HACE_25_H.getTime() + 3_600_000).toISOString(),
+    });
+  });
+
+  it("una partida todavía dentro de la ventana no cuenta: su resumen aún puede llegar", () => {
+    const match = sinRevisar({
+      gameId: "800-602",
+      finishedAt: HACE_23_H,
+      attemptedAt: HACE_23_H,
+    });
+
+    expect(de(evaluar({ matches: [match], now: AHORA }), "SUMMARY_NOT_REVIEWED")).toHaveLength(0);
+  });
+
+  it("una partida que nunca se intentó no avisa: no es que no se pudiera, es que no tocó", () => {
+    const match = sinRevisar({ gameId: "800-603", finishedAt: HACE_25_H, attemptedAt: null });
+
+    expect(de(evaluar({ matches: [match], now: AHORA }), "SUMMARY_NOT_REVIEWED")).toHaveLength(0);
+  });
+
+  it("una partida con respuesta concluyente no avisa, aunque no tenga métricas", () => {
+    // Un 404 es una respuesta: la partida no tiene resumen y eso ya se sabe.
+    const match = sinRevisar({
+      gameId: "800-604",
+      finishedAt: HACE_25_H,
+      attemptedAt: HACE_25_H,
+      checkedAt: HACE_25_H,
+    });
+
+    expect(de(evaluar({ matches: [match], now: AHORA }), "SUMMARY_NOT_REVIEWED")).toHaveLength(0);
+  });
+
+  it("una partida con summary no avisa: hay `apm`", () => {
+    const match = sinRevisar({
+      gameId: "800-605",
+      finishedAt: HACE_25_H,
+      attemptedAt: HACE_25_H,
+      apm: 120,
+    });
+
+    expect(de(evaluar({ matches: [match], now: AHORA }), "SUMMARY_NOT_REVIEWED")).toHaveLength(0);
+  });
+
+  it("es UNA alerta por jugador, con las partidas de la más reciente a la más antigua", () => {
+    const vieja = sinRevisar({
+      gameId: "800-606",
+      finishedAt: new Date(HACE_25_H.getTime() - 3_600_000),
+      attemptedAt: HACE_25_H,
+    });
+    const nueva = sinRevisar({ gameId: "800-607", finishedAt: HACE_25_H, attemptedAt: HACE_25_H });
+
+    const alertas = de(
+      evaluar({ matches: [vieja, nueva], now: AHORA }),
+      "SUMMARY_NOT_REVIEWED",
+    );
+
+    expect(alertas).toHaveLength(1);
+    expect(alertas[0]?.count).toBe(2);
+    expect(alertas[0]?.summary).toBe("2 partidas no se han podido revisar por falta de resumen");
+    expect(alertas[0]?.details).toMatchObject({ unreviewedGameIds: ["800-607", "800-606"] });
+  });
+
+  it("la ventana la decide quien evalúa, no la regla", () => {
+    const match = sinRevisar({ gameId: "800-608", finishedAt: HACE_23_H, attemptedAt: HACE_23_H });
+
+    // Con una ventana de 20 h la misma partida ya está fuera de plazo.
+    const evaluacion = evaluar({ matches: [match], now: AHORA, summaryReviewWindowMs: 20 * 3_600_000 });
+
+    expect(de(evaluacion, "SUMMARY_NOT_REVIEWED")).toHaveLength(1);
   });
 });
 

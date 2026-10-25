@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { MatchResult } from "@/generated/prisma/enums";
+import type { EditionEvent, EditionEventsState } from "@/lib/edition-events";
 import { OBJECTIVE_COUNT, OBJECTIVE_POINTS, type ObjectiveAward } from "@/lib/objectives";
 import {
   DEFAULT_RULESET,
@@ -8,11 +9,14 @@ import {
   RULESET_VERSION,
   SCORING_RULESET_KEY,
   compareStandings,
+  computeEventBonuses,
   countsAsRanked,
+  lockedRulesetChanges,
   mergeRuleset,
   rankApprovedPlayers,
   ruleLabel,
   type AggregatedRow,
+  type EventBonusSummary,
   type ScoringRuleset,
   type ScoringWindow,
 } from "@/lib/scoring";
@@ -490,6 +494,104 @@ describe("mergeRuleset: el candidato que guarda el panel de administración", ()
   });
 });
 
+describe("lockedRulesetChanges: lo que la edición empezada congela", () => {
+  /**
+   * El ruleset de partida: el de por defecto, con las listas copiadas para que un test
+   * pueda reordenarlas o vaciarlas sin tocar la constante compartida.
+   */
+  const actual: ScoringRuleset = {
+    ...DEFAULT_RULESET,
+    modes: [...DEFAULT_RULESET.modes],
+    window: { ...DEFAULT_RULESET.window },
+    objectives: { ...DEFAULT_RULESET.objectives },
+    disabledObjectives: ["rey-1v1"],
+  };
+
+  /** El mismo documento con lo que se le pase cambiado. */
+  function con(cambios: Partial<ScoringRuleset>): ScoringRuleset {
+    return { ...actual, ...cambios };
+  }
+
+  it("dos documentos iguales no mueven nada", () => {
+    expect(lockedRulesetChanges(actual, con({}))).toEqual([]);
+  });
+
+  it("la fecha de inicio de la ventana está congelada", () => {
+    expect(
+      lockedRulesetChanges(actual, con({ window: { ...actual.window, from: "2026-09-20T00:00:00.000Z" } })),
+    ).toEqual([{ campo: "window", etiqueta: "fecha de inicio de la ventana" }]);
+  });
+
+  it("mover solo el fin de la ventana está permitido", () => {
+    // Es la forma de cerrar la edición: `window.to` se ignora a propósito.
+    expect(lockedRulesetChanges(actual, con({ window: { from: actual.window.from, to: null } }))).toEqual(
+      [],
+    );
+    expect(
+      lockedRulesetChanges(
+        actual,
+        con({ window: { from: actual.window.from, to: "2026-10-20T00:00:00.000Z" } }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("las familias de ladder se comparan como conjunto", () => {
+    expect(lockedRulesetChanges(actual, con({ modes: ["rm_team", "rm_solo"] }))).toEqual([]);
+    expect(lockedRulesetChanges(actual, con({ modes: ["rm_solo"] }))).toEqual([
+      { campo: "modes", etiqueta: "familias de ladder" },
+    ]);
+  });
+
+  it("los puntos por victoria están congelados", () => {
+    expect(lockedRulesetChanges(actual, con({ pointsPerWin: actual.pointsPerWin + 1 }))).toEqual([
+      { campo: "pointsPerWin", etiqueta: "puntos por victoria" },
+    ]);
+  });
+
+  it("la civ aleatoria está congelada, en los dos sentidos", () => {
+    expect(
+      lockedRulesetChanges(actual, con({ countRandomizedCivs: !actual.countRandomizedCivs })),
+    ).toEqual([{ campo: "countRandomizedCivs", etiqueta: "civilizaciones aleatorias" }]);
+  });
+
+  it("los puntos de un objetivo están congelados", () => {
+    expect(
+      lockedRulesetChanges(
+        actual,
+        con({ objectives: { ...actual.objectives, "loco-por-ganar": 999 } }),
+      ),
+    ).toEqual([{ campo: "objectives", etiqueta: "puntos de objetivos" }]);
+  });
+
+  it("un objetivo que solo aparece en una de las dos versiones también es un cambio", () => {
+    // La comparación es por unión de claves: si solo se miraran las claves de una, un
+    // id añadido o quitado se colaría como si no hubiera pasado nada.
+    const sinUno = { ...actual.objectives };
+
+    delete sinUno["rey-1v1"];
+
+    expect(lockedRulesetChanges(con({ objectives: sinUno }), actual)).toEqual([
+      { campo: "objectives", etiqueta: "puntos de objetivos" },
+    ]);
+  });
+
+  it("los objetivos desactivados se comparan como conjunto", () => {
+    expect(lockedRulesetChanges(actual, con({ disabledObjectives: ["rey-1v1"] }))).toEqual([]);
+    expect(
+      lockedRulesetChanges(actual, con({ disabledObjectives: ["rey-1v1", "jugon"] })),
+    ).toEqual([{ campo: "disabledObjectives", etiqueta: "objetivos desactivados" }]);
+  });
+
+  it("varios campos a la vez se devuelven todos, para poder componer el mensaje", () => {
+    const cambios = lockedRulesetChanges(
+      actual,
+      con({ pointsPerWin: 5, disabledObjectives: [] }),
+    );
+
+    expect(cambios.map((cambio) => cambio.campo)).toEqual(["pointsPerWin", "disabledObjectives"]);
+  });
+});
+
 describe("ruleLabel", () => {
   const base: Pick<ScoringRuleset, "pointsPerWin" | "disabledObjectives"> = {
     pointsPerWin: 2,
@@ -627,6 +729,7 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
       matches: 0,
       byMode: byModeCero,
       objectives: { points: 0, earned: [], awards: {} },
+      events: { points: 0, awards: {} },
       rank: 2,
     });
     expect(filas[0].playerId).toBe("b");
@@ -780,6 +883,281 @@ describe("rankApprovedPlayers: todos los aprobados tienen fila", () => {
       "mismoTotalMenosVictorias",
       "sinPartidas",
     ]);
+  });
+});
+
+describe("rankApprovedPlayers: el bono de eventos se suma al total", () => {
+  function agregado(overrides: Partial<AggregatedRow> = {}): AggregatedRow {
+    return { matchPoints: 0, wins: 0, matches: 0, byMode: {}, ...overrides };
+  }
+
+  it("suma el bono a los objetivos sin tocar `Match.points`", () => {
+    // El agregado trae `matchPoints` (auditoría) y el objetivo `victorias` ya cobra
+    // el punto base: el bono es lo único que se añade aparte.
+    const bono: EventBonusSummary = {
+      points: 4,
+      awards: { clasico: { points: 4, wins: 2, multiplier: 2 } },
+    };
+    const filas = rankApprovedPlayers(
+      [{ id: "a", profileId: 1 }],
+      new Map([["a", agregado({ matchPoints: 4, wins: 2, matches: 2 })]]),
+      new Map([
+        [
+          "a",
+          {
+            points: 4,
+            earned: ["victorias"],
+            awards: { victorias: { points: 4, count: 2 } },
+          },
+        ],
+      ]),
+      DEFAULT_RULESET,
+      new Map([["a", bono]]),
+    );
+
+    expect(filas[0].total).toBe(8);
+    expect(filas[0].objectives.points).toBe(4);
+    expect(filas[0].events).toEqual(bono);
+  });
+
+  it("quien no tiene bono sale con el desglose vacío, no sin desglose", () => {
+    const filas = rankApprovedPlayers(
+      [{ id: "a", profileId: 1 }],
+      new Map(),
+      new Map(),
+      DEFAULT_RULESET,
+      new Map(),
+    );
+
+    expect(filas[0].events).toEqual({ points: 0, awards: {} });
+    expect(filas[0].total).toBe(0);
+  });
+
+  it("el bono cuenta para el orden y el puesto", () => {
+    // `b` tiene menos objetivos pero un evento que le da la vuelta al total.
+    const filas = rankApprovedPlayers(
+      [
+        { id: "a", profileId: 1 },
+        { id: "b", profileId: 2 },
+      ],
+      new Map([
+        ["a", agregado({ wins: 1, matches: 1 })],
+        ["b", agregado({ wins: 1, matches: 1 })],
+      ]),
+      new Map([
+        ["a", { points: 6, earned: [] as string[], awards: {} }],
+        ["b", { points: 2, earned: [] as string[], awards: {} }],
+      ]),
+      DEFAULT_RULESET,
+      new Map([["b", { points: 8, awards: { clasico: { points: 8, wins: 2, multiplier: 3 } } }]]),
+    );
+
+    expect(filas.map((fila) => [fila.playerId, fila.total, fila.rank])).toEqual([
+      ["b", 10, 1],
+      ["a", 6, 2],
+    ]);
+  });
+});
+
+describe("computeEventBonuses: victorias dentro de un evento", () => {
+  const CLASICO: EditionEvent = {
+    id: "clasico",
+    name: "Clásico de otoño",
+    description: null,
+    from: "2026-09-20T17:00:00.000Z",
+    to: "2026-09-20T20:00:00.000Z",
+    multiplier: 2,
+    discordRequired: false,
+  };
+
+  const SIN_ESTADO: EditionEventsState = { version: 1, events: {} };
+
+  function fila(
+    playerId: string,
+    startedAt: string,
+    result: string = MatchResult.WIN,
+  ): { playerId: string; startedAtMs: number; result: string } {
+    return { playerId, startedAtMs: new Date(startedAt).getTime(), result };
+  }
+
+  it("cuenta las victorias de `[from, to)` y ninguna más", () => {
+    const bonos = computeEventBonuses(
+      [
+        fila("a", "2026-09-20T17:00:00.000Z"),
+        fila("a", "2026-09-20T19:59:59.999Z"),
+        fila("a", "2026-09-20T20:00:00.000Z"),
+        fila("a", "2026-09-20T16:59:59.999Z"),
+      ],
+      [CLASICO],
+      SIN_ESTADO,
+      2,
+    );
+
+    expect(bonos.get("a")).toEqual({
+      points: 4,
+      awards: { clasico: { points: 4, wins: 2, multiplier: 2 } },
+    });
+  });
+
+  it("una derrota no cobra bono", () => {
+    const bonos = computeEventBonuses(
+      [fila("a", "2026-09-20T18:00:00.000Z", MatchResult.LOSS)],
+      [CLASICO],
+      SIN_ESTADO,
+      2,
+    );
+
+    expect(bonos.size).toBe(0);
+  });
+
+  it("el extra es `pointsPerWin × (multiplier - 1)`", () => {
+    const x3: EditionEvent = { ...CLASICO, id: "triple", multiplier: 3 };
+    const bonos = computeEventBonuses(
+      [
+        fila("a", "2026-09-20T18:00:00.000Z"),
+        fila("a", "2026-09-20T18:30:00.000Z"),
+      ],
+      [x3],
+      SIN_ESTADO,
+      2,
+    );
+
+    // 2 puntos por victoria × (3 - 1) = 4 por victoria, dos victorias.
+    expect(bonos.get("a")).toEqual({
+      points: 8,
+      awards: { triple: { points: 8, wins: 2, multiplier: 3 } },
+    });
+  });
+
+  it("sin eventos, o sin filas, no hay bono", () => {
+    expect(computeEventBonuses([fila("a", "2026-09-20T18:00:00.000Z")], [], SIN_ESTADO, 2).size).toBe(0);
+    expect(computeEventBonuses([], [CLASICO], SIN_ESTADO, 2).size).toBe(0);
+  });
+
+  it("un multiplicador imposible se ignora", () => {
+    const bonos = computeEventBonuses(
+      [fila("a", "2026-09-20T18:00:00.000Z")],
+      [{ ...CLASICO, multiplier: 1 }],
+      SIN_ESTADO,
+      2,
+    );
+
+    expect(bonos.size).toBe(0);
+  });
+
+  it("sin `discordRequired` cobra cualquiera, aunque no haya snapshot", () => {
+    const bonos = computeEventBonuses(
+      [fila("a", "2026-09-20T18:00:00.000Z")],
+      [CLASICO],
+      SIN_ESTADO,
+      2,
+    );
+
+    expect(bonos.get("a")?.points).toBe(2);
+  });
+
+  it("con `discordRequired` solo cobra quien está en el snapshot", () => {
+    const eventoDiscord: EditionEvent = { ...CLASICO, id: "discord", discordRequired: true };
+    const estado: EditionEventsState = {
+      version: 1,
+      events: {
+        discord: {
+          checkedAt: "2026-09-20T17:00:00.000Z",
+          checkedPlayerIds: ["a", "b"],
+          eligiblePlayerIds: ["a"],
+        },
+      },
+    };
+    const bonos = computeEventBonuses(
+      [
+        fila("a", "2026-09-20T18:00:00.000Z"),
+        fila("b", "2026-09-20T18:00:00.000Z"),
+      ],
+      [eventoDiscord],
+      estado,
+      2,
+    );
+
+    expect(bonos.has("a")).toBe(true);
+    expect(bonos.has("b")).toBe(false);
+  });
+
+  it("con `discordRequired` y sin snapshot no reparte nada: no se inventa elegibilidad", () => {
+    const bonos = computeEventBonuses(
+      [fila("a", "2026-09-20T18:00:00.000Z")],
+      [{ ...CLASICO, id: "discord", discordRequired: true }],
+      SIN_ESTADO,
+      2,
+    );
+
+    expect(bonos.size).toBe(0);
+  });
+
+  it("con el snapshot de otro evento no vale", () => {
+    const estado: EditionEventsState = {
+      version: 1,
+      events: {
+        otro: { checkedAt: null, checkedPlayerIds: ["a"], eligiblePlayerIds: ["a"] },
+      },
+    };
+    const bonos = computeEventBonuses(
+      [fila("a", "2026-09-20T18:00:00.000Z")],
+      [{ ...CLASICO, id: "discord", discordRequired: true }],
+      estado,
+      2,
+    );
+
+    expect(bonos.size).toBe(0);
+  });
+
+  it("si dos eventos se solapan, la victoria cuenta en los dos", () => {
+    // La validación impide publicarlos, pero el motor lee lo que hay: cada evento
+    // multiplica por su cuenta y no se queda con uno.
+    const otro: EditionEvent = { ...CLASICO, id: "otro", multiplier: 3 };
+    const bonos = computeEventBonuses(
+      [fila("a", "2026-09-20T18:00:00.000Z")],
+      [CLASICO, otro],
+      SIN_ESTADO,
+      2,
+    );
+
+    expect(bonos.get("a")).toEqual({
+      points: 6,
+      awards: {
+        clasico: { points: 2, wins: 1, multiplier: 2 },
+        otro: { points: 4, wins: 1, multiplier: 3 },
+      },
+    });
+  });
+
+  it("separa el bono por jugador y por evento", () => {
+    const otro: EditionEvent = {
+      ...CLASICO,
+      id: "otro",
+      from: "2026-09-21T17:00:00.000Z",
+      to: "2026-09-21T20:00:00.000Z",
+    };
+    const bonos = computeEventBonuses(
+      [
+        fila("a", "2026-09-20T18:00:00.000Z"),
+        fila("a", "2026-09-21T18:00:00.000Z"),
+        fila("b", "2026-09-21T18:00:00.000Z"),
+      ],
+      [CLASICO, otro],
+      SIN_ESTADO,
+      2,
+    );
+
+    expect(bonos.get("a")).toEqual({
+      points: 4,
+      awards: {
+        clasico: { points: 2, wins: 1, multiplier: 2 },
+        otro: { points: 2, wins: 1, multiplier: 2 },
+      },
+    });
+    expect(bonos.get("b")?.awards).toEqual({
+      otro: { points: 2, wins: 1, multiplier: 2 },
+    });
   });
 });
 

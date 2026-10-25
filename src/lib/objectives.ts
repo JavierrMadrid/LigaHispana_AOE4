@@ -699,6 +699,17 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
 export const OBJECTIVE_COUNT = OBJECTIVE_DEFINITIONS.length;
 
 /**
+ * Los ids del catálogo.
+ *
+ * Lo usan los historiales para filtrar en la consulta las filas cuyo `objectiveId` ya no
+ * existe en el catálogo —solo puede pasar si alguien insertó a mano—, de modo que el
+ * recuento que decide la ventana y las filas que se publican cuenten lo mismo.
+ */
+export const OBJECTIVE_IDS: readonly string[] = OBJECTIVE_DEFINITIONS.map(
+  (definition) => definition.id,
+);
+
+/**
  * ¿El objetivo reparte un **premio fijo**, de los que cuenta la suma nominal de
  * `docs/OBJETIVOS.md`?
  *
@@ -723,6 +734,34 @@ export function hasFixedPrize(definition: ObjectiveDefinition): boolean {
 export const OBJECTIVE_POINTS: Record<string, number> = Object.fromEntries(
   OBJECTIVE_DEFINITIONS.map((definition) => [definition.id, definition.points]),
 );
+
+/**
+ * La forma de cobrar de cada id del catálogo, indexada por id.
+ *
+ * Es un `Map` a nivel de módulo (el catálogo es una constante del código) y tiene
+ * que ir **después** de `OBJECTIVE_DEFINITIONS`: se construye al cargar el módulo.
+ */
+const KINDS_BY_ID: ReadonlyMap<string, ObjectiveKind> = new Map(
+  OBJECTIVE_DEFINITIONS.map((definition) => [definition.id, definition.kind]),
+);
+
+/**
+ * La forma de cobrar de un id del catálogo: competición, logro, o `null` si el id
+ * no está en el catálogo.
+ *
+ * Se pregunta **por id** y no por definición porque quien pregunta lo tiene por id:
+ * el motor reparte los objetivos cobrados como `ObjectiveAwarded` (id y jugador, sin
+ * la definición delante), y los dos registros que se reparten ese `awarded` —el
+ * espejo de logros (`ObjectiveEvent`) y el registro de poseedores de competiciones
+ * (`ObjectiveLeadEvent`)— tienen que decidir cuál les toca sin volver a recorrer el
+ * catálogo.
+ *
+ * Un id que no está en el catálogo (solo puede venir de una fila escrita a mano) no
+ * pertenece a ninguno de los dos y no se anota en ninguno.
+ */
+export function objectiveKind(id: string): ObjectiveKind | null {
+  return KINDS_BY_ID.get(id) ?? null;
+}
 
 /**
  * Lo que un jugador cobra por **un** objetivo: importe real y repeticiones.
@@ -757,11 +796,12 @@ export type ObjectiveAward = {
 /**
  * Un objetivo cobrado por un jugador, visto desde el motor.
  *
- * Va en `awarded` y no en `ObjectiveOption` a propósito: es lo que consume el
- * registro de hitos (`ObjectiveEvent`, escrito por `reconcileObjectiveEvents()`
- * en `scoring.ts`), y `/objetivos` no tiene por qué enterarse de que existe una
- * tabla de hitos. En una competición hay una entrada; en un logro, una por
- * beneficiario.
+ * Va en `awarded` y no en `ObjectiveOption` a propósito: es lo que consumen los dos
+ * registros del historial —el espejo de logros (`ObjectiveEvent`, escrito por
+ * `reconcileObjectiveEvents()`) y el log de poseedores de competiciones
+ * (`ObjectiveLeadEvent`, escrito por `reconcileObjectiveLeadEvents()`), los dos en
+ * `scoring.ts`— y `/objetivos` no tiene por qué enterarse de que existen esas
+ * tablas. En una competición hay una entrada; en un logro, una por beneficiario.
  */
 export type ObjectiveAwarded = {
   /** Id estable del objetivo (`loco-por-ganar`, `lider-japanese`…). */
@@ -783,7 +823,7 @@ export type ObjectivesComputation = {
 /** Cliente con la única consulta que necesita este módulo (`db` o una `tx`). */
 export type ObjectiveQueryClient = Pick<Prisma.TransactionClient, "$queryRaw">;
 
-type ObjectiveMatchRow = {
+export type ObjectiveMatchRow = {
   playerId: string;
   profileId: number;
   name: string;
@@ -811,6 +851,15 @@ type ObjectiveMatchRow = {
   gameId: string;
   leaderboard: string;
   kind: string | null;
+  /**
+   * `Match.startedAt` en milisegundos.
+   *
+   * Lo usan los eventos puntuales, que cuentan por **cuándo empezó** la partida (el
+   * mismo criterio que la ventana del torneo) y no por cuándo terminó. Viaja como
+   * número por el mismo motivo que `finishedAtMs`: evita discutir con la zona
+   * horaria de la sesión al cruzar tiempos.
+   */
+  startedAtMs: number;
   finishedAtMs: number;
 };
 
@@ -860,6 +909,7 @@ function objectiveRowsQuery(ruleset: ScoringRuleset, cutoffs: LadderCutoffsTable
            m."gameId" as "gameId",
            m."leaderboard" as "leaderboard",
            m."rawJson" ->> 'kind' as "kind",
+           (extract(epoch from m."startedAt" at time zone 'UTC') * 1000)::double precision as "startedAtMs",
            (extract(epoch from m."finishedAt" at time zone 'UTC') * 1000)::double precision as "finishedAtMs"
     from "Match" m
     join "Player" p on p."id" = m."playerId"
@@ -869,7 +919,7 @@ function objectiveRowsQuery(ruleset: ScoringRuleset, cutoffs: LadderCutoffsTable
   `;
 }
 
-type PlayerMeta = {
+export type PlayerMeta = {
   playerId: string;
   profileId: number;
   name: string;
@@ -990,7 +1040,7 @@ function resolveFormat(row: ObjectiveMatchRow): FormatId | null {
   return null;
 }
 
-function emptyPlayer(meta: PlayerMeta): PlayerAggregate {
+export function emptyObjectiveAggregate(meta: PlayerMeta): PlayerAggregate {
   return {
     playerId: meta.playerId,
     profileId: meta.profileId,
@@ -1150,6 +1200,92 @@ export function matchAchievements(
  * racha de APM. Es el mismo criterio que el `null` de `historyPublic`: lo que no se
  * ha podido leer no se escribe.
  */
+export function applyObjectiveMatch(
+  aggregate: PlayerAggregate,
+  row: ObjectiveMatchRow,
+  ruleset: ScoringRuleset,
+): void {
+  const won = row.result === "WIN";
+
+  aggregate.matches += 1;
+  aggregate.lastMatchAt = row.finishedAtMs;
+  aggregate.playedDays.add(naturalDay(row.finishedAtMs));
+
+  if (won) {
+    aggregate.wins += 1;
+    aggregate.lastWinAt = row.finishedAtMs;
+
+    if (row.durationSeconds !== null) {
+      if (row.durationSeconds < SHORT_MATCH_SECONDS) {
+        aggregate.shortWins += 1;
+      } else if (row.durationSeconds > LONG_MATCH_SECONDS) {
+        aggregate.longWins += 1;
+      }
+    }
+  }
+
+  const achievements = matchAchievements(row);
+
+  if (achievements.fastFeudal) {
+    aggregate.fastFeudal += 1;
+  }
+
+  if (achievements.fastCastle) {
+    aggregate.fastCastle += 1;
+  }
+
+  if (achievements.fastImperial) {
+    aggregate.fastImperial += 1;
+  }
+
+  if (achievements.defender) {
+    aggregate.defenderMatches += 1;
+  }
+
+  const format = resolveFormat(row);
+
+  if (format !== null) {
+    const record = aggregate.byFormat.get(format) ?? { matches: 0, wins: 0, lastWinAt: 0 };
+    record.matches += 1;
+
+    if (won) {
+      record.wins += 1;
+      record.lastWinAt = row.finishedAtMs;
+    }
+
+    aggregate.byFormat.set(format, record);
+  }
+
+  if (row.map !== null) {
+    aggregate.byMap.set(row.map, (aggregate.byMap.get(row.map) ?? 0) + 1);
+  }
+
+  // Las partidas con civ aleatoria no dicen nada de la civilización de nadie: se
+  // excluyen de todos los objetivos de civilización. No afectan a los demás.
+  if (row.civ === null || (!ruleset.countRandomizedCivs && row.civRandomized)) {
+    return;
+  }
+
+  const civ = aggregate.byCiv.get(row.civ) ?? { matches: 0, wins: 0, lastWinAt: 0 };
+
+  civ.matches += 1;
+
+  if (won) {
+    civ.wins += 1;
+    civ.lastWinAt = row.finishedAtMs;
+  }
+
+  aggregate.byCiv.set(row.civ, civ);
+}
+
+/**
+ * Agrega las partidas de un jugador **en orden cronológico** y cierra la racha
+ * más larga de victorias.
+ *
+ * La racha vive fuera de `applyObjectiveMatch()` a propósito: es la única parte que
+ * depende del orden y del estado anterior, y el backfill de liderazgos la mantiene a
+ * mano con su propio contador, sin duplicar el resto de la agregación.
+ */
 function aggregatePlayer(
   aggregate: PlayerAggregate,
   rows: ObjectiveMatchRow[],
@@ -1158,85 +1294,18 @@ function aggregatePlayer(
   let run = 0;
 
   for (const row of rows) {
-    const won = row.result === "WIN";
+    applyObjectiveMatch(aggregate, row, ruleset);
 
-    aggregate.matches += 1;
-    aggregate.lastMatchAt = row.finishedAtMs;
-    aggregate.playedDays.add(naturalDay(row.finishedAtMs));
-
-    if (won) {
-      aggregate.wins += 1;
-      aggregate.lastWinAt = row.finishedAtMs;
+    if (row.result === "WIN") {
       run += 1;
 
       if (run > aggregate.streak) {
         aggregate.streak = run;
         aggregate.streakEndsAt = row.finishedAtMs;
       }
-
-      if (row.durationSeconds !== null) {
-        if (row.durationSeconds < SHORT_MATCH_SECONDS) {
-          aggregate.shortWins += 1;
-        } else if (row.durationSeconds > LONG_MATCH_SECONDS) {
-          aggregate.longWins += 1;
-        }
-      }
     } else {
       run = 0;
     }
-
-    const achievements = matchAchievements(row);
-
-    if (achievements.fastFeudal) {
-      aggregate.fastFeudal += 1;
-    }
-
-    if (achievements.fastCastle) {
-      aggregate.fastCastle += 1;
-    }
-
-    if (achievements.fastImperial) {
-      aggregate.fastImperial += 1;
-    }
-
-    if (achievements.defender) {
-      aggregate.defenderMatches += 1;
-    }
-
-    const format = resolveFormat(row);
-
-    if (format !== null) {
-      const record = aggregate.byFormat.get(format) ?? { matches: 0, wins: 0, lastWinAt: 0 };
-      record.matches += 1;
-
-      if (won) {
-        record.wins += 1;
-        record.lastWinAt = row.finishedAtMs;
-      }
-
-      aggregate.byFormat.set(format, record);
-    }
-
-    if (row.map !== null) {
-      aggregate.byMap.set(row.map, (aggregate.byMap.get(row.map) ?? 0) + 1);
-    }
-
-    // Las partidas con civ aleatoria no dicen nada de la civilización de nadie: se
-    // excluyen de todos los objetivos de civilización. No afectan a los demás.
-    if (row.civ === null || (!ruleset.countRandomizedCivs && row.civRandomized)) {
-      continue;
-    }
-
-    const civ = aggregate.byCiv.get(row.civ) ?? { matches: 0, wins: 0, lastWinAt: 0 };
-
-    civ.matches += 1;
-
-    if (won) {
-      civ.wins += 1;
-      civ.lastWinAt = row.finishedAtMs;
-    }
-
-    aggregate.byCiv.set(row.civ, civ);
   }
 }
 
@@ -1248,16 +1317,37 @@ function aggregatePlayer(
  * de equipos del predicado y los pasa quien llama (el motor de puntos los ha leído
  * de `Setting` una sola vez por pasada).
  */
-export async function loadObjectivePlayers(
+export async function loadObjectiveMatchRows(
   client: ObjectiveQueryClient,
   ruleset: ScoringRuleset,
   cutoffs: LadderCutoffsTable | null,
-): Promise<PlayerAggregate[]> {
+): Promise<ObjectiveMatchRow[]> {
   if (ruleset.modes.length === 0) {
     return [];
   }
 
-  const rows = await client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset, cutoffs));
+  return client.$queryRaw<ObjectiveMatchRow[]>(objectiveRowsQuery(ruleset, cutoffs));
+}
+
+/**
+ * Lo que devuelve `loadObjectiveData()`: las filas clasificatorias y sus agregados.
+ *
+ * Se piden juntos porque salen del mismo barrido: los agregados alimentan el
+ * catálogo de objetivos y las filas alimentan los eventos puntuales, que cuentan
+ * victorias por **partida** y no por agregado.
+ */
+export type ObjectiveData = {
+  /** Los agregados por jugador, listos para el catálogo de objetivos. */
+  players: PlayerAggregate[];
+  /** Las filas clasificatorias de las que salen, ordenadas como las lee el motor. */
+  rows: ObjectiveMatchRow[];
+};
+
+/** Agrupa las filas por jugador y las convierte en agregados. */
+function aggregateObjectivePlayers(
+  rows: readonly ObjectiveMatchRow[],
+  ruleset: ScoringRuleset,
+): PlayerAggregate[] {
   const byPlayer = new Map<string, { meta: PlayerMeta; rows: ObjectiveMatchRow[] }>();
 
   for (const row of rows) {
@@ -1291,7 +1381,7 @@ export async function loadObjectivePlayers(
         (a.gameId < b.gameId ? -1 : a.gameId > b.gameId ? 1 : 0),
     );
 
-    const aggregate = emptyPlayer(meta);
+    const aggregate = emptyObjectiveAggregate(meta);
     aggregatePlayer(aggregate, ordered, ruleset);
     // La racha actual y la de APM salen del mismo orden cronológico; se calculan
     // aparte para que las partes puras sean comprobables por sí solas.
@@ -1305,6 +1395,33 @@ export async function loadObjectivePlayers(
   }
 
   players.sort((a, b) => a.profileId - b.profileId);
+
+  return players;
+}
+
+/**
+ * Las partidas clasificatorias y sus agregados, en una sola consulta.
+ *
+ * `recomputeScores()` usa las dos partes: los agregados para los objetivos y las
+ * filas para el bono de los eventos puntuales. `loadObjectivePlayers()` se queda
+ * como el atajo de quien solo necesita lo primero (`loadObjectiveView`).
+ */
+export async function loadObjectiveData(
+  client: ObjectiveQueryClient,
+  ruleset: ScoringRuleset,
+  cutoffs: LadderCutoffsTable | null,
+): Promise<ObjectiveData> {
+  const rows = await loadObjectiveMatchRows(client, ruleset, cutoffs);
+
+  return { players: aggregateObjectivePlayers(rows, ruleset), rows };
+}
+
+export async function loadObjectivePlayers(
+  client: ObjectiveQueryClient,
+  ruleset: ScoringRuleset,
+  cutoffs: LadderCutoffsTable | null,
+): Promise<PlayerAggregate[]> {
+  const { players } = await loadObjectiveData(client, ruleset, cutoffs);
 
   return players;
 }
@@ -1795,7 +1912,8 @@ function targetFor(
  * Los objetivos **desactivados** (`ruleset.disabledObjectives`) se saltan antes de
  * calcular nada: no entran en `options` (así no se publican ni entran en el
  * snapshot), no reparten puntos y no aparecen en `awarded`, que es lo que hace que
- * `reconcileObjectiveEvents()` borre sus eventos.
+ * `reconcileObjectiveEvents()` borre sus eventos y que
+ * `reconcileObjectiveLeadEvents()` anote la pérdida de su poseedor.
  */
 export function computeObjectives(
   players: readonly PlayerAggregate[],
