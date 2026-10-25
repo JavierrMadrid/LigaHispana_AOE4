@@ -32,8 +32,14 @@ import {
 import { campoSiCambia } from "@/lib/player-fields";
 import { parseEmail } from "@/lib/player-input";
 import { VICTORIAS_ID } from "@/lib/objectives";
-import { parseMadridLocalInstant } from "@/lib/ranked-match";
-import { mergeRuleset, readRuleset, writeScoringRuleset, type ScoringRuleset } from "@/lib/scoring";
+import { editionStarted, parseMadridLocalInstant } from "@/lib/ranked-match";
+import {
+  lockedRulesetChanges,
+  mergeRuleset,
+  readRuleset,
+  writeScoringRuleset,
+  type ScoringRuleset,
+} from "@/lib/scoring";
 
 /**
  * Server Actions del superadministrador: la gestión de admins, la configuración de la
@@ -434,6 +440,53 @@ const WINDOW_TO_INVALID_ERROR =
  */
 const OBJECTIVE_POINTS_PREFIX = "objectivePoints.";
 
+/**
+ * El error de "la edición ya ha empezado".
+ *
+ * Es el mismo mensaje para los dos casos que lo producen —un formulario que trae un
+ * campo congelado y un documento que movería puntos pese a todo— porque la regla que se
+ * incumple es la misma y el camino que le queda a quien lo lee también.
+ */
+const RULESET_LOCKED_ERROR =
+  "La edición ya ha empezado: los puntos y las reglas de puntuación ya no se pueden cambiar. Solo se puede fijar la fecha de fin de la ventana.";
+
+/**
+ * Los campos del formulario que quedan congelados cuando la edición ha empezado.
+ *
+ * `windowTo` **no** está: es el único que se puede seguir tocando. Los puntos por
+ * objetivo no se pueden listar aquí —son hasta 88 claves `objectivePoints.<id>`— y se
+ * detectan por su prefijo.
+ */
+const LOCKED_RULESET_FIELDS = [
+  "windowFrom",
+  "pointsPerWin",
+  "modes",
+  "countRandomizedCivs",
+  "disabledObjectives",
+] as const;
+
+/**
+ * ¿Trae el formulario algún campo que la edición empezada ya no admite?
+ *
+ * Se mira lo que **llega** y no lo que cambia: con la edición en marcha, el formulario
+ * bueno es el que solo manda `windowTo`, y un campo bloqueado en el `FormData` es una
+ * petición de cambiarlo, aunque venga con el valor que ya estaba. Así el rechazo es
+ * explícito y no depende de que la interfaz haya deshabilitado el campo de verdad.
+ */
+function touchesLockedRulesetFields(formData: FormData): boolean {
+  if (LOCKED_RULESET_FIELDS.some((name) => formData.has(name))) {
+    return true;
+  }
+
+  for (const key of formData.keys()) {
+    if (key.startsWith(OBJECTIVE_POINTS_PREFIX)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /** La ventana como texto, para el rastro: `from → to`, con el `to` abierto explícito. */
 function windowText(window: ScoringRuleset["window"]): string {
   return `${window.from} → ${window.to ?? "sin fin"}`;
@@ -507,15 +560,47 @@ function objectivesChanged(
  *
  * Revalida las pantallas que leen las reglas: el panel, la clasificación, los objetivos
  * y la puntuación.
+ *
+ * ## Con la edición empezada solo queda el fin de la ventana
+ *
+ * Desde `window.from` (`editionStarted()`) los puntos y las reglas que los mueven
+ * quedan **congelados**: la fecha de inicio, las familias de ladder, los puntos por
+ * victoria, la civ aleatoria, los puntos de objetivos y los objetivos desactivados.
+ * Cambiarlos a mitad de edición reescribiría una clasificación que ya está publicada.
+ * Lo único que se puede hacer después del inicio es **fijar o mover `window.to`**, que
+ * es cómo se cierra la edición (ver `docs/PUNTUACION.md` y `docs/OPERACION.md`).
+ *
+ * El bloqueo lo decide **este servidor**: la interfaz puede deshabilitar campos y
+ * explicar el motivo, pero una Server Action es un endpoint público y quien se niega es
+ * esta función. Se comprueba dos veces: primero, qué campos trae el formulario; y como
+ * guarda final, que el documento resultante no mueva ningún campo bloqueado
+ * (`lockedRulesetChanges()`), aunque el formulario hubiera mentido.
  */
 export async function saveScoringRuleset(
   _prevState: AdminActionResult,
   formData: FormData,
 ): Promise<AdminActionResult> {
   const admin = await requireSuperadmin();
+  const windowTo = readField(formData, "windowTo");
+
+  // El ruleset guardado se lee **antes** de validar los campos: si la edición ya ha
+  // empezado, casi todo el formulario deja de tener sentido y lo que decide el camino
+  // es la ventana guardada, no la que traiga el campo de la fecha de inicio.
+  let actual: ScoringRuleset;
+
+  try {
+    actual = await readRuleset();
+  } catch (error) {
+    logDatabaseFailure("admin/saveScoringRuleset/leer", error);
+
+    return { status: "error", message: RULESET_SAVE_FAILED_MESSAGE };
+  }
+
+  if (editionStarted(actual.window, new Date())) {
+    return saveWindowEnd(admin, formData, windowTo, actual);
+  }
 
   const windowFrom = readField(formData, "windowFrom");
-  const windowTo = readField(formData, "windowTo");
   const modes = readList(formData, "modes");
   const pointsPerWinRaw = readField(formData, "pointsPerWin");
   const countRandomizedCivs = readField(formData, "countRandomizedCivs") === "true";
@@ -541,16 +626,6 @@ export async function saveScoringRuleset(
 
   if (!Number.isInteger(pointsPerWin) || pointsPerWin <= 0) {
     return { status: "error", message: POINTS_PER_WIN_INVALID_ERROR };
-  }
-
-  let actual: ScoringRuleset;
-
-  try {
-    actual = await readRuleset();
-  } catch (error) {
-    logDatabaseFailure("admin/saveScoringRuleset/leer", error);
-
-    return { status: "error", message: RULESET_SAVE_FAILED_MESSAGE };
   }
 
   const objectives = { ...actual.objectives };
@@ -673,6 +748,103 @@ export async function saveScoringRuleset(
       `Se han guardado las reglas de puntuación. Campos: ${cambios
         .map((cambio) => cambio.etiqueta)
         .join(", ")}.`,
+      resultado.recomputed
+        ? "La clasificación se ha recalculado con las reglas nuevas."
+        : resultado.recomputeWarning ?? "El cambio no mueve la puntuación, así que no ha hecho falta recalcular.",
+    ),
+  };
+}
+
+/**
+ * La única escritura que se permite con la edición ya empezada: el **fin** de la
+ * ventana.
+ *
+ * Se niega si el formulario trae un campo congelado, y no solo si lo cambia: con la
+ * edición en marcha el formulario bueno es el que manda solo `windowTo`, así que un
+ * campo de puntos en el `FormData` es una petición de cambiarlo. Después se arma el
+ * documento con **los valores guardados** de todo lo bloqueado y solo el `to` del
+ * formulario, de modo que lo que se escribe no puede mover puntos ni aunque llegue un
+ * documento manipulado; y aun así se compara el resultado con el guardado
+ * (`lockedRulesetChanges()`) antes de tocar la base, como última guarda.
+ *
+ * Un `to` vacío deja la ventana **abierta** por la derecha, igual que en el camino
+ * normal: es lo que permite reabrir el fin de una edición que se cerró antes de tiempo.
+ */
+async function saveWindowEnd(
+  admin: User,
+  formData: FormData,
+  windowTo: string,
+  actual: ScoringRuleset,
+): Promise<AdminActionResult> {
+  if (touchesLockedRulesetFields(formData)) {
+    return { status: "error", message: RULESET_LOCKED_ERROR };
+  }
+
+  const windowToInstant = windowTo === "" ? null : parseMadridLocalInstant(windowTo);
+
+  if (windowTo !== "" && windowToInstant === null) {
+    return { status: "error", message: WINDOW_TO_INVALID_ERROR };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- la etiqueta la recalcula `mergeRuleset`
+  const { label: _etiquetaCalculada, ...documento } = actual;
+
+  const merged = mergeRuleset({
+    ...documento,
+    window: { from: actual.window.from, to: windowToInstant },
+  });
+
+  if (merged.warnings.length > 0) {
+    return {
+      status: "error",
+      message: `No se ha guardado el fin de la ventana: ${merged.warnings.join("; ")}.`,
+    };
+  }
+
+  const despues = merged.ruleset;
+  const bloqueados = lockedRulesetChanges(actual, despues);
+
+  if (bloqueados.length > 0) {
+    return { status: "error", message: RULESET_LOCKED_ERROR };
+  }
+
+  const cambios = campoSiCambia(
+    windowText(actual.window),
+    windowText(despues.window),
+    "window",
+    "fin de la ventana del torneo",
+  );
+
+  if (cambios.length === 0) {
+    return {
+      status: "success",
+      message: "No había ningún cambio que guardar en el fin de la ventana.",
+    };
+  }
+
+  let resultado;
+
+  try {
+    resultado = await writeScoringRuleset(despues, cambios, actorEmail(admin));
+  } catch (error) {
+    logDatabaseFailure("admin/saveScoringRuleset/fin-ventana", error);
+
+    return { status: "error", message: RULESET_SAVE_FAILED_MESSAGE };
+  }
+
+  // El fin de la ventana mueve puntos (las partidas que quedan fuera del corte dejan de
+  // contar), así que el recálculo y su aviso se conservan tal cual: las pantallas que
+  // leen las reglas son las mismas que en el camino normal.
+  revalidatePath("/admin/administracion");
+  revalidatePath("/admin/acciones");
+  revalidatePath("/");
+  revalidatePath("/objetivos");
+  revalidatePath("/puntuacion");
+
+  return {
+    status: "success",
+    message: frase(
+      "Se ha guardado la fecha de fin de la ventana del torneo.",
       resultado.recomputed
         ? "La clasificación se ha recalculado con las reglas nuevas."
         : resultado.recomputeWarning ?? "El cambio no mueve la puntuación, así que no ha hecho falta recalcular.",

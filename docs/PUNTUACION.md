@@ -229,6 +229,13 @@ u objetivos desactivados— recalcula la clasificación al guardar; si el recál
 quedan guardadas y el aviso lo dice (la clasificación se pone al día en la siguiente pasada). El
 detalle operativo está en [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
 
+**Con la edición empezada solo se puede cerrar la ventana.** Desde `window.from` (`editionStarted()`)
+quedan congelados `window.from`, las familias de ladder, los puntos por victoria, el recuento de civs
+aleatorias, los puntos de objetivos y los objetivos desactivados: cambiarlos reescribiría una
+clasificación que ya está publicada. Lo único que se puede fijar o cambiar es `window.to`, que es cómo
+se cierra la edición. El bloqueo está en el servidor (`saveScoringRuleset`); la pantalla esconde los
+campos congelados y solo deja fijar el fin.
+
 Forma del desglose (`PlayerScore.breakdown`): las dos familias y el bloque de eventos, con ceros si no
 aplican. Una fila escrita antes de que existieran los eventos no trae `events`.
 

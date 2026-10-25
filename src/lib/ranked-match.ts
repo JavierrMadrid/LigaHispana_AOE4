@@ -229,6 +229,30 @@ export function countsWithinWindow(
 }
 
 /**
+ * ¿Ha empezado ya la edición?
+ *
+ * La edición empieza en `window.from`, el mismo instante desde el que las partidas
+ * empiezan a contar. A partir de ahí lo que reparte puntos queda congelado (ver
+ * `lockedRulesetChanges()` en `scoring.ts` y `editionEventsLocked()` en
+ * `edition-events.ts`), porque cambiarlo movería una clasificación que ya está
+ * publicada.
+ *
+ * Una fecha de inicio **ilegible no bloquea**: se prefiere dejar arreglar la
+ * configuración a encerrar el panel por un documento roto, y la lectura del ruleset
+ * ya garantiza una ventana legible (`parseWindow()`).
+ *
+ * Es el predicado único de ese "ya ha empezado", y está aquí y no en cada consumidor
+ * porque el instante que lo decide es de la ventana, que es lo que define este
+ * módulo: `editionEventsLocked()` y `saveScoringRuleset()` lo comparten en lugar de
+ * comparar fechas cada uno a su manera.
+ */
+export function editionStarted(window: ScoringWindow, now: Date): boolean {
+  const from = new Date(window.from).getTime();
+
+  return Number.isFinite(from) && now.getTime() >= from;
+}
+
+/**
  * Un instante escrito con zona explícita.
  *
  * Se rechaza a propósito lo que `Date.parse` admitiría sin más: `"2026-09-15"` lo
