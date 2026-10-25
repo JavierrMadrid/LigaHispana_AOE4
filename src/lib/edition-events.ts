@@ -3,7 +3,7 @@ import "server-only";
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
 import { isRecord } from "@/lib/json";
-import { readInstant, type ScoringWindow } from "@/lib/ranked-match";
+import { editionStarted, readInstant, type ScoringWindow } from "@/lib/ranked-match";
 
 /**
  * Los eventos puntuales de la edición: ventanas con multiplicador de puntos.
@@ -498,11 +498,13 @@ export function activeEditionEvent(
  * ya están publicados. Una fecha de inicio ilegible **no** bloquea: se prefiere
  * dejar arreglar la configuración a encerrar el panel por un documento roto, y la
  * validación del ruleset ya garantiza una ventana legible.
+ *
+ * El predicado no se escribe aquí: es `editionStarted()`, el mismo con el que el
+ * ruleset congela sus puntos. La idea "la edición ya ha empezado" tiene que ser una
+ * sola, o los eventos y las reglas podrían discrepar en el mismo instante.
  */
 export function editionEventsLocked(window: ScoringWindow, now: Date): boolean {
-  const from = new Date(window.from).getTime();
-
-  return Number.isFinite(from) && now.getTime() >= from;
+  return editionStarted(window, now);
 }
 
 /* -------------------------------------------------------------------------- */

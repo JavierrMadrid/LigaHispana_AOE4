@@ -627,6 +627,12 @@ superadministrador que viven en sus subpestañas (`/admin/administracion/inscrip
 - **Un cambio de reglas que mueva puntos recalcula la clasificación al guardar.** Si el recálculo falla,
   las reglas **sí** están guardadas y el mensaje lo dice: la clasificación se pone al día en la
   siguiente pasada del sincronizador.
+- **Con la edición empezada, los puntos quedan congelados.** Desde `window.from` (`editionStarted()`),
+  `saveScoringRuleset` rechaza la fecha de inicio, las familias de ladder, los puntos por victoria, el
+  recuento de civs aleatorias, los puntos de objetivos y los objetivos desactivados: moverlos
+  reescribiría una clasificación ya publicada. Lo único que se puede fijar o cambiar es el **fin de la
+  ventana** (`window.to`), que es cómo se cierra la edición. El bloqueo está en el servidor; la
+  pantalla esconde los campos congelados y solo deja fijar el fin.
 - **La retransmisión obligatoria** enciende la alerta `NO_STREAM_CHANNEL` (ver
   [Alertas de comportamiento](#alertas-de-comportamiento)). Apagarla **no** borra las alertas ya
   escritas: `Alert` es *append-only*.

@@ -632,6 +632,89 @@ export async function writeScoringRuleset(
 }
 
 /* -------------------------------------------------------------------------- */
+/* Bloqueo de las reglas con la edición empezada                              */
+/* -------------------------------------------------------------------------- */
+
+/** Un campo bloqueado que cambia: lo justo para componer el mensaje del panel. */
+export type LockedRulesetChange = {
+  /** Nombre del campo, el mismo que el del ruleset. */
+  campo: string;
+  /** Cómo se llama en español, para el mensaje. */
+  etiqueta: string;
+};
+
+/** Dos listas con el mismo contenido, sin mirar el orden ni las repeticiones. */
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  const desde = new Set(a);
+  const hasta = new Set(b);
+
+  return desde.size === hasta.size && [...desde].every((value) => hasta.has(value));
+}
+
+/**
+ * Los campos bloqueados del ruleset que cambian entre dos versiones del documento.
+ *
+ * Es la **guarda del servidor** de "una vez que empieza la edición no se pueden
+ * cambiar los puntos": `saveScoringRuleset()` la usa para negarse a escribir aunque
+ * el formulario (o una llamada directa a la Server Action) traiga otro documento. Es
+ * pura y no toca la base de datos, así que se prueba entera sin ella.
+ *
+ * Con la edición empezada quedan congelados:
+ *
+ * | Campo | Por qué |
+ * |---|---|
+ * | `window.from` | Mueve el corte de todas las partidas: cambia qué se jugó "dentro" |
+ * | `modes` | Añadir o quitar una familia cambia quién puntúa |
+ * | `pointsPerWin` | Es el precio de cada victoria |
+ * | `countRandomizedCivs` | Cambia los objetivos de civilización que se cobran |
+ * | `objectives` | Es el precio de cada objetivo |
+ * | `disabledObjectives` | Apagar un objetivo retira puntos ya repartidos |
+ *
+ * **`window.to` se ignora a propósito**: fijar o mover el fin de la ventana es la
+ * forma de cerrar la edición, y la documentación ya dice que una ventana abierta se
+ * cierra más tarde. Es el único campo editable después del inicio.
+ *
+ * Se compara el texto de `window.from` y no el instante: las dos versiones llegan
+ * pasadas por `mergeRuleset()` → `parseWindow()`, que normaliza a `toISOString()`, así
+ * que dos fechas iguales son el mismo texto.
+ */
+export function lockedRulesetChanges(
+  actual: ScoringRuleset,
+  next: ScoringRuleset,
+): LockedRulesetChange[] {
+  const cambios: LockedRulesetChange[] = [];
+
+  const anotar = (campo: string, etiqueta: string, cambia: boolean): void => {
+    if (cambia) {
+      cambios.push({ campo, etiqueta });
+    }
+  };
+
+  anotar("window", "fecha de inicio de la ventana", actual.window.from !== next.window.from);
+  anotar("modes", "familias de ladder", !sameSet(actual.modes, next.modes));
+  anotar("pointsPerWin", "puntos por victoria", actual.pointsPerWin !== next.pointsPerWin);
+  anotar(
+    "countRandomizedCivs",
+    "civilizaciones aleatorias",
+    actual.countRandomizedCivs !== next.countRandomizedCivs,
+  );
+
+  // Por unión de claves: un id que solo está en una de las dos versiones cambia el
+  // reparto aunque su valor no esté a la vista en la otra.
+  const ids = new Set([...Object.keys(actual.objectives), ...Object.keys(next.objectives)]);
+  const objetivosCambiados = [...ids].some((id) => actual.objectives[id] !== next.objectives[id]);
+
+  anotar("objectives", "puntos de objetivos", objetivosCambiados);
+  anotar(
+    "disabledObjectives",
+    "objetivos desactivados",
+    !sameSet(actual.disabledObjectives, next.disabledObjectives),
+  );
+
+  return cambios;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Desglose                                                                    */
 /* -------------------------------------------------------------------------- */
 

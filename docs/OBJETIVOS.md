@@ -133,6 +133,11 @@ La etiqueta de la regla se recalcula con los objetivos activos, así que la web 
 ya no existen. Lo cambia el superadministrador desde el panel; el detalle, en
 [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
 
+Apagar un objetivo **solo se puede antes de que empiece la edición**: desde `window.from`, el ruleset
+está congelado (`saveScoringRuleset` rechaza el cambio) porque un objetivo apagado retiraría puntos que
+la clasificación ya está publicando. Después del inicio, lo único editable del ruleset es el fin de la
+ventana.
+
 ## Pool de mapas
 
 `por-tierra-y-agua` usa los mapas de `Setting["scoring.mapPool"]`: una lista de nombres **exactamente**

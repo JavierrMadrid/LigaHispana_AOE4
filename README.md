@@ -59,8 +59,10 @@ avisos y por privado al participante— y, si hace falta, una información priva
 panel. Una reversión es final y no se puede revertir. El **superadministrador** configura además la
 **edición**: su nombre y su premio base, la marca (emblema y color de acento) que se
 aplica a la web pública, si la retransmisión es obligatoria, las reglas de puntuación (ventana,
-familias, puntos y objetivos desactivados) y los **eventos puntuales**, todo sin desplegar. También
-puede **deshacer** lo que hicieron los admins regulares.
+familias, puntos y objetivos desactivados) y los **eventos puntuales**, todo sin desplegar. Las
+reglas de puntos y los eventos solo se pueden cambiar antes de que empiece la edición; desde su
+inicio los puntos quedan congelados y solo se puede fijar el fin de la ventana. También puede
+**deshacer** lo que hicieron los admins regulares.
 
 Un **bot de Discord** avisa del comienzo y el final del torneo en el canal de avisos, una sola vez por
 aviso, con el nombre de la edición y sus fechas. También recuerda cada **evento puntual** 24, 12 y 1 hora
@@ -134,7 +136,8 @@ Supabase Cron ──► Worker (Cloudflare) ──► API de AoE4World
   un workflow de GitHub queda como red de seguridad.
 - El **motor de puntuación** lee las partidas guardadas, aplica el ruleset activo y escribe la
   clasificación. Se recalcula solo.
-- Las **reglas y los puntos** son configurables sin desplegar (viven en la tabla `Setting`).
+- Las **reglas y los puntos** son configurables sin desplegar antes de que empiece la edición (viven
+  en la tabla `Setting`); después, solo se puede fijar el fin de la ventana.
 
 ### Acceso al panel
 

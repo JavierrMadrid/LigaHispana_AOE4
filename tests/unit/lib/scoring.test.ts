@@ -11,6 +11,7 @@ import {
   compareStandings,
   computeEventBonuses,
   countsAsRanked,
+  lockedRulesetChanges,
   mergeRuleset,
   rankApprovedPlayers,
   ruleLabel,
@@ -490,6 +491,104 @@ describe("mergeRuleset: el candidato que guarda el panel de administración", ()
 
     expect(warnings.some((w) => w.startsWith("label se ignora"))).toBe(true);
     expect(ruleset.label).toBe(ruleLabel(ruleset));
+  });
+});
+
+describe("lockedRulesetChanges: lo que la edición empezada congela", () => {
+  /**
+   * El ruleset de partida: el de por defecto, con las listas copiadas para que un test
+   * pueda reordenarlas o vaciarlas sin tocar la constante compartida.
+   */
+  const actual: ScoringRuleset = {
+    ...DEFAULT_RULESET,
+    modes: [...DEFAULT_RULESET.modes],
+    window: { ...DEFAULT_RULESET.window },
+    objectives: { ...DEFAULT_RULESET.objectives },
+    disabledObjectives: ["rey-1v1"],
+  };
+
+  /** El mismo documento con lo que se le pase cambiado. */
+  function con(cambios: Partial<ScoringRuleset>): ScoringRuleset {
+    return { ...actual, ...cambios };
+  }
+
+  it("dos documentos iguales no mueven nada", () => {
+    expect(lockedRulesetChanges(actual, con({}))).toEqual([]);
+  });
+
+  it("la fecha de inicio de la ventana está congelada", () => {
+    expect(
+      lockedRulesetChanges(actual, con({ window: { ...actual.window, from: "2026-09-20T00:00:00.000Z" } })),
+    ).toEqual([{ campo: "window", etiqueta: "fecha de inicio de la ventana" }]);
+  });
+
+  it("mover solo el fin de la ventana está permitido", () => {
+    // Es la forma de cerrar la edición: `window.to` se ignora a propósito.
+    expect(lockedRulesetChanges(actual, con({ window: { from: actual.window.from, to: null } }))).toEqual(
+      [],
+    );
+    expect(
+      lockedRulesetChanges(
+        actual,
+        con({ window: { from: actual.window.from, to: "2026-10-20T00:00:00.000Z" } }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("las familias de ladder se comparan como conjunto", () => {
+    expect(lockedRulesetChanges(actual, con({ modes: ["rm_team", "rm_solo"] }))).toEqual([]);
+    expect(lockedRulesetChanges(actual, con({ modes: ["rm_solo"] }))).toEqual([
+      { campo: "modes", etiqueta: "familias de ladder" },
+    ]);
+  });
+
+  it("los puntos por victoria están congelados", () => {
+    expect(lockedRulesetChanges(actual, con({ pointsPerWin: actual.pointsPerWin + 1 }))).toEqual([
+      { campo: "pointsPerWin", etiqueta: "puntos por victoria" },
+    ]);
+  });
+
+  it("la civ aleatoria está congelada, en los dos sentidos", () => {
+    expect(
+      lockedRulesetChanges(actual, con({ countRandomizedCivs: !actual.countRandomizedCivs })),
+    ).toEqual([{ campo: "countRandomizedCivs", etiqueta: "civilizaciones aleatorias" }]);
+  });
+
+  it("los puntos de un objetivo están congelados", () => {
+    expect(
+      lockedRulesetChanges(
+        actual,
+        con({ objectives: { ...actual.objectives, "loco-por-ganar": 999 } }),
+      ),
+    ).toEqual([{ campo: "objectives", etiqueta: "puntos de objetivos" }]);
+  });
+
+  it("un objetivo que solo aparece en una de las dos versiones también es un cambio", () => {
+    // La comparación es por unión de claves: si solo se miraran las claves de una, un
+    // id añadido o quitado se colaría como si no hubiera pasado nada.
+    const sinUno = { ...actual.objectives };
+
+    delete sinUno["rey-1v1"];
+
+    expect(lockedRulesetChanges(con({ objectives: sinUno }), actual)).toEqual([
+      { campo: "objectives", etiqueta: "puntos de objetivos" },
+    ]);
+  });
+
+  it("los objetivos desactivados se comparan como conjunto", () => {
+    expect(lockedRulesetChanges(actual, con({ disabledObjectives: ["rey-1v1"] }))).toEqual([]);
+    expect(
+      lockedRulesetChanges(actual, con({ disabledObjectives: ["rey-1v1", "jugon"] })),
+    ).toEqual([{ campo: "disabledObjectives", etiqueta: "objetivos desactivados" }]);
+  });
+
+  it("varios campos a la vez se devuelven todos, para poder componer el mensaje", () => {
+    const cambios = lockedRulesetChanges(
+      actual,
+      con({ pointsPerWin: 5, disabledObjectives: [] }),
+    );
+
+    expect(cambios.map((cambio) => cambio.campo)).toEqual(["pointsPerWin", "disabledObjectives"]);
   });
 });
 
