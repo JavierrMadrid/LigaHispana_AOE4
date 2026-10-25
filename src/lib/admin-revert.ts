@@ -437,6 +437,10 @@ async function markReverted(
  * no lo está, algo lo ha cambiado después —otra aprobación, un rechazo, una
  * reinscripción— y deshacerla pisaría ese cambio: se dice y no se escribe nada. Es la
  * diferencia entre deshacer una acción y deshacer todo lo que vino detrás.
+ *
+ * Y si la vuelta es a `APPROVED` con la verificación del alta pendiente, **se
+ * bloquea**: una reversión no puede aprobar a alguien que no ha confirmado sin que
+ * quede rastro de la excepción (ver el comentario dentro de la función).
  */
 async function revertPlayerStatus(
   action: RevertibleAction,
@@ -456,7 +460,13 @@ async function revertPlayerStatus(
 
   const player = await db.player.findUnique({
     where: { id: targetId },
-    select: { id: true, name: true, status: true },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      discordVerificationRequestedAt: true,
+      discordVerifiedAt: true,
+    },
   });
 
   if (player === null) {
@@ -467,6 +477,34 @@ async function revertPlayerStatus(
     return {
       ok: false,
       message: `No se puede deshacer: ${player.name} no está en el estado que dejó esa acción. Algo lo ha cambiado después, y deshacerla ahora pisaría ese cambio.`,
+    };
+  }
+
+  /**
+   * Deshacer no puede ser una puerta de atrás de la verificación del alta (issue
+   * 119).
+   *
+   * Una reversión puede devolver la fila a `APPROVED` —es el caso de deshacer un
+   * rechazo—, y si esa fila está sujeta y no ha confirmado, hacerlo aquí dejaría
+   * aprobado a alguien sin que la persona haya dicho nada y **sin rastro** de que se
+   * saltó la puerta: la fila `ACTION_REVERTED` habla de la acción deshecha, no de
+   * esto. Por eso se bloquea y se dice por dónde se puede seguir, que son las dos
+   * vías que sí dejan constancia: aprobar desde el panel (y esperar la confirmación)
+   * o «Aprobar sin verificación», que es explícita y solo del superadministrador.
+   *
+   * Solo se comprueba la fila, no la configuración: `requestedAt` únicamente se
+   * escribe cuando la verificación estaba configurada, así que es la prueba de que
+   * esta fila se pidió verificar. Que la configuración se caiga después no autoriza
+   * a aprobarla por la puerta de atrás.
+   */
+  if (
+    before === PlayerStatus.APPROVED &&
+    player.discordVerificationRequestedAt !== null &&
+    player.discordVerifiedAt === null
+  ) {
+    return {
+      ok: false,
+      message: `No se puede deshacer: ${player.name} no ha confirmado su alta por Discord, y esta reversión lo aprobaría sin verificación. Aprobar desde el panel y esperar la confirmación, o —solo el superadministrador— aprobar sin verificación desde la ficha cuando el alta vuelva a estar pendiente, que queda registrado en el historial.`,
     };
   }
 

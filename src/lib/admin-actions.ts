@@ -45,7 +45,7 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * | `PLAYER_CREATED` | `Alta de BeastWizard (AoE4World 123456)` |
  * | `PLAYER_EDITED` | `Edición de BeastWizard (AoE4World 123456): nombre, canal de Twitch` |
  * | `PLAYER_REMOVED` | `Baja de BeastWizard y sus 87 partidas clasificatorias` |
- * | `PLAYER_APPROVED` | `Aprobación de BeastWizard (AoE4World 123456)` |
+ * | `PLAYER_APPROVED` | `Aprobación de BeastWizard (AoE4World 123456)` / `Aprobación sin verificación de BeastWizard (AoE4World 123456)` |
  * | `PLAYER_REJECTED` | `Rechazo de BeastWizard (AoE4World 123456)` |
  * | `MATCH_POINTS_REVERTED` | `Revertidos 2 puntos de la partida G-12345 de BeastWizard` |
  * | `MATCH_POINTS_RESTORED` | `Restaurados 2 puntos de la partida G-12345 de BeastWizard` |
@@ -79,6 +79,12 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * clasificación. Sin el estado anterior el historial no podría distinguir esos dos
  * movimientos.
  *
+ * `PLAYER_APPROVED` tiene además una variante: `withoutVerification`, la aprobación
+ * explícita del superadministrador que se salta la confirmación de la persona
+ * (issue 119). La frase lo dice —"Aprobación sin verificación de…"— y el `details`
+ * guarda `withoutVerification: true`, porque dos aprobaciones idénticas en el
+ * historial esconderían que una de ellas no tiene el consentimiento del jugador.
+ *
  * `PLAYER_EDITED` lleva **qué campos** cambiaron en la frase y no solo el jugador, por
  * la misma razón: "Edición de BeastWizard" sin más no dice qué se editó, que es justo
  * lo que se viene a mirar cuando alguien pregunta por qué un participante aparece con
@@ -98,8 +104,29 @@ type PlayerCreatedEntry = {
   /** `Player.name`: el nombre de display que se ha escrito. */
   name: string;
   profileId: number;
-  /** Estado con el que se ha creado, tal como se envió (`APPROVED`…). */
+  /**
+   * Estado **real** con el que queda la fila.
+   *
+   * Desde la issue 119 no siempre es el que se pidió: un alta que se pide
+   * `APPROVED` con la verificación de Discord activa se crea `PENDING` hasta que la
+   * persona confirme, y el historial tiene que decir lo que pasó, no lo que se
+   * intentó.
+   */
   status: string;
+  /**
+   * Estado que se pidió en el formulario, **solo si difiere** del real.
+   *
+   * Es lo que permite leer "se pidió aprobado y quedó pendiente de verificación" en
+   * vez de tener que deducirlo del estado final.
+   */
+  requestedStatus?: string;
+  /**
+   * ¿La fila ha quedado sujeta a la verificación del alta?
+   *
+   * Va a `details` y no a la frase: el resumen diario no lo necesita, y quien
+   * investiga sí.
+   */
+  verificationRequired?: boolean;
 };
 
 /** Baja de jugador, con cuántas partidas clasificatorias caen con ella. */
@@ -125,6 +152,14 @@ type PlayerStatusEntry = {
   statusBefore: string;
   /** Estado con el que queda. */
   statusAfter: string;
+  /**
+   * La aprobación se hizo **renunciando** a la verificación por privado.
+   *
+   * Solo la puede hacer el superadministrador, y tiene que poder distinguirse en el
+   * historial de una aprobación normal: sin esto, dos filas "Aprobación de X"
+   * idénticas esconderían que una se saltó la confirmación de la persona.
+   */
+  withoutVerification?: boolean;
 };
 
 /**
@@ -285,7 +320,9 @@ export function adminActionSummary(entry: AdminActionEntry): string {
         ? `Baja de ${entry.name} y su 1 partida clasificatoria`
         : `Baja de ${entry.name} y sus ${entry.matchCount} partidas clasificatorias`;
     case AdminActionType.PLAYER_APPROVED:
-      return `Aprobación de ${entry.name} (AoE4World ${entry.profileId})`;
+      return entry.withoutVerification === true
+        ? `Aprobación sin verificación de ${entry.name} (AoE4World ${entry.profileId})`
+        : `Aprobación de ${entry.name} (AoE4World ${entry.profileId})`;
     case AdminActionType.PLAYER_REJECTED:
       return `Rechazo de ${entry.name} (AoE4World ${entry.profileId})`;
     case AdminActionType.MATCH_POINTS_REVERTED:
@@ -338,7 +375,15 @@ function camposEnDetails(cambios: readonly CampoEditado[]): Record<string, strin
 export function adminActionDetails(entry: AdminActionEntry): Prisma.InputJsonObject {
   switch (entry.type) {
     case AdminActionType.PLAYER_CREATED:
-      return { name: entry.name, profileId: entry.profileId, status: entry.status };
+      return {
+        name: entry.name,
+        profileId: entry.profileId,
+        status: entry.status,
+        ...(entry.requestedStatus !== undefined ? { requestedStatus: entry.requestedStatus } : {}),
+        ...(entry.verificationRequired !== undefined
+          ? { verificationRequired: entry.verificationRequired }
+          : {}),
+      };
     case AdminActionType.PLAYER_EDITED: {
       // Una clave por campo y no un objeto anidado: el DAL aplana `details` a
       // primitivos de un nivel (`readDetails()` en `src/lib/admin.ts`), así que lo
@@ -361,6 +406,10 @@ export function adminActionDetails(entry: AdminActionEntry): Prisma.InputJsonObj
         profileId: entry.profileId,
         statusBefore: entry.statusBefore,
         statusAfter: entry.statusAfter,
+        ...(entry.type === AdminActionType.PLAYER_APPROVED &&
+        entry.withoutVerification === true
+          ? { withoutVerification: true }
+          : {}),
       };
     case AdminActionType.MATCH_POINTS_REVERTED:
       return {

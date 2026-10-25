@@ -148,6 +148,15 @@ export default async function RulesPage() {
                 </strong>{" "}
                 del torneo; la propia inscripción incluye el botón para entrar.
               </li>
+              <li>
+                Si la organización da de alta a alguien, el bot le manda un{" "}
+                <strong className="font-semibold text-foreground">
+                  privado de Discord para confirmar que participa
+                </strong>
+                . Hasta que la persona confirme desde su cuenta, el alta no queda
+                aprobada y no aparece en la clasificación; si responde que no, queda
+                rechazada.
+              </li>
             </ul>
           </section>
 

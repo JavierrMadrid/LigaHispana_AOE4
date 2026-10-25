@@ -64,7 +64,10 @@ puede **deshacer** lo que hicieron los admins regulares.
 
 Un **bot de Discord** avisa del comienzo y el final del torneo en el canal de avisos, una sola vez por
 aviso, con el nombre de la edición y sus fechas. También recuerda cada **evento puntual** 24, 12 y 1 hora
-antes de que empiece, y el mensaje de comienzo incluye el resumen del calendario de eventos.
+antes de que empiece, y el mensaje de comienzo incluye el resumen del calendario de eventos. Además,
+cuando la organización da de alta a alguien desde el panel, el bot le manda un **privado con dos
+botones** para que confirme que quiere participar: el alta no queda firme hasta que la persona confirma
+desde su cuenta (o el superadministrador la aprueba explícitamente sin verificación).
 
 ## Cómo se compite
 

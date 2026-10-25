@@ -14,6 +14,13 @@ import { requireAdmin, requireSuperadmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
 import { logDatabaseFailure, uniqueViolationOn } from "@/lib/db-errors";
+import { isDiscordVerificationConfigured } from "@/lib/discord/env";
+import {
+  planApproval,
+  verificationCanBeApprovedWithout,
+  verificationCanBeResent,
+} from "@/lib/discord/verification";
+import { sendPlayerVerificationDm } from "@/lib/discord/verification-send";
 import { parseMatcherinoDonations, type MatcherinoDonations } from "@/lib/donations";
 import { formatAbsoluteTime } from "@/lib/format";
 import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
@@ -274,6 +281,21 @@ function actorEmail(user: User): string {
  * desde el perfil de AoE4World es justamente lo que hace que un canal mal escrito no
  * se pueda arreglar solo en la siguiente pasada.
  *
+ * ## La puerta de verificación (issue 119)
+ *
+ * Si la verificación está configurada, **toda** alta de admin nace sujeta:
+ * `discordVerificationRequestedAt` se escribe con la fila y la puerta no deja pasar
+ * a `APPROVED` sin que la persona confirme desde su Discord. Por eso un alta pedida
+ * como aprobada se crea `PENDING` y, **después del commit**, se intenta mandar el
+ * privado: si Discord falla, la fila ya existe y el panel puede reenviar, así que el
+ * mensaje cuenta qué pasó en vez de fingir que el alta falló.
+ *
+ * Un alta pedida `PENDING` o `REJECTED` no manda nada: el privado sale al aprobarla
+ * (`setPlayerStatus`). `requestedAt` se escribe igual en los tres casos, y es lo que
+ * hace que aprobar después vuelva a exigir confirmación.
+ *
+ * Sin configuración, nada de esto existe y el alta se comporta como siempre.
+ *
  * La lista de países se lee **fuera** de la transacción y solo si lo obligatorio ya
  * vale, por lo mismo que los validadores: es una lectura de `Setting` y no tiene
  * sentido pagarla en un envío que ya está descartado.
@@ -314,6 +336,20 @@ export async function createPlayer(
   const statusRaw = readField(formData, "status") || "APPROVED";
   const status =
     statusRaw === "PENDING" || statusRaw === "REJECTED" ? statusRaw : "APPROVED";
+
+  // La verificación del alta (issue 119). Se lee **una vez** y se usa para tres
+  // cosas que tienen que decidir igual: si la fila queda sujeta, con qué estado se
+  // crea y si se manda el privado. Sin configuración, todo esto se apaga y el alta
+  // se comporta como siempre (es la degradación documentada en `discord/env.ts`).
+  const verificationConfigured = isDiscordVerificationConfigured();
+
+  // Pedir un alta aprobada con la verificación activa **no** puede dejar la fila
+  // `APPROVED`: nace `PENDING` y solo la confirmación de la persona (o el
+  // superadministrador, explícitamente) la aprueba.
+  const finalStatus =
+    verificationConfigured && status === PlayerStatus.APPROVED
+      ? PlayerStatus.PENDING
+      : (status as PlayerStatus);
 
   if (!profileId) {
     return { error: "El profile ID de AoE4World debe ser un número.", message: null };
@@ -365,6 +401,11 @@ export async function createPlayer(
   // El `try` cubre **solo** la base de datos. Un fallo de validación tiene que
   // seguir siendo un error de aplicación, y por eso el bloque va aquí y no
   // alrededor de la acción entera.
+  //
+  // El id sale de la transacción porque el privado de verificación se manda
+  // después del commit y necesita la fila ya escrita.
+  let createdId: string | null = null;
+
   try {
     const existing = await db.player.findUnique({ where: { profileId } });
 
@@ -394,7 +435,12 @@ export async function createPlayer(
       };
     }
 
-    await db.$transaction(async (tx) => {
+    createdId = await db.$transaction(async (tx) => {
+      // Un único instante para el alta y para la marca de verificación: si
+      // `requestedAt` fuera un `new Date()` aparte, dos llamadas seguidas podrían
+      // dejar la fila registrada un milisegundo antes de que se pidiera verificar.
+      const now = new Date();
+
       const created = await tx.player.create({
         data: {
           profileId,
@@ -410,8 +456,14 @@ export async function createPlayer(
           // cuenta a un alta posterior las partidas que jugó antes de entrar. No es
           // `createdAt` porque una reinscripción de un `REJECTED` reutiliza la fila
           // y ese se queda en el primer envío.
-          registeredAt: new Date(),
-          status: status as PlayerStatus,
+          registeredAt: now,
+          // La llave de la puerta: a partir de aquí la fila no puede quedar
+          // `APPROVED` sin que la persona confirme. Se escribe en **todas** las
+          // altas de admin cuando la verificación está configurada, también en las
+          // que se crean `PENDING` o `REJECTED`, porque aprobarlas después tiene que
+          // volver a pedir confirmación.
+          discordVerificationRequestedAt: verificationConfigured ? now : null,
+          status: finalStatus,
         },
         select: { id: true },
       });
@@ -422,8 +474,14 @@ export async function createPlayer(
         targetId: created.id,
         name,
         profileId,
-        status,
+        status: finalStatus,
+        // Solo cuando difiere: un alta `APPROVED` que queda `PENDING` tiene que
+        // poder leerse en el historial como "se pidió aprobado".
+        ...(status !== finalStatus ? { requestedStatus: status } : {}),
+        verificationRequired: verificationConfigured,
       });
+
+      return created.id;
     });
   } catch (error) {
     // Dos admins que den de alta a la vez el mismo `@usuario` (o el mismo perfil) no
@@ -440,7 +498,37 @@ export async function createPlayer(
     return { error: SAVE_FAILED_MESSAGE, message: null };
   }
 
+  if (createdId === null) {
+    // No puede pasar: la transacción o devuelve el id o lanza. Existe para que el
+    // tipo diga la verdad sin un `as` y para que un fallo raro no mande un privado
+    // sin fila detrás.
+    logDatabaseFailure("admin/createPlayer", new Error("La transacción no ha devuelto el id"));
+
+    return { error: SAVE_FAILED_MESSAGE, message: null };
+  }
+
   revalidatePath("/admin");
+
+  // La verificación (issue 119): el privado se manda **después del commit**, cuando
+  // la fila ya está escrita. Si Discord falla, el alta no se deshace —la fila existe y
+  // `requestedAt` queda informado—, así que el mensaje dice qué pasó y cómo
+  // reintentarlo en vez de devolver un error de alta.
+  if (verificationConfigured && status === PlayerStatus.APPROVED) {
+    const envio = await sendPlayerVerificationDm({
+      id: createdId,
+      name,
+      profileId,
+      discordUserId: null,
+      discordUsername,
+    });
+
+    return {
+      error: null,
+      message: envio.ok
+        ? `Se ha dado de alta a ${name}, pero queda pendiente de verificación: le hemos enviado un privado por Discord para que confirme desde su cuenta. En cuanto lo confirme, aparecerá en la clasificación en la próxima pasada del sincronizador, con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`
+        : `Se ha dado de alta a ${name}, pero queda pendiente de verificación y no se ha podido enviar el privado. ${envio.message} Mientras no confirme, no entrará en la clasificación; puedes reintentar el envío con «Enviar verificación» desde su ficha.`,
+    };
+  }
 
   // El alta solo escribe el estado; quién entra en la clasificación lo decide la
   // siguiente pasada del sincronizador. Por eso el mensaje de un aprobado avisa de
@@ -456,7 +544,16 @@ export async function createPlayer(
   if (status === PlayerStatus.PENDING) {
     return {
       error: null,
-      message: `Se ha dado de alta a ${name} como pendiente. Al aprobarlo aparecerá en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`,
+      message: verificationConfigured
+        ? `Se ha dado de alta a ${name} como pendiente. Cuando la apruebes se le enviará un privado de verificación y no entrará en la clasificación hasta que confirme desde su cuenta.`
+        : `Se ha dado de alta a ${name} como pendiente. Al aprobarlo aparecerá en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`,
+    };
+  }
+
+  if (verificationConfigured) {
+    return {
+      error: null,
+      message: `Se ha dado de alta a ${name} como rechazado. Si lo apruebas después, se le pedirá que confirme el alta desde su cuenta de Discord.`,
     };
   }
 
@@ -657,7 +754,14 @@ export async function updatePlayer(
     country = parsedCountry.value;
   }
 
-  let actual: ({ id: string; profileId: number } & CamposEditables) | null;
+  let actual:
+    | ({
+        id: string;
+        profileId: number;
+        discordVerificationRequestedAt: Date | null;
+        discordVerifiedAt: Date | null;
+      } & CamposEditables)
+    | null;
 
   try {
     actual = await db.player.findUnique({
@@ -672,6 +776,10 @@ export async function updatePlayer(
         kickChannel: true,
         country: true,
         discordUsername: true,
+        // La puerta de verificación: corregir el `@usuario` de un alta pendiente
+        // invalida el privado anterior, y para saberlo hay que leerla.
+        discordVerificationRequestedAt: true,
+        discordVerifiedAt: true,
       },
     });
   } catch (error) {
@@ -739,6 +847,33 @@ export async function updatePlayer(
 
   const cambios = camposQueCambian(player, despues);
 
+  /**
+   * ¿Hay que tirar el privado de verificación que hubiera?
+   *
+   * Corregir el `@usuario` de un alta pendiente cambia **a quién** hay que
+   * preguntar, así que el privado anterior ya no vale: el token se limpia para que
+   * sus botones no puedan aprobar a la fila, y `sentAt` se pone a `null` para que
+   * aprobar vuelva a mandar el mensaje. `requestedAt` **no** se toca: la fila sigue
+   * sujeta, que es justo lo que el admin está intentando arreglar.
+   *
+   * Solo aplica a una fila sujeta y sin confirmar. A un jugador ya verificado no se
+   * le quita nada: su confirmación es suya y un cambio de nombre de usuario no la
+   * anula.
+   */
+  const invalidarVerificacion =
+    discordUsername !== player.discordUsername &&
+    player.discordVerificationRequestedAt !== null &&
+    player.discordVerifiedAt === null;
+
+  const data = invalidarVerificacion
+    ? {
+        ...despues,
+        discordVerificationToken: null,
+        discordVerificationUserId: null,
+        discordVerificationSentAt: null,
+      }
+    : despues;
+
   // Abrir el formulario y cerrarlo sin tocar nada es lo más normal del mundo —el
   // país se elige de una lista y los canales vienen ya en su forma canónica, así que
   // casi siempre se vuelve a enviar lo mismo—, así que sale como lo que es, un
@@ -757,10 +892,10 @@ export async function updatePlayer(
     // dice "Edición de X" sin cambio, o un cambio sin su línea, serían los dos estados
     // que el rastro no puede describir.
     await db.$transaction(async (tx) => {
-      // Solo los siete campos, nunca el resto del `data` de un `Player`: lo que no se
-      // nombra aquí no lo toca esta acción. En particular, `discordUserId` no se
-      // escribe nunca desde aquí.
-      await tx.player.update({ where: { id: playerId }, data: despues });
+      // Solo los siete campos (más la invalidación de la verificación), nunca el
+      // resto del `data` de un `Player`: lo que no se nombra aquí no lo toca esta
+      // acción. En particular, `discordUserId` no se escribe nunca desde aquí.
+      await tx.player.update({ where: { id: playerId }, data });
 
       await recordAdminAction(tx, {
         type: AdminActionType.PLAYER_EDITED,
@@ -795,6 +930,9 @@ export async function updatePlayer(
     message: frase(
       `Se han guardado los cambios de ${player.name} (AoE4World ${player.profileId}).`,
       `Campos: ${cambios.map((cambio) => cambio.etiqueta).join(", ")}.`,
+      invalidarVerificacion
+        ? "El privado de verificación anterior ya no vale: al aprobar se enviará uno nuevo al @usuario corregido."
+        : "",
     ),
   };
 }
@@ -804,7 +942,7 @@ export async function updatePlayer(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Aprueba o rechaza una solicitud.
+ * Aprueba o rechaza una solicitud, y dice qué ha pasado.
  *
  * Escribe el estado **y su línea en el historial de acciones** en la misma
  * transacción: aprobar mete al jugador en la clasificación y rechazar lo deja fuera,
@@ -813,24 +951,51 @@ export async function updatePlayer(
  * estado no llegue a confirmarse.
  *
  * Repetir un POST no inventa un movimiento: si el jugador ya está en el estado pedido
- * no se escribe ni el `update` ni la fila de `AdminAction`. Y si la fila ya no existe
- * —la carrera con otro admin que lo haya borrado entretanto— no hay nada que cambiar
- * y solo queda el rastro del fallo en el log.
+ * no se escribe ni el `update` ni la fila de `AdminAction`.
+ *
+ * ## La puerta de verificación (issue 119)
+ *
+ * Aprobar **no siempre aprueba**. Si la fila está sujeta (`requestedAt` informado y
+ * `verifiedAt` a `null`) y la verificación está configurada, lo que hace esta acción
+ * es pedir la confirmación de la persona:
+ *
+ * - si el privado ya se había enviado, **no lo duplica** y devuelve "esperando
+ *   confirmación", que es la respuesta honesta a un admin que vuelve a pulsar;
+ * - si no se había enviado, lo manda y la fila sigue `PENDING`;
+ * - si no se puede resolver la cuenta o el envío falla, **no cambia el estado** y
+ *   devuelve el motivo.
+ *
+ * La aprobación de verdad se escribe cuando la persona pulsa "Sí" (o cuando el
+ * superadministrador renuncia explícitamente a la verificación con
+ * `approvePlayerWithoutVerification`).
+ *
+ * Rechazar sí rechaza siempre, y limpia el token y la cuenta destinataria para que
+ * los botones del privado dejen de valer. `requestedAt` y `sentAt` **se conservan**:
+ * el primero es lo que hace que una re-aprobación vuelva a exigir confirmación, y el
+ * segundo cuenta que ya se intentó avisar.
+ *
+ * ## Lo que no hace
  *
  * Sigue **sin traer partidas ni recalcular**: al pasar a `APPROVED` el jugador entra
  * en el siguiente cálculo del sincronizador, y ese cálculo lo hace el cron (cada 10
  * minutos) o la llamada manual (`syncNow`), no esta petición. Una pasada gasta
  * ~500 ms de CPU y el plan Free de Cloudflare da 10 ms por invocación, así que
  * lanzarla dentro del aprobado mataba el *isolate* con `Worker exceeded CPU time
- * limit` (1102) en cuanto se apilaban dos clics. No hay estado de vuelta que
- * informar —el botón no lleva diálogo— así que un fallo solo se registra, y el estado
- * no ha cambiado.
+ * limit` (1102) en cuanto se apilaban dos clics.
+ *
+ * Devuelve `AdminActionResult` porque desde la issue 119 hay caminos que **no**
+ * cambian el estado y hay que poder explicarlos: "se ha enviado el privado, espera",
+ * "no se ha podido resolver la cuenta". Los formularios que no sepan mostrar el
+ * mensaje pueden ignorarlo (`approvePlayerForm`); el panel nuevo lo pinta.
  */
-async function setPlayerStatus(playerId: string, status: PlayerStatus) {
+async function setPlayerStatus(
+  playerId: string,
+  status: PlayerStatus,
+): Promise<AdminActionResult> {
   const admin = await requireAdmin();
 
   if (!playerId) {
-    return;
+    return { status: "error", message: "No se ha podido saber qué jugador hay que actualizar." };
   }
 
   let player: {
@@ -838,50 +1003,164 @@ async function setPlayerStatus(playerId: string, status: PlayerStatus) {
     name: string;
     profileId: number;
     status: PlayerStatus;
+    discordUserId: string | null;
+    discordUsername: string | null;
+    discordVerificationRequestedAt: Date | null;
+    discordVerificationSentAt: Date | null;
+    discordVerifiedAt: Date | null;
   } | null;
 
   try {
     player = await db.player.findUnique({
       where: { id: playerId },
-      select: { id: true, name: true, profileId: true, status: true },
+      select: {
+        id: true,
+        name: true,
+        profileId: true,
+        status: true,
+        discordUserId: true,
+        discordUsername: true,
+        discordVerificationRequestedAt: true,
+        discordVerificationSentAt: true,
+        discordVerifiedAt: true,
+      },
     });
   } catch (error) {
     logDatabaseFailure(`admin/${status}`, error);
 
-    return;
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
   }
 
-  // El `P2025` que antes lanzaba el `update` a secas cuando la fila no estaba. Sin
-  // estado de vuelta, el log es el único rastro de que la acción no se pudo hacer.
   if (player === null) {
     logDatabaseFailure(`admin/${status}`, new Error(`No existe el jugador ${playerId}`));
 
-    return;
+    return { status: "error", message: "Ese jugador ya no está en el panel." };
   }
 
   if (player.status === status) {
-    return;
+    return { status: "success", message: null };
   }
 
   // A un expulsado no se le aprueba ni se le rechaza desde aquí: la única salida es
-  // revertir la actuación, que restaura el estado que tenía antes. La acción no
-  // devuelve estado (los botones son un `<form>` sin diálogo), así que el motivo queda
-  // en el log y la interfaz deshabilita los botones para ese estado.
+  // revertir la actuación, que restaura el estado que tenía antes. La interfaz
+  // deshabilita los botones para ese estado, y esto cubre el POST hecho a mano.
   if (player.status === PlayerStatus.BANNED) {
     console.warn(
       `[admin/${status}] No se cambia el estado de ${player.name}: está expulsado por una actuación. Hay que revertirla desde Actuaciones.`,
     );
 
-    return;
+    return {
+      status: "error",
+      message: `No se puede cambiar el estado de ${player.name}: está expulsado por una actuación. Revierte la actuación desde Actuaciones.`,
+    };
   }
 
   // `const` a propósito: se usa dentro de un cierre (la transacción) y TypeScript
   // solo estrecha un `let` si no puede haber sido reasignado entre medias.
   const fila = player;
 
+  if (status === PlayerStatus.APPROVED) {
+    const plan = planApproval({
+      verificationConfigured: isDiscordVerificationConfigured(),
+      sentAt: fila.discordVerificationSentAt,
+      requestedAt: fila.discordVerificationRequestedAt,
+      verifiedAt: fila.discordVerifiedAt,
+      status: fila.status,
+    });
+
+    if (plan === "await-confirmation") {
+      return {
+        status: "success",
+        message: `${fila.name} sigue pendiente de verificación: el privado ya está enviado y se espera su confirmación desde Discord. Si no le ha llegado, usa «Reenviar verificación».`,
+      };
+    }
+
+    if (plan === "send-verification") {
+      const envio = await sendPlayerVerificationDm(fila);
+
+      if (!envio.ok) {
+        return {
+          status: "error",
+          message: frase(
+            `${fila.name} sigue pendiente de verificación: no se ha podido enviar el privado y el estado no ha cambiado.`,
+            envio.message,
+          ),
+        };
+      }
+
+      /**
+       * Aprobar un `REJECTED` lo devuelve a la cola de revisión.
+       *
+       * La confirmación de la persona solo se aplica sobre `PENDING`
+       * (`resolveVerificationClick()`), así que la fila tiene que estar ahí para que
+       * su "Sí" pueda resolverla. Se hace **después** del envío y no antes: si
+       * Discord falla, no se ha movido el estado. No deja fila en `AdminAction`
+       * porque no hay tipo para "vuelve a pendiente"; el movimiento se ve en el panel
+       * y el privado que lo provocó queda en `sentAt`.
+       */
+      if (fila.status !== PlayerStatus.PENDING) {
+        try {
+          await db.player.update({
+            where: { id: fila.id },
+            data: { status: PlayerStatus.PENDING },
+          });
+        } catch (error) {
+          logDatabaseFailure(`admin/${status}/pendiente`, error);
+
+          // El privado ya está en Discord y no se puede aplicar: se invalida para
+          // que el reintento mande uno nuevo en vez de quedarse esperando una
+          // confirmación que no encontraría la fila en `PENDING`.
+          try {
+            await db.player.update({
+              where: { id: fila.id },
+              data: {
+                discordVerificationToken: null,
+                discordVerificationUserId: null,
+                discordVerificationSentAt: null,
+              },
+            });
+          } catch (cleanupError) {
+            logDatabaseFailure(`admin/${status}/pendiente-limpieza`, cleanupError);
+          }
+
+          return {
+            status: "error",
+            message: `Se ha enviado el privado a ${fila.name}, pero no se ha podido dejar el alta pendiente de verificación. Inténtalo de nuevo.`,
+          };
+        }
+      }
+
+      revalidatePath("/admin");
+
+      return {
+        status: "success",
+        message: `Se ha enviado a ${fila.name} el privado de verificación. Sigue pendiente hasta que confirme desde su cuenta de Discord; en cuanto lo haga, entrará en la clasificación en la próxima pasada del sincronizador.`,
+      };
+    }
+  }
+
+  // La limpieza de la puerta va con el cambio de estado: un token vivo apuntando a
+  // un privado que ya no puede resolver nada es basura, y un `discordUserId` de
+  // verificación se conserva en la fila equivocada si alguien re-aprueba después.
+  const data =
+    status === PlayerStatus.REJECTED || status === PlayerStatus.PENDING
+      ? {
+          status,
+          discordVerificationToken: null,
+          discordVerificationUserId: null,
+        }
+      : { status };
+
   try {
     await db.$transaction(async (tx) => {
-      await tx.player.update({ where: { id: fila.id }, data: { status } });
+      await tx.player.update({ where: { id: fila.id }, data });
+
+      if (status === PlayerStatus.PENDING) {
+        // No hay ningún botón del panel que devuelva a pendiente y no hay tipo de
+        // `AdminAction` para eso; la rama existe para dejar escrita, junto a las
+        // otras dos, la regla de datos de la puerta (limpiar token y cuenta).
+        return;
+      }
 
       await recordAdminAction(tx, {
         type:
@@ -897,22 +1176,297 @@ async function setPlayerStatus(playerId: string, status: PlayerStatus) {
       });
     });
   } catch (error) {
-    // Sin estado de vuelta, un fallo aquí solo puede registrarse: la acción termina
-    // sin cambiar nada y no hay superficie en la que informar a quien la pulsó.
     logDatabaseFailure(`admin/${status}`, error);
 
-    return;
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
   }
 
   revalidatePath("/admin");
+
+  if (status === PlayerStatus.REJECTED) {
+    return {
+      status: "success",
+      message:
+        fila.discordVerificationRequestedAt === null
+          ? `Se ha rechazado a ${fila.name}.`
+          : `Se ha rechazado a ${fila.name} y su privado de verificación ya no vale. Si se vuelve a aprobar, se le pedirá confirmación otra vez.`,
+    };
+  }
+
+  return {
+    status: "success",
+    message: `Se ha aprobado a ${fila.name}. Entrará en la clasificación en la próxima pasada del sincronizador, con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`,
+  };
 }
 
-export async function approvePlayer(formData: FormData) {
-  await setPlayerStatus(readField(formData, "playerId"), PlayerStatus.APPROVED);
+/**
+ * Aprobar desde el panel. Devuelve el resultado para que la interfaz pueda explicar
+ * que un alta sujeta a verificación **no** se ha aprobado todavía.
+ */
+export async function approvePlayer(formData: FormData): Promise<AdminActionResult> {
+  return setPlayerStatus(readField(formData, "playerId"), PlayerStatus.APPROVED);
 }
 
-export async function rejectPlayer(formData: FormData) {
-  await setPlayerStatus(readField(formData, "playerId"), PlayerStatus.REJECTED);
+/**
+ * Rechazar desde el panel. Devuelve el resultado por el mismo motivo que
+ * `approvePlayer`.
+ */
+export async function rejectPlayer(formData: FormData): Promise<AdminActionResult> {
+  return setPlayerStatus(readField(formData, "playerId"), PlayerStatus.REJECTED);
+}
+
+/*
+ * Compatibilidad con los formularios que ya existen.
+ *
+ * Un `<form action={…}>` exige `(formData) => void | Promise<void>`, y las acciones
+ * de arriba devuelven el resultado. Mientras una interfaz nueva las use con
+ * `useActionState` (o con el diálogo de confirmación), estas dos envolturas
+ * descartan el mensaje y dejan los botones actuales funcionando igual que antes.
+ *
+ * No son la API que hay que usar para informar del resultado: para eso están
+ * `approvePlayer` y `rejectPlayer`.
+ */
+export async function approvePlayerForm(formData: FormData): Promise<void> {
+  await approvePlayer(formData);
+}
+
+export async function rejectPlayerForm(formData: FormData): Promise<void> {
+  await rejectPlayer(formData);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Verificación del alta                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Envía o reenvía el privado de verificación de un alta pendiente.
+ *
+ * ## Cuándo
+ *
+ * Solo para una fila **sujeta y sin confirmar** (`PENDING`, `requestedAt` informado,
+ * `verifiedAt` a `null`) y con la verificación configurada; la decisión es la misma
+ * que usa la puerta (`verificationCanBeResent()`), para que la acción y el botón de
+ * aprobar no puedan discrepar. Fuera de eso, aprobar ya hace lo que toca y esta acción
+ * sería mandar un mensaje que no cambia nada.
+ *
+ * ## Primer envío y reenvío, y por qué el mensaje los distingue
+ *
+ * Es la misma acción para las dos cosas, pero no son lo mismo: si `sentAt` está a
+ * `null` es el **primer** privado —el alta se creó `PENDING` y nunca se avisó a la
+ * persona—, y si no lo está se está **reenviando**, con lo que el privado anterior
+ * deja de valer. Decir "se ha reenviado" en el primer envío sería mentira, así que el
+ * mensaje se decide leyendo `sentAt` **antes** de mandar.
+ *
+ * ## Qué hace con el token
+ *
+ * Genera uno **nuevo** y borra el anterior al escribirlo: reenviar invalida los
+ * botones del privado viejo, que es lo que se quiere —si el primero acabó en el
+ * canal equivocado, sus botones dejan de servir—. `requestedAt` se conserva y
+ * `sentAt` se actualiza solo si Discord acepta el mensaje.
+ */
+export async function resendPlayerVerification(
+  formData: FormData,
+): Promise<AdminActionResult> {
+  await requireAdmin();
+
+  const playerId = readField(formData, "playerId");
+
+  if (!playerId) {
+    return { status: "error", message: "No se ha podido saber de qué jugador enviar la verificación." };
+  }
+
+  let player: {
+    id: string;
+    name: string;
+    profileId: number;
+    status: PlayerStatus;
+    discordUserId: string | null;
+    discordUsername: string | null;
+    discordVerificationRequestedAt: Date | null;
+    discordVerificationSentAt: Date | null;
+    discordVerifiedAt: Date | null;
+  } | null;
+
+  try {
+    player = await db.player.findUnique({
+      where: { id: playerId },
+      select: {
+        id: true,
+        name: true,
+        profileId: true,
+        status: true,
+        discordUserId: true,
+        discordUsername: true,
+        discordVerificationRequestedAt: true,
+        // Decide el mensaje: `null` = primer envío; informado = reenvío.
+        discordVerificationSentAt: true,
+        discordVerifiedAt: true,
+      },
+    });
+  } catch (error) {
+    logDatabaseFailure("admin/resendPlayerVerification", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  if (player === null) {
+    return { status: "error", message: "Ese jugador ya no está en el panel." };
+  }
+
+  if (
+    !verificationCanBeResent({
+      verificationConfigured: isDiscordVerificationConfigured(),
+      status: player.status,
+      requestedAt: player.discordVerificationRequestedAt,
+      verifiedAt: player.discordVerifiedAt,
+    })
+  ) {
+    return {
+      status: "error",
+      message: `No se puede enviar la verificación de ${player.name}: solo se envía a un alta pendiente que aún no haya confirmado y con la verificación configurada.`,
+    };
+  }
+
+  // Se decide **antes** de mandar: `sendPlayerVerificationDm()` escribe `sentAt` al
+  // terminar bien, así que leerlo después convertiría el primer envío en un reenvío.
+  const eraReenvio = player.discordVerificationSentAt !== null;
+
+  const envio = await sendPlayerVerificationDm(player);
+
+  if (!envio.ok) {
+    return { status: "error", message: envio.message };
+  }
+
+  revalidatePath("/admin");
+
+  return {
+    status: "success",
+    message: eraReenvio
+      ? `Se ha reenviado el privado de verificación a ${player.name}. El privado anterior ya no vale.`
+      : `Se ha enviado el privado de verificación a ${player.name}.`,
+  };
+}
+
+/**
+ * Aprueba un alta **sin** la confirmación de la persona.
+ *
+ * ## Solo el superadministrador
+ *
+ * Es la única puerta de atrás de la verificación, y por eso va con
+ * `requireSuperadmin()`: un admin normal no puede saltarse la confirmación de un
+ * participante ni por error ni a propósito. La interfaz solo debe ofrecerla a quien
+ * tenga ese acceso.
+ *
+ * ## Qué deja escrito
+ *
+ * Pasa la fila a `APPROVED`, limpia `requestedAt`, el token y la cuenta destinataria
+ * —la verificación ya no tiene nada que pedir— y **conserva `sentAt`**, que cuenta
+ * que el privado se llegó a mandar. El rastro es `PLAYER_APPROVED` con
+ * `details.withoutVerification = true` y la frase "Aprobación sin verificación de…":
+ * sin eso, en el historial no se podría distinguir de una aprobación normal.
+ *
+ * No manda ningún privado ni toca la puntuación: el worker recoge la fila nueva en
+ * la siguiente pasada, como con cualquier aprobación.
+ */
+export async function approvePlayerWithoutVerification(
+  formData: FormData,
+): Promise<AdminActionResult> {
+  const admin = await requireSuperadmin();
+
+  const playerId = readField(formData, "playerId");
+
+  if (!playerId) {
+    return { status: "error", message: "No se ha podido saber qué jugador hay que aprobar." };
+  }
+
+  let player: {
+    id: string;
+    name: string;
+    profileId: number;
+    status: PlayerStatus;
+    discordVerificationRequestedAt: Date | null;
+    discordVerifiedAt: Date | null;
+  } | null;
+
+  try {
+    player = await db.player.findUnique({
+      where: { id: playerId },
+      select: {
+        id: true,
+        name: true,
+        profileId: true,
+        status: true,
+        discordVerificationRequestedAt: true,
+        discordVerifiedAt: true,
+      },
+    });
+  } catch (error) {
+    logDatabaseFailure("admin/approvePlayerWithoutVerification", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  if (player === null) {
+    return { status: "error", message: "Ese jugador ya no está en el panel." };
+  }
+
+  if (
+    !verificationCanBeApprovedWithout({
+      status: player.status,
+      requestedAt: player.discordVerificationRequestedAt,
+      verifiedAt: player.discordVerifiedAt,
+    })
+  ) {
+    return {
+      status: "error",
+      message: `Solo se puede aprobar sin verificación un alta pendiente que todavía no haya confirmado. ${player.name} no está en ese estado.`,
+    };
+  }
+
+  const fila = player;
+
+  try {
+    await db.$transaction(async (tx) => {
+      await tx.player.update({
+        where: { id: fila.id },
+        data: {
+          status: PlayerStatus.APPROVED,
+          // La verificación deja de existir para esta fila: ya no hay nada que
+          // pedir ni token con el que pedirlo. `sentAt` se conserva como memoria de
+          // que se llegó a mandar el privado.
+          discordVerificationRequestedAt: null,
+          discordVerificationToken: null,
+          discordVerificationUserId: null,
+        },
+      });
+
+      await recordAdminAction(tx, {
+        type: AdminActionType.PLAYER_APPROVED,
+        actorEmail: actorEmail(admin),
+        targetId: fila.id,
+        name: fila.name,
+        profileId: fila.profileId,
+        statusBefore: fila.status,
+        statusAfter: PlayerStatus.APPROVED,
+        withoutVerification: true,
+      });
+    });
+  } catch (error) {
+    if (filaInexistente(error)) {
+      return { status: "error", message: "Ese jugador ya no está en el panel." };
+    }
+
+    logDatabaseFailure("admin/approvePlayerWithoutVerification", error);
+
+    return { status: "error", message: SAVE_FAILED_MESSAGE };
+  }
+
+  revalidatePath("/admin");
+
+  return {
+    status: "success",
+    message: `Se ha aprobado a ${fila.name} (AoE4World ${fila.profileId}) sin verificación de Discord. Queda registrado en el historial.`,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
