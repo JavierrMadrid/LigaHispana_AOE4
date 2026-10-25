@@ -15,10 +15,14 @@ export const PLAYER_STATUS_LABELS: Record<PlayerStatus, string> = {
   APPROVED: "Aprobado",
   PENDING: "Pendiente",
   REJECTED: "Rechazado",
+  BANNED: "Expulsado",
 };
 
 export const PLAYER_STATUS_STYLES: Record<PlayerStatus, string> = {
   APPROVED: "border-win/40 text-win",
   PENDING: "border-accent/40 text-accent",
   REJECTED: "border-loss/40 text-loss",
+  // El rojo de la casa, pero con relleno: una expulsión no es un rechazo de solicitud
+  // y tiene que leerse como un estado distinto a un vistazo.
+  BANNED: "border-loss bg-loss/10 text-loss",
 };

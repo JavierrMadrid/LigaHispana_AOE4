@@ -212,6 +212,7 @@ export function parseGame(value: unknown): Aoe4WorldGame | null {
   return {
     gameId,
     startedAt,
+    updatedAt: readDate(value.updated_at) ?? startedAt,
     durationSeconds: durationSeconds === null ? null : Math.round(durationSeconds),
     map: readString(value.map),
     mapId: readInteger(value.map_id),
@@ -288,6 +289,7 @@ export function parseGamesPage(value: unknown): Aoe4WorldGamesPage | null {
 
   const perPage = readInteger(value.per_page) ?? games.length;
   const nextPage = readInteger(value.next_page);
+  const filters = isRecord(value.filters) ? value.filters : null;
 
   return {
     page: readInteger(value.page) ?? 1,
@@ -295,6 +297,7 @@ export function parseGamesPage(value: unknown): Aoe4WorldGamesPage | null {
     totalCount: readInteger(value.total_count) ?? games.length,
     count: readInteger(value.count) ?? games.length,
     nextPage: nextPage !== null && nextPage > 0 ? nextPage : null,
+    notice: filters === null ? null : readString(filters["_important_notice_"]),
     games,
   };
 }

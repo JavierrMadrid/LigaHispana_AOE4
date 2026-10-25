@@ -229,6 +229,30 @@ export function countsWithinWindow(
 }
 
 /**
+ * ¿Ha empezado ya la edición?
+ *
+ * La edición empieza en `window.from`, el mismo instante desde el que las partidas
+ * empiezan a contar. A partir de ahí lo que reparte puntos queda congelado (ver
+ * `lockedRulesetChanges()` en `scoring.ts` y `editionEventsLocked()` en
+ * `edition-events.ts`), porque cambiarlo movería una clasificación que ya está
+ * publicada.
+ *
+ * Una fecha de inicio **ilegible no bloquea**: se prefiere dejar arreglar la
+ * configuración a encerrar el panel por un documento roto, y la lectura del ruleset
+ * ya garantiza una ventana legible (`parseWindow()`).
+ *
+ * Es el predicado único de ese "ya ha empezado", y está aquí y no en cada consumidor
+ * porque el instante que lo decide es de la ventana, que es lo que define este
+ * módulo: `editionEventsLocked()` y `saveScoringRuleset()` lo comparten en lugar de
+ * comparar fechas cada uno a su manera.
+ */
+export function editionStarted(window: ScoringWindow, now: Date): boolean {
+  const from = new Date(window.from).getTime();
+
+  return Number.isFinite(from) && now.getTime() >= from;
+}
+
+/**
  * Un instante escrito con zona explícita.
  *
  * Se rechaza a propósito lo que `Date.parse` admitiría sin más: `"2026-09-15"` lo
@@ -839,7 +863,7 @@ export function rankedModesWhere(modes: readonly string[]): Prisma.MatchWhereInp
  * Las condiciones de partida clasificatoria **sin** la marca de revertida.
  *
  * Es el filtro de `rankedMatchWhere()` menos una condición, y existe para un solo
- * consumidor: el historial de partidas del panel de admin, que tiene que **listar**
+ * consumidor: el historial de puntos del panel de admin, que tiene que **listar**
  * las revertidas (marcándolas, para que se vea que no puntúan) en vez de esconderlas.
  * Que el listado historialice en vez de borrar es una decisión de producto: sin la
  * fila no habría nada que deshacer, y el worker de sync la volvería a importar
@@ -985,8 +1009,8 @@ export function rankedMatchSql(
  * que no quede una forma de llamar a la regla sin decir de qué jugador se trata: un
  * `null` explícito ("corta en `window.from`") es una decisión, y un valor por
  * defecto sería indistinguible de haberse olvidado. Los dos consumidores reales lo
- * tienen a mano —`setMatchReverted()` carga `player.registeredAt` en el mismo
- * `findUnique` que trae el nombre, y `verify-sync` lo lee del jugador de muestra—.
+ * tienen a mano —`getAdminActMatchCandidates()` carga `player.registeredAt` en la misma
+ * lectura que trae las partidas, y `verify-sync` lo lee del jugador de muestra—.
  *
  * ## Por qué el contexto de equipos también es obligatorio
  *

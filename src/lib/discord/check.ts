@@ -406,6 +406,36 @@ async function checkOne(
   }
 }
 
+/**
+ * El resultado de una comprobación por cuenta.
+ *
+ * `reason` solo tiene sentido con `unknown`: es el motivo por el que no se ha podido
+ * concluir, para el rastro de la pasada.
+ */
+export type DiscordAccountCheck = {
+  verdict: DiscordMembershipVerdict;
+  status: number | null;
+  reason: string | null;
+};
+
+/**
+ * La comprobación por cuenta de **un** jugador, expuesta para el snapshot de
+ * elegibilidad de los eventos (`src/lib/discord/event-eligibility.ts`).
+ *
+ * Es el mismo `checkOne()` de abajo, con el mismo contrato: nunca lanza, solo un
+ * `200` es `member`, solo un `404` es `not-member`, y todo lo demás es `unknown`. Se
+ * expone porque ese paso necesita preguntar por una cuenta concreta sin pasar por la
+ * pasada entera de `checkDiscordMembership()` (que además escribe columnas y crea
+ * alertas, y esto **no** debe hacer ninguna de las dos cosas).
+ */
+export async function checkDiscordAccount(
+  discordUserId: string,
+  config: DiscordConfig & { botToken: string },
+  client: DiscordHttpClient,
+): Promise<DiscordAccountCheck> {
+  return checkOne(discordUserId, config, client);
+}
+
 /** Una alerta `DISCORD_NOT_IN_GUILD`, con la evidencia de **cómo** se comprobó. */
 function notInGuildAlert(input: {
   player: DiscordPlayerRow;

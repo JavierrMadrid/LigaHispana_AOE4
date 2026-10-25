@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import type { ObjectiveContender, ObjectiveOption } from "@/lib/public";
+import type {
+  ObjectiveContender,
+  ObjectiveOption,
+  ParticipantObjective,
+} from "@/lib/public";
 import {
   completedContenders,
   contenderShareOfObjective,
@@ -17,6 +21,7 @@ import {
   ineligibleTag,
   MapGaps,
 } from "@/components/objective-card";
+import { FamilyCivDetail } from "@/components/objective-family-detail";
 import { ObjectiveFlipDialog } from "@/components/objective-flip-dialog";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PlayerAvatar } from "@/components/player-avatar";
@@ -33,6 +38,13 @@ type ObjectiveRankingDialogProps = {
    * participante, que siempre lo pasa.
    */
   highlightProfileId?: number | null;
+  /**
+   * Hijos de la familia si el objetivo abierto es su cabeza (`polifacetico`,
+   * `jugon`): con ellos y con jugador resaltado, la cara de clasificación enseña
+   * el avance por civilización de ese jugador. Sin ellos —la clasificación
+   * general, que se abre sin ficha de jugador— no se pinta nada.
+   */
+  familyChildren?: readonly ParticipantObjective[];
   /** Cara frontal de la tarjeta: el resumen del avance del jugador. */
   front: ReactNode;
   onClose: () => void;
@@ -71,10 +83,19 @@ type ObjectiveRankingDialogProps = {
  * scroll, **entre la cabecera y la lista**: es información suya, así que va
  * antes que la clasificación neutra, y en su sitio —y no dentro de su fila—
  * porque la paginación puede dejar al jugador fuera de la primera página.
+ *
+ * ## El detalle por civilización
+ *
+ * En `polifacetico` y `jugon` ocupa ese mismo sitio el avance del jugador en
+ * cada civilización, con la lista más corta de las dos —las hechas o las que
+ * quedan—. No puede salir del ranking, porque los `lider-<civ>`/`acolito-<civ>`
+ * son objetivos aparte: la ficha los pasa por prop (`familyChildren`), y sin
+ * ellos —una ventana abierta sin ficha de jugador— no se pinta.
  */
 export function ObjectiveRankingDialog({
   option,
   highlightProfileId = null,
+  familyChildren,
   front,
   onClose,
 }: ObjectiveRankingDialogProps) {
@@ -126,7 +147,10 @@ export function ObjectiveRankingDialog({
               </div>
             </div>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            {/* Las dos cajas se igualan en alto —la placa crece hasta la del
+                aviso para que sus bordes superior e inferior concorden—; en
+                móvil, apiladas, cada una sigue midiendo lo suyo. */}
+            <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-stretch">
               <HolderSummary option={option} />
               <PrizePlate option={option} />
             </div>
@@ -142,6 +166,20 @@ export function ObjectiveRankingDialog({
                   Tus mapas
                 </p>
                 <MapGaps gaps={yourGaps} />
+              </div>
+            ) : null}
+
+            {/* El avance por civilización de un logro de familia, en el mismo
+                sitio que el de mapas: lo del jugador, antes que la clasificación
+                neutra. Los hijos no los lleva el ranking, así que van por prop. */}
+            {familyChildren !== undefined &&
+            familyChildren.length > 0 &&
+            highlightProfileId !== null ? (
+              <div className="mx-6 border-b border-line pb-4 sm:mx-8">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted">
+                  Tus civilizaciones
+                </p>
+                <FamilyCivDetail items={familyChildren} />
               </div>
             ) : null}
 
@@ -362,10 +400,16 @@ function YouBadge() {
   );
 }
 
-/** La misma placa de premio de la tarjeta, en tamaño grande. */
+/**
+ * La misma placa de premio de la tarjeta, en tamaño grande.
+ *
+ * La caja crece hasta el alto de la de al lado —el aviso o el poseedor— para que
+ * los dos bordes concorden, y su contenido va centrado dentro: la cifra no se
+ * quedaría colgada a media altura.
+ */
 function PrizePlate({ option }: { option: ObjectiveOption }) {
   return (
-    <span className="justify-self-start rounded-md border border-accent/30 bg-accent/5 px-4 py-2 text-right sm:justify-self-end">
+    <span className="flex flex-col justify-center justify-self-start rounded-md border border-accent/30 bg-accent/5 px-4 py-2 text-right sm:justify-self-end">
       <span className="block font-display text-2xl font-semibold leading-none tabular-nums text-accent">
         +{option.points}
       </span>

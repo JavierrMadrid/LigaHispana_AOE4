@@ -52,7 +52,16 @@ const CONFIG: Aoe4WorldConfig = {
   syncConcurrency: 3,
   syncPageSize: 50,
   syncMaxPages: 10,
+  syncBulkMaxPages: 10,
+  syncBackfillMaxPlayers: 20,
+  syncBackfillPagesPerPlayer: 3,
+  syncRecheckMaxAgeDays: 30,
+  syncSeedMaxAgeMinutes: 360,
   syncDeadlineMs: 240_000,
+  summaryMaxPerRun: 10,
+  summaryMinIntervalMs: 2_000,
+  summaryRetryDelayMs: 3_600_000,
+  summaryReviewWindowHours: 24,
   mock: false,
 };
 

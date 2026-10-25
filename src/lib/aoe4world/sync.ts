@@ -4,27 +4,42 @@ import type { LadderCutoffsTable } from "@/lib/alerts/division-cutoffs";
 import { evaluateAlerts, type EvaluateAlertsResult } from "@/lib/alerts/evaluate";
 import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { checkDiscordMembership, describeDiscordChecks, type DiscordChecksResult } from "@/lib/discord/check";
+import {
+  describeEditionEventEligibility,
+  syncEditionEventEligibility,
+} from "@/lib/discord/event-eligibility";
 import { describeParticipantRoleSync } from "@/lib/discord/participant-role";
 import { syncParticipantRole } from "@/lib/discord/role-sync";
 import { db } from "@/lib/db";
 import { announceEditionWindow } from "@/lib/edition-announcements";
+import { announceEditionEvents } from "@/lib/edition-event-announcements";
 import {
   checkPlayerHistory,
   describeHistoryChecks,
   type HistoryChecksResult,
 } from "@/lib/history-checks";
 import {
+  GAMES_BATCH_ERRORS_LIMIT,
   mergeAbandonedAudit,
+  readGamesCursor,
   readPlayerSyncState,
+  readScoringLastRun,
   readSyncRunTrace,
+  writeGamesCursor,
   writePlayerSyncState,
   writeSyncRunTrace,
+  type GamesBatchError,
+  type GamesCursorSeedSource,
+  type GamesCursorState,
+  type ScoringLastRunState,
   type SyncRunTrace,
 } from "@/lib/settings";
 import { countsAsRanked, type TeamTierContext } from "@/lib/ranked-match";
 import {
   recomputeScores,
   readRuleset,
+  RULESET_VERSION,
+  SCORING_CACHE_VERSION,
   type RecomputeScoresResult,
   type ScoringRuleset,
 } from "@/lib/scoring";
@@ -39,7 +54,7 @@ import {
   describeSummaryBackfill,
   type SummaryBackfillResult,
 } from "@/lib/sync-summaries";
-import { createAoe4WorldClient, type Aoe4WorldClient } from "./client";
+import { createAoe4WorldClient, GAMES_BULK_MAX_PAGE, type Aoe4WorldClient } from "./client";
 import { getAoe4WorldConfig } from "./env";
 import { Aoe4WorldError, Aoe4WorldNotFoundError } from "./http";
 import { syncLadderSnapshot, type LadderSyncResult } from "./ladder";
@@ -60,7 +75,8 @@ import type { Aoe4WorldGame } from "./types";
  * ladder (`ladder.ts`): elo, división, racha y directo de Twitch de todos los
  * aprobados en una sola llamada.
  *
- * Al final se recalcula la clasificación y, si algo ha cambiado para alguien, se
+ * Al final se recalcula la clasificación —salvo que no haya cambiado nada que la
+ * justifique, ver `shouldRecomputeScores()`— y, si algo ha cambiado para alguien, se
  * evaluan las alertas de comportamiento **de ese jugador y solo de ese**. Es lo
  * que cumple el requisito de "siempre actualizada" sin que nadie tenga que
  * recargar: cada pasada del worker deja la tabla de puntos al día y el historial
@@ -111,12 +127,526 @@ import type { Aoe4WorldGame } from "./types";
 
 /**
  * Margen que se le resta al cursor para volver a pedir una franja ya vista.
- * Sin él, una partida que la API publica con retraso (una partida en curso que
- * se procesa minutos después) podría quedarse sin resultado para siempre.
+ *
+ * El invariante es `SYNC_OVERLAP_MINUTES >= LADDER_PUBLICATION_LAG_MINUTES`: lo
+ * que el incremental no puede ver por quedar por debajo del cursor tiene que
+ * caer dentro de la franja que la regla de la ladder declara no poder juzgar.
+ * Con el margen de 75 min, 90 deja 15 de holgura.
  */
-export const SYNC_OVERLAP_MINUTES = 60;
+export const SYNC_OVERLAP_MINUTES = 90;
 
 const SYNC_OVERLAP_MS = SYNC_OVERLAP_MINUTES * 60_000;
+
+/**
+ * Edad a la que el `updated_since` de un cursor vivo deja de ser fiable.
+ *
+ * F0 midió que la API empieza a devolver `_important_notice_` con ventanas de 30
+ * días o más. No tiene nada que ver con `AOE4WORLD_SYNC_SEED_MAX_AGE_MINUTES`:
+ * esa cota solo se aplica a la **siembra inicial**, no a un cursor que ya existe.
+ */
+const GAMES_CURSOR_NOTICE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Caché de perfil: a partir de una hora se vuelve a pedir `GET /players/:id`. */
+export const PROFILE_CACHE_TTL_HOURS = 1;
+
+export const PROFILE_CACHE_TTL_MS = PROFILE_CACHE_TTL_HOURS * 60 * 60_000;
+
+/**
+ * ¿Toca pedir el perfil de este jugador?
+ *
+ * `null` es "nunca comprobado" y siempre toca. Una fecha futura se considera
+ * fresca (no se puede haber comprobado en el futuro; si el reloj se movió, no
+ * hay que pedir nada). `ttlMs = 0` desactiva la caché y toca siempre.
+ */
+export function shouldRefreshProfile(
+  checkedAt: Date | null,
+  now: Date,
+  ttlMs: number,
+): boolean {
+  if (checkedAt === null) {
+    return true;
+  }
+
+  if (ttlMs <= 0) {
+    return true;
+  }
+
+  const elapsed = now.getTime() - checkedAt.getTime();
+
+  if (elapsed < 0) {
+    return false;
+  }
+
+  return elapsed >= ttlMs;
+}
+
+/* -------------------------------------------------------------------------- */
+/* ¿Toca recalcular la clasificación?                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Las entradas que deciden si la pasada necesita recalcular. */
+export type RecomputeScoresInput = {
+  /** Lo que dejó el último recálculo, o `null` si no hay rastro legible. */
+  lastScoring: ScoringLastRunState | null;
+  /** `RULESET_VERSION` del código que está corriendo. */
+  currentRuleSetVersion: number;
+  /** `SCORING_CACHE_VERSION` del código que está corriendo. */
+  currentCacheVersion: number;
+  /** `scoringError` de la pasada anterior: si falló, se reintenta. */
+  previousScoringError: string | null;
+  /**
+   * Aprobados que hay ahora mismo, o `null` si esta pasada no los conoce todos
+   * (pasada dirigida a unos `profileId`). Se compara con
+   * `lastScoring.playersRanked`: un alta, una aprobación o un rechazo cambian la
+   * clasificación sin que nadie haya jugado, y quien los hace no recalcula.
+   */
+  approvedPlayers: number | null;
+  /** Partidas insertadas, actualizadas, resueltas o borradas en esta pasada. */
+  matchesChanged: number;
+  /** Summaries rellenados: cambian las métricas de cinco objetivos. */
+  summariesFetched: number;
+  /** El pool de mapas se ha reescrito: cambia `por-tierra-y-agua`. */
+  mapPoolUpdated: boolean;
+  /** Jugadores con un metadato cambiado que lee la vista de objetivos. */
+  playersChanged: number;
+};
+
+/**
+ * ¿Hay algo que justifique recalcular la clasificación en esta pasada?
+ *
+ * Es la lista **cerrada** de lo que `recomputeScores()` lee y puede haber
+ * cambiado por debajo: partidas, summaries, pool de mapas, el número de aprobados
+ * y los tres metadatos de jugador que publica la vista de objetivos. Con todo a
+ * cero y las mismas versiones, recalcular solo gasta CPU para escribir exactamente
+ * lo mismo.
+ *
+ * El número de aprobados entra porque aprobar y rechazar **no recalculan** en su
+ * propia petición —una pasada entera no cabe en el presupuesto de CPU— y se
+ * apoyaban en que el worker recalculaba siempre. Sin él, un rechazo dejaría al
+ * jugador en la clasificación hasta la siguiente partida de cualquiera.
+ *
+ * Queda fuera a propósito:
+ *
+ * - la configuración (`scoring.ruleset`, cortes, eventos): la recalculan sus
+ *   escritores (panel y scripts), no el worker;
+ * - el elo, la racha, el número de partidas de la ladder y Twitch: cambian con
+ *   demasiada frecuencia y no influyen en el motor;
+ * - los sellos de caché (`ladderUpdatedAt`, `profileCheckedAt`): se escriben en
+ *   **cada** pasada, y si contaran esto no se saltaría nunca.
+ *
+ * Y `matchesChanged` es "filas tocadas", no `newMatches`: una partida insertada
+ * en curso, fuera de la ventana o de un modo que no puntúa también puede cambiar
+ * el estado y no puede quedar fuera por un falso negativo.
+ */
+export function shouldRecomputeScores(input: RecomputeScoresInput): boolean {
+  if (input.lastScoring === null) {
+    return true;
+  }
+
+  if (input.lastScoring.cacheVersion !== input.currentCacheVersion) {
+    return true;
+  }
+
+  if (input.lastScoring.ruleSetVersion !== input.currentRuleSetVersion) {
+    return true;
+  }
+
+  if (input.previousScoringError !== null) {
+    return true;
+  }
+
+  if (
+    input.approvedPlayers !== null &&
+    input.approvedPlayers !== input.lastScoring.playersRanked
+  ) {
+    return true;
+  }
+
+  return (
+    input.matchesChanged > 0 ||
+    input.summariesFetched > 0 ||
+    input.mapPoolUpdated ||
+    input.playersChanged > 0
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Piezas puras del cursor global y del relleno                                */
+/* -------------------------------------------------------------------------- */
+
+/** Un lote del masivo, con el estado que decide si hay que encolarlo. */
+export type GamesBatch = {
+  profileIds: number[];
+  incomplete: boolean;
+};
+
+/** Lo que el relleno necesita saber de cada jugador del lote. */
+export type BackfillPlayerState = {
+  profileId: number;
+  windowComplete: boolean;
+  backfillPage: number;
+};
+
+export type BackfillQueueAction = "rewind" | "keepPage";
+
+export type BackfillQueueEntry = {
+  profileId: number;
+  action: BackfillQueueAction;
+};
+
+export type BackfillPlan = {
+  since: Date;
+  startPage: number;
+  pages: number;
+};
+
+export type RecheckPlan = BackfillPlan & {
+  /** `true` cuando la ventana ya estaba completa y esta pasada la revisa (F2b). */
+  recheck: boolean;
+};
+
+/** Las tres guardas de avance del cursor global. */
+export type GamesCursorAdvanceInput = {
+  directed: boolean;
+  batchesFailed: number;
+  aborted: boolean;
+  maxUpdatedAt: Date | null;
+};
+
+export type BackfillWatchdogState = Pick<
+  GamesCursorState,
+  "bulkIncompleteStreak" | "pendingBestCount" | "pendingBestAt"
+>;
+
+export type BackfillThresholds = {
+  maxIncompleteStreak?: number;
+  pendingStaleMs?: number;
+};
+
+/** Trocea ids en lotes de `size`; con una lista vacía devuelve cero lotes. */
+export function groupProfileIds(ids: readonly number[], size: number): number[][] {
+  if (!Number.isInteger(size) || size <= 0) {
+    throw new Error(`El tamaño de lote tiene que ser un entero positivo (recibido: ${size}).`);
+  }
+
+  const batches: number[][] = [];
+
+  for (let start = 0; start < ids.length; start += size) {
+    batches.push(ids.slice(start, start + size));
+  }
+
+  return batches;
+}
+
+/**
+ * Reparte las partidas de un lote entre sus jugadores.
+ *
+ * Solo se queda con los ids que se le pasan: una partida entre un jugador del
+ * lote y otro de fuera no se le asigna al de fuera. Si dos jugadores del lote
+ * comparten una partida (2v2, 3v3…), la partida aparece en los dos arrays una
+ * vez por jugador, que es justo lo que `persistMatches()` necesita.
+ */
+export function splitGamesByPlayer(
+  games: readonly Aoe4WorldGame[],
+  profileIds: readonly number[],
+): Map<number, Aoe4WorldGame[]> {
+  const ids = [...new Set(profileIds)];
+  const byProfile = new Map<number, Aoe4WorldGame[]>(ids.map((id) => [id, []]));
+  const inBatch = new Set(ids);
+
+  for (const game of games) {
+    const assigned = new Set<number>();
+
+    for (const team of game.teams) {
+      for (const side of team) {
+        const profileId = side.profileId;
+
+        if (profileId === null || !inBatch.has(profileId) || assigned.has(profileId)) {
+          continue;
+        }
+
+        assigned.add(profileId);
+        byProfile.get(profileId)?.push(game);
+      }
+    }
+  }
+
+  return byProfile;
+}
+
+/**
+ * Siembra acotada del cursor global.
+ *
+ * `floor = max(window.from, now − capMs)` y `ceiling = now`; si el último acierto
+ * del rastro cae dentro se usa tal cual. El `capMs = 0` desactiva la cota. La
+ * diferencia con `now` se resta después como solape.
+ */
+export function seedGamesCursor(
+  trace: Pick<SyncRunTrace, "finishedAt"> | null,
+  windowFrom: Date,
+  now: Date,
+  overlapMs: number,
+  capMs: number,
+): { updatedAt: Date; seededFrom: GamesCursorSeedSource } {
+  const floor =
+    capMs > 0
+      ? new Date(Math.max(windowFrom.getTime(), now.getTime() - capMs))
+      : windowFrom;
+  const finishedMs = trace === null ? Number.NaN : Date.parse(trace.finishedAt);
+
+  if (Number.isNaN(finishedMs)) {
+    return {
+      updatedAt: new Date(now.getTime() - overlapMs),
+      seededFrom: "catch-up",
+    };
+  }
+
+  const base = new Date(
+    Math.min(Math.max(finishedMs, floor.getTime()), now.getTime()),
+  );
+
+  return {
+    updatedAt: new Date(base.getTime() - overlapMs),
+    seededFrom: "sync.lastRun.finishedAt",
+  };
+}
+
+/**
+ * Cursor siguiente a partir de lo leído: el mayor `updatedAt` menos el solape.
+ *
+ * Nunca retrocede: si el candidato queda por debajo del anterior, se conserva el
+ * anterior. Sin partidas con `updatedAt` devuelve `null` y el llamador no escribe.
+ */
+export function nextGamesCursor(
+  previous: Date | null,
+  games: readonly Aoe4WorldGame[],
+  overlapMs: number,
+): Date | null {
+  let maxUpdatedAtMs: number | null = null;
+
+  for (const game of games) {
+    const updatedAtMs = game.updatedAt?.getTime();
+
+    if (
+      updatedAtMs !== undefined &&
+      !Number.isNaN(updatedAtMs) &&
+      (maxUpdatedAtMs === null || updatedAtMs > maxUpdatedAtMs)
+    ) {
+      maxUpdatedAtMs = updatedAtMs;
+    }
+  }
+
+  if (maxUpdatedAtMs === null) {
+    return null;
+  }
+
+  const candidate = maxUpdatedAtMs - overlapMs;
+
+  if (previous !== null && previous.getTime() > candidate) {
+    return previous;
+  }
+
+  return new Date(candidate);
+}
+
+/** Las tres guardas: ni dirigida, ni lote fallido, ni plazo, ni cero partidas. */
+export function shouldAdvanceGamesCursor(input: GamesCursorAdvanceInput): boolean {
+  return (
+    !input.directed &&
+    input.batchesFailed === 0 &&
+    !input.aborted &&
+    input.maxUpdatedAt !== null
+  );
+}
+
+function isBackfillStateArray(
+  value: ReadonlyMap<number, BackfillPlayerState> | readonly BackfillPlayerState[],
+): value is readonly BackfillPlayerState[] {
+  return Array.isArray(value);
+}
+
+/**
+ * Jugadores de los lotes truncados, con la acción que les toca.
+ *
+ * `keepPage` solo para quien ya iba a mitad de recorrido: rebobinarlo gastaría
+ * las páginas que ya había leído. Sin fila o con la ventana completa, `rewind`.
+ * Los ids repetidos se quedan con la primera acción vista.
+ */
+export function playersToQueueForBackfill(
+  batches: readonly GamesBatch[],
+  states: ReadonlyMap<number, BackfillPlayerState> | readonly BackfillPlayerState[],
+): BackfillQueueEntry[] {
+  const byProfile = new Map<number, BackfillPlayerState>();
+
+  if (isBackfillStateArray(states)) {
+    for (const state of states) {
+      byProfile.set(state.profileId, state);
+    }
+  } else {
+    for (const [profileId, state] of states) {
+      byProfile.set(profileId, state);
+    }
+  }
+
+  const queued = new Map<number, BackfillQueueAction>();
+
+  for (const batch of batches) {
+    if (!batch.incomplete) {
+      continue;
+    }
+
+    for (const profileId of batch.profileIds) {
+      if (queued.has(profileId)) {
+        continue;
+      }
+
+      const state = byProfile.get(profileId);
+      const action: BackfillQueueAction =
+        state !== undefined && !state.windowComplete && state.backfillPage > 1
+          ? "keepPage"
+          : "rewind";
+
+      queued.set(profileId, action);
+    }
+  }
+
+  return [...queued].map(([profileId, action]) => ({ profileId, action }));
+}
+
+/** Plan de una pasada de relleno, o `null` si la ventana ya está completa. */
+export function backfillPlan(
+  player: Pick<BackfillPlayerState, "windowComplete" | "backfillPage"> & {
+    registeredAt: Date | null;
+  },
+  windowFrom: Date,
+  pagesPerPlayer: number,
+): BackfillPlan | null {
+  if (player.windowComplete) {
+    return null;
+  }
+
+  const since =
+    player.registeredAt !== null && player.registeredAt.getTime() > windowFrom.getTime()
+      ? player.registeredAt
+      : windowFrom;
+
+  return {
+    since,
+    startPage: Math.max(1, player.backfillPage),
+    pages: pagesPerPlayer,
+  };
+}
+
+/**
+ * Plan de una pasada de la ventana: terminarla o revisitarla (F2b).
+ *
+ * `backfillPlan()` deja de mirar una ventana en cuanto se marca completa, así que
+ * una partida que se escapó antes de eso —publicada tarde, o que la API todavía no
+ * devolvía— no se recuperaría nunca. Esto devuelve un plan de **recheck** (desde la
+ * página 1 y con el mismo presupuesto) cuando el último recorrido completo tiene
+ * `recheckMaxAgeMs` o más; con `0` la revisión está desactivada y solo se atienden
+ * pendientes.
+ *
+ * Un `windowCheckedAt` nulo con la ventana completa significa "no se sabe cuándo se
+ * comprobó", y se revisa. Una fecha en el futuro (reloj movido) cuenta como fresca:
+ * no se puede haber comprobado después de ahora.
+ */
+export function recheckPlan(
+  state: {
+    windowComplete: boolean;
+    backfillPage: number;
+    registeredAt: Date | null;
+    windowCheckedAt: Date | null;
+  },
+  windowFrom: Date,
+  pagesPerPlayer: number,
+  recheckMaxAgeMs: number,
+  now: Date,
+): RecheckPlan | null {
+  if (!state.windowComplete) {
+    const plan = backfillPlan(state, windowFrom, pagesPerPlayer);
+
+    return plan === null ? null : { ...plan, recheck: false };
+  }
+
+  if (recheckMaxAgeMs <= 0) {
+    return null;
+  }
+
+  const checkedMs = state.windowCheckedAt === null ? null : state.windowCheckedAt.getTime();
+
+  if (checkedMs !== null && now.getTime() - checkedMs < recheckMaxAgeMs) {
+    return null;
+  }
+
+  const since =
+    state.registeredAt !== null && state.registeredAt.getTime() > windowFrom.getTime()
+      ? state.registeredAt
+      : windowFrom;
+
+  return { since, startPage: 1, pages: pagesPerPlayer, recheck: true };
+}
+
+/**
+ * Actualiza la racha de truncación y el mejor `backfillPending` visto.
+ *
+ * La racha sube una unidad por pasada con truncación y se resetea a cero en la
+ * primera limpia. El mínimo solo se mueve cuando aparece uno nuevo (o el primero):
+ * si no baja, `count` y `at` se quedan intactos.
+ */
+export function nextBackfillWatchdog(
+  state: BackfillWatchdogState,
+  pending: number | null,
+  incompleteThisPass: number,
+  now: Date,
+): BackfillWatchdogState {
+  const bulkIncompleteStreak =
+    incompleteThisPass > 0 ? state.bulkIncompleteStreak + 1 : 0;
+  let pendingBestCount = state.pendingBestCount;
+  let pendingBestAt = state.pendingBestAt;
+
+  if (pending !== null && (pendingBestAt === null || pending < pendingBestCount)) {
+    pendingBestCount = pending;
+    pendingBestAt = now.toISOString();
+  }
+
+  return { bulkIncompleteStreak, pendingBestCount, pendingBestAt };
+}
+
+/**
+ * ¿Lleva el relleno demasiado tiempo sin avanzar?
+ *
+ * Con `pending` a `null` o `0` no hay atasco por construcción. Si no, la alarma
+ * salta con siete pasadas seguidas truncando o con un mínimo de 24 h sin bajar.
+ */
+export function backfillProgressStalled(
+  state: Pick<BackfillWatchdogState, "bulkIncompleteStreak" | "pendingBestAt">,
+  pending: number | null,
+  now: Date,
+  thresholds: BackfillThresholds = {},
+): boolean {
+  if (pending === null || pending === 0) {
+    return false;
+  }
+
+  const maxIncompleteStreak = thresholds.maxIncompleteStreak ?? 7;
+  const pendingStaleMs = thresholds.pendingStaleMs ?? 24 * 60 * 60 * 1000;
+
+  if (state.bulkIncompleteStreak >= maxIncompleteStreak) {
+    return true;
+  }
+
+  if (state.pendingBestAt === null) {
+    return false;
+  }
+
+  const pendingBestAtMs = Date.parse(state.pendingBestAt);
+
+  return (
+    !Number.isNaN(pendingBestAtMs) &&
+    now.getTime() - pendingBestAtMs >= pendingStaleMs
+  );
+}
 
 /**
  * Regla del torneo: si la API nunca publica el desenlace de una partida, esa
@@ -165,8 +695,13 @@ export type SyncPlayerResult = {
   /** Partidas borradas por abandono (regla "nunca cuenta"). */
   matchesAbandoned: number;
   liveMatches: number;
-  historyTruncated: boolean;
+  /** ¿Está completa la ventana del torneo de este jugador? */
+  windowComplete: boolean;
+  /** Página por la que sigue el relleno de su ventana. */
+  backfillPage: number;
+  /** `since` que usó el relleno, o `null` si el jugador no pasó por él. */
   sinceUsed: string | null;
+  /** `since` que quedó en la auditoría del relleno; `null` si no se escribió. */
   sinceStored: string | null;
 };
 
@@ -230,13 +765,46 @@ export type SyncSummary = {
    * bien o no había nada que pedir.
    */
   summariesError: string | null;
+  /** Páginas leídas del endpoint masivo en la pasada. */
+  gamesPagesRead: number;
+  /** Lotes que agotaron su presupuesto de páginas con la ventana abierta. */
+  gamesBatchesIncomplete: number;
+  /** Lotes que fallaron enteros. */
+  gamesBatchesFailed: number;
+  /** Jugadores encolados para el relleno. */
+  gamesPlayersQueuedForBackfill: number;
+  /** Errores de lote, con su número y su rango de ids. */
+  gamesBatchErrors: GamesBatchError[];
+  /** `updated_since` que deja la pasada, o `null` si no hay cursor. */
+  gamesCursor: string | null;
+  /** `true` si el cursor global avanzó. */
+  gamesCursorAdvanced: boolean;
+  /** `true` si esta pasada sembró el cursor. */
+  gamesCursorSeeded: boolean;
+  /** Jugadores a los que tocó el relleno. */
+  backfillPlayers: number;
+  /** Páginas leídas por el relleno. */
+  backfillPagesRead: number;
+  /** Aprobados con la ventana todavía incompleta al terminar. */
+  backfillPending: number;
+  /** Aviso de la API (`filters._important_notice_`), si lo mandó. */
+  apiNotice: string | null;
   /**
-   * Recálculo de la clasificación al final de la pasada. `null` solo si la
-   * versión de reglas leída no existe, lo que no debería ocurrir.
+   * Recálculo de la clasificación al final de la pasada. `null` cuando no había
+   * nada que justificara recalcular (`scoringSkipped`) o cuando la versión de
+   * reglas leída no existe, lo que no debería ocurrir.
    */
   scoring: RecomputeScoresResult | null;
   /** Por qué no se pudo recalcular la clasificación, si no se pudo. */
   scoringError: string | null;
+  /**
+   * `true` cuando la pasada **se ha saltado** el recálculo porque no había nada
+   * que lo justificara (`shouldRecomputeScores()`): ni partidas tocadas, ni
+   * summaries, ni pool nuevo, ni metadatos de jugador cambiados, y las versiones
+   * del rastro coinciden con las del código. No es un fallo: la clasificación
+   * publicada sigue siendo la de la última pasada que sí recalculó.
+   */
+  scoringSkipped: boolean;
   /**
    * Alertas de comportamiento de **los jugadores tocados** en esta pasada, más
    * la evaluación completa del cierre de torneo si esta pasada ha sido la que lo
@@ -345,7 +913,21 @@ export type SyncOptions = {
 
 type SyncConfig = {
   pageSize: number;
+  /** Tope duro de páginas por jugador del relleno. */
   maxPages: number;
+  /** Páginas por lote del endpoint masivo (ya recortadas al tope del cliente). */
+  bulkMaxPages: number;
+  /** Jugadores con la ventana pendiente que se atienden por pasada. */
+  backfillMaxPlayers: number;
+  /** Páginas por jugador en cada pasada de relleno (sin recortar). */
+  backfillPagesPerPlayer: number;
+  /**
+   * Antigüedad a la que una ventana ya completa se vuelve a leer, en ms (F2b).
+   * `0` desactiva la revisión: solo se atienden pendientes.
+   */
+  recheckMaxAgeMs: number;
+  /** Cota de antigüedad de la semilla del cursor global, en ms. 0 = sin cota. */
+  seedMaxAgeMs: number;
   concurrency: number;
   deadlineMs: number;
 };
@@ -356,12 +938,20 @@ type SyncPlayerRow = {
   name: string;
   aoe4WorldName: string | null;
   avatarUrl: string | null;
+  /** División de la ladder; la escribe el snapshot y no cuenta como cambio de caché. */
+  rankLevel: string | null;
+  /** Sello de la caché de perfil; `null` = sin comprobar. */
+  profileCheckedAt: Date | null;
   /**
    * Cuándo se inscribió la persona (`Player.registeredAt`). Es el corte por el que
    * cuenta `countsAsRanked()`: una partida anterior a esta fecha no puntúa. `null`
    * significa "desde el inicio de la ventana".
    */
   registeredAt: Date | null;
+  /** ¿Ya se recorrió su ventana del torneo? */
+  windowComplete: boolean;
+  /** Página por la que sigue el relleno. */
+  backfillPage: number;
 };
 
 function nowIso(): string {
@@ -388,7 +978,11 @@ function readApprovedPlayers(profileIds: number[] | undefined): Promise<SyncPlay
       name: true,
       aoe4WorldName: true,
       avatarUrl: true,
+      rankLevel: true,
+      profileCheckedAt: true,
       registeredAt: true,
+      windowComplete: true,
+      backfillPage: true,
     },
     orderBy: { profileId: "asc" },
   });
@@ -412,7 +1006,8 @@ function emptyPlayerResult(
     matchesResolvedByRefetch: 0,
     matchesAbandoned: 0,
     liveMatches: 0,
-    historyTruncated: false,
+    windowComplete: player.windowComplete,
+    backfillPage: player.backfillPage,
     sinceUsed: null,
     sinceStored: null,
     ...overrides,
@@ -587,11 +1182,18 @@ async function persistMatches(
   return { inserted, updated: toRefresh.length, counted };
 }
 
-type ReconcileResult = {
+type ReconcilePlayerResult = {
   resolved: number;
   /** De las resueltas, las que entran a contar para el torneo (regla única). */
   counted: number;
   abandonedGameIds: string[];
+  firstAbandonedStartedAt: Date | null;
+};
+
+type ReconcileResult = {
+  byProfile: Map<number, ReconcilePlayerResult>;
+  /** Jugadores con un error no-404; el primero que apareció. */
+  failed: Map<number, string>;
 };
 
 function toGameIdNumber(gameId: string): number | null {
@@ -601,109 +1203,192 @@ function toGameIdNumber(gameId: string): number | null {
 }
 
 /**
- * Segunda pasada sobre las partidas guardadas que ya no pueden estar vivas.
+ * Reconciliación global de partidas guardadas que ya no pueden estar vivas.
  *
  * Una fila con `finishedAt = null` solo es legítima mientras la partida pueda
  * seguir jugándose. Pasada la ventana de directo, el listado ya no la resuelve:
  * la devuelve, pero `normalizeGame` la clasifica como "cerrada sin resultado" y
  * entonces no se refresca (ni se borra) la fila que ya estaba guardada. Sin esta
- * pasada se quedaría con `finishedAt = null` indefinidamente: ni F3 la puntuaría
- * ni F4 dejaría de listarla.
+ * pasada se quedaría con `finishedAt = null` indefinidamente.
  *
- * El corte es la **ventana de directo** (`reconciliationCutoff()`) y **no** el
- * cursor `since`: una partida abandonada que fuera la más nueva del jugador tiene
- * `startedAt >= since` (el cursor es `maxStartedAt − 60 min`) y con el criterio
- * del cursor se quedaba sin reconciliar para siempre. El corte de la ventana es
- * un superconjunto del cursor, así que rescata también ese borde.
- *
- * Aquí se resuelven con el endpoint de detalle (una llamada por partida, y el
- * conjunto suele ser de 0 a 2). `normalizeGame` sigue siendo el único que juzga
- * si una partida está en curso, con el mismo criterio de 60 minutos: el refetch
- * no se salta ninguna regla, solo rescata lo que el listado no resuelve.
+ * Es una sola consulta para toda la pasada, no una por jugador: el conjunto de
+ * pendientes suele ser de 0 a 2 y se agrupa en memoria. El corte es la ventana de
+ * directo (`reconciliationCutoff()`), no el cursor: una partida abandonada que
+ * fuera la más nueva del jugador tiene `startedAt` dentro de la ventana y con el
+ * criterio del cursor no se reconciliaría nunca.
  */
 async function reconcileUnfinishedMatches(
-  player: SyncPlayerRow,
+  players: readonly SyncPlayerRow[],
+  profileIds: number[] | undefined,
   client: Aoe4WorldClient,
   signal: AbortSignal,
   ruleset: Pick<ScoringRuleset, "window">,
-  context: TeamTierContext,
+  cutoffs: LadderCutoffsTable | null,
+  now: Date,
 ): Promise<ReconcileResult> {
-  const cutoff = reconciliationCutoff();
-
+  const byId = new Map(players.map((player) => [player.id, player]));
   const pending = await db.match.findMany({
-    where: { playerId: player.id, finishedAt: null, startedAt: { lt: cutoff } },
-    select: { gameId: true },
+    where: {
+      finishedAt: null,
+      startedAt: { lt: reconciliationCutoff(now) },
+      player: {
+        status: "APPROVED",
+        ...(profileIds === undefined ? {} : { profileId: { in: profileIds } }),
+      },
+    },
+    select: {
+      gameId: true,
+      playerId: true,
+      startedAt: true,
+      player: { select: { profileId: true, registeredAt: true } },
+    },
     orderBy: { startedAt: "asc" },
   });
 
-  const result: ReconcileResult = { resolved: 0, counted: 0, abandonedGameIds: [] };
+  const groups = new Map<
+    string,
+    { profileId: number; registeredAt: Date | null; rows: typeof pending }
+  >();
 
-  const abandon = async (gameId: string) => {
-    await db.match.delete({
-      where: { playerId_gameId: { playerId: player.id, gameId } },
-    });
-    result.abandonedGameIds.push(gameId);
-    console.warn(
-      `[sync] Jugador ${player.profileId}: partida ${gameId} borrada (${ABANDONED_REASON}).`,
-    );
-  };
+  for (const row of pending) {
+    const group = groups.get(row.playerId);
 
-  for (const match of pending) {
-    signal.throwIfAborted();
-
-    const gameId = toGameIdNumber(match.gameId);
-
-    if (gameId === null) {
-      // Una fila que ni siquiera se puede pedir no puede contar para nadie.
-      await abandon(match.gameId);
-      continue;
-    }
-
-    let finished: Aoe4WorldGame;
-
-    try {
-      finished = await client.getPlayerGame(player.profileId, gameId, { signal });
-    } catch (error) {
-      if (error instanceof Aoe4WorldNotFoundError) {
-        // La API ya no conoce la partida: no hay desenlace que esperar.
-        await abandon(match.gameId);
-        continue;
-      }
-
-      throw error;
-    }
-
-    const normalized = normalizeGame(finished, player.profileId);
-
-    if (normalized.status === "skipped") {
-      // Pasada la ventana de 60 min y sin resultado: abandono definitivo.
-      await abandon(match.gameId);
-      continue;
-    }
-
-    if (normalized.match.finishedAt === null) {
-      // La API la sigue dando viva y dentro de ventana: aún no se decide nada.
-      continue;
-    }
-
-    await applyMatchUpdate(player.id, normalized.match);
-    result.resolved += 1;
-
-    // La fila estaba en curso y ahora está resuelta: si cumple la regla, entra a
-    // contar en esta pasada.
-    if (countTournamentMatches([normalized.match], ruleset, player.registeredAt, context) > 0) {
-      result.counted += 1;
+    if (group === undefined) {
+      groups.set(row.playerId, {
+        profileId: row.player.profileId,
+        registeredAt: row.player.registeredAt,
+        rows: [row],
+      });
+    } else {
+      group.rows.push(row);
     }
   }
 
-  return result;
+  const byProfile = new Map<number, ReconcilePlayerResult>();
+  const failed = new Map<number, string>();
+
+  for (const [playerId, group] of groups) {
+    const player = byId.get(playerId);
+
+    if (player === undefined) {
+      continue;
+    }
+
+    const result: ReconcilePlayerResult = {
+      resolved: 0,
+      counted: 0,
+      abandonedGameIds: [],
+      firstAbandonedStartedAt: null,
+    };
+    const context: TeamTierContext = { profileId: player.profileId, cutoffs };
+    let playerError: string | null = null;
+
+    try {
+      for (const row of group.rows) {
+        if (signal.aborted) {
+          break;
+        }
+
+        const abandon = async (gameId: string, startedAt: Date) => {
+          await db.match.delete({
+            where: { playerId_gameId: { playerId, gameId } },
+          });
+          result.abandonedGameIds.push(gameId);
+
+          if (result.firstAbandonedStartedAt === null) {
+            result.firstAbandonedStartedAt = startedAt;
+          }
+
+          console.warn(
+            `[sync] Jugador ${player.profileId}: partida ${gameId} borrada (${ABANDONED_REASON}).`,
+          );
+        };
+
+        const gameId = toGameIdNumber(row.gameId);
+
+        if (gameId === null) {
+          // Una fila que ni siquiera se puede pedir no puede contar para nadie.
+          await abandon(row.gameId, row.startedAt);
+          continue;
+        }
+
+        let finished: Aoe4WorldGame;
+
+        try {
+          finished = await client.getPlayerGame(player.profileId, gameId, { signal });
+        } catch (error) {
+          if (error instanceof Aoe4WorldNotFoundError) {
+            // La API ya no conoce la partida: no hay desenlace que esperar.
+            await abandon(row.gameId, row.startedAt);
+            continue;
+          }
+
+          playerError = toErrorMessage(error);
+          break;
+        }
+
+        const normalized = normalizeGame(finished, player.profileId, now);
+
+        if (normalized.status === "skipped") {
+          // Pasada la ventana de 60 min y sin resultado: abandono definitivo.
+          await abandon(row.gameId, row.startedAt);
+          continue;
+        }
+
+        if (normalized.match.finishedAt === null) {
+          // La API la sigue dando viva y dentro de ventana: aún no se decide nada.
+          continue;
+        }
+
+        await applyMatchUpdate(player.id, normalized.match);
+        result.resolved += 1;
+
+        // La fila estaba en curso y ahora está resuelta: si cumple la regla,
+        // entra a contar en esta pasada.
+        if (
+          countTournamentMatches([normalized.match], ruleset, player.registeredAt, context) > 0
+        ) {
+          result.counted += 1;
+        }
+      }
+    } catch (error) {
+      playerError = playerError ?? toErrorMessage(error);
+    }
+
+    if (result.abandonedGameIds.length > 0) {
+      try {
+        const previous = await readPlayerSyncState(player.profileId);
+        const fallbackStartedAt = result.firstAbandonedStartedAt ?? now;
+        const since = previous?.since ?? fallbackStartedAt.toISOString();
+        const maxStartedAt = previous?.maxStartedAt ?? fallbackStartedAt.toISOString();
+
+        await writePlayerSyncState(player.profileId, {
+          since,
+          maxStartedAt,
+          lastSyncedAt: nowIso(),
+          ...mergeAbandonedAudit(previous, result.abandonedGameIds, nowIso()),
+        });
+      } catch (error) {
+        playerError = playerError ?? toErrorMessage(error);
+      }
+    }
+
+    byProfile.set(player.profileId, result);
+
+    if (playerError !== null) {
+      failed.set(player.profileId, playerError);
+    }
+  }
+
+  return { byProfile, failed };
 }
 
 type FetchedGames = {
   games: Aoe4WorldGame[];
   pages: number;
   maxStartedAt: Date | null;
-  truncated: boolean;
+  /** Página siguiente a la última leída, o `null` si el recorrido terminó. */
+  nextPage: number | null;
 };
 
 async function fetchPlayerGames(
@@ -712,15 +1397,17 @@ async function fetchPlayerGames(
   since: Date | null,
   config: SyncConfig,
   signal: AbortSignal,
+  startPage = 1,
+  maxPages = config.maxPages,
 ): Promise<FetchedGames> {
   const games: Aoe4WorldGame[] = [];
   let maxStartedAt: Date | null = null;
   let pages = 0;
-  let nextPage: number | null = 1;
+  let nextPage: number | null = startPage;
 
   // La API pagina de la más reciente a la más antigua, así que el tope de
   // páginas recorta el pasado y nunca lo nuevo: no se pierden partidas nuevas.
-  while (nextPage !== null && pages < config.maxPages) {
+  while (nextPage !== null && pages < maxPages) {
     signal.throwIfAborted();
 
     const page = await client.getPlayerGames(
@@ -734,6 +1421,7 @@ async function fetchPlayerGames(
     nextPage = page.nextPage;
 
     if (page.games.length === 0) {
+      nextPage = null;
       break;
     }
 
@@ -744,143 +1432,605 @@ async function fetchPlayerGames(
     }
   }
 
-  return { games, pages, maxStartedAt, truncated: nextPage !== null };
+  return { games, pages, maxStartedAt, nextPage };
 }
 
-async function syncPlayer(
-  player: SyncPlayerRow,
+function markPlayerFailed(result: SyncPlayerResult, error: string): void {
+  if (result.status !== "failed") {
+    result.status = "failed";
+    result.error = error;
+  }
+}
+
+function markPlayerCancelled(result: SyncPlayerResult): void {
+  if (result.status === "ok") {
+    result.status = "cancelled";
+    result.error = "Plazo agotado.";
+  }
+}
+
+/**
+ * Siembra (o recupera) el cursor global y encola al roster entero.
+ *
+ * Las dos escrituras van en la **misma transacción**: si se escribiera el cursor
+ * sin encolar, el masivo avanzaría y el relleno no sabría qué tramo cubrir. El
+ * `updateMany` no se filtra por `profileIds` a propósito: la siembra es la única
+ * vez que el sistema admite que no sabe dónde está, y filtrarla dejaría al resto
+ * del roster sin dueño para su tramo perdido.
+ */
+async function seedCursorAndQueue(
+  players: readonly SyncPlayerRow[],
+  trace: Pick<SyncRunTrace, "finishedAt"> | null,
+  windowFrom: Date,
+  now: Date,
+  config: SyncConfig,
+  forceCatchUp: boolean,
+): Promise<GamesCursorState> {
+  const seed = seedGamesCursor(
+    forceCatchUp ? null : trace,
+    windowFrom,
+    now,
+    SYNC_OVERLAP_MS,
+    config.seedMaxAgeMs,
+  );
+  const state: GamesCursorState = {
+    updatedAt: seed.updatedAt.toISOString(),
+    seededAt: now.toISOString(),
+    seededFrom: seed.seededFrom,
+    bulkIncompleteStreak: 0,
+    pendingBestCount: 0,
+    pendingBestAt: null,
+  };
+
+  await db.$transaction(async (tx) => {
+    await tx.player.updateMany({
+      where: { status: "APPROVED" },
+      data: { windowComplete: false, backfillPage: 1 },
+    });
+    await writeGamesCursor(state, tx);
+  });
+
+  for (const player of players) {
+    player.windowComplete = false;
+    player.backfillPage = 1;
+  }
+
+  return state;
+}
+
+/** Aplica la cola del relleno a la base y a las filas/resultados en memoria. */
+async function applyBackfillQueue(
+  players: readonly SyncPlayerRow[],
+  results: ReadonlyMap<number, SyncPlayerResult>,
+  entries: readonly BackfillQueueEntry[],
+): Promise<void> {
+  const byProfile = new Map(players.map((player) => [player.profileId, player]));
+  const rewindIds: string[] = [];
+  const keepIds: string[] = [];
+
+  for (const entry of entries) {
+    const player = byProfile.get(entry.profileId);
+
+    if (player === undefined) {
+      continue;
+    }
+
+    if (entry.action === "rewind") {
+      rewindIds.push(player.id);
+    } else {
+      keepIds.push(player.id);
+    }
+  }
+
+  if (keepIds.length > 0) {
+    await db.player.updateMany({
+      where: { id: { in: keepIds } },
+      data: { windowComplete: false },
+    });
+  }
+
+  if (rewindIds.length > 0) {
+    await db.player.updateMany({
+      where: { id: { in: rewindIds } },
+      data: { windowComplete: false, backfillPage: 1 },
+    });
+  }
+
+  for (const entry of entries) {
+    const player = byProfile.get(entry.profileId);
+
+    if (player === undefined) {
+      continue;
+    }
+
+    player.windowComplete = false;
+
+    if (entry.action === "rewind") {
+      player.backfillPage = 1;
+    }
+
+    const result = results.get(entry.profileId);
+
+    if (result !== undefined) {
+      result.windowComplete = false;
+
+      if (entry.action === "rewind") {
+        result.backfillPage = 1;
+      }
+    }
+  }
+}
+
+type BulkStepResult = {
+  pagesRead: number;
+  batchesIncomplete: number;
+  batchesFailed: number;
+  batchErrors: GamesBatchError[];
+  queuedEntries: BackfillQueueEntry[];
+  games: Aoe4WorldGame[];
+  maxUpdatedAt: Date | null;
+  apiNotice: string | null;
+};
+
+async function runBulkStep(
+  batches: readonly (readonly number[])[],
+  players: readonly SyncPlayerRow[],
+  results: ReadonlyMap<number, SyncPlayerResult>,
   client: Aoe4WorldClient,
   config: SyncConfig,
   signal: AbortSignal,
+  cursorDate: Date,
   ruleset: Pick<ScoringRuleset, "window">,
   cutoffs: LadderCutoffsTable | null,
-): Promise<SyncPlayerResult> {
-  const teamContext: TeamTierContext = { profileId: player.profileId, cutoffs };
-  const state = await readPlayerSyncState(player.profileId);
-  const storedSince = state === null ? null : new Date(state.since);
-  const since = storedSince !== null && !Number.isNaN(storedSince.getTime()) ? storedSince : null;
-  const sinceUsed = since === null ? null : since.toISOString();
+  now: Date,
+): Promise<BulkStepResult> {
+  const byProfile = new Map(players.map((player) => [player.profileId, player]));
+  const incompleteBatches: GamesBatch[] = [];
+  const saveFailureBatches: GamesBatch[] = [];
+  const batchErrors: GamesBatchError[] = [];
+  const games: Aoe4WorldGame[] = [];
+  let pagesRead = 0;
+  let batchesIncomplete = 0;
+  let batchesFailed = 0;
+  let maxUpdatedAt: Date | null = null;
+  let apiNotice: string | null = null;
 
-  // `Player.name` es el nombre de display y no se toca aquí: lo escribió quien
-  // se inscribió y no depende de que AoE4World renombre el perfil. Del perfil
-  // solo se toma lo que es de AoE4World y va en su propia columna.
-  try {
-    const profile = await client.getPlayer(player.profileId, { signal });
+  const cancelFrom = (startIndex: number): void => {
+    for (let index = startIndex; index < batches.length; index += 1) {
+      for (const profileId of batches[index] ?? []) {
+        const result = results.get(profileId);
 
-    // El perfil se pide en cada pasada, así que aprovecha para refrescar también
-    // el retrato: es la única vía para los jugadores que la ladder de `rm_solo`
-    // no devuelve (sin partidas en la temporada), que no llegarían a tener
-    // avatar nunca. Un `avatars.full` vacío no pisa el que ya había, igual que
-    // en `ladder.ts`.
-    const officialNameChanged = profile.name !== player.aoe4WorldName;
-    const avatarUrl = profile.avatars.full;
-    const avatarChanged = avatarUrl !== null && avatarUrl !== player.avatarUrl;
+        if (result !== undefined) {
+          markPlayerCancelled(result);
+        }
+      }
+    }
+  };
 
-    if (officialNameChanged || avatarChanged) {
+  for (let index = 0; index < batches.length; index += 1) {
+    const batchProfileIds = batches[index];
+
+    if (batchProfileIds === undefined) {
+      continue;
+    }
+
+    if (signal.aborted) {
+      cancelFrom(index);
+      break;
+    }
+
+    const batchNumber = index + 1;
+    const batchGames: Aoe4WorldGame[] = [];
+    let page: number | null = 1;
+    let pagesThisBatch = 0;
+
+    try {
+      while (page !== null && pagesThisBatch < config.bulkMaxPages) {
+        const response = await client.getGamesBulk(
+          {
+            profileIds: [...batchProfileIds],
+            updatedSince: cursorDate,
+            order: "updated_at",
+            page,
+          },
+          { signal },
+        );
+
+        pagesRead += 1;
+        pagesThisBatch += 1;
+
+        if (response.notice !== null && apiNotice === null) {
+          apiNotice = response.notice;
+        }
+
+        batchGames.push(...response.games);
+
+        for (const game of response.games) {
+          const updatedAt = game.updatedAt;
+
+          if (updatedAt !== null && (maxUpdatedAt === null || updatedAt > maxUpdatedAt)) {
+            maxUpdatedAt = updatedAt;
+          }
+        }
+
+        page = response.nextPage;
+
+        if (response.games.length === 0) {
+          page = null;
+        }
+      }
+    } catch (error) {
+      if (signal.aborted) {
+        cancelFrom(index);
+        break;
+      }
+
+      batchesFailed += 1;
+      const batchError = toErrorMessage(error);
+
+      if (batchErrors.length < GAMES_BATCH_ERRORS_LIMIT) {
+        batchErrors.push({
+          batch: batchNumber,
+          firstProfileId: batchProfileIds[0] ?? 0,
+          lastProfileId: batchProfileIds[batchProfileIds.length - 1] ?? 0,
+          error: batchError,
+        });
+      }
+
+      for (const profileId of batchProfileIds) {
+        const result = results.get(profileId);
+
+        if (result !== undefined) {
+          markPlayerFailed(result, batchError);
+        }
+      }
+
+      continue;
+    }
+
+    games.push(...batchGames);
+
+    if (page !== null) {
+      batchesIncomplete += 1;
+      incompleteBatches.push({ profileIds: [...batchProfileIds], incomplete: true });
+    }
+
+    const split = splitGamesByPlayer(batchGames, batchProfileIds);
+
+    for (const profileId of batchProfileIds) {
+      const player = byProfile.get(profileId);
+      const result = results.get(profileId);
+
+      if (player === undefined || result === undefined) {
+        continue;
+      }
+
+      if (signal.aborted) {
+        markPlayerCancelled(result);
+        cancelFrom(index);
+        break;
+      }
+
+      const playerGames = split.get(profileId) ?? [];
+      result.gamesSeen += playerGames.length;
+
+      const matches: NormalizedMatch[] = [];
+
+      for (const game of playerGames) {
+        const normalized = normalizeGame(game, profileId, now);
+
+        if (normalized.status === "skipped") {
+          result.matchesSkipped += 1;
+          continue;
+        }
+
+        if (normalized.match.finishedAt === null) {
+          result.liveMatches += 1;
+        }
+
+        matches.push(normalized.match);
+      }
+
+      try {
+        const context: TeamTierContext = { profileId, cutoffs };
+        const persisted = await persistMatches(
+          player.id,
+          matches,
+          ruleset,
+          player.registeredAt,
+          context,
+        );
+
+        result.matchesInserted += persisted.inserted;
+        result.matchesCounted += persisted.counted;
+        result.matchesUpdated += persisted.updated;
+      } catch (error) {
+        if (signal.aborted) {
+          markPlayerCancelled(result);
+          cancelFrom(index);
+          break;
+        }
+
+        markPlayerFailed(result, toErrorMessage(error));
+        saveFailureBatches.push({ profileIds: [profileId], incomplete: true });
+      }
+    }
+  }
+
+  const queuedEntries =
+    incompleteBatches.length === 0 && saveFailureBatches.length === 0
+      ? []
+      : playersToQueueForBackfill(
+          [...incompleteBatches, ...saveFailureBatches],
+          players.map((player) => ({
+            profileId: player.profileId,
+            windowComplete: player.windowComplete,
+            backfillPage: player.backfillPage,
+          })),
+        );
+
+  return {
+    pagesRead,
+    batchesIncomplete,
+    batchesFailed,
+    batchErrors,
+    queuedEntries,
+    games,
+    maxUpdatedAt,
+    apiNotice,
+  };
+}
+
+type BackfillStepResult = {
+  players: number;
+  pagesRead: number;
+  pending: number;
+};
+
+async function runBackfillStep(
+  candidates: readonly {
+    id: string;
+    profileId: number;
+    registeredAt: Date | null;
+    backfillPage: number;
+    windowComplete: boolean;
+    windowCheckedAt: Date | null;
+  }[],
+  players: readonly SyncPlayerRow[],
+  results: ReadonlyMap<number, SyncPlayerResult>,
+  client: Aoe4WorldClient,
+  config: SyncConfig,
+  signal: AbortSignal,
+  windowFrom: Date,
+  ruleset: Pick<ScoringRuleset, "window">,
+  cutoffs: LadderCutoffsTable | null,
+  profileIds: number[] | undefined,
+  now: Date,
+): Promise<BackfillStepResult> {
+  const byProfile = new Map(players.map((player) => [player.profileId, player]));
+  const pagesPerPlayer = Math.min(config.backfillPagesPerPlayer, config.maxPages);
+  let served = 0;
+  let pagesRead = 0;
+
+  for (const candidate of candidates) {
+    if (signal.aborted) {
+      break;
+    }
+
+    const player = byProfile.get(candidate.profileId);
+    const result = results.get(candidate.profileId);
+
+    if (player === undefined || result === undefined) {
+      continue;
+    }
+
+    const plan = recheckPlan(
+      candidate,
+      windowFrom,
+      pagesPerPlayer,
+      config.recheckMaxAgeMs,
+      now,
+    );
+
+    if (plan === null) {
+      continue;
+    }
+
+    served += 1;
+    const sinceUsed = plan.since.toISOString();
+    result.sinceUsed = sinceUsed;
+
+    try {
+      const fetched = await fetchPlayerGames(
+        client,
+        candidate.profileId,
+        plan.since,
+        config,
+        signal,
+        plan.startPage,
+        plan.pages,
+      );
+
+      pagesRead += fetched.pages;
+      result.pages += fetched.pages;
+      result.gamesSeen += fetched.games.length;
+
+      const matches: NormalizedMatch[] = [];
+
+      for (const game of fetched.games) {
+        const normalized = normalizeGame(game, candidate.profileId, now);
+
+        if (normalized.status === "skipped") {
+          result.matchesSkipped += 1;
+          continue;
+        }
+
+        if (normalized.match.finishedAt === null) {
+          result.liveMatches += 1;
+        }
+
+        matches.push(normalized.match);
+      }
+
+      const context: TeamTierContext = { profileId: candidate.profileId, cutoffs };
+      const persisted = await persistMatches(
+        candidate.id,
+        matches,
+        ruleset,
+        candidate.registeredAt,
+        context,
+      );
+
+      result.matchesInserted += persisted.inserted;
+      result.matchesCounted += persisted.counted;
+      result.matchesUpdated += persisted.updated;
+
+      // Un recheck que se trunca cae en la rama de abajo y vuelve a la cola normal
+      // como pendiente; uno que falla no escribe nada y sigue siendo candidato.
+      if (fetched.nextPage === null) {
+        await db.player.update({
+          where: { id: candidate.id },
+          data: { windowComplete: true, windowCheckedAt: now },
+        });
+
+        player.windowComplete = true;
+        result.windowComplete = true;
+
+        const previous = await readPlayerSyncState(candidate.profileId);
+        const maxStartedAt = fetched.maxStartedAt ?? plan.since;
+
+        await writePlayerSyncState(candidate.profileId, {
+          since: sinceUsed,
+          maxStartedAt: maxStartedAt.toISOString(),
+          lastSyncedAt: nowIso(),
+          ...mergeAbandonedAudit(previous, [], nowIso()),
+        });
+
+        result.sinceStored = sinceUsed;
+      } else {
+        await db.player.update({
+          where: { id: candidate.id },
+          data: { windowComplete: false, backfillPage: fetched.nextPage },
+        });
+
+        player.windowComplete = false;
+        player.backfillPage = fetched.nextPage;
+        result.windowComplete = false;
+        result.backfillPage = fetched.nextPage;
+      }
+    } catch (error) {
+      markPlayerFailed(result, toErrorMessage(error));
+    }
+  }
+
+  const pending = await db.player.count({
+    where: {
+      status: "APPROVED",
+      windowComplete: false,
+      ...(profileIds === undefined ? {} : { profileId: { in: profileIds } }),
+    },
+  });
+
+  return { players: served, pagesRead, pending };
+}
+
+async function refreshProfiles(
+  players: readonly SyncPlayerRow[],
+  results: ReadonlyMap<number, SyncPlayerResult>,
+  client: Aoe4WorldClient,
+  config: SyncConfig,
+  signal: AbortSignal,
+  now: Date,
+): Promise<number> {
+  // La ladder se ejecuta antes que este paso y sella `profileCheckedAt` y el
+  // nombre en la base. La lista de jugadores se leyó antes, así que hay que
+  // releer esas tres columnas para no pedir un perfil que la ladder acaba de
+  // dejar fresco.
+  if (players.length > 0) {
+    const frescos = await db.player.findMany({
+      where: { profileId: { in: players.map((player) => player.profileId) } },
+      select: {
+        profileId: true,
+        profileCheckedAt: true,
+        aoe4WorldName: true,
+        avatarUrl: true,
+      },
+    });
+    const byProfile = new Map(frescos.map((row) => [row.profileId, row]));
+
+    for (const player of players) {
+      const row = byProfile.get(player.profileId);
+
+      if (row !== undefined) {
+        player.profileCheckedAt = row.profileCheckedAt;
+        player.aoe4WorldName = row.aoe4WorldName;
+        player.avatarUrl = row.avatarUrl;
+      }
+    }
+  }
+
+  const changed = await runPool(players, config.concurrency, async (player): Promise<boolean> => {
+    const result = results.get(player.profileId);
+
+    if (result === undefined) {
+      return false;
+    }
+
+    if (signal.aborted) {
+      markPlayerCancelled(result);
+      return false;
+    }
+
+    if (!shouldRefreshProfile(player.profileCheckedAt, now, PROFILE_CACHE_TTL_MS)) {
+      return false;
+    }
+
+    try {
+      const profile = await client.getPlayer(player.profileId, { signal });
+      const officialNameChanged = profile.name !== player.aoe4WorldName;
+      const avatarUrl = profile.avatars.full;
+      const avatarChanged = avatarUrl !== null && avatarUrl !== player.avatarUrl;
+
       await db.player.update({
         where: { id: player.id },
         data: {
           ...(officialNameChanged ? { aoe4WorldName: profile.name } : {}),
           ...(avatarChanged ? { avatarUrl } : {}),
+          // Se sella siempre que la llamada va bien, haya cambiado algo o no.
+          profileCheckedAt: now,
         },
       });
+
+      if (officialNameChanged) {
+        player.aoe4WorldName = profile.name;
+      }
+
+      if (avatarChanged) {
+        player.avatarUrl = avatarUrl;
+      }
+
+      player.profileCheckedAt = now;
+
+      // El sello no cuenta: lo que decide el recálculo son los metadatos que lee
+      // la vista de objetivos, y `profileCheckedAt` se escribe siempre.
+      return officialNameChanged || avatarChanged;
+    } catch (error) {
+      if (error instanceof Aoe4WorldError && error.status === 404) {
+        markPlayerFailed(result, `AoE4World no conoce el perfil ${player.profileId}.`);
+      } else {
+        markPlayerFailed(result, toErrorMessage(error));
+      }
+
+      return false;
     }
-  } catch (error) {
-    if (error instanceof Aoe4WorldError && error.status === 404) {
-      // Perfil borrado o inexistente en AoE4World: es un fallo de este jugador,
-      // no del lote, pero no se sigue gastando API en intentarlo cada pasada.
-      return emptyPlayerResult(player, {
-        status: "failed",
-        error: `AoE4World no conoce el perfil ${player.profileId}.`,
-        sinceUsed,
-      });
-    }
-
-    throw error;
-  }
-
-  // Antes de paginar: resuelve o abandona lo que ya no puede estar vivo.
-  const reconcile = await reconcileUnfinishedMatches(player, client, signal, ruleset, teamContext);
-
-  const fetched = await fetchPlayerGames(client, player.profileId, since, config, signal);
-  const now = new Date();
-
-  const matches: NormalizedMatch[] = [];
-  let matchesSkipped = 0;
-  let liveMatches = 0;
-
-  for (const game of fetched.games) {
-    const normalized = normalizeGame(game, player.profileId, now);
-
-    if (normalized.status === "skipped") {
-      matchesSkipped += 1;
-      continue;
-    }
-
-    if (normalized.match.finishedAt === null) {
-      liveMatches += 1;
-    }
-
-    matches.push(normalized.match);
-  }
-
-  const { inserted, counted, updated } = await persistMatches(
-    player.id,
-    matches,
-    ruleset,
-    player.registeredAt,
-    teamContext,
-  );
-
-  // El cursor solo avanza si hemos visto alguna partida, y nunca retrocede.
-  const nextSince =
-    fetched.maxStartedAt === null
-      ? null
-      : new Date(fetched.maxStartedAt.getTime() - SYNC_OVERLAP_MS);
-  const cursorAdvances = nextSince !== null && (since === null || nextSince > since);
-  const effectiveSince = cursorAdvances ? nextSince : since;
-  const effectiveMaxStartedAt =
-    fetched.maxStartedAt ?? (state === null ? null : new Date(state.maxStartedAt));
-
-  let sinceStored = sinceUsed;
-
-  // Se escribe el cursor si avanza o si hay abandonos que dejar anotados.
-  if (
-    effectiveSince !== null &&
-    effectiveMaxStartedAt !== null &&
-    !Number.isNaN(effectiveMaxStartedAt.getTime()) &&
-    (cursorAdvances || reconcile.abandonedGameIds.length > 0)
-  ) {
-    await writePlayerSyncState(player.profileId, {
-      since: effectiveSince.toISOString(),
-      maxStartedAt: effectiveMaxStartedAt.toISOString(),
-      lastSyncedAt: nowIso(),
-      historyTruncated: cursorAdvances ? fetched.truncated : (state?.historyTruncated ?? false),
-      ...mergeAbandonedAudit(state, reconcile.abandonedGameIds, nowIso()),
-    });
-
-    sinceStored = effectiveSince.toISOString();
-  }
-
-  return emptyPlayerResult(player, {
-    pages: fetched.pages,
-    gamesSeen: fetched.games.length,
-    matchesInserted: inserted,
-    matchesCounted: counted + reconcile.counted,
-    matchesUpdated: updated,
-    matchesSkipped,
-    matchesResolvedByRefetch: reconcile.resolved,
-    matchesAbandoned: reconcile.abandonedGameIds.length,
-    liveMatches,
-    historyTruncated: fetched.truncated,
-    sinceUsed,
-    sinceStored,
   });
+
+  return changed.filter((value) => value).length;
 }
 
 /** Reparte los jugadores en `concurrency` carriles para no saturar la API. */
 async function runPool<T, R>(
-  items: T[],
+  items: readonly T[],
   concurrency: number,
   worker: (item: T) => Promise<R>,
 ): Promise<R[]> {
@@ -905,6 +2055,11 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   const config: SyncConfig = {
     pageSize: envConfig.syncPageSize,
     maxPages: envConfig.syncMaxPages,
+    bulkMaxPages: Math.min(envConfig.syncBulkMaxPages, GAMES_BULK_MAX_PAGE),
+    backfillMaxPlayers: envConfig.syncBackfillMaxPlayers,
+    backfillPagesPerPlayer: envConfig.syncBackfillPagesPerPlayer,
+    recheckMaxAgeMs: envConfig.syncRecheckMaxAgeDays * 86_400_000,
+    seedMaxAgeMs: envConfig.syncSeedMaxAgeMinutes * 60_000,
     concurrency: envConfig.syncConcurrency,
     deadlineMs: envConfig.syncDeadlineMs,
   };
@@ -918,22 +2073,80 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     options.signal === undefined ? deadline : AbortSignal.any([options.signal, deadline]);
 
   const players = await readApprovedPlayers(options.profileIds);
+  const results = new Map(
+    players.map((player) => [player.profileId, emptyPlayerResult(player)]),
+  );
+  const directed = options.profileIds !== undefined;
 
-  // El ruleset se lee una vez por pasada y se pasa al bucle: es la ventana con la
-  // que cada jugador decide si una partida entra a contar (`matchesCounted`). El
-  // recálculo de la clasificación lo vuelve a leer por su cuenta, que es correcto:
-  // entre la lectura y el recálculo hay minutos de llamadas a la API, y lo que
-  // importa para puntuar es el ruleset vigente en ese momento.
   const ruleset = await readRuleset();
-
-  // Los cortes de división también se leen **una vez por pasada**: son de la
-  // condición de equipos de la regla (un compañero a dos escalones o más deja la
-  // partida fuera), no salen a la red y los necesitan los dos contadores —el de
-  // las partidas nuevas y el del refetch—. Sin ellos, las partidas de equipo
-  // cuentan, que es la degradación acordada y lo que dice el rastro del recálculo.
   const cutoffs = await readDivisionCutoffs();
+  const previousTrace = players.length === 0 ? null : await readSyncRunTrace();
+  const windowFrom = new Date(ruleset.window.from);
 
-  // Una sola llamada a la ladder para todos los aprobados, y antes del bucle:
+  // --- Cursor global: siembra perezosa y recuperación por edad -----------------
+  let cursorState: GamesCursorState | null = null;
+  let cursorDate: Date | null = null;
+  let gamesCursorSeeded = false;
+
+  const resetBackfillInMemory = (): void => {
+    for (const player of players) {
+      player.windowComplete = false;
+      player.backfillPage = 1;
+    }
+
+    for (const result of results.values()) {
+      result.windowComplete = false;
+      result.backfillPage = 1;
+    }
+  };
+
+  if (players.length > 0) {
+    cursorState = await readGamesCursor();
+    const seedNow = new Date();
+
+    if (cursorState === null) {
+      cursorState = await seedCursorAndQueue(
+        players,
+        previousTrace,
+        windowFrom,
+        seedNow,
+        config,
+        false,
+      );
+      resetBackfillInMemory();
+      cursorDate = new Date(cursorState.updatedAt);
+      gamesCursorSeeded = true;
+    } else {
+      const cursorMs = Date.parse(cursorState.updatedAt);
+
+      // La cota de `seedMaxAgeMs` es de la **siembra inicial**: un cursor vivo
+      // puede quedarse quieto horas o días sin partidas nuevas y eso no lo
+      // invalida. Solo se recupera cuando la propia API empezaría a rechazar la
+      // ventana por antigüedad (30 días) o cuando llega el aviso del masivo.
+      if (
+        !Number.isNaN(cursorMs) &&
+        seedNow.getTime() - cursorMs > GAMES_CURSOR_NOTICE_AGE_MS
+      ) {
+        // La recuperación usa `catch-up` a propósito: la fila guardada ya no es
+        // una base fiable y el tramo que se salte lo cubre el relleno del roster.
+        cursorState = await seedCursorAndQueue(
+          players,
+          previousTrace,
+          windowFrom,
+          seedNow,
+          config,
+          true,
+        );
+        resetBackfillInMemory();
+        cursorDate = new Date(cursorState.updatedAt);
+        gamesCursorSeeded = true;
+      } else {
+        cursorDate = new Date(cursorState.updatedAt);
+      }
+    }
+  }
+
+  // Una sola llamada a la ladder para todos los aprobados, y antes del resto:
   // así se ejecuta siempre, aunque el bucle se pase del plazo o algún jugador
   // falle. Si falla, se registra y la pasada continúa con lo que ya había.
   const ladder = await syncLadderSnapshot(players, client, signal);
@@ -942,17 +2155,220 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido refrescar la ladder: ${ladder.error}`);
   }
 
-  const settled = await runPool(players, config.concurrency, async (player) => {
-    if (signal.aborted) {
-      return emptyPlayerResult(player, { status: "cancelled", error: "Plazo agotado." });
+  // --- Paso 1: reconciliación global -----------------------------------------
+  if (players.length > 0) {
+    const reconcileNow = new Date();
+    const reconciled = await reconcileUnfinishedMatches(
+      players,
+      options.profileIds,
+      client,
+      signal,
+      ruleset,
+      cutoffs,
+      reconcileNow,
+    );
+
+    for (const [profileId, result] of reconciled.byProfile) {
+      const playerResult = results.get(profileId);
+
+      if (playerResult === undefined) {
+        continue;
+      }
+
+      playerResult.matchesResolvedByRefetch += result.resolved;
+      playerResult.matchesCounted += result.counted;
+      playerResult.matchesAbandoned += result.abandonedGameIds.length;
     }
 
-    try {
-      return await syncPlayer(player, client, config, signal, ruleset, cutoffs);
-    } catch (error) {
-      return emptyPlayerResult(player, { status: "failed", error: toErrorMessage(error) });
+    for (const [profileId, error] of reconciled.failed) {
+      const playerResult = results.get(profileId);
+
+      if (playerResult !== undefined) {
+        markPlayerFailed(playerResult, error);
+      }
     }
-  });
+  }
+
+  // --- Paso 2: incremental masivo --------------------------------------------
+  let bulkResult: BulkStepResult = {
+    pagesRead: 0,
+    batchesIncomplete: 0,
+    batchesFailed: 0,
+    batchErrors: [],
+    queuedEntries: [],
+    games: [],
+    maxUpdatedAt: null,
+    apiNotice: null,
+  };
+
+  if (players.length > 0 && cursorDate !== null) {
+    bulkResult = await runBulkStep(
+      groupProfileIds(
+        players.map((player) => player.profileId),
+        50,
+      ),
+      players,
+      results,
+      client,
+      config,
+      signal,
+      cursorDate,
+      ruleset,
+      cutoffs,
+      new Date(),
+    );
+
+    if (bulkResult.queuedEntries.length > 0) {
+      await applyBackfillQueue(players, results, bulkResult.queuedEntries);
+    }
+  }
+
+  // Red de seguridad para la API: si el `updated_since` era demasiado antiguo,
+  // vuelve a sembrar y encola al roster. La recuperación por edad de 30 días ya
+  // cubre el caso normal; esto también funciona si el aviso llega antes.
+  if (!directed && players.length > 0 && cursorState !== null && cursorDate !== null) {
+    const noticeMentionsOldWindow =
+      bulkResult.apiNotice !== null &&
+      bulkResult.apiNotice.toLowerCase().includes("updated_since");
+    const nextCursorPreview =
+      bulkResult.maxUpdatedAt === null
+        ? null
+        : nextGamesCursor(cursorDate, bulkResult.games, SYNC_OVERLAP_MS);
+    const wouldAdvance =
+      shouldAdvanceGamesCursor({
+        directed: false,
+        batchesFailed: bulkResult.batchesFailed,
+        aborted: signal.aborted,
+        maxUpdatedAt: bulkResult.maxUpdatedAt,
+      }) &&
+      nextCursorPreview !== null &&
+      nextCursorPreview.getTime() > cursorDate.getTime();
+
+    if (bulkResult.apiNotice !== null && (noticeMentionsOldWindow || !wouldAdvance)) {
+      const recoveryNow = new Date();
+      cursorState = await seedCursorAndQueue(
+        players,
+        previousTrace,
+        windowFrom,
+        recoveryNow,
+        config,
+        true,
+      );
+      resetBackfillInMemory();
+      cursorDate = new Date(cursorState.updatedAt);
+      gamesCursorSeeded = true;
+    }
+  }
+
+  // --- Paso 3: relleno de la ventana -----------------------------------------
+  let backfillResult: BackfillStepResult = { players: 0, pagesRead: 0, pending: 0 };
+
+  if (players.length > 0) {
+    const backfillNow = new Date();
+    // Con la revisión activa, la cola es "pendientes primero y rechecks detrás",
+    // y el `take` corta: un recheck no puede desplazar a una ventana a medias.
+    const recheckBefore = new Date(backfillNow.getTime() - config.recheckMaxAgeMs);
+    const expiredOrUnknown =
+      config.recheckMaxAgeMs > 0
+        ? [
+            { windowComplete: false },
+            {
+              windowComplete: true,
+              OR: [
+                { windowCheckedAt: null },
+                { windowCheckedAt: { lt: recheckBefore } },
+              ],
+            },
+          ]
+        : [{ windowComplete: false }];
+
+    const candidates = await db.player.findMany({
+      where: {
+        status: "APPROVED",
+        ...(options.profileIds === undefined
+          ? {}
+          : { profileId: { in: options.profileIds } }),
+        OR: expiredOrUnknown,
+      },
+      select: {
+        id: true,
+        profileId: true,
+        registeredAt: true,
+        backfillPage: true,
+        windowComplete: true,
+        windowCheckedAt: true,
+      },
+      orderBy: [{ windowComplete: "asc" }, { backfillPage: "asc" }, { profileId: "asc" }],
+      take: config.backfillMaxPlayers,
+    });
+
+    backfillResult = await runBackfillStep(
+      candidates,
+      players,
+      results,
+      client,
+      config,
+      signal,
+      windowFrom,
+      ruleset,
+      cutoffs,
+      options.profileIds,
+      backfillNow,
+    );
+  }
+
+  // --- Paso 4: perfil con caché de una hora --------------------------------
+  let profilesChanged = 0;
+
+  if (players.length > 0) {
+    profilesChanged = await refreshProfiles(players, results, client, config, signal, new Date());
+  }
+
+  // --- Paso 6a/6b: avance del cursor y watchdog -------------------------------
+  let gamesCursorAdvanced = false;
+
+  if (!directed && cursorState !== null) {
+    const nowCursor = new Date();
+    let nextState = cursorState;
+
+    if (cursorDate !== null) {
+      const advance = shouldAdvanceGamesCursor({
+        directed: false,
+        batchesFailed: bulkResult.batchesFailed,
+        aborted: signal.aborted,
+        maxUpdatedAt: bulkResult.maxUpdatedAt,
+      });
+
+      if (advance) {
+        const next = nextGamesCursor(cursorDate, bulkResult.games, SYNC_OVERLAP_MS);
+
+        if (next !== null && next.getTime() > cursorDate.getTime()) {
+          nextState = { ...cursorState, updatedAt: next.toISOString() };
+          gamesCursorAdvanced = true;
+        }
+      }
+    }
+
+    const watchdog = nextBackfillWatchdog(
+      nextState,
+      backfillResult.pending,
+      bulkResult.batchesIncomplete,
+      nowCursor,
+    );
+    const candidate = { ...nextState, ...watchdog };
+
+    try {
+      await writeGamesCursor(candidate);
+      cursorState = candidate;
+      cursorDate = new Date(candidate.updatedAt);
+    } catch (error) {
+      // El cursor anterior sigue siendo válido; se reintenta en la próxima pasada.
+      gamesCursorAdvanced = false;
+      console.error(`[sync] No se ha podido guardar el cursor global: ${toErrorMessage(error)}`);
+    }
+  }
+
+  const settled = [...results.values()];
 
   for (const result of settled) {
     if (result.status === "failed") {
@@ -1003,10 +2419,14 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
       console.warn(`[sync] ${summariesError}`);
     }
 
-    if (summaries.fetched > 0) {
+    if (summaries.fetched > 0 || summaries.throttled) {
       console.info(
         `[sync] Summaries de partida: ${summaries.fetched} guardado(s), ` +
-          `${summaries.missing} sin summary, ${summaries.candidates} candidata(s) pendiente(s).`,
+          `${summaries.missing} sin summary, ${summaries.unreviewed} sin revisar, ` +
+          `${summaries.candidates} candidata(s) pendiente(s).` +
+          (summaries.throttled
+            ? " AoE4World pidió bajar el ritmo (429): la pasada se ha cortado."
+            : ""),
       );
     }
   } catch (error) {
@@ -1014,17 +2434,92 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se han podido rellenar los summaries de partida: ${summariesError}`);
   }
 
+  // La **elegibilidad de los eventos puntuales** que exigen Discord se congela
+  // **antes** del recálculo, que es quien la lee para repartir el bono
+  // (`computeEventBonuses()`). Si se escribiera después, el bono de la primera pasada
+  // del evento llegaría un ciclo tarde. Es un paso tolerante: sin snapshot el motor no
+  // reparte bono, y un fallo no impide sincronizar ni recalcular lo demás.
+  let eventEligibilityError: string | null = null;
+
+  try {
+    const eventEligibility = await syncEditionEventEligibility({ signal });
+    eventEligibilityError = describeEditionEventEligibility(eventEligibility);
+
+    if (eventEligibilityError !== null) {
+      console.warn(`[sync] ${eventEligibilityError}`);
+    }
+
+    if (eventEligibility.checked > 0) {
+      console.info(
+        `[sync] Elegibilidad de eventos en Discord: ${eventEligibility.checked} comprobado(s), ` +
+          `${eventEligibility.eligible} elegible(s) nuevo(s), ` +
+          `${eventEligibility.pending} para la siguiente pasada.`,
+      );
+    }
+  } catch (error) {
+    eventEligibilityError = toErrorMessage(error);
+    console.error(
+      `[sync] No se ha podido comprobar la elegibilidad de los eventos en Discord: ${eventEligibilityError}`,
+    );
+  }
+
   // La clasificación se recalcula al final y en su propia transacción. Si falla,
   // las partidas ya están guardadas: la web serviría la clasificación anterior
   // hasta la próxima pasada, que es preferible a tumbar la sincronización entera.
+  //
+  // Y desde F3b **solo se recalcula si hay algo que lo justifique**: el recálculo
+  // es la parte más cara de la pasada y, en una pasada ociosa, reescribiría la
+  // misma clasificación y el mismo `scoring.lastRun` para nada. La lista cerrada
+  // de motivos está en `shouldRecomputeScores()`; lo que no esté ahí no fuerza un
+  // recálculo, y por eso los escritores de configuración (panel, scripts) lo
+  // recalculan ellos al guardar.
   let scoring: RecomputeScoresResult | null = null;
   let scoringError: string | null = null;
 
+  const matchesChanged = settled.reduce(
+    (total, result) =>
+      total +
+      result.matchesInserted +
+      result.matchesUpdated +
+      result.matchesResolvedByRefetch +
+      result.matchesAbandoned,
+    0,
+  );
+  // Los metadatos de la ladder y los del perfil se suman: los dos escriben los
+  // mismos campos y los dos sellan caché, pero solo cuentan los cambios de verdad.
+  const playersChanged = ladder.playersChanged + profilesChanged;
+
+  // Sin rastro legible se recalcula: es la salida segura, y un fallo de lectura no
+  // puede tumbar la pasada.
+  let lastScoring: ScoringLastRunState | null = null;
+
   try {
-    scoring = await recomputeScores();
+    lastScoring = await readScoringLastRun();
   } catch (error) {
-    scoringError = toErrorMessage(error);
-    console.error(`[sync] No se ha podido recalcular la clasificación: ${scoringError}`);
+    console.warn(`[sync] No se ha podido leer el último recálculo: ${toErrorMessage(error)}`);
+  }
+
+  const scoringSkipped = !shouldRecomputeScores({
+    lastScoring,
+    currentRuleSetVersion: RULESET_VERSION,
+    currentCacheVersion: SCORING_CACHE_VERSION,
+    previousScoringError: previousTrace?.scoringError ?? null,
+    // En una pasada dirigida `players` es solo el subconjunto pedido, así que el
+    // total del roster no se conoce y no se usa como señal.
+    approvedPlayers: directed ? null : players.length,
+    matchesChanged,
+    summariesFetched: summaries?.fetched ?? 0,
+    mapPoolUpdated: mapPool?.status === "updated",
+    playersChanged,
+  });
+
+  if (!scoringSkipped) {
+    try {
+      scoring = await recomputeScores();
+    } catch (error) {
+      scoringError = toErrorMessage(error);
+      console.error(`[sync] No se ha podido recalcular la clasificación: ${scoringError}`);
+    }
   }
 
   // Las alertas van **después** del recálculo y solo para quien ha cambiado, porque
@@ -1032,15 +2527,27 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   // clasificatorias del jugador ha cambiado: y eso es exactamente lo que cuenta
   // cualquiera de los cuatro contadores. En una pasada sin novedades (lo normal,
   // 288 veces al día) no se evalúa a nadie y no se lee ni una fila de `Match`.
-  const tocados = settled
-    .filter(
-      (result) =>
-        result.matchesInserted > 0 ||
-        result.matchesUpdated > 0 ||
-        result.matchesResolvedByRefetch > 0 ||
-        result.matchesAbandoned > 0,
-    )
-    .map((result) => result.profileId);
+  //
+  // **Y los del summary, aunque no hayan jugado nada nuevo**: un resumen rellenado
+  // para una partida vieja cambia lo que el motor de alertas tiene que mirar
+  // (las tres reglas por partida y el estado de "sin revisar"), y esa partida pudo
+  // entrar en la base hace días. Sin sumarlos, el hallazgo no se vería hasta que el
+  // jugador volviera a jugar.
+  const tocados = [
+    ...new Set([
+      ...settled
+        .filter(
+          (result) =>
+            result.matchesInserted > 0 ||
+            result.matchesUpdated > 0 ||
+            result.matchesResolvedByRefetch > 0 ||
+            result.matchesAbandoned > 0,
+        )
+        .map((result) => result.profileId),
+      ...(summaries?.reviewedProfileIds ?? []),
+      ...(summaries?.unreviewedProfileIds ?? []),
+    ]),
+  ].sort((a, b) => a - b);
 
   let alerts: EvaluateAlertsResult | null = null;
   let alertsError: string | null = null;
@@ -1144,6 +2651,14 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se ha podido comprobar la pertenencia a Discord: ${discordError}`);
   }
 
+  // El snapshot de elegibilidad de los eventos comparte el rastro de Discord: es el
+  // mismo servicio y el mismo sitio donde ya se mira que Discord esté funcionando. Se
+  // **suma** al aviso de la pertenencia, no lo sustituye.
+  if (eventEligibilityError !== null) {
+    discordError =
+      discordError === null ? eventEligibilityError : `${discordError} ${eventEligibilityError}`;
+  }
+
   // El **rol de participante** (issue 56) va justo después, en el mismo tratamiento
   // tolerante y con el mismo destino en el rastro: es el adorno del torneo que acompaña
   // a la pertenencia, y comparte su resolución de cuentas (el roster resuelve los
@@ -1232,6 +2747,30 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se han podido enviar los avisos del torneo: ${announceError}`);
   }
 
+  // Los avisos de los **eventos puntuales** (recordatorios de 24/12/1 h, inicio y
+  // fin) van junto a los hitos de la edición, con el mismo tratamiento: un fallo no
+  // para la pasada, el motivo se suma a `announceError` y el aviso que no salió queda
+  // pendiente. Sin eventos, o sin ninguno con un aviso pendiente, no se lee la
+  // configuración de Discord.
+  try {
+    const eventos = await announceEditionEvents();
+
+    if (eventos.sent.length > 0) {
+      console.info(
+        `[sync] Avisos de eventos enviados a Discord: ${eventos.sent.join(", ")}.`,
+      );
+    }
+
+    if (eventos.error !== null) {
+      announceError = announceError === null ? eventos.error : `${announceError} ${eventos.error}`;
+      console.warn(`[sync] ${eventos.error}`);
+    }
+  } catch (error) {
+    const eventosError = toErrorMessage(error);
+    announceError = announceError === null ? eventosError : `${announceError} ${eventosError}`;
+    console.error(`[sync] No se han podido enviar los avisos de los eventos: ${eventosError}`);
+  }
+
   try {
     const report = await announceDailyStandings();
 
@@ -1279,8 +2818,21 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     mapPoolError,
     summaries,
     summariesError,
+    gamesPagesRead: bulkResult.pagesRead,
+    gamesBatchesIncomplete: bulkResult.batchesIncomplete,
+    gamesBatchesFailed: bulkResult.batchesFailed,
+    gamesPlayersQueuedForBackfill: bulkResult.queuedEntries.length,
+    gamesBatchErrors: bulkResult.batchErrors,
+    gamesCursor: cursorState?.updatedAt ?? null,
+    gamesCursorAdvanced,
+    gamesCursorSeeded,
+    backfillPlayers: backfillResult.players,
+    backfillPagesRead: backfillResult.pagesRead,
+    backfillPending: backfillResult.pending,
+    apiNotice: bulkResult.apiNotice,
     scoring,
     scoringError,
+    scoringSkipped,
     alerts,
     alertsError,
     history,
@@ -1339,6 +2891,7 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       rateLimitPausesMs: summary.rateLimitPausesMs,
       ladderError: summary.ladder.error,
       scoringError: summary.scoringError,
+      scoringSkipped: summary.scoringSkipped,
       alertsError: summary.alertsError,
       historyError: summary.historyError,
       discordError: summary.discordError,
@@ -1346,6 +2899,18 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       announceError: summary.announceError,
       mapPoolError: summary.mapPoolError,
       summariesError: summary.summariesError,
+      gamesPagesRead: summary.gamesPagesRead,
+      gamesBatchesIncomplete: summary.gamesBatchesIncomplete,
+      gamesBatchesFailed: summary.gamesBatchesFailed,
+      gamesPlayersQueuedForBackfill: summary.gamesPlayersQueuedForBackfill,
+      gamesBatchErrors: summary.gamesBatchErrors,
+      gamesCursor: summary.gamesCursor,
+      gamesCursorAdvanced: summary.gamesCursorAdvanced,
+      gamesCursorSeeded: summary.gamesCursorSeeded,
+      backfillPlayers: summary.backfillPlayers,
+      backfillPagesRead: summary.backfillPagesRead,
+      backfillPending: summary.backfillPending,
+      apiNotice: summary.apiNotice,
       failures: summary.players
         .filter((result) => result.status !== "ok")
         .map((result) => ({

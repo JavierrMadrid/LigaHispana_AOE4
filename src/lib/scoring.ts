@@ -6,13 +6,24 @@ import { recordAdminAction, type CampoEditado } from "@/lib/admin-actions";
 import { readDivisionCutoffs } from "@/lib/alerts/settings";
 import { db } from "@/lib/db";
 import { logDatabaseFailure, readFromDatabase, type PublicRead } from "@/lib/db-errors";
+import {
+  MIN_EVENT_MULTIPLIER,
+  eventWindowBounds,
+  readEditionEventEligibility,
+  readEditionEvents,
+  readEditionEventsState,
+  type EditionEvent,
+  type EditionEventsState,
+} from "@/lib/edition-events";
 import { isRecord } from "@/lib/json";
 import { reconcileObjectiveEvents } from "@/lib/objective-events";
+import { reconcileObjectiveLeadEvents } from "@/lib/objective-leads";
 import {
   OBJECTIVES_SNAPSHOT_VERSION,
   OBJECTIVE_DEFINITIONS,
   OBJECTIVE_POINTS,
   computeObjectives,
+  loadObjectiveData,
   loadObjectivePlayers,
   objectivesSnapshotFingerprint,
   readObjectivesSnapshotValue,
@@ -46,6 +57,11 @@ import { readMapPool, writeScoringLastRun } from "@/lib/settings";
  * apagar objetivos del catálogo, y uno apagado no se computa, no se publica, no da
  * puntos y sus eventos reconciliados se borran. La etiqueta de la regla
  * (`ruleLabel()`) deja de ser un texto fijo y se calcula con los objetivos activos.
+ *
+ * Los **eventos puntuales** (`Setting["edition.events"]`) añaden un bono por victoria
+ * dentro de una ventana y con un multiplicador: no son objetivos, no tocan
+ * `Match.points` y se guardan aparte en `PlayerScore.breakdown.events` (ver
+ * `computeEventBonuses()`).
  *
  * Qué cuenta como partida clasificatoria **no** está aquí: vive en
  * `src/lib/ranked-match.ts`, que es donde se puede definir sin que `scoring.ts` y
@@ -132,6 +148,22 @@ export const RULESET_VERSION = 4;
 export const LEGACY_RULESET_VERSION = 3;
 
 /**
+ * Versión de la caché que deja el recálculo en `Setting["scoring.lastRun"]`.
+ *
+ * El worker se salta el recálculo cuando no ha cambiado nada que lo justifique
+ * (ver `shouldRecomputeScores()` en `src/lib/aoe4world/sync.ts`), y esa decisión
+ * se apoya en la lista cerrada de entradas de aquella función. Si un cambio de
+ * este motor añade una dependencia nueva —una tabla, una columna, una regla que
+ * no estaba en la lista—, subir este número **fuerza un recálculo** en la
+ * primera pasada tras el despliegue: sin él, la clasificación publicada podría
+ * quedarse con lo que calculó la versión anterior hasta la siguiente partida.
+ *
+ * No es `RULESET_VERSION`: esa describe la forma del documento de reglas y su
+ * lectura ya invalida el recálculo por su cuenta.
+ */
+export const SCORING_CACHE_VERSION = 1;
+
+/**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
  *
  * Es texto de producto, así que lo fija **el código**: el `label` que haya en
@@ -188,8 +220,11 @@ export type ScoringRuleset = {
    * Ids del catálogo de objetivos **desactivados** por la organización.
    *
    * Un objetivo desactivado no se computa, no se publica en la vista de objetivos,
-   * no reparte puntos y sus eventos de `ObjectiveEvent` se borran en la siguiente
-   * reconciliación. Vacío (lo normal) significa el catálogo entero activo.
+   * no reparte puntos y no llega a `awarded`, así que las reconciliaciones lo dan
+   * por desaparecido: sus eventos de `ObjectiveEvent` (si es un logro) se borran en
+   * la siguiente pasada, y su poseedor (si es una competición) queda registrado como
+   * una pérdida en `ObjectiveLeadEvent`. Vacío (lo normal) significa el catálogo
+   * entero activo.
    */
   disabledObjectives: string[];
 };
@@ -597,6 +632,89 @@ export async function writeScoringRuleset(
 }
 
 /* -------------------------------------------------------------------------- */
+/* Bloqueo de las reglas con la edición empezada                              */
+/* -------------------------------------------------------------------------- */
+
+/** Un campo bloqueado que cambia: lo justo para componer el mensaje del panel. */
+export type LockedRulesetChange = {
+  /** Nombre del campo, el mismo que el del ruleset. */
+  campo: string;
+  /** Cómo se llama en español, para el mensaje. */
+  etiqueta: string;
+};
+
+/** Dos listas con el mismo contenido, sin mirar el orden ni las repeticiones. */
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  const desde = new Set(a);
+  const hasta = new Set(b);
+
+  return desde.size === hasta.size && [...desde].every((value) => hasta.has(value));
+}
+
+/**
+ * Los campos bloqueados del ruleset que cambian entre dos versiones del documento.
+ *
+ * Es la **guarda del servidor** de "una vez que empieza la edición no se pueden
+ * cambiar los puntos": `saveScoringRuleset()` la usa para negarse a escribir aunque
+ * el formulario (o una llamada directa a la Server Action) traiga otro documento. Es
+ * pura y no toca la base de datos, así que se prueba entera sin ella.
+ *
+ * Con la edición empezada quedan congelados:
+ *
+ * | Campo | Por qué |
+ * |---|---|
+ * | `window.from` | Mueve el corte de todas las partidas: cambia qué se jugó "dentro" |
+ * | `modes` | Añadir o quitar una familia cambia quién puntúa |
+ * | `pointsPerWin` | Es el precio de cada victoria |
+ * | `countRandomizedCivs` | Cambia los objetivos de civilización que se cobran |
+ * | `objectives` | Es el precio de cada objetivo |
+ * | `disabledObjectives` | Apagar un objetivo retira puntos ya repartidos |
+ *
+ * **`window.to` se ignora a propósito**: fijar o mover el fin de la ventana es la
+ * forma de cerrar la edición, y la documentación ya dice que una ventana abierta se
+ * cierra más tarde. Es el único campo editable después del inicio.
+ *
+ * Se compara el texto de `window.from` y no el instante: las dos versiones llegan
+ * pasadas por `mergeRuleset()` → `parseWindow()`, que normaliza a `toISOString()`, así
+ * que dos fechas iguales son el mismo texto.
+ */
+export function lockedRulesetChanges(
+  actual: ScoringRuleset,
+  next: ScoringRuleset,
+): LockedRulesetChange[] {
+  const cambios: LockedRulesetChange[] = [];
+
+  const anotar = (campo: string, etiqueta: string, cambia: boolean): void => {
+    if (cambia) {
+      cambios.push({ campo, etiqueta });
+    }
+  };
+
+  anotar("window", "fecha de inicio de la ventana", actual.window.from !== next.window.from);
+  anotar("modes", "familias de ladder", !sameSet(actual.modes, next.modes));
+  anotar("pointsPerWin", "puntos por victoria", actual.pointsPerWin !== next.pointsPerWin);
+  anotar(
+    "countRandomizedCivs",
+    "civilizaciones aleatorias",
+    actual.countRandomizedCivs !== next.countRandomizedCivs,
+  );
+
+  // Por unión de claves: un id que solo está en una de las dos versiones cambia el
+  // reparto aunque su valor no esté a la vista en la otra.
+  const ids = new Set([...Object.keys(actual.objectives), ...Object.keys(next.objectives)]);
+  const objetivosCambiados = [...ids].some((id) => actual.objectives[id] !== next.objectives[id]);
+
+  anotar("objectives", "puntos de objetivos", objetivosCambiados);
+  anotar(
+    "disabledObjectives",
+    "objetivos desactivados",
+    !sameSet(actual.disabledObjectives, next.disabledObjectives),
+  );
+
+  return cambios;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Desglose                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -670,6 +788,19 @@ export type ScoreBreakdown = {
      */
     awards: Record<string, ObjectiveAwardEntry>;
   };
+  /**
+   * El bono de los eventos puntuales, sumado **aparte** de los objetivos.
+   *
+   * `points` es lo que aportan los eventos al total y `awards`, por id de evento, las
+   * victorias que lo cobraron, su multiplicador y los puntos que salieron de ellas.
+   * Es **opcional** para las filas escritas antes de que existieran los eventos; una
+   * fila nueva lo escribe siempre, con ceros si no había ninguno.
+   *
+   * No se mete en `objectives` a propósito: un evento no es un objetivo, no se cobra
+   * por el catálogo y no altera `Match.points` (que sigue siendo el punto base por
+   * victoria). Ver `docs/PUNTUACION.md`.
+   */
+  events?: EventBonusSummary;
 };
 
 /**
@@ -910,16 +1041,19 @@ export type RecomputeScoresResult = {
    */
   playersUnranked: number;
   /**
-   * Suma de `PlayerScore.total`. Con las reglas actuales todo punto de un jugador
-   * sale de sus objetivos —las victorias también, como objetivo `victorias`—, así que
-   * hoy coincide con `objectivesPoints`; se publican los dos porque uno es el total de
-   * la tabla y el otro, el reparto por objetivos.
+   * Suma de `PlayerScore.total`: objetivos **más** bono de eventos.
+   *
+   * Se publica junto a `objectivesPoints` y `eventsPoints` porque uno es el total de
+   * la tabla y los otros dos, su reparto. Sin eventos, `totalPoints` coincide con
+   * `objectivesPoints`.
    */
   totalPoints: number;
   /** Objetivos con al menos un cobrador en este recálculo. */
   objectivesAwarded: number;
   /** Puntos repartidos por objetivos, sumados de todas las filas de la tabla. */
   objectivesPoints: number;
+  /** Puntos repartidos por los eventos puntuales, sumados de todas las filas. */
+  eventsPoints: number;
   durationMs: number;
 };
 
@@ -958,6 +1092,11 @@ export type RankedStanding = {
     awards: Record<string, ObjectiveAwardEntry>;
   };
   /**
+   * El bono de eventos del jugador, ya calculado. Se guarda entero —no solo los
+   * puntos— para publicar en el desglose qué evento pagó qué.
+   */
+  events: EventBonusSummary;
+  /**
    * Puesto 1-based de competición sobre todos los aprobados: dos filas con la
    * misma tupla de criterios lo comparten y el siguiente hueco se salta.
    */
@@ -991,7 +1130,7 @@ type AggregatedMatchRow = {
  * que un proceso que revienta no deja el torneo bloqueado hasta que alguien
  * reinicie la base.
  */
-const SCORING_LOCK_NAME = "ligahispana.recomputeScores";
+export const SCORING_LOCK_NAME = "ligahispana.recomputeScores";
 
 /**
  * Los números que deciden el puesto. Si dos filas los comparten, comparten puesto.
@@ -1046,14 +1185,165 @@ export function compareStandings(
   return compareCriteria(a, b) || a.profileId - b.profileId;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Bono de los eventos puntuales                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Lo que un jugador cobró en **un** evento.
+ *
+ * `wins` es el número de victorias clasificatorias que cayeron dentro de la ventana
+ * del evento (y de la elegibilidad, si la exige); `points` lo que suman al total,
+ * que es `wins × pointsPerWin × (multiplier - 1)`.
+ */
+export type EventBonusAward = {
+  points: number;
+  wins: number;
+  multiplier: number;
+};
+
+/** El bono de eventos de un jugador: el total y el desglose por evento. */
+export type EventBonusSummary = {
+  points: number;
+  /** `EditionEvent.id` → lo que pagó ese evento. */
+  awards: Record<string, EventBonusAward>;
+};
+
+/**
+ * Una victoria clasificatoria, en lo que el bono necesita saber.
+ *
+ * Sale de `ObjectiveMatchRow` en `recomputeScores()`: son las mismas filas que usan
+ * los objetivos, ya filtradas por `rankedMatchSql()`, así que el evento no puede
+ * contar una partida distinta de la que puntúa.
+ */
+export type EventBonusRow = {
+  /** `Player.id`. */
+  playerId: string;
+  /** `Match.startedAt` en milisegundos. */
+  startedAtMs: number;
+  /** `Match.result` (`WIN`, `LOSS`). */
+  result: string;
+};
+
+/**
+ * Reparte el bono de los eventos: victorias dentro de cada ventana, por jugador.
+ *
+ * Es una función **pura** y por eso se puede probar sin base de datos. Las reglas:
+ *
+ * - Solo cuenta `WIN`. El multiplicador **no** toca derrotas, objetivos ni partidas
+ *   que no son clasificatorias: quien llama ya le pasa únicamente las clasificatorias.
+ * - La ventana es `[from, to)` sobre `startedAt`, con `from` incluido y `to`
+ *   excluido, igual que la del torneo.
+ * - El extra por victoria es `pointsPerWin × (multiplier - 1)`: el punto base
+ *   (`pointsPerWin`) ya se cobra por el objetivo `victorias`, así que aquí solo va
+ *   **la diferencia** del multiplicador. `Match.points` no se toca.
+ * - Si el evento exige Discord (`discordRequired`), solo cobran quienes están en
+ *   `eligiblePlayerIds` del snapshot de **ese** evento. Sin snapshot **no hay bono**:
+ *   no se inventa elegibilidad.
+ * - Los eventos se aplican por separado. La validación impide solapes, pero si un
+ *   documento guardado a mano los tuviera, una victoria contaría en cada uno: es la
+ *   lectura literal de "cada evento multiplica".
+ *
+ * No devuelve entradas a cero: el mapa solo lleva a quien cobró algo, y un jugador
+ * sin bono no aparece (quien llama lo trata como `{ points: 0, awards: {} }`).
+ */
+export function computeEventBonuses(
+  rows: readonly EventBonusRow[],
+  events: readonly EditionEvent[],
+  state: EditionEventsState,
+  pointsPerWin: number,
+): Map<string, EventBonusSummary> {
+  const bonuses = new Map<string, EventBonusSummary>();
+
+  if (rows.length === 0 || events.length === 0 || !(pointsPerWin > 0)) {
+    return bonuses;
+  }
+
+  type Ventana = {
+    event: EditionEvent;
+    fromMs: number;
+    toMs: number;
+    /** Lo que añade cada victoria: `pointsPerWin × (multiplier - 1)`. */
+    extraPerWin: number;
+    /** Nada si el evento no exige Discord; si lo exige, el snapshot congelado. */
+    eligible: ReadonlySet<string> | null;
+  };
+
+  const ventanas: Ventana[] = [];
+
+  for (const event of events) {
+    if (event.multiplier < MIN_EVENT_MULTIPLIER) {
+      continue;
+    }
+
+    const eligibility = readEditionEventEligibility(state, event.id);
+
+    if (event.discordRequired && eligibility === null) {
+      continue;
+    }
+
+    const { from, to } = eventWindowBounds(event);
+    const fromMs = from.getTime();
+    const toMs = to.getTime();
+
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
+      continue;
+    }
+
+    ventanas.push({
+      event,
+      fromMs,
+      toMs,
+      extraPerWin: pointsPerWin * (event.multiplier - 1),
+      eligible: event.discordRequired ? new Set(eligibility?.eligiblePlayerIds ?? []) : null,
+    });
+  }
+
+  if (ventanas.length === 0) {
+    return bonuses;
+  }
+
+  for (const row of rows) {
+    if (row.result !== MatchResult.WIN) {
+      continue;
+    }
+
+    for (const ventana of ventanas) {
+      if (row.startedAtMs < ventana.fromMs || row.startedAtMs >= ventana.toMs) {
+        continue;
+      }
+
+      if (ventana.eligible !== null && !ventana.eligible.has(row.playerId)) {
+        continue;
+      }
+
+      const current = bonuses.get(row.playerId) ?? { points: 0, awards: {} };
+      const award = current.awards[ventana.event.id] ?? {
+        points: 0,
+        wins: 0,
+        multiplier: ventana.event.multiplier,
+      };
+
+      award.wins += 1;
+      award.points += ventana.extraPerWin;
+      current.points += ventana.extraPerWin;
+      current.awards[ventana.event.id] = award;
+      bonuses.set(row.playerId, current);
+    }
+  }
+
+  return bonuses;
+}
+
 /**
  * Arma las filas de la clasificación a partir de los aprobados y sus agregados.
  *
  * Es la parte **pura** del motor: recibe todos los aprobados —con o sin partidas—,
  * los agregados de partidas por jugador (puede faltar quien no ha jugado), los
- * puntos de objetivos por jugador y el ruleset (solo para el `byMode` de ceros), y
- * devuelve las filas ya ordenadas y con su `rank`. El SQL y la transacción se
- * quedan en `recomputeScores()`, que es quien no se puede probar sin base.
+ * puntos de objetivos por jugador, el ruleset (solo para el `byMode` de ceros) y el
+ * bono de eventos ya calculado, y devuelve las filas ya ordenadas y con su `rank`.
+ * El SQL y la transacción se quedan en `recomputeScores()`, que es quien no se puede
+ * probar sin base.
  *
  * Dos reglas que decide esta función:
  *
@@ -1075,20 +1365,23 @@ export function compareStandings(
  * así que quedan detrás de cualquiera que haya jugado alguna y comparten entre
  * ellos el último puesto.
  *
- * ## El total son los objetivos
+ * ## El total son los objetivos y el bono de eventos
  *
- * `total` es la suma de los objetivos del jugador y **nada más**: las victorias
- * clasificatorias se cobran como el objetivo `victorias` (`pointsPerWin` por
- * victoria), así que todo punto sale de ahí. Los `matchPoints` del agregado son
- * auditoría y no se suman: sumarlos contaría dos veces las victorias, y además haría
- * que un objetivo apagado dejara de descontar (el total tiene que salir de los
- * objetivos **activos** del ruleset).
+ * `total` es la suma de los objetivos del jugador más el bono de los eventos
+ * puntuales y **nada más**: las victorias clasificatorias se cobran como el objetivo
+ * `victorias` (`pointsPerWin` por victoria), así que todo punto base sale de ahí.
+ * Los `matchPoints` del agregado son auditoría y no se suman: sumarlos contaría dos
+ * veces las victorias, y además haría que un objetivo apagado dejara de descontar
+ * (el total tiene que salir de los objetivos **activos** del ruleset). El bono de
+ * eventos llega ya calculado en `eventBonuses` y es un concepto aparte: no altera
+ * `victorias` ni `Match.points`.
  */
 export function rankApprovedPlayers(
   players: readonly { id: string; profileId: number }[],
   totals: ReadonlyMap<string, AggregatedRow>,
   objectives: ReadonlyMap<string, ObjectiveAward>,
   ruleset: ScoringRuleset,
+  eventBonuses: ReadonlyMap<string, EventBonusSummary> = new Map(),
 ): RankedStanding[] {
   const ordenadas = players
     .map((player) => {
@@ -1100,6 +1393,7 @@ export function rankApprovedPlayers(
       };
       const award = objectives.get(player.id);
       const objectivePoints = award?.points ?? 0;
+      const events = eventBonuses.get(player.id) ?? { points: 0, awards: {} };
 
       return {
         playerId: player.id,
@@ -1107,12 +1401,13 @@ export function rankApprovedPlayers(
         wins: aggregate.wins,
         matches: aggregate.matches,
         byMode: aggregate.byMode,
-        total: objectivePoints,
+        total: objectivePoints + events.points,
         objectives: {
           points: objectivePoints,
           earned: award?.earned ?? [],
           awards: award?.awards ?? {},
         },
+        events,
       };
     })
     .sort(compareStandings);
@@ -1154,6 +1449,14 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
   const ruleset = await ensureRuleset();
   const mapPool = await readMapPool();
   const cutoffs = await readDivisionCutoffs();
+
+  // Los eventos y su snapshot de elegibilidad son configuración, como el ruleset:
+  // se leen **fuera** de la transacción para no tener el cerrojo de la clasificación
+  // esperando a una fila de `Setting`. Se lee una vez por pasada y no por fila.
+  const [events, eventsState] = await Promise.all([
+    readEditionEvents(),
+    readEditionEventsState(),
+  ]);
   const warnings =
     cutoffs === null
       ? [
@@ -1223,8 +1526,22 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         where m.id = d.id and m.points is distinct from d.puntos
       `;
 
-      const objectivePlayers = await loadObjectivePlayers(tx, ruleset, cutoffs);
+      const objectiveData = await loadObjectiveData(tx, ruleset, cutoffs);
+      const objectivePlayers = objectiveData.players;
       const objectives = computeObjectives(objectivePlayers, ruleset, mapPool);
+
+      // El bono de los eventos sale de las **mismas filas clasificatorias** que los
+      // objetivos: ya vienen filtradas por `rankedMatchSql()`, así que un evento no
+      // puede contar una partida que no puntúa (modo, resultado, ventana, corte de
+      // inscripción, reversión o equipo desequilibrado). Aquí no se toca
+      // `Match.points`: el punto base sigue siendo el de la victoria y el extra va
+      // aparte, en el desglose.
+      const eventBonuses = computeEventBonuses(
+        objectiveData.rows,
+        events.events,
+        eventsState,
+        ruleset.pointsPerWin,
+      );
 
       // La racha actual del torneo sale del mismo agregado que los objetivos: los
       // agregados solo existen para quien tiene partidas clasificatorias, así que
@@ -1235,7 +1552,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
 
       // Registro de hitos, en esta misma transacción y a continuación del cómputo:
       // el feed del historial de `/admin/historial` mezcla partidas y objetivos, y
-      // un objetivo sin evento se contaría como un objetivo que nadie cumplió.
+      // un logro sin evento se contaría como un logro que nadie cumplió.
       //
       // Va aquí y no al final, y no en un segundo paso, por dos motivos que son los
       // mismos que los del resto del motor: dentro de la transacción, con el cerrojo
@@ -1246,6 +1563,17 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       // `reconcileObjectiveEvents` es idempotente y solo escribe lo que difiere de
       // lo que ya había.
       await reconcileObjectiveEvents(tx, ruleset, objectives.awarded);
+
+      // Y el registro de **poseedores de competiciones**, con el mismo `awarded` y
+      // en la misma transacción: las dos reconciliaciones se reparten el catálogo
+      // (los logros son el espejo de arriba y las competiciones este log), así que
+      // ninguna fila del cómputo se queda sin registrar ni se registra dos veces.
+      //
+      // A diferencia del espejo, este registro **se escribe en vivo**: los cambios
+      // de poseedor se anotan en cada recálculo, con el instante del pase, porque lo
+      // que cuenta no es quién la posee al final sino cuándo la ganó y cuándo la
+      // perdió cada uno. Y no escribe nada mientras no cambie ningún poseedor.
+      await reconcileObjectiveLeadEvents(tx, ruleset, objectives.awarded);
 
       // La vista pública, en la misma transacción que el cómputo del que sale: así
       // las páginas de objetivos leen el snapshot en vez de repetir el barrido, y el
@@ -1337,7 +1665,13 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       // de victorias, victorias y partidas, con `profileId` solo para el orden de
       // presentación dentro del puesto. Los que empatan en la tupla comparten
       // puesto, así que la numeración puede repetirse y saltarse huecos.
-      const ranked = rankApprovedPlayers(players, totals, objectives.pointsByPlayer, ruleset);
+      const ranked = rankApprovedPlayers(
+        players,
+        totals,
+        objectives.pointsByPlayer,
+        ruleset,
+        eventBonuses,
+      );
 
       const previousCount = await tx.playerScore.count({
         where: { ruleSetVersion: RULESET_VERSION },
@@ -1360,6 +1694,7 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
               rule: ruleset.label,
               byMode: row.byMode,
               objectives: row.objectives,
+              events: row.events,
             } satisfies ScoreBreakdown,
           })),
         });
@@ -1374,13 +1709,17 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
         totalPoints: ranked.reduce((sum, row) => sum + row.total, 0),
         objectivesAwarded: objectives.holders,
         objectivesPoints: ranked.reduce((sum, row) => sum + row.objectives.points, 0),
+        eventsPoints: ranked.reduce((sum, row) => sum + row.events.points, 0),
         durationMs: Date.now() - startedAtMs,
       };
 
       // Última sentencia de la transacción: el rastro de la pasada se confirma
       // junto con la clasificación que describe y no en una escritura aparte que
       // pudiera fallar o quedar desfasada.
-      await writeScoringLastRun({ ...recomputed }, tx);
+      await writeScoringLastRun(
+        { ...recomputed, cacheVersion: SCORING_CACHE_VERSION },
+        tx,
+      );
 
       return recomputed;
     },

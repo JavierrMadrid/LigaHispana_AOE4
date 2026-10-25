@@ -17,6 +17,12 @@ type PlayerComboboxProps = {
   allLabel: string;
   /** `id` del campo, para que el `<label>` del formulario lo apunte. */
   inputId: string;
+  /** `id` de la ayuda o del error que describe el campo, si los hay. */
+  describedBy?: string;
+  /** El campo participa en una validación con error: se marca como inválido. */
+  invalid?: boolean;
+  /** El campo es obligatorio en el formulario que lo monta. */
+  required?: boolean;
 };
 
 /** Sin acentos ni mayúsculas, para que "chocola" encuentre a "Chocolate". */
@@ -59,6 +65,9 @@ export function PlayerCombobox({
   onChange,
   allLabel,
   inputId,
+  describedBy,
+  invalid = false,
+  required = false,
 }: PlayerComboboxProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -208,7 +217,12 @@ export function PlayerCombobox({
         onFocus={abrir}
         placeholder="Buscar jugador"
         autoComplete="off"
-        className="h-10 w-full rounded-md border border-line bg-background px-3 text-foreground placeholder:text-muted"
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
+        aria-required={required || undefined}
+        className={`h-10 w-full rounded-md border bg-background px-3 text-foreground placeholder:text-muted ${
+          invalid ? "border-loss" : "border-line"
+        }`}
       />
 
       {open ? (

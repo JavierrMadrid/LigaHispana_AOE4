@@ -1,8 +1,3 @@
-const relative = new Intl.RelativeTimeFormat("es-ES", {
-  style: "narrow",
-  numeric: "auto",
-});
-
 const absoluteTime = new Intl.DateTimeFormat("es-ES", {
   dateStyle: "medium",
   timeStyle: "short",
@@ -15,31 +10,51 @@ const absoluteDay = new Intl.DateTimeFormat("es-ES", {
 
 /**
  * Cuánto pasó desde `date`, en castellano y en corto: "ahora mismo",
- * "hace 12 min", "ayer", "hace 3 días".
+ * "hace 12 min", "hace 3 h", "hace 2 días y 5 horas".
  *
- * A partir de una semana la distancia deja de importar y se da la fecha, que es
- * lo único que el lector puede situar. La referencia es el momento de la
- * respuesta del servidor, así que el resultado cambia con cada `force-dynamic`.
+ * A partir de un día se desglosan **días y horas**: decir "hace 53 h" obliga a
+ * dividir mentalmente y esconde cuánto falta para el día siguiente. A partir de
+ * una semana la distancia deja de importar y se da la fecha, que es lo único que
+ * el lector puede situar. La referencia es el momento de la respuesta del
+ * servidor, así que el resultado cambia con cada `force-dynamic`.
  */
 export function formatRelativeTime(date: Date, now: Date = new Date()): string {
   // Positivo hacia el pasado. Si `date` está en el futuro por un desajuste de
   // reloj sale negativo y cae en "ahora mismo", que es lo que hay que mostrar.
-  const elapsedSeconds = Math.round((now.getTime() - date.getTime()) / 1000);
+  const elapsedSeconds = Math.max(
+    0,
+    Math.round((now.getTime() - date.getTime()) / 1000),
+  );
 
   if (elapsedSeconds < 60) {
     return "ahora mismo";
   }
 
-  const minutes = Math.round(elapsedSeconds / 60);
-  const hours = Math.round(minutes / 60);
-  const days = Math.round(hours / 24);
+  const minutes = Math.floor(elapsedSeconds / 60);
 
-  if (hours < 1) {
-    return relative.format(-minutes, "minute");
+  if (minutes < 60) {
+    return `hace ${minutes} min`;
   }
 
+  const hours = Math.floor(minutes / 60);
+
+  if (hours < 24) {
+    return `hace ${hours} h`;
+  }
+
+  const days = Math.floor(hours / 24);
+
   if (days < 7) {
-    return relative.format(-hours, "hour");
+    const restoHoras = hours % 24;
+    const dias = days === 1 ? "día" : "días";
+
+    if (restoHoras === 0) {
+      return `hace ${days} ${dias}`;
+    }
+
+    const horas = restoHoras === 1 ? "hora" : "horas";
+
+    return `hace ${days} ${dias} y ${restoHoras} ${horas}`;
   }
 
   return absoluteDay.format(date);
@@ -101,6 +116,102 @@ export function formatTournamentWindow(window: { from: string; to: string | null
   }
 
   return `Del ${windowDayYear.format(from)} al ${windowDayYear.format(to)}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Fechas en Europe/Madrid                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * La zona con la que la organización lee el torneo.
+ *
+ * Es la misma que usan el panel (`parseMadridLocalInstant`) y el día natural de los
+ * objetivos. Todo lo que se pinte en hora de Madrid pasa por aquí para que no haya
+ * dos definiciones de "la hora del torneo".
+ */
+const MADRID_TIME_ZONE = "Europe/Madrid";
+
+/** El día de Madrid, en largo ("20 de septiembre de 2026"). */
+const madridDayLong = new Intl.DateTimeFormat("es-ES", {
+  dateStyle: "long",
+  timeZone: MADRID_TIME_ZONE,
+});
+
+/** La hora de Madrid, en 24 h y con dos dígitos ("08:05"). */
+const madridTime = new Intl.DateTimeFormat("es-ES", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZone: MADRID_TIME_ZONE,
+});
+
+/**
+ * La clave del día de Madrid (`YYYY-MM-DD`), para saber si dos instantes caen en la
+ * misma fecha **allí**.
+ *
+ * `en-CA` numera con dos dígitos y en el orden ISO, que es lo que hace comparables
+ * las dos cadenas.
+ */
+const madridDayKey = new Intl.DateTimeFormat("en-CA", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  timeZone: MADRID_TIME_ZONE,
+});
+
+/**
+ * Fecha y hora de Madrid, para la web y para el bot.
+ *
+ * Se compone con dos formateadores —el día en largo y la hora en 24 h— en vez de con
+ * `dateStyle`/`timeStyle`, porque el segundo deja la hora sin cero delante ("8:05") y
+ * en una ventana de evento esa hora se lee junto a otra. La zona va **explícita**: sin
+ * `timeZone`, el resultado dependería de dónde corra el proceso (el Worker, un script,
+ * la máquina de quien pruebe) y la misma fecha saldría distinta en cada sitio. No usa
+ * la zona del navegador ni la del servidor, solo Madrid.
+ *
+ * Devuelve `null` si el valor no es una fecha legible: un texto inventado se pinta
+ * vacío, no como "Invalid Date".
+ */
+export function formatMadridDateTime(instant: Date | string): string | null {
+  const date = instant instanceof Date ? instant : new Date(instant);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return `${madridDayLong.format(date)} a las ${madridTime.format(date)}`;
+}
+
+/**
+ * La ventana de un evento en una frase, con las dos horas en Madrid.
+ *
+ * Dos formas, según el día:
+ *
+ * - Mismo día de Madrid: "20 de septiembre de 2026, de 18:00 a 22:00 (hora de
+ *   Madrid)".
+ * - Días distintos: "Del 20 de septiembre de 2026 a las 18:00 al 22 de septiembre
+ *   de 2026 a las 22:00 (hora de Madrid)".
+ *
+ * Se compara el **día de Madrid** y no el de UTC: un evento de 23:00 a 01:00 es de
+ * una sola noche para quien lo juega, aunque en UTC caiga en dos días. El sufijo
+ * "(hora de Madrid)" va siempre porque el instante guardado es UTC y quien lo lee
+ * tiene que saber en qué reloj está.
+ *
+ * Devuelve `null` si alguno de los dos límites no se puede leer.
+ */
+export function formatEventWindow(event: { from: string; to: string }): string | null {
+  const from = new Date(event.from);
+  const to = new Date(event.to);
+
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return null;
+  }
+
+  if (madridDayKey.format(from) === madridDayKey.format(to)) {
+    return `${madridDayLong.format(from)}, de ${madridTime.format(from)} a ${madridTime.format(to)} (hora de Madrid)`;
+  }
+
+  return `Del ${madridDayLong.format(from)} a las ${madridTime.format(from)} al ${madridDayLong.format(to)} a las ${madridTime.format(to)} (hora de Madrid)`;
 }
 
 /**

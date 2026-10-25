@@ -29,6 +29,14 @@ enum PlayerStatus {
   PENDING
   APPROVED
   REJECTED
+  /// Expulsado por una actuación administrativa (`AdminAct` de tipo `BAN`).
+  ///
+  /// Es un estado **reversible** y conserva todos los datos del participante: no es
+  /// la baja destructiva (`deletePlayer`). Un `BANNED` no puntúa (el motor solo
+  /// publica `APPROVED`) y no puede recibir una segunda expulsión vigente; para
+  /// devolverlo al torneo hay que revertir la actuación. Va al final por la regla de
+  /// `ALTER TYPE … ADD VALUE`.
+  BANNED
 }
 
 enum MatchResult {
@@ -66,6 +74,21 @@ enum AdminActionType {
   ADMIN_REACTIVATED
   ACTION_REVERTED
   CONFIG_CHANGED
+}
+
+/// Qué hizo una **actuación administrativa** (`AdminAct`).
+///
+/// Es un historial aparte de `AdminAction`: una actuación tiene una sola acción, una
+/// razón pública y, opcionalmente, información privada. Las tres clases no se pueden
+/// reducir a dos: una expulsión no cambia partidas, una anulación no cambia el estado
+/// del jugador y una reversión no crea ni quita nada, solo deshace otra actuación.
+///
+/// `REVERSAL` es **final**: una reversión no se puede revertir. Los valores nuevos van
+/// al final, como en todos los enums de Postgres.
+enum AdminActKind {
+  BAN
+  MATCH_ANNULMENT
+  REVERSAL
 }
 
 /// Qué comportamiento anómalo de un participante ha detectado el motor.
@@ -129,6 +152,28 @@ enum AlertRule {
   /// retransmisión obligatoria. Apagarla no borra las alertas ya escritas: `Alert`
   /// es *append-only* y lo que se dejó de comprobar no se desdice.
   NO_STREAM_CHANNEL
+  /// No creó **ningún aldeano** en los primeros minutos de una partida concreta.
+  ///
+  /// Esta y las dos siguientes (`NO_MILITARY_GAP` y `NO_RESOURCES_GAP`) son
+  /// **hallazgos sobre una partida**, no sobre una racha de partidas: el dato que
+  /// las dispara es el interior de esa partida (`Match.summaryAnomalies`, leído del
+  /// summary) y el aviso es uno por partida y regla. Van al final por el mismo
+  /// motivo que el resto de valores nuevos.
+  NO_VILLAGERS_FIRST_MINUTES
+  /// La puntuación militar no subió durante una ventana seguida de la partida,
+  /// con una gracia inicial.
+  NO_MILITARY_GAP
+  /// La suma de recursos recolectados no subió durante una ventana seguida de la
+  /// partida.
+  NO_RESOURCES_GAP
+  /// Hay partidas que llevan más de la ventana de revisión sin una respuesta
+  /// concluyente del summary, tras haberlas intentado.
+  ///
+  /// Es una regla de **estado** del jugador (una fila por jugador), no de una
+  /// partida: lo que dice es que no se ha podido revisar su historial reciente. El
+  /// caso de perfil privado **confirmado** sigue siendo `HISTORY_NOT_PUBLIC`; este
+  /// es el respaldo de lo que no se pudo confirmar.
+  SUMMARY_NOT_REVIEWED
 }
 
 /// Cuándo se ha detectado la alerta.
@@ -145,11 +190,37 @@ enum AlertRule {
 /// tiene "con qué evidencia", y por eso es el único cuyo `anchorGameId` es
 /// siempre `null`: la evidencia son las respuestas del sondeo, que van en
 /// `details`, y la corrección es que la condición deje de cumplirse.
+///
+/// `MATCH_DETECTED` (al final, como todos los valores nuevos) es el hallazgo de
+/// **una partida concreta**: la evidencia está dentro de esa partida
+/// (`Match.summaryAnomalies`) y el ancla es su `gameId`, así que a diferencia de
+/// `STATE_DETECTED` **sí lleva partida** y su clave de dedupe la incluye: una fila
+/// por partida y regla, no una por jugador.
 enum AlertKind {
   STREAK_CLOSED
   STREAK_AT_TOURNAMENT_END
   TOTAL_REACHED
   STATE_DETECTED
+  MATCH_DETECTED
+}
+
+/// Qué le ha pasado al poseedor de una competición (`ObjectiveLeadEvent`).
+///
+/// **El orden de declaración es el del feed a igual instante, y no es
+/// decorativo**: en Postgres un enum se ordena por el orden en que se declaró, así
+/// que con `LOST` delante, un `orderBy` de `kind` con el **mismo `dir`** que el
+/// resto de la consulta deja la ganancia delante en descendente (el estado que
+/// queda: el nuevo poseedor) y la pérdida delante en ascendente (el inverso
+/// exacto). Es el mismo recurso —y la misma advertencia— que en
+/// `AdminActionType`: no reordenar los valores, y el que se añada va al final,
+/// porque `ALTER TYPE … ADD VALUE` solo añade al final.
+///
+/// Las dos filas de un cambio de poseedor comparten instante, así que este orden
+/// es lo único que las separa en el feed. `OBJECTIVE_LEAD_RANK`
+/// (`src/lib/objective-leads.ts`) tiene que decir lo mismo que esta declaración.
+enum ObjectiveLeadKind {
+  LOST
+  GAINED
 }
 
 model Player {
@@ -160,8 +231,9 @@ model Player {
   // alguien eligió no dependa de que AoE4World lo cambie por su cuenta.
   name             String
   // Nombre **oficial de AoE4World**, separado del de display para poder publicar
-  // los dos. Lo refresca el worker con `GET /players/:profile_id`; null = aún no
-  // se ha sincronizado, que es lo que hay en toda fila creada hoy.
+  // los dos. Lo escriben la ladder (que ya lo trae en su entrada) y, si falta o
+  // la caché de perfil ha caducado, `GET /players/:profile_id`. `null` = todavía
+  // no se ha sincronizado.
   aoe4WorldName    String?
   // Canal registrado en el panel (lo escribe el admin). No es lo mismo que
   // `twitchUrl`, que es lo que AoE4World publica en el perfil del jugador.
@@ -275,6 +347,49 @@ model Player {
   // Cuándo se comprobó lo anterior: es el plazo de la caché y, con
   // `discordUserId === null`, la señal de que esa fila nunca se ha comprobado.
   discordCheckedAt DateTime?
+
+  // --- Verificación del alta por privado de Discord (issue 119) ---
+  //
+  // El alta de admin ya no deja a nadie dentro sin más: si la verificación está
+  // configurada, el bot manda un privado con dos botones y la fila **no puede
+  // quedar `APPROVED`** hasta que la persona confirme desde su cuenta. Estas
+  // columnas son la máquina de estados de esa puerta, y son nullable porque
+  // **las filas anteriores no la tienen**: `requestedAt = null` es "esta fila no
+  // está sujeta a verificación", que es justo lo que hace que ni las altas
+  // antiguas ni las de `/participar` (que ya prueba la cuenta por OAuth) se
+  // bloqueen.
+  //
+  // `requestedAt` es la **llave de la puerta**: se escribe en toda alta de admin
+  // cuando la verificación está configurada y **no se limpia** al rechazar, para
+  // que una re-aprobación vuelva a exigir confirmación. Solo la aprobación
+  // explícita sin verificación del superadministrador la pone a `null`.
+  discordVerificationRequestedAt DateTime?
+  // Último privado de verificación enviado. `null` = todavía no se ha mandado (o
+  // se ha invalidado al corregir el `@usuario`), y entonces aprobar dispara el
+  // envío en vez de esperar confirmación.
+  discordVerificationSentAt      DateTime?
+  // Token aleatorio que llevan los botones (`pv:c:<token>` / `pv:d:<token>`). Es
+  // `@unique` porque es la **única** forma de encontrar la fila desde la
+  // interacción: Discord solo devuelve el `custom_id`. Se rota al reenviar, se
+  // invalida al corregir el `@usuario` y se limpia al resolverse. **No se expone
+  // nunca**: el token permite **encontrar** la fila, pero no basta para resolverla
+  // —hace falta pulsar desde la cuenta destinataria (`discordVerificationUserId`) y
+  // que la fila siga `PENDING`—, y aun así no sale ni en la capa de datos del panel
+  // ni en un log.
+  discordVerificationToken       String?         @unique
+  // Cuenta de Discord a la que se mandó el privado. La interacción comprueba que
+  // quien pulsa es esta persona; sin esa comparación, reenviar el mensaje a otro
+  // canal dejaría los botones en manos de cualquiera.
+  discordVerificationUserId      String?
+  // Cuándo confirmó la persona desde su cuenta. **No confundir con
+  // `discordUserId`**: ese es "lo que dice Discord" (OAuth o roster) y puede
+  // estar resuelto sin que nadie haya consentido nada; este es la prueba de que
+  // la persona pulsó "Sí, participo". Es lo que hace que la puerta deje pasar.
+  discordVerifiedAt              DateTime?
+  // Cuándo pulsó "No, no participo". Queda como rastro de que la baja fue una
+  // decisión de la persona y no de la organización.
+  discordDeclinedAt              DateTime?
+
   status           PlayerStatus @default(PENDING)
 
   // Cuándo se **inscribió** la persona, no cuándo la aprobó la organización:
@@ -352,6 +467,10 @@ model Player {
   twitchUrl        String?
   // `avatars.full`; si es null la interfaz dibuja un monograma.
   avatarUrl        String?
+  // Sello de la caché de perfil: cuándo se refrescó por última vez el nombre
+  // oficial y el avatar. `null` = sin comprobar. Lo escriben la ladder y
+  // `GET /players/:profile_id`; con menos de 1 h no se vuelve a pedir el perfil.
+  profileCheckedAt DateTime?
   // Cuándo se miró la ladder por última vez. No se toca si el jugador no
   // aparece en la respuesta, para poder distinguir "sin ladder" de "sin sync".
   ladderUpdatedAt  DateTime?
@@ -382,12 +501,35 @@ model Player {
   // mismo ritmo.
   historyCheckedAt DateTime?
 
+  // --- Ventana completa y relleno (F2) ---
+  //
+  // `windowComplete` significa "se ha recorrido la ventana del torneo entera de
+  // este jugador hasta el corte". `false` es el valor de migración y también el
+  // de un jugador que entró después: su ventana todavía no se ha recorrido.
+  // No es lo mismo que `historyTruncated`, que se ponía a `false` en cuanto
+  // llegaba una partida nueva aunque el histórico siguiera cortado.
+  windowComplete  Boolean   @default(false)
+  // Página del relleno por la que sigue. 1 = empezar por el principio de la
+  // ventana; las páginas 1..backfillPage−1 ya se leyeron.
+  backfillPage    Int       @default(1)
+  // Cuándo se completó por última vez el recorrido de la ventana. `null` = nunca.
+  windowCheckedAt DateTime?
+
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   matches         Match[]
   scores          PlayerScore[]
   objectiveEvents ObjectiveEvent[]
+  leadEvents      ObjectiveLeadEvent[]
   alerts          Alert[]
+  // Actuaciones administrativas del jugador. La relación es `SetNull`: una actuación
+  // sobrevive al borrado del jugador con la foto de `playerName`/`profileId`.
+  adminActs       AdminAct[]
+
+  // Cola del relleno: quién está aprobado, quién tiene la ventana pendiente y
+  // por qué página va. El orden de las columnas es el de la consulta de
+  // candidatos (`status`, `windowComplete`, `backfillPage`).
+  @@index([status, windowComplete, backfillPage])
 }
 
 model Match {
@@ -446,6 +588,19 @@ model Match {
   // concluyente: así no se vuelve a preguntar por ella. Un fallo de red, un 5xx o un
   // 200 ilegible **no** la tocan, así que la partida vuelve a la cola más tarde.
   summaryCheckedAt       DateTime?
+  // Cuándo se pidió el summary por última vez, con **cualquier** desenlace (200, 404,
+  // fallo, 429). `null` = nunca se intentó. Es distinto de `summaryCheckedAt`: esa
+  // marca dice "ya hay una respuesta concluyente" y esta dice "se intentó, saliera lo
+  // que saliera". De aquí salen el margen de reintento de una hora y la detección de
+  // las partidas que se intentaron y nunca se resolvieron (`SUMMARY_NOT_REVIEWED`).
+  summaryLastAttemptAt   DateTime?
+  // Evidencia compacta del summary para las alertas de comportamiento: si el
+  // `buildOrder` se pudo leer, cuándo se creó el primer aldeano y los dos tramos sin
+  // progreso (militar y de recursos). `null` = no hay summary. La forma exacta está en
+  // `SummaryAnomalies` (`src/lib/aoe4world/summary-anomalies.ts`); se guarda el resumen
+  // y no el payload entero porque lo que el motor necesita son cuatro datos, y
+  // `rawJson` no lleva el summary.
+  summaryAnomalies       Json?
   // Puntos que esta partida aporta según el ruleset activo: hoy
   // `DEFAULT_RULESET.pointsPerWin` en cada victoria clasificatoria resuelta y 0 en
   // el resto. El motor es el único que lo escribe, y solo en las filas cuyo valor
@@ -468,6 +623,9 @@ model Match {
   revertedAt        DateTime?
   rawJson           Json
   createdAt         DateTime     @default(now())
+
+  // Vínculos de las actuaciones que anularon esta partida (`AdminAct`).
+  adminActMatches   AdminActMatch[]
 
   // La unicidad es por jugador, no global: en un torneo individual dos
   // participantes pueden jugar la misma partida y cada uno necesita su fila
@@ -525,18 +683,22 @@ model PlayerScore {
   @@index([ruleSetVersion, rank])
 }
 
-/// Un objetivo del torneo que alguien cumplió, con **cuándo** se cumplió.
+/// Un **logro** del torneo que alguien cumplió, con **cuándo** se cumplió.
 ///
-/// Un evento por **objetivo y jugador**: en una competición hay uno (el
-/// poseedor), y en un logro puede haber muchos (todos los que lo completan). El
-/// historial del panel (`/admin/historial`) lo lee como un feed; no alimenta la
+/// Un evento por **objetivo y jugador**. Solo aparecen los logros
+/// (`kind: "achievement"`): un logro lo cobra todo el que cumple su condición, así
+/// que tiene varios beneficiarios. Las **competiciones** no viven aquí, sino en
+/// `ObjectiveLeadEvent`, que es el registro de quién posee cada una y cuándo
+/// cambió de manos: una competición no se "cumple" una vez, se posee, y su
+/// historial es la línea de cambios de poseedor. El historial del panel
+/// (`/admin/historial`) lee las dos tablas como un feed; ninguna alimenta la
 /// clasificación.
 ///
 /// ## Cuándo se registra (la traducción de `docs/OBJETIVOS.md`)
 ///
-/// El catálogo nuevo **no tiene carreras**: competiciones y logros se resuelven en
-/// caliente y pueden cambiar en cada recálculo. Por eso todos se registran igual:
-/// solo cuando la ventana ya tiene `to` informado **y** ha pasado, con
+/// El catálogo **no tiene carreras**: los logros se resuelven en caliente y sus
+/// beneficiarios pueden cambiar en cada recálculo. Por eso se registran solo
+/// cuando la ventana ya tiene `to` informado **y** ha pasado, con
 /// `achievedAt` = ese `window.to`. Con la ventana abierta (`to: null`) no se
 /// registra nada todavía, que es justo lo que significa "solo se añaden una vez
 /// termina el torneo".
@@ -560,18 +722,20 @@ model PlayerScore {
 /// La fila es un **espejo reconciliado del cómputo**, no un log *append-only* (la
 /// diferencia con `AdminAction`, que sí es un log: allí el rastro vale aunque el
 /// cambio se deshaga). La reconciliación borra lo que deja de cumplirse, porque el
-/// escenario es real: si se revierte la partida que cerró una competición o que
-/// completó un logro, los puntos se mueven y un evento que nombrara al beneficiario
-/// antiguo estaría mintiendo. `@@unique([objectiveId, playerId])` es lo que hace que
-/// esa reconciliación quepa en un `update` por esa clave en lugar de un historial
-/// de repeticiones.
+/// escenario es real: si se revierte la partida que completó un logro, los puntos se
+/// mueven y un evento que nombrara al beneficiario antiguo estaría mintiendo.
+/// `@@unique([objectiveId, playerId])` es lo que hace que esa reconciliación quepa en
+/// un `update` por esa clave en lugar de un historial de repeticiones.
+///
+/// Un objetivo **apagado** (`disabledObjectives`) no llega a `awarded`, así que sus
+/// filas quedan fuera del espejo y la siguiente reconciliación las borra.
 ///
 /// ## El borrado en cascada
 ///
 /// El de `Match` y `PlayerScore`: si se borra un participante, sus hitos no pueden
-/// quedarse sin dueño. El `playerId` además lleva índice porque Postgres no indexa
-/// las FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra los
-/// hitos por jugador).
+/// quedarse sin dueño. El `playerId` abre un índice compuesto porque Postgres no indexa
+/// las FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra los hitos
+/// por jugador).
 model ObjectiveEvent {
   /// Id estable del catálogo (`loco-por-ganar`, `lider-japanese`…).
   objectiveId String
@@ -587,11 +751,105 @@ model ObjectiveEvent {
 
   // Un evento por objetivo y jugador: un logro tiene varios beneficiarios.
   @@unique([objectiveId, playerId])
-  // El feed del historial ordena y filtra por `achievedAt`.
-  @@index([achievedAt])
-  // Índice de la FK: el panel filtra los hitos por jugador y el `Cascade` al borrar
-  // un participante los recorre (Postgres no indexa las FK por su cuenta).
-  @@index([playerId])
+  // El feed del historial filtra y ordena por `achievedAt` y desempata por `objectiveId`.
+  // Sustituye al índice simple de `achievedAt`, que era su prefijo.
+  @@index([achievedAt, objectiveId])
+  // Filtro por jugador y cascada; el `achievedAt` de detrás sostiene el feed de un jugador.
+  // Sustituye al índice simple de `playerId`, que era su prefijo.
+  @@index([playerId, achievedAt])
+}
+
+/// Un cambio de poseedor de una **competición**: quién pasa a poseerla o deja de
+/// poseerla, y **cuándo**.
+///
+/// Es un registro **append-only**, al revés que `ObjectiveEvent`. Aquí la fila
+/// describe un hecho que ocurrió en un instante —el jugador pasó a liderar «Rey del
+/// 1v1»— y eso no deja de ser cierto porque después cambie el poseedor: lo que hay
+/// que anotar es el cambio siguiente, no corregir el anterior. Es justo lo que el
+/// espejo no puede hacer: una competición se posee durante semanas y se puede
+/// perder y recuperar, así que su historial es una línea temporal de ganancias y
+/// pérdidas, no un "cumplido" con fecha.
+///
+/// ## Qué escribe, y qué dos filas escribe un cambio
+///
+/// `reconcileObjectiveLeadEvents()` (`src/lib/objective-leads.ts`), dentro de la
+/// transacción de `recomputeScores()`, deriva de `awarded` el poseedor actual de
+/// cada competición, lo compara con el **último estado anotado** y anexa solo lo que
+/// difiere:
+///
+/// - **cambio de poseedor**: dos filas con **el mismo `at`**, `LOST` para el
+///   anterior y `GAINED` para el nuevo;
+/// - **poseedor que desaparece** (objetivo apagado, ventana reabierta, una partida
+///   revertida que cambia el ranking): una sola `LOST`;
+/// - **competición sin filas previas y con poseedor**: una sola `GAINED` (siembra).
+///
+/// **La siembra no reconstruye el pasado**: el primer estado de una competición se
+/// anota con el instante del pase que lo descubre, no con la fecha en que el jugador
+/// se puso a liderar, que no consta en ninguna parte.
+///
+/// Es idempotente y **no escribe nada cuando no cambia nada** (el worker pasa 288
+/// veces al día): la comparación es una lectura del registro de la edición en curso
+/// y la escritura solo sale si hay diferencia. La única clave única posible sería
+/// `(objectiveId, playerId, kind, at)`, y no se pone: no impediría el caso real que
+/// hay que evitar (una repetición con otro instante), así que la idempotencia la
+/// sostiene la comparación, no una restricción.
+///
+/// ## Cohortes: la edición sella cada fila
+///
+/// `editionFrom` es el `window.from` de la ventana **con la que se escribió** la
+/// fila. Los dos feeds publican solo las filas de la edición activa —igualdad con el
+/// `from` de la ventana que se está usando—, así que una edición nueva arranca su
+/// propio registro sin mezclar los liderazgos de la anterior. Y como el filtro es
+/// por ventana y no por la fecha de la fila, **sí se ven** las correcciones
+/// posteriores al cierre de la edición en curso: una partida revertida después del
+/// cierre cambia el poseedor y anexa sus dos filas, que siguen siendo de esta
+/// edición.
+///
+/// ## Por qué no guarda la etiqueta ni los puntos
+///
+/// Por el mismo motivo que `ObjectiveEvent`: se resuelven **al leer**, con
+/// `resolveObjective()` y el ruleset activo, y una copia se quedaría vieja en cuanto
+/// la organización retocara un punto. En una competición el importe es el mismo para
+/// la pérdida y para la ganancia (premio fijo, una sola vez), así que las dos filas
+/// de un cambio llevan la misma cifra y la interfaz decide el signo.
+///
+/// ## El borrado en cascada
+///
+/// Igual que en `ObjectiveEvent`: si se borra un participante, sus liderazgos no
+/// pueden quedarse sin dueño. `playerId` abre un índice compuesto porque Postgres no
+/// indexa las FK por su cuenta y el `Cascade` las recorre (y porque el panel filtra por
+/// jugador).
+model ObjectiveLeadEvent {
+  id String @id @default(cuid())
+
+  /// Id del catálogo de la competición (`loco-por-ganar`, `rey-1v1`, `masterizando-…`).
+  objectiveId String
+
+  /// Quien pasa a poseerla (`GAINED`) o quien deja de poseerla (`LOST`).
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  /// Qué le ha pasado a ese jugador con esa competición.
+  kind ObjectiveLeadKind
+
+  /// Instante del cambio: el del recálculo que lo detectó, **el mismo en las dos
+  /// filas** de un cambio de poseedor. En la siembra es el instante del pase.
+  at DateTime
+
+  /// `window.from` de la ventana activa cuando se escribió; ver el docblock.
+  editionFrom DateTime
+
+  /// Cuándo se escribió la fila. `at` es el dato del torneo; esto es solo el rastro
+  /// de que el motor lo registró (corre cada 5 minutos).
+  recordedAt DateTime @default(now())
+
+  // Feed: la cohorte y el rango de `at` de la consulta, con el orden del merge
+  // (`at`, `objectiveId`, `kind`) detrás. Sustituye al índice `(editionFrom, at)`, que
+  // era su prefijo.
+  @@index([editionFrom, at, objectiveId, kind])
+  // Filtro por jugador y cascada; la cohorte y la fecha de detrás sostienen su historial.
+  // Sustituye al índice simple de `playerId`, que era su prefijo.
+  @@index([playerId, editionFrom, at])
 }
 
 model Setting {
@@ -788,9 +1046,11 @@ model Alert {
   // la liga no va a aparecer en ningún `join` del panel.
   subjectName      String?
 
-  // Magnitud del hallazgo: partidas de la racha para los avisos de racha, y
-  // partidas acumuladas para los de total. En un total es siempre el múltiplo o
-  // el umbral que se ha cruzado, así que `count == threshold`.
+  // Magnitud del hallazgo: partidas de la racha para los avisos de racha,
+  // partidas acumuladas para los de total y **segundos del tramo** para los
+  // hallazgos de una partida (`MATCH_DETECTED`). En `NO_VILLAGERS_FIRST_MINUTES`
+  // es 0, "cero aldeanos", y el umbral es la ventana del arranque. En un total es
+  // siempre el múltiplo o el umbral que se ha cruzado, así que `count == threshold`.
   //
   // Las reglas de estado (`AlertKind.STATE_DETECTED`) no cuentan nada: ahí
   // `count` es la magnitud **con la que se comparó** y `threshold` el valor con
@@ -802,7 +1062,8 @@ model Alert {
   count     Int
   // Umbral que dispara el aviso, tomado del ruleset activo. Se guarda para que
   // el informe pueda decir con qué criterio se avisó aunque las reglas cambien
-  // después.
+  // después. En las tres reglas de partida del resumen es el umbral del ruleset
+  // (segundos de la ventana, o la ventana del arranque en la de aldeanos).
   threshold Int
 
   // Partida que **rompió** la racha (la primera clasificatoria sin el patrón) o
@@ -823,4 +1084,108 @@ model Alert {
   // orden, y para contar cuántas alertas de cada regla ha tenido.
   @@index([createdAt])
   @@index([playerId, rule])
+}
+
+/// Una **actuación administrativa**: la unidad con la que la organización expulsa a
+/// un participante, anula partidas ganadas o revierte actuaciones anteriores.
+///
+/// Es un historial **aparte de `AdminAction`**, no una fila más de aquella tabla: la
+/// actuación tiene razón pública (la que se anuncia en Discord), información privada
+/// (que nunca sale del panel), autor y fecha, y además se aplica en el momento. Los
+/// `AdminAction` siguen siendo el rastro técnico de cada cambio; la actuación es el
+/// expediente que lo explica.
+///
+/// ## Una acción por actuación
+///
+/// `kind` decide qué se hizo y solo se puede hacer una cosa: una expulsión y una
+/// anulación del mismo jugador son **dos actuaciones**. El único caso que selecciona
+/// varias filas es la reversión, que puede deshacer varias actuaciones vigentes del
+/// mismo participante a la vez.
+///
+/// ## La razón pública y la privada
+///
+/// `publicReason` es obligatoria y es lo único que se manda a Discord (canal y DM).
+/// `privateInfo` es opcional y **no sale del panel ni se loguea**: el aviso público no
+/// la recibe por tipo (ver `src/lib/admin-acts.ts`), así que no se puede filtrar por
+/// descuido. `summary` es una frase ya redactada en español, como
+/// `AdminAction.summary`, y no contiene información privada.
+///
+/// ## El borrado del jugador
+///
+/// `playerId` es nullable y `SetNull`: una actuación sobrevive a que se borre el
+/// jugador, con la foto de `playerName`/`profileId` del momento. Eso conserva el
+/// historial de una expulsión que luego se revierte y el jugador se da de baja.
+model AdminAct {
+  id String @id @default(cuid())
+
+  kind AdminActKind
+
+  /// `Player.id`, o `null` si el jugador se ha borrado después.
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  /// Foto del nombre y del perfil en el momento de la actuación: es lo que queda si
+  /// la relación con `Player` se pone a `null`.
+  playerName String
+  profileId  Int
+
+  /// Frase ya redactada en español (`adminActSummary()`); el panel la pinta tal cual.
+  summary String
+
+  /// Razón pública obligatoria: es lo único que se manda en el canal y en el DM.
+  publicReason String
+  /// Información privada opcional: nunca sale del panel ni se loguea.
+  privateInfo  String?
+
+  /// Correo del usuario de Supabase Auth que la creó.
+  actorEmail String
+
+  /// Partidas anuladas, o en una reversión el total de partidas afectadas por las
+  /// actuaciones revertidas (unión, sin repetir).
+  matchCount Int @default(0)
+
+  /// Estado que tenía el jugador antes de una expulsión. `null` en los otros tipos.
+  /// Es lo que restaura la reversión.
+  statusBefore PlayerStatus?
+
+  /// Cuándo la revirtió otra actuación. `null` = sigue vigente. En una `REVERSAL`
+  /// siempre es `null`: una reversión es final y no se revierte.
+  revertedAt      DateTime?
+  revertedByEmail String?
+
+  /// La actuación de reversión que la deshizo, si existe. Autorrelación con
+  /// `SetNull`: la reversión es una fila más de este mismo historial.
+  reversedByActId String?
+  reversedByAct   AdminAct?  @relation("AdminActReversal", fields: [reversedByActId], references: [id], onDelete: SetNull)
+  reverses        AdminAct[] @relation("AdminActReversal")
+
+  /// Partidas anuladas por esta actuación (vacío en una expulsión o una reversión).
+  matches AdminActMatch[]
+
+  createdAt DateTime @default(now())
+
+  // Listado por fecha (lo más reciente primero), filtro por tipo y por jugador, y
+  // estado vigente/revertido. El último sostiene la autorrelación.
+  @@index([createdAt])
+  @@index([kind, createdAt])
+  @@index([playerId, createdAt])
+  @@index([revertedAt, kind])
+  @@index([reversedByActId])
+}
+
+/// Qué partidas anuló una actuación (`AdminAct` de tipo `MATCH_ANNULMENT`).
+///
+/// Es la lista de vínculos, no una copia de la partida: los datos se leen en vivo de
+/// `Match`. El `Cascade` en los dos lados es deliberado: si se borra la actuación o la
+/// partida, el vínculo no puede quedarse apuntando a nada.
+model AdminActMatch {
+  actId String
+  act   AdminAct @relation(fields: [actId], references: [id], onDelete: Cascade)
+
+  matchId String
+  match   Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@id([actId, matchId])
+  // La consulta "qué actuaciones anularon esta partida" y el `Cascade` desde `Match`.
+  @@index([matchId])
 }

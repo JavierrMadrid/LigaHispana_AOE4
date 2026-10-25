@@ -14,21 +14,21 @@ import {
  * Todo es puro y sin red ni base de datos. Lo que se fija es lo que no puede fallar: que
  * la baja de una solicitud **no** diga «retirado del torneo» (nunca entró), que el
  * privado y el global sean independientes, y que un punto no se anuncie en plural.
+ *
+ * Las actuaciones administrativas (expulsiones, anulaciones y reversiones) se prueban
+ * en `admin-acts.test.ts`: tienen su propio módulo porque llevan razón pública.
  */
 
 const EDICION = "Liga Hispana AoE IV";
 
-function baja(status: "PENDING" | "APPROVED" | "REJECTED", matchCount: number): AdminNotice {
+function baja(status: "PENDING" | "APPROVED" | "REJECTED" | "BANNED", matchCount: number): AdminNotice {
   return { kind: "player-removed", editionName: EDICION, name: "BeastWizard", status, matchCount };
 }
 
-function revertida(points: number): AdminNotice {
-  return { kind: "match-points-reverted", editionName: EDICION, name: "BeastWizard", gameId: "G-12345", points };
-}
-
 describe("playerRemovedIsParticipant", () => {
-  it("solo un APPROVED había entrado al torneo", () => {
+  it("un APPROVED o un BANNED habían entrado al torneo", () => {
     expect(playerRemovedIsParticipant("APPROVED")).toBe(true);
+    expect(playerRemovedIsParticipant("BANNED")).toBe(true);
     expect(playerRemovedIsParticipant("PENDING")).toBe(false);
     expect(playerRemovedIsParticipant("REJECTED")).toBe(false);
   });
@@ -103,22 +103,9 @@ describe("adminNoticeChannelText", () => {
     }
   });
 
-  it("la invalidación de una partida dice la partida y los puntos", () => {
-    const texto = adminNoticeChannelText(revertida(2), null);
-
-    expect(texto).toContain("en la partida G-12345 de BeastWizard");
-    expect(texto).toContain("2 puntos dejan de contar para la clasificación.");
-  });
-
-  it("un solo punto va en singular", () => {
-    expect(adminNoticeChannelText(revertida(1), null)).toContain(
-      "1 punto deja de contar para la clasificación.",
-    );
-  });
-
   it("con dominio configurado añade el enlace; sin él, no inventa una dirección", () => {
-    const conEnlace = adminNoticeChannelText(revertida(2), "https://laligahispana.es/");
-    const sinEnlace = adminNoticeChannelText(revertida(2), null);
+    const conEnlace = adminNoticeChannelText(baja("APPROVED", 2), "https://laligahispana.es/");
+    const sinEnlace = adminNoticeChannelText(baja("APPROVED", 2), null);
 
     expect(conEnlace).toContain("Más información: https://laligahispana.es/");
     expect(sinEnlace).not.toContain("http");
@@ -142,15 +129,7 @@ describe("adminNoticeDmText", () => {
     expect(texto).not.toContain("retirado");
   });
 
-  it("el de la partida habla de su partida y de los puntos", () => {
-    const texto = adminNoticeDmText(revertida(2));
-
-    expect(texto).toContain("en tu partida G-12345");
-    expect(texto).toContain("2 puntos dejan de contar para la clasificación.");
-    expect(texto).toContain("Si crees que es un error");
-  });
-
   it("el privado no lleva enlace", () => {
-    expect(adminNoticeDmText(revertida(2))).not.toContain("http");
+    expect(adminNoticeDmText(baja("APPROVED", 2))).not.toContain("http");
   });
 });

@@ -100,6 +100,29 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
                 a {thresholds.repeatedTeammateTotal} partidas en total con ese mismo
                 compañero, se crea otra alerta, una sola vez.
               </Rule>
+
+              <Rule index={4} title="Sin aldeanos al arrancar">
+                Solo se miran las partidas que duraron al menos{" "}
+                {minutos(thresholds.noVillagersFirstSeconds)}. Si en esa ventana no
+                apareció ningún aldeano, se avisa; los aldeanos con los que se empieza
+                no cuentan. La alerta es de esa partida, no una racha.
+              </Rule>
+
+              <Rule index={5} title="Sin crecimiento militar">
+                La puntuación militar arranca en un valor bajo por el explorador inicial,
+                y no hacer un máximo nuevo al principio es normal: los primeros{" "}
+                {minutos(thresholds.noMilitaryGraceSeconds)} no se miran. Después, si pasa{" "}
+                {minutos(thresholds.noMilitaryGapSeconds)} seguidos sin que haga un máximo
+                nuevo, se avisa. Se mide la puntuación militar, no un número de unidades.
+                Cada partida que lo cumpla tiene su propia alerta.
+              </Rule>
+
+              <Rule index={6} title="Sin obtener recursos">
+                Se mira la suma de recursos recolectados, no las existencias que quedan
+                en el banco. Si esa suma no sube durante{" "}
+                {minutos(thresholds.noResourcesGapSeconds)} seguidos, se avisa. Una
+                alerta por partida.
+              </Rule>
             </ol>
 
             <p className="mt-6 border-l-2 border-accent/40 pl-4 text-sm leading-relaxed text-muted">
@@ -109,7 +132,11 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
               umbral. Solo cuentan las partidas clasificatorias resueltas y no
               revertidas: las que no puntúan quedan fuera de la racha y no la rompen
               (por ejemplo, una de equipo con un compañero a dos escalones o más de
-              división). Cada umbral avisa una sola vez.
+              división). Cada umbral avisa una sola vez. En cambio, las tres del
+              resumen no son rachas: cada partida que cumple su criterio lleva su
+              propia alerta, y si el hallazgo se repite en otra partida, hay otra. Un
+              dato que no se pudo leer no cuenta como cero: si falta, la regla de esa
+              partida no se evalúa.
             </p>
 
             <div className="mt-6 border-t border-line pt-5">
@@ -117,8 +144,8 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
                 Estado que no sale de las partidas
               </h3>
               <p className="mt-1 text-sm leading-relaxed text-muted">
-                Tres comprobaciones más no miran las partidas que ya tenemos, sino el
-                perfil del jugador en AoE4World y su cuenta de Discord. Avisan cuando:
+                Estas comprobaciones no miran las partidas que ya tenemos, sino el perfil
+                del jugador en AoE4World y su cuenta de Discord. Avisan cuando:
               </p>
               <ul className="mt-3 flex flex-col gap-3 text-sm leading-relaxed text-muted">
                 <li>
@@ -147,7 +174,26 @@ export function AlertRulesDialog({ thresholds, fallback }: AlertRulesDialogProps
                 </li>
               </ul>
               <p className="mt-3 text-sm leading-relaxed text-muted/85">
-                Estas tres son un aviso para que la organización mire, no un veredicto.
+                Estas comprobaciones son un aviso para que la organización mire, no un
+                veredicto.
+              </p>
+            </div>
+
+            <div className="mt-6 border-t border-line pt-5">
+              <h3 className="text-sm font-semibold text-foreground">
+                Cuando el resumen no se puede revisar
+              </h3>
+              <p className="mt-1 text-sm leading-relaxed text-muted">
+                Aunque el historial no esté cerrado, el resumen de una partida puede no
+                dejar leer sus datos. Cuando hay partidas que se intentaron leer y pasó
+                la ventana de revisión sin una respuesta concluyente, se escribe una
+                alerta de estado por jugador, con el número de partidas afectadas.
+              </p>
+              <p className="mt-3 text-sm leading-relaxed text-muted/85">
+                Es un aviso para revisar, no una sanción: dice que la organización
+                todavía no sabe qué pasó en esas partidas, no que el jugador haya hecho
+                nada. Una sola por jugador, no una por partida, y no se confunde con el
+                perfil privado confirmado, que tiene su propia alerta.
               </p>
             </div>
           </div>

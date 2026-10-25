@@ -102,6 +102,11 @@ secciones (es un objetivo que se consigue) y sus hijos van en un carrusel por fa
 alcance"** y tras sus tarjetas individuales, con el avance del jugador y las tarjetas ordenadas de
 mayor a menor porcentaje de consecución.
 
+La tarjeta de la cabeza añade además el detalle por civilización: la **lista más corta de las dos**
+—las hechas o las que quedan— con la bandera de cada una y la cifra en partidas (Jugón) o victorias
+(Polifacético). La ventana volteable la lista entera, en el resumen frontal y en la cara de
+clasificación.
+
 Los 23 `masterizando-<civ>` no forman familia —no tienen cabeza que los agrupe—, pero en `/objetivos`
 se leen igual: bajo el titular «Masterizando», un riel con el mismo filtro de banderas y la misma
 navegación, con cada tarjeta abriendo la clasificación de esa civilización.
@@ -115,8 +120,10 @@ uno y por su `id`. Un objetivo apagado:
 - **no se publica**: no aparece en `/objetivos`, ni en la ficha de un participante, ni en el snapshot
   (`Setting["scoring.objectives"]`, que se reescribe porque cambia su huella);
 - **no reparte puntos**: nadie lo cobra, así que el total de la clasificación sale de los **activos**;
-- **pierde sus eventos**: `ObjectiveEvent` es un espejo de lo que se cobra hoy, así que la
-  reconciliación borra las filas del objetivo apagado.
+- **pierde sus eventos**: `ObjectiveEvent` (logros) es un espejo de lo que se cobra hoy, así que la
+  reconciliación borra las filas del objetivo apagado; y si era una **competición**, su poseedor
+  desaparece del cómputo y el registro de liderazgos (`ObjectiveLeadEvent`) anota una `LOST` para el
+  que la tenía.
 
 Apagar la **cabeza** de una familia (`polifacetico`, `jugon`) no apaga a sus hijos: la familia es una
 agrupación de la interfaz, no una dependencia, y cada objetivo se apaga por su id. Un id que no exista
@@ -125,6 +132,11 @@ en el catálogo o repetido se avisa y se ignora.
 La etiqueta de la regla se recalcula con los objetivos activos, así que la web no anuncia objetivos que
 ya no existen. Lo cambia el superadministrador desde el panel; el detalle, en
 [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
+
+Apagar un objetivo **solo se puede antes de que empiece la edición**: desde `window.from`, el ruleset
+está congelado (`saveScoringRuleset` rechaza el cambio) porque un objetivo apagado retiraría puntos que
+la clasificación ya está publicando. Después del inicio, lo único editable del ruleset es el fin de la
+ventana.
 
 ## Pool de mapas
 
@@ -155,9 +167,18 @@ logro (que no decide puntos: todos los que cumplen cobran):
 - **Todos** los objetivos se resuelven en caliente: se recalculan con los datos de ahora mismo y su
   poseedor o sus beneficiarios pueden cambiar de una jornada a otra. Ya **no hay carreras**: el
   catálogo no tiene ningún objetivo que se cierre al completarse.
-- El registro de hitos (`ObjectiveEvent`) solo se escribe **cuando la ventana del torneo ya ha
+- El registro de **logros** (`ObjectiveEvent`) solo se escribe **cuando la ventana del torneo ya ha
   terminado**, con `achievedAt` = el fin de la ventana. Con la ventana abierta no se registra nada.
   Hay un evento por objetivo y jugador, porque un logro tiene varios beneficiarios.
+- Los cambios de poseedor de una **competición** (`ObjectiveLeadEvent`) se registran **en vivo**, en
+  cada recálculo: cada vez que una competición cambia de manos se anotan dos filas con el mismo
+  instante —`LOST` para el que la suelta y `GAINED` para el que la agarra—, y la primera vez que se
+  ve un poseedor se siembra con una sola `GAINED`. Es lo que permite contar en `/historial` "ahora
+  lidera" y "ya no lidera" durante el torneo. Una competición que no cambia de dueño no escribe nada.
+- Si la edición ya se jugó antes de activar ese registro, `npm run backfill:objective-leads`
+  reconstruye la secuencia desde las partidas contadas: borra y reescribe las filas de la edición,
+  con el `finishedAt` de la partida que cambió el poseedor. Es idempotente, toma el cerrojo del
+  recálculo y `-- --dry-run` lo enseña sin escribir.
 
 ## Total de puntos
 
@@ -170,3 +191,15 @@ banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no repar
 reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en
 `kind === "achievement" && target === null`. Los puntos por objetivo, uno a uno, están en las tablas de
 arriba y en `OBJECTIVE_POINTS`.
+
+## El bono de eventos no es un objetivo
+
+Los **eventos puntuales** (una ventana con multiplicador) no forman parte de este catálogo:
+
+- No se poseen ni se cobran como logro o competición, y no aparecen en `/objetivos` ni en el reparto de
+  objetivos.
+- No alteran `victorias` ni su precio: el bono es un concepto aparte que se suma en
+  `PlayerScore.breakdown.events` y sube el total de la clasificación. `Match.points` sigue siendo el
+  punto base por victoria.
+- Por eso no cuentan en la suma nominal del catálogo ni en `OBJECTIVE_COUNT`, y no cambian los
+  desempates dentro de un objetivo. La regla del bono está en [`PUNTUACION.md`](./PUNTUACION.md).
