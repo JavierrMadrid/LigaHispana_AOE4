@@ -209,6 +209,7 @@ npm run dev          # http://localhost:3000
 | `npm run score` | Recalcula la clasificación. |
 | `npm run backfill:objective-leads` | Reconstruye el historial de liderazgos de la edición desde las partidas ya jugadas (`-- --dry-run` no escribe). |
 | `npm run db:push` / `npm run db:security` | Sincroniza el schema y aplica la postura de RLS en el entorno de `DATABASE_URL` (por defecto, desarrollo). |
+| `npm run db:check` | Compara el schema del repositorio con la base de `DATABASE_URL` sin escribir: imprime la deriva y sale con **2** si la hay (0 = al día, 1 = error). |
 | `npm run db:cron` | Programa el reloj del torneo en producción (Supabase Cron). No ejecutar contra desarrollo. |
 | `npm run mock:tournament` / `npm run mock:clean` | Simula el torneo con fixtures locales y lo deshace. |
 | `npm run deploy` / `npm run preview` | Despliega el Worker (producción manual / preview local). |

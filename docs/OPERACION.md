@@ -831,7 +831,12 @@ Un roster viejo **no se usa como reserva**: si la lectura falla, se vuelve a la 
 `npm run db:push` añade las columnas de Discord, el valor `DISCORD_NOT_IN_GUILD` de `AlertRule`, el
 **`@unique` de `discordUsername`** y, desde la issue 119, las seis columnas de la verificación del alta
 más el **`@unique` de `discordVerificationToken`**. No hace falta `db:security`: no se crea ninguna
-tabla, y las filas existentes quedan con las columnas nuevas a `null` (no se re-verifica a nadie).
+tabla, y las filas existentes quedan con las columnas nuevas a `null` (no se re-verifica a nadie). Que
+estén aplicadas lo dice `npm run db:check` con el `DATABASE_URL` de esa base (sale con 2 si falta).
+
+El push **avisa de pérdida de datos** por el `@unique` de `discordVerificationToken` («There might be
+data loss…»). El aviso es genérico: la columna nace vacía (todo `NULL`), así que no hay duplicados ni
+nada que perder. Tras comprobarlo, se aplica con `npm run db:push -- --accept-data-loss`.
 
 Si el `db push` falla por unicidad en `discordUsername`, dos filas comparten nombre sin discriminador
 (`pepito#1234` y `pepito#5678`). Hay que decidir cuál se queda con el `@usuario` y corregir o vaciar
@@ -1394,6 +1399,7 @@ type PublicRead<T> = { status: "ok"; data: T } | { status: "degraded"; data: nul
 En orden, sobre la base de datos que usa el Worker:
 
 ```bash
+npm run db:check                 # dice si a la base le falta el schema; sale con 2 si hay deriva
 npm run db:push                  # sincroniza el schema
 npm run db:security -- --check   # comprueba RLS; aplica con db:security si sale mal
 npm run countries:seed           # publica la lista de países del formulario
@@ -1403,6 +1409,11 @@ npm run backfill:objective-leads # reconstruye el historial de liderazgos de la 
 npm run db:cron                  # programa el reloj cada 10 minutos
 ```
 
+- `db:check` es de solo lectura y va antes del `db:push`: **0** = la base tiene el schema, **2** = le
+  falta, **1** = error. **Cualquier** cambio de esquema obliga al `db:push`, también una **columna
+  nueva** y no solo una tabla nueva: Prisma pide todas las columnas del modelo y la ausente tumba toda
+  lectura y escritura de esa tabla. El porqué está en
+  [`MODELO-DATOS.md`](./MODELO-DATOS.md#cambios-de-esquema).
 - `db:security` es obligatorio **después de cada `db:push` que añada tablas**: una tabla nueva nace
   accesible para los roles de cliente. Si el `--check` falla, `npm run db:security`.
 - `countries:seed` siembra `Setting["registration.countries"]` desde `paises.txt`; sin ella el

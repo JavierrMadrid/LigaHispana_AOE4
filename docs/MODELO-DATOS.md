@@ -563,9 +563,21 @@ hace falta servir una tabla, sería con una vista `security_invoker = true` y un
 
 ## Cambios de esquema
 
+**Todo** cambio de esquema —una columna incluida, no solo una tabla— se aplica con `db:push` en
+**desarrollo y en producción**. Son dos bases distintas y ninguna hereda el esquema de la otra.
+
 - La fuente es `prisma/schema.prisma`. Un cambio va ahí, luego `npm run generate` y `npm run db:push`.
-- **Nada de `prisma migrate`**: Supabase no permite *shadow database*. El script `migrate` del
-  `package.json` no es válido en este proyecto.
+- `npm run db:check` dice si una base está al día: **0** = al día, **2** = le falta el schema, **1** =
+  error. Compara contra el `DATABASE_URL` del entorno y no escribe nada. No va en CI ni en el build: el
+  workflow y las Workers Builds no definen esa variable en *build* a propósito.
+- **Por qué una columna ausente no es un detalle**: Prisma pide `SELECT` de **todas** las columnas del
+  modelo, así que la que falta tumba cualquier lectura o escritura de esa tabla (`The column Player.X
+  does not exist in the current database`), aunque las consultas públicas usen `select` explícito y
+  sigan funcionando. El motivo real solo está en el log del servidor, con el prefijo `[db]`; la
+  interfaz dice "La base de datos no ha respondido" y despista hacia un corte transitorio.
+- **Nada de `prisma migrate dev`**: el script `migrate` del `package.json` no es válido en este
+  proyecto, porque Supabase no permite *shadow database*. `migrate diff` (lo que ejecuta `db:check`)
+  sí: solo compara y no abre shadow database.
 - La base es la de **producción y no hay *staging*`. Nada de `--accept-data-loss`: si `db push`
   avisa de pérdida, hay que mirarlo.
 - **Después de cada `db:push` que añada tablas**: `npm run db:security -- --check` (una tabla nueva
