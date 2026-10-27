@@ -764,6 +764,16 @@ export function objectiveKind(id: string): ObjectiveKind | null {
 }
 
 /**
+ * ¿El objetivo se puede cobrar más de una vez por el mismo jugador?
+ *
+ * Hoy solo `victorias` (una por victoria) e `imparable` (una por día). El resto
+ * de logros se cobran una vez y las competiciones las posee un único jugador.
+ */
+export function objectiveRepeatable(id: string): boolean {
+  return id === VICTORIAS_ID || id === IMPARABLE_ID;
+}
+
+/**
  * Lo que un jugador cobra por **un** objetivo: importe real y repeticiones.
  *
  * Va junto al id y no en una lista aparte porque las dos cosas definen la misma
@@ -1991,8 +2001,7 @@ export function computeObjectives(
           : definition.id === IMPARABLE_ID
             ? Math.min(beneficiary.value, points)
             : points;
-      const count =
-        definition.id === VICTORIAS_ID || definition.id === IMPARABLE_ID ? beneficiary.value : 1;
+      const count = objectiveRepeatable(definition.id) ? beneficiary.value : 1;
 
       addAward(beneficiary.player.playerId, definition.id, earned, count);
       awarded.push({ id: definition.id, playerId: beneficiary.player.playerId });
@@ -2024,8 +2033,7 @@ export function computeObjectives(
             : definition.id === IMPARABLE_ID
               ? Math.min(value.value, points)
               : points,
-        count:
-          definition.id === VICTORIAS_ID || definition.id === IMPARABLE_ID ? value.value : 1,
+        count: objectiveRepeatable(definition.id) ? value.value : 1,
       })),
       target: targetFor(definition, mapPool),
     });

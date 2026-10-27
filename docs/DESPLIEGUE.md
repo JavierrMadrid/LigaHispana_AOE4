@@ -275,6 +275,7 @@ npm run preview    # opennextjs-cloudflare build + preview local
 Antes de probar una rama (desarrollo):
 
 ```bash
+npm run db:check                 # dice si a la base le falta el schema; sale con 2 si hay deriva
 npm run db:push                  # sincroniza el schema en desarrollo
 npm run db:security -- --check   # RLS; obligatorio tras un db:push que añada tablas
 npm run countries:seed           # lista de países del formulario de inscripción
@@ -287,6 +288,10 @@ se heredan del entorno de desarrollo. `db:cron` es **solo de producción**.
 - Las actuaciones administrativas (`AdminAct` y `AdminActMatch`) son tablas nuevas: su primer
   `db:push` también exige `npm run db:security -- --check`, porque una tabla nace accesible para los
   roles de cliente. Si la comprobación falla, `npm run db:security`.
+
+- Una **columna** nueva también exige el `db:push`, no solo una tabla: Prisma pide todas las columnas
+  del modelo y la que falta tumba el panel y la sincronización. El porqué, en
+  [`MODELO-DATOS.md`](./MODELO-DATOS.md#cambios-de-esquema).
 
 - La variable de Hyperdrive en la build del trigger, o el despliegue no publica.
 - Las `NEXT_PUBLIC_*` y los secretos de servidor, en la lista de build que corresponda.
@@ -307,6 +312,7 @@ se heredan del entorno de desarrollo. `db:cron` es **solo de producción**.
 | `npm run deploy` publica un bundle que apunta a desarrollo | `.env.local` apunta al proyecto de desarrollo. Exportar las variables de producción antes del build manual o desplegar con Workers Builds. |
 | `npm run db:cron` contra desarrollo programa un reloj que llama a producción | Sin `SITE_URL`, el script usa `https://laligahispana.es`. Es un comando solo de producción. |
 | `npm run db:window` en una base vacía deja un `scoring.ruleset` sin versión y se ignoran las reglas guardadas | Pasa al crear la clave desde cero: el script solo añade `window`. Publicar primero el ruleset con `npm run score` y después fijar la ventana; o sembrar el documento completo. |
+| Panel con «No se ha podido leer la lista de jugadores» (Participantes, alertas, actuaciones) y sincronización que falla con `The column Player.X does not exist in the current database` | El esquema se desplegó sin aplicar `db:push` a esa base. Prisma pide todas las columnas del modelo aunque la web pública use `select`, así que la columna que falta tumba esa tabla; el motivo real solo está en el log, con el prefijo `[db]`. `npm run db:check` con el `DATABASE_URL` del entorno lo confirma (sale con 2) y después `npm run db:push`. |
 | El dominio nuevo no carga para algunos visitantes | Caché DNS antigua; se resuelve sola. |
 | Una variable del panel desaparece tras un despliegue | Era una variable de **texto** y el despliegue no llevaba `keep_vars`: el archivo es la fuente de verdad y las borra. Ya está activo en `wrangler.jsonc` (y los secretos nunca se borran). |
 | El panel de admin no refleja una aprobación o edición reciente (y el historial de acciones repite la misma acción) | La caché de consultas de Hyperdrive servía `SELECT` anteriores a la escritura. La configuración va **sin caché** (`caching.disabled`) a propósito. |

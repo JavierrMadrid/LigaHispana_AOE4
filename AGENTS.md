@@ -78,6 +78,7 @@ toques la documentación.
 | Schema, columnas, índices o claves de `Setting` | `docs/MODELO-DATOS.md` |
 | Despliegue, variables, dominio, build, previews, Actions | `docs/DESPLIEGUE.md` |
 | Sincronización, reloj, alertas, simulaciones, operativa | `docs/OPERACION.md` |
+| Endpoints, contrato o eventos de la API del overlay | `docs/API-OVERLAY.md` y `docs/openapi-overlay.yaml` |
 | Stack, páginas y funcionalidad visible, comandos, puesta en marcha | `README.md` |
 | Enrutado, convenciones o reglas de los propios agentes | `AGENTS.md` y `.opencode/agent/*.md` |
 
