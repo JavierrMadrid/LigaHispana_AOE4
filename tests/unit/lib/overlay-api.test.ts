@@ -6,24 +6,33 @@ import {
 } from "@/lib/objectives";
 import {
   overlayError,
+  overlayEventoObjetivo,
+  overlayEventosObjetivos,
   overlayJson,
+  overlayNeighborhood,
   overlayObjectives,
   overlayParticipants,
   overlayPreflight,
+  overlayStanding,
   readOverlayDesde,
   readOverlayProfileId,
+  type OverlayClasificacion,
+  type OverlayEventoObjetivo,
   type OverlayObjetivo,
+  type OverlayProgressEventSource,
+  type OverlayStandingSource,
 } from "@/lib/overlay-api";
+import { objectiveLookup } from "@/lib/public";
 import { DEFAULT_RULESET, type ScoringRuleset } from "@/lib/scoring";
 
 /**
  * La API del overlay, en lo que se puede comprobar sin base de datos: los parsers
  * de los parámetros, los mapeadores del contrato y la forma de las respuestas.
  *
- * Los dos lectores (`loadOverlayParticipants`, `loadOverlayObjectives`) no se
- * prueban aquí: necesitan base de datos, y los comprueba la API en marcha. Lo que
- * sí se prueba es todo lo que hay entre la consulta y el JSON, que es donde se
- * decide qué se publica.
+ * Los tres lectores (`loadOverlayParticipants`, `loadOverlayObjectives`,
+ * `loadOverlayClassification`) no se prueban aquí: necesitan base de datos, y los
+ * comprueba la API en marcha. Lo que sí se prueba es todo lo que hay entre la
+ * consulta y el JSON, que es donde se decide qué se publica.
  */
 
 const ORIGEN = "https://liga.example";
@@ -91,6 +100,13 @@ describe("readOverlayDesde", () => {
     expect(readOverlayDesde("2026-10-24T14:30:00.250Z")).toEqual({
       status: "ok",
       value: new Date("2026-10-24T14:30:00.250Z"),
+    });
+  });
+
+  it("acepta una fracción de segundo más larga que los milisegundos", () => {
+    expect(readOverlayDesde("2026-10-24T14:30:00.1234Z")).toEqual({
+      status: "ok",
+      value: new Date("2026-10-24T14:30:00.1234Z"),
     });
   });
 
@@ -239,6 +255,263 @@ describe("overlayObjectives", () => {
     expect(porId(overlayObjectives(SUBCONJUNTO, regla, 9, ORIGEN)).get("imparable")?.puntos).toBe(
       20,
     );
+  });
+});
+
+/** Un evento de progreso tal y como lo devuelve la consulta. */
+function evento(
+  objectiveId: string,
+  kind: OverlayProgressEventSource["kind"],
+  at: string,
+  values: Partial<Pick<OverlayProgressEventSource, "ownValue" | "otherValue" | "repetition">> = {},
+): OverlayProgressEventSource {
+  return {
+    objectiveId,
+    kind,
+    at: new Date(at),
+    ownValue: values.ownValue ?? 0,
+    otherValue: values.otherValue ?? null,
+    repetition: values.repetition ?? null,
+  };
+}
+
+/** Una fila de la clasificación, con lo mínimo para que sea válida. */
+function clasificacion(id: string, posicion: number): OverlayClasificacion {
+  return {
+    id,
+    posicion,
+    partidas: 0,
+    puntos: { volatiles: 0, permanentes: 0 },
+    rango: null,
+    victorias: 0,
+    derrotas: 0,
+    racha: null,
+    eventos_objetivos: {},
+  };
+}
+
+describe("overlayEventoObjetivo", () => {
+  it("CUMPLIDO: tipo cumplido, ISO con zona y sin opcionales", () => {
+    const eventoMapeado = overlayEventoObjetivo(
+      evento("imparable", "CUMPLIDO", "2026-10-24T14:30:00Z", { ownValue: 14 }),
+    );
+
+    expect(eventoMapeado).toEqual({
+      tipo: "cumplido",
+      fechahora: "2026-10-24T14:30:00.000Z",
+      progreso: { propio: 14 },
+    });
+  });
+
+  it("PROGRESADO conserva la repetición", () => {
+    const eventoMapeado = overlayEventoObjetivo(
+      evento("victorias", "PROGRESADO", "2026-10-24T14:30:00Z", {
+        ownValue: 7,
+        repetition: 7,
+      }),
+    );
+
+    expect(eventoMapeado).toEqual({
+      tipo: "progresado",
+      fechahora: "2026-10-24T14:30:00.000Z",
+      progreso: { propio: 7 },
+      repeticion: 7,
+    });
+  });
+
+  it("PERDIDO añade el valor del nuevo poseedor y no inventa repetición", () => {
+    const eventoMapeado = overlayEventoObjetivo(
+      evento("loco-por-ganar", "PERDIDO", "2026-10-24T14:30:00Z", {
+        ownValue: 8,
+        otherValue: 11,
+      }),
+    );
+
+    expect(eventoMapeado).toEqual({
+      tipo: "perdido",
+      fechahora: "2026-10-24T14:30:00.000Z",
+      progreso: { propio: 8, ajeno: 11 },
+    });
+    expect(eventoMapeado).not.toHaveProperty("repeticion");
+  });
+});
+
+describe("overlayEventosObjetivos", () => {
+  const ACTIVOS = new Set(["victorias", "imparable", "loco-por-ganar"]);
+
+  it("se queda con el evento más reciente de cada objetivo", () => {
+    const mapa = overlayEventosObjetivos(
+      [
+        evento("victorias", "PROGRESADO", "2026-10-20T10:00:00Z", {
+          ownValue: 3,
+          repetition: 3,
+        }),
+        evento("victorias", "PROGRESADO", "2026-10-24T10:00:00Z", {
+          ownValue: 5,
+          repetition: 5,
+        }),
+      ],
+      ACTIVOS,
+    );
+
+    expect(mapa.victorias).toMatchObject({ progreso: { propio: 5 }, repeticion: 5 });
+  });
+
+  it("descarta los objetivos que no están activos", () => {
+    const mapa = overlayEventosObjetivos(
+      [evento("rey-1v1", "CUMPLIDO", "2026-10-24T10:00:00Z", { ownValue: 1 })],
+      ACTIVOS,
+    );
+
+    expect(mapa).toEqual({});
+  });
+
+  it("ordena por instante aunque lleguen desordenados", () => {
+    const mapa = overlayEventosObjetivos(
+      [
+        evento("victorias", "PROGRESADO", "2026-10-24T10:00:00Z", {
+          ownValue: 5,
+          repetition: 5,
+        }),
+        evento("victorias", "PROGRESADO", "2026-10-20T10:00:00Z", {
+          ownValue: 3,
+          repetition: 3,
+        }),
+        evento("imparable", "CUMPLIDO", "2026-10-22T10:00:00Z", { ownValue: 14 }),
+      ],
+      ACTIVOS,
+    );
+
+    expect(mapa.victorias).toMatchObject({ progreso: { propio: 5 } });
+    expect(mapa.imparable).toMatchObject({ tipo: "cumplido", progreso: { propio: 14 } });
+  });
+
+  it("sin eventos, mapa vacío", () => {
+    expect(overlayEventosObjetivos([], ACTIVOS)).toEqual({});
+  });
+});
+
+describe("overlayStanding", () => {
+  const lookup = objectiveLookup(DEFAULT_RULESET);
+
+  function fila(overrides: Partial<OverlayStandingSource> = {}): OverlayStandingSource {
+    return {
+      rank: 4,
+      total: 150,
+      wins: 6,
+      matches: 8,
+      streak: -2,
+      breakdown: { objectives: { points: 100, earned: ["loco-por-ganar"] } },
+      player: { id: "player-1", profileId: 42, elo: 1273, rankLevel: "silver_1" },
+      ...overrides,
+    };
+  }
+
+  it("reparte el total entre volátiles y permanentes con el desglose de la fila", () => {
+    // `loco-por-ganar` es una competición de 50 puntos y `objectives.points` dice
+    // 100, así que los otros 50 son de logros: el reparto es el de la web.
+    expect(overlayStanding(fila(), lookup, {}).puntos).toEqual({
+      volatiles: 50,
+      permanentes: 100,
+    });
+  });
+
+  it("publica la fila con el identificador como cadena y las derrotas por resta", () => {
+    const filaMapeada = overlayStanding(fila(), lookup, {});
+
+    expect(filaMapeada).toMatchObject({
+      id: "42",
+      posicion: 4,
+      partidas: 8,
+      victorias: 6,
+      derrotas: 2,
+    });
+  });
+
+  it("resuelve la ladder a liga y subdivisión", () => {
+    expect(overlayStanding(fila(), lookup, {}).rango).toEqual({
+      puntos: 1273,
+      liga: "plata",
+      division: 1,
+    });
+  });
+
+  it("sin ELO no hay rango", () => {
+    const sinElo = fila({
+      player: { id: "player-1", profileId: 42, elo: null, rankLevel: "silver_1" },
+    });
+
+    expect(overlayStanding(sinElo, lookup, {}).rango).toBeNull();
+  });
+
+  it("sin `rankLevel` no hay rango", () => {
+    const sinLadder = fila({
+      player: { id: "player-1", profileId: 42, elo: 1273, rankLevel: null },
+    });
+
+    expect(overlayStanding(sinLadder, lookup, {}).rango).toBeNull();
+  });
+
+  it("un `rankLevel` sin subdivisión no inventa el número", () => {
+    const sinSubrango = fila({
+      player: { id: "player-1", profileId: 42, elo: 1273, rankLevel: "gold" },
+    });
+
+    expect(overlayStanding(sinSubrango, lookup, {}).rango).toBeNull();
+  });
+
+  it("conserva la racha firmada y el `null` sin partidas", () => {
+    expect(overlayStanding(fila(), lookup, {}).racha).toBe(-2);
+    expect(overlayStanding(fila({ streak: null }), lookup, {}).racha).toBeNull();
+  });
+
+  it("pasa el mapa de eventos tal cual", () => {
+    const eventos: Record<string, OverlayEventoObjetivo> = {
+      imparable: {
+        tipo: "cumplido",
+        fechahora: "2026-10-24T14:30:00.000Z",
+        progreso: { propio: 14 },
+      },
+    };
+
+    expect(overlayStanding(fila(), lookup, eventos).eventos_objetivos).toBe(eventos);
+  });
+});
+
+describe("overlayNeighborhood", () => {
+  const pedido = clasificacion("pedido", 1);
+  const primero = clasificacion("primero", 1);
+  const segundo = clasificacion("segundo", 2);
+  const tercero = clasificacion("tercero", 3);
+
+  it("sin nadie por delante, el participante y los dos siguientes", () => {
+    expect(overlayNeighborhood(pedido, [], [segundo, tercero]).map((fila) => fila.id)).toEqual([
+      "pedido",
+      "segundo",
+      "tercero",
+    ]);
+  });
+
+  it("sin nadie por detrás, los dos anteriores y el participante, en orden de posición", () => {
+    // `above` llega de más cercano a más lejano, así que el recorte se invierte para
+    // publicar de la posición menor a la mayor.
+    expect(overlayNeighborhood(pedido, [primero, segundo], []).map((fila) => fila.id)).toEqual([
+      "segundo",
+      "primero",
+      "pedido",
+    ]);
+  });
+
+  it("con los dos lados, solo el inmediato de cada uno", () => {
+    expect(
+      overlayNeighborhood(pedido, [primero, segundo], [tercero, clasificacion("cuarto", 4)]).map(
+        (fila) => fila.id,
+      ),
+    ).toEqual(["primero", "pedido", "tercero"]);
+  });
+
+  it("solo el participante si no hay vecinos", () => {
+    expect(overlayNeighborhood(pedido, [], [])).toEqual([pedido]);
   });
 });
 
