@@ -256,6 +256,11 @@ clasificación y después de calcular los objetivos, con el mismo cerrojo:
   el worker podría saltarse el recálculo y el feed no se sembraría hasta la siguiente partida.
 - **La API del overlay lee `ObjectiveProgressEvent`**: polling recomendado de 30 s. El dato cambia al
   ritmo del recálculo (10 min), así que pedir más a menudo no adelanta nada.
+- **El feed se escribe en cada recálculo**: los logros y las competiciones aparecen **en vivo**, con
+  el retraso del pase (10 min), no solo al cierre de la edición. El contrato publicado está en
+  [`API-OVERLAY.md`](./API-OVERLAY.md).
+- **Una bajada de progreso** (revertir una partida) actualiza el estado pero no emite evento: el feed
+  cuenta avances y `PERDIDO` es solo de competiciones. La siguiente subida vuelve a anotarse.
 - **Despliegue**: el esquema necesita `db:push` y, después, `npm run db:security -- --check` (las dos
   tablas ya están en la lista del script).
 
@@ -1388,6 +1393,18 @@ y claves de `Setting`) y restaura todo, incluso si una comprobación falla. Cubr
 caducada recheckada, ventana reciente no recheckada, `0` que la desactiva y prioridad del pendiente
 con `BACKFILL_MAX_PLAYERS=1`. Solo se niega a arrancar si alguno de esos
 `profileId` ya existía de una ejecución anterior.
+
+### API del overlay
+
+```bash
+npm run verify:overlay-api   # solo lectura, contra DATABASE_URL
+```
+
+Comprueba que los lectores de `src/lib/overlay-api.ts` —los mismos que sirven `/api/v0`— coinciden
+con la base: participantes aprobados y su orden, catálogo activo con puntos y `max_progreso`, vecinos
+de la clasificación, reparto de puntos, `rango`, `racha`, el feed de `ObjectiveProgressEvent` con y
+sin `desde`, y la coherencia entre `ObjectiveProgressState` y su último evento. **No escribe ni borra
+nada.**
 
 ### Medidas de AoE4World
 

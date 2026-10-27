@@ -307,6 +307,9 @@ Un **cambio de progreso** de un objetivo: cuándo un jugador lo cumplió (`CUMPL
 feed que lee la API del overlay (`GET /api/v0/clasificacion`), que publica por objetivo el `tipo`, la
 `fechahora` y el `progreso { propio, ajeno? }` de cada evento. **No alimenta la clasificación.**
 
+El contrato que lo publica —endpoints, campos, tipos y errores— está en
+[`API-OVERLAY.md`](./API-OVERLAY.md).
+
 | Campo | Tipo | Nota |
 |---|---|---|
 | `id` | `String` (cuid) | |
