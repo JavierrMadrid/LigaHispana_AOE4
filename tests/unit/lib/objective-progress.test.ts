@@ -15,6 +15,7 @@ import {
   objectiveMaxProgress,
   objectiveProgressKey,
   optionMaxProgress,
+  planObjectiveProgressStateWrites,
   type ObjectiveProgressStateRow,
 } from "@/lib/objective-progress";
 
@@ -502,5 +503,119 @@ describe("diffObjectiveProgress: la diferencia entre el estado guardado y el act
       `a:${VICTORIAS}`,
       `b:${IMPARABLE}`,
     ]);
+  });
+});
+
+describe("planObjectiveProgressStateWrites: qué filas de estado hay que escribir", () => {
+  it("sin estado anterior, todo son altas", () => {
+    const actual = estado(fila(LOCO, "a", 30, true), fila(LIDER_JAPANESE, "b", 2, false));
+
+    const plan = planObjectiveProgressStateWrites(new Map(), actual);
+
+    expect(plan.create.map((f) => `${f.playerId}:${f.objectiveId}`)).toEqual([
+      `a:${LOCO}`,
+      `b:${LIDER_JAPANESE}`,
+    ]);
+    expect(plan.update).toEqual([]);
+    expect(plan.remove).toEqual([]);
+  });
+
+  it("un estado idéntico no escribe nada", () => {
+    const previo = estado(fila(LOCO, "a", 30, true), fila(LIDER_JAPANESE, "b", 2, false));
+    const actual = estado(fila(LOCO, "a", 30, true), fila(LIDER_JAPANESE, "b", 2, false));
+
+    expect(planObjectiveProgressStateWrites(previo, actual)).toEqual({
+      create: [],
+      update: [],
+      remove: [],
+    });
+  });
+
+  it("un valor distinto es una actualización con los valores actuales", () => {
+    const previo = estado(fila(LIDER_JAPANESE, "a", 2, false));
+    const actual = estado(fila(LIDER_JAPANESE, "a", 3, false));
+
+    const plan = planObjectiveProgressStateWrites(previo, actual);
+
+    expect(plan.create).toEqual([]);
+    expect(plan.update).toEqual([fila(LIDER_JAPANESE, "a", 3, false)]);
+    expect(plan.remove).toEqual([]);
+  });
+
+  it("un cambio de `completed` es una actualización", () => {
+    const previo = estado(fila(LOCO, "a", 30, false));
+    const actual = estado(fila(LOCO, "a", 30, true));
+
+    expect(planObjectiveProgressStateWrites(previo, actual).update).toEqual([
+      fila(LOCO, "a", 30, true),
+    ]);
+  });
+
+  it("un cambio de `repetition` es una actualización", () => {
+    const previo = estado(fila(IMPARABLE, "a", 14, true, 14));
+    const actual = estado(fila(IMPARABLE, "a", 14, true, 16));
+
+    expect(planObjectiveProgressStateWrites(previo, actual).update).toEqual([
+      fila(IMPARABLE, "a", 14, true, 16),
+    ]);
+  });
+
+  it("un estado que ya no está es una baja con los valores anteriores", () => {
+    const previo = estado(fila(LOCO, "a", 30, true));
+
+    const plan = planObjectiveProgressStateWrites(previo, new Map());
+
+    expect(plan.create).toEqual([]);
+    expect(plan.update).toEqual([]);
+    expect(plan.remove).toEqual([fila(LOCO, "a", 30, true)]);
+  });
+
+  it("una pasada que mezcla altas, cambios y bajas reparte las tres listas", () => {
+    const previo = estado(
+      fila(LOCO, "a", 30, true),
+      fila(LIDER_JAPANESE, "a", 2, false),
+      fila(IMPARABLE, "a", 10, true, 10),
+    );
+    const actual = estado(
+      fila(LOCO, "a", 30, true),
+      fila(LIDER_JAPANESE, "a", 3, false),
+      fila(VICTORIAS, "a", 5, true, 5),
+    );
+
+    const plan = planObjectiveProgressStateWrites(previo, actual);
+
+    expect(plan.create).toEqual([fila(VICTORIAS, "a", 5, true, 5)]);
+    expect(plan.update).toEqual([fila(LIDER_JAPANESE, "a", 3, false)]);
+    expect(plan.remove).toEqual([fila(IMPARABLE, "a", 10, true, 10)]);
+  });
+
+  it("las tres listas salen ordenadas por jugador y objetivo", () => {
+    const previo = estado(
+      fila(VICTORIAS, "b", 1, false),
+      fila(IMPARABLE, "b", 1, false),
+      fila(LIDER_JAPANESE, "a", 1, false),
+      fila(VICTORIAS, "a", 1, false),
+      fila(IMPARABLE, "a", 1, false),
+    );
+    const actual = estado(
+      fila(VICTORIAS, "b", 2, false),
+      fila(IMPARABLE, "b", 2, false),
+      fila(LIDER_JAPANESE, "a", 2, false),
+      fila(LOCO, "b", 1, false),
+      fila(LOCO, "a", 1, false),
+    );
+
+    const plan = planObjectiveProgressStateWrites(previo, actual);
+
+    const claves = (filas: ObjectiveProgressStateRow[]): string[] =>
+      filas.map((f) => `${f.playerId}:${f.objectiveId}`);
+
+    expect(claves(plan.create)).toEqual([`a:${LOCO}`, `b:${LOCO}`]);
+    expect(claves(plan.update)).toEqual([
+      `a:${LIDER_JAPANESE}`,
+      `b:${IMPARABLE}`,
+      `b:${VICTORIAS}`,
+    ]);
+    expect(claves(plan.remove)).toEqual([`a:${IMPARABLE}`, `a:${VICTORIAS}`]);
   });
 });

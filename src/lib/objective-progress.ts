@@ -385,6 +385,75 @@ export function diffObjectiveProgress(
   );
 }
 
+/** Qué hay que hacer con `ObjectiveProgressState` para pasar del guardado al actual. */
+export type ObjectiveProgressStatePlan = {
+  /** Filas que no estaban: la primera vez que se ve ese jugador en ese objetivo. */
+  create: ObjectiveProgressStateRow[];
+  /** Filas que ya estaban pero han cambiado; los valores son los **actuales**. */
+  update: ObjectiveProgressStateRow[];
+  /** Filas que ya no corresponden; los valores son los **anteriores**. */
+  remove: ObjectiveProgressStateRow[];
+};
+
+/**
+ * La diferencia mínima que hay que escribir en `ObjectiveProgressState`.
+ *
+ * El estado es la **memoria de trabajo** de la reconciliación, no el dato publicado:
+ * el feed que lee el overlay es `ObjectiveProgressEvent`. Por eso aquí no se decide
+ * nada del torneo, solo qué filas hay que dejar como están y cuáles no, de modo que
+ * una pasada sin cambios devuelve los tres arrays vacíos y no ejecuta ni una
+ * escritura (el worker corre cada 10 minutos).
+ *
+ * Un cambio de `value`, de `completed` o de `repetition` obliga a reescribir la fila:
+ * los tres son el estado que la siguiente pasada compara, y dejar uno atrás haría
+ * que el mismo cambio se anotara dos veces en el feed. Los arrays salen ordenados por
+ * jugador y objetivo para que el plan (y los tests) no dependan del orden en que el
+ * mapa devuelva las claves.
+ */
+export function planObjectiveProgressStateWrites(
+  previous: ReadonlyMap<string, ObjectiveProgressStateRow>,
+  current: ReadonlyMap<string, ObjectiveProgressStateRow>,
+): ObjectiveProgressStatePlan {
+  const create: ObjectiveProgressStateRow[] = [];
+  const update: ObjectiveProgressStateRow[] = [];
+  const remove: ObjectiveProgressStateRow[] = [];
+
+  for (const [clave, ahora] of current) {
+    const antes = previous.get(clave);
+
+    if (antes === undefined) {
+      create.push(ahora);
+      continue;
+    }
+
+    if (
+      antes.value !== ahora.value ||
+      antes.completed !== ahora.completed ||
+      antes.repetition !== ahora.repetition
+    ) {
+      update.push(ahora);
+    }
+  }
+
+  for (const [clave, antes] of previous) {
+    if (!current.has(clave)) {
+      remove.push(antes);
+    }
+  }
+
+  const porJugadorYObjetivo = (
+    a: ObjectiveProgressStateRow,
+    b: ObjectiveProgressStateRow,
+  ): number =>
+    compararTexto(a.playerId, b.playerId) || compararTexto(a.objectiveId, b.objectiveId);
+
+  return {
+    create: create.sort(porJugadorYObjetivo),
+    update: update.sort(porJugadorYObjetivo),
+    remove: remove.sort(porJugadorYObjetivo),
+  };
+}
+
 /** Comparación lexicográfica de dos cadenas, sin depender del locale. */
 function compararTexto(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
