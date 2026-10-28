@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isDiscordVerificationConfigured,
+  missingDiscordVerificationEnv,
+  type DiscordConfig,
+} from "@/lib/discord/env";
+import {
+  VERIFICATION_ENV_NAMES,
+  missingVerificationEnv,
   parseVerificationCustomId,
   planApproval,
   resolveVerificationClick,
@@ -13,6 +20,7 @@ import {
   verificationLinksDiscord,
   verificationResolvedText,
   verificationStaleText,
+  type VerificationConfig,
   type VerificationDecision,
   type VerificationPlayerStatus,
   type VerificationState,
@@ -30,6 +38,117 @@ import {
 const PENDIENTE: VerificationState = { requestedAt: new Date("2026-10-01T10:00:00Z"), verifiedAt: null };
 const VERIFICADA: VerificationState = { requestedAt: new Date("2026-10-01T10:00:00Z"), verifiedAt: new Date("2026-10-01T10:05:00Z") };
 const SIN_PUERTA: VerificationState = { requestedAt: null, verifiedAt: null };
+
+/** Las cuatro credenciales puestas, que es lo que hay en producción. */
+const CONFIG_COMPLETA: VerificationConfig = {
+  botToken: "token",
+  guildId: "servidor",
+  clientId: "aplicacion",
+  publicKey: "clave",
+};
+
+/** La misma configuración con lo que se quiera cambiar. */
+function conConfig(overrides: Partial<VerificationConfig> = {}): VerificationConfig {
+  return { ...CONFIG_COMPLETA, ...overrides };
+}
+
+/**
+ * La configuración entera de Discord, que es lo que leen el guard y el aviso.
+ *
+ * Se pasa siempre explícita para no tocar ni los bindings del Worker ni `process.env`:
+ * el test sigue siendo puro, y lo que se comprueba es la decisión, no la lectura.
+ */
+const CONFIG_DISCORD: DiscordConfig = {
+  botToken: "token",
+  guildId: "servidor",
+  announceChannelId: null,
+  participantRoleId: null,
+  clientId: "aplicacion",
+  clientSecret: "secreto",
+  redirectUri: null,
+  inviteUrl: null,
+  linkSecret: "firma",
+  publicKey: "clave",
+  apiBase: "https://discord.com/api/v10",
+  timeoutMs: 8_000,
+  userAgent: "test",
+  maxChecksPerRun: 10,
+  roleMaxPerRun: 10,
+  rosterMaxPages: 20,
+  rosterTtlHours: 12,
+};
+
+describe("credenciales que faltan para verificar el alta", () => {
+  it("con las cuatro puestas no falta ninguna", () => {
+    expect(missingVerificationEnv(CONFIG_COMPLETA)).toEqual([]);
+  });
+
+  it("nota cada una por separado, por su nombre de variable", () => {
+    const casos: [string, VerificationConfig][] = [
+      ["DISCORD_BOT_TOKEN", conConfig({ botToken: null })],
+      ["DISCORD_GUILD_ID", conConfig({ guildId: null })],
+      ["DISCORD_CLIENT_ID", conConfig({ clientId: null })],
+      ["DISCORD_PUBLIC_KEY", conConfig({ publicKey: null })],
+    ];
+
+    for (const [nombre, config] of casos) {
+      expect(missingVerificationEnv(config)).toEqual([nombre]);
+    }
+  });
+
+  it("con varias ausentes las devuelve en el orden de la lista", () => {
+    // Lo que se fija es el orden, no el conjunto: el aviso del panel se pinta tal
+    // cual, y un orden que cambie con la configuración no se puede leer.
+    expect(
+      missingVerificationEnv(
+        conConfig({ botToken: null, clientId: null, publicKey: null }),
+      ),
+    ).toEqual(["DISCORD_BOT_TOKEN", "DISCORD_CLIENT_ID", "DISCORD_PUBLIC_KEY"]);
+  });
+
+  it("sin ninguna, están las cuatro y en el mismo orden que la constante", () => {
+    const faltan = missingVerificationEnv(
+      conConfig({ botToken: null, guildId: null, clientId: null, publicKey: null }),
+    );
+
+    expect(faltan).toEqual([...VERIFICATION_ENV_NAMES]);
+    expect(faltan).toEqual([
+      "DISCORD_BOT_TOKEN",
+      "DISCORD_GUILD_ID",
+      "DISCORD_CLIENT_ID",
+      "DISCORD_PUBLIC_KEY",
+    ]);
+  });
+
+  it("un valor vacío no cuenta como ausente: eso lo decide la lectura del entorno", () => {
+    // `null` es lo que devuelve `readString()` cuando la variable no está o está en
+    // blanco. Tratar aquí `""` como ausente daría al guard de `env.ts` una condición
+    // distinta de la del aviso del panel.
+    expect(missingVerificationEnv(conConfig({ botToken: "" }))).toEqual([]);
+  });
+});
+
+describe("el guard de env y el aviso del panel", () => {
+  it("dicen lo mismo sobre la misma configuración", () => {
+    // La coherencia no es cosmética: si el guard aprobara y el aviso callara, el alta
+    // se aprobaría sin privado sin que nadie se entere. Se prueban las dos caras de
+    // cada credencial, que es donde pueden divergir.
+    const configuraciones: DiscordConfig[] = [
+      CONFIG_DISCORD,
+      { ...CONFIG_DISCORD, botToken: null },
+      { ...CONFIG_DISCORD, guildId: null },
+      { ...CONFIG_DISCORD, clientId: null },
+      { ...CONFIG_DISCORD, publicKey: null },
+    ];
+
+    for (const config of configuraciones) {
+      const faltan = missingDiscordVerificationEnv(config);
+
+      expect(missingVerificationEnv(config)).toEqual(faltan);
+      expect(isDiscordVerificationConfigured(config)).toBe(faltan.length === 0);
+    }
+  });
+});
 
 describe("custom_id de los botones", () => {
   it("el sí y el no se distinguen en el prefijo", () => {

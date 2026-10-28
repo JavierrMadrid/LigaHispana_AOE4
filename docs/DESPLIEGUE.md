@@ -33,7 +33,7 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
 | Custom Domain (Cloudflare) | `laligahispana.es` apuntando al Worker. |
 | Supabase Postgres | Base de datos. |
 | Supabase Auth | Cuentas del panel. El **Site URL** y las **plantillas de correo** (Authentication → URL Configuration / Email Templates) deciden a dónde llevan los correos de invitación y recuperación. |
-| Supabase Cron (`pg_cron` + `pg_net`) | Reloj del torneo: `POST /api/sync` cada 10 minutos. |
+| Supabase Cron (`pg_cron` + `pg_net`) | Reloj del torneo: `POST /api/sync` cada minuto; el candado deja una pasada cada 1-3 minutos según el coste de la anterior. |
 
 ## Canales de despliegue
 
@@ -66,6 +66,10 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
   secretos de desarrollo (`SUPABASE_SERVICE_ROLE_KEY`, `SUPERADMIN_EMAIL`, `RATE_LIMIT_SALT`). No
   hereda los secretos del Worker de producción. Sin `CRON_SECRET`, `DISCORD_*`, `YOUTUBE_API_KEY` ni
   `TURNSTILE_SECRET_KEY` de producción: degrada sin ellos.
+- Un cambio en **Previews Base** (variable o secreto) solo se aplica a las Previews **nuevas**: las
+  que ya existen conservan lo que tenían hasta que se borran y se vuelven a crear, o hasta que se fija
+  el valor en esa Preview con `npx wrangler preview secret put NOMBRE --name <preview>`. Si una feature
+  depende de una variable recién añadida, hay que recrear la Preview o fijar el valor en ella.
 - Las `NEXT_PUBLIC_*` se compilan dentro del bundle. Cambiarlas exige un build nuevo, y los Previews
   ya existentes **no se actualizan solos**: hay que redesplegarlos o borrarlos.
 - La build de *Previews Base* comprueba que `previews.hyperdrive` apunte al proyecto de desarrollo
@@ -154,6 +158,10 @@ La tabla siguiente es la de **producción**:
   interacciones del botón del privado de verificación del alta; sin ella esa confirmación se apaga y el
   endpoint `/api/discord/interactions` contesta `503`. El resto de la configuración del bot está en
   [`OPERACION.md`](./OPERACION.md#discord).
+- `DISCORD_PUBLIC_KEY` es de **texto** y su ausencia **no da ningún error de arranque**: el Worker
+  arranca, el alta se aprueba y nadie recibe el privado. Por eso no basta con mirar que el Worker
+  esté sano: se comprueba en la configuración del Worker, y el panel de participantes lo avisa con
+  los nombres de las variables que faltan (`missingDiscordVerificationEnv()`).
 - Sin la variable de Hyperdrive en build, el `next build` termina bien y el `npx wrangler deploy` muere con
   un mensaje engañoso que habla de *developing locally*; mientras tanto, producción se queda en la versión anterior.
 

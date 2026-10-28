@@ -2,6 +2,7 @@ import "server-only";
 
 import { Prisma } from "@/generated/prisma/client";
 import { db } from "@/lib/db";
+import { logDatabaseFailure } from "@/lib/db-errors";
 import { isRecord } from "@/lib/json";
 import {
   MAP_POOL_KEY,
@@ -60,6 +61,10 @@ import {
  *
  * Clave que introduce el refresco del pool desde AoE4World:
  * - `scoring.mapPoolSync`: cuándo se escribió el pool y qué metadatos publicó AoE4World.
+ *
+ * Clave que introduce la cadencia del estado de directo:
+ * - `streams.lastRun`: cuándo se comprobó por última vez YouTube/Kick, para que ese
+ *   paso no siga el ritmo del sync de partidas (1-3 min) y no agote la cuota.
  */
 
 /** Cuántos `gameId` de partidas abandonadas se guardan como rastro. */
@@ -769,6 +774,66 @@ export async function readSyncRunTrace(): Promise<SyncRunTrace | null> {
   const setting = await db.setting.findUnique({ where: { key: SYNC_LAST_RUN_KEY } });
 
   return setting === null ? null : readSyncRunTraceValue(setting.value);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Estado de directo (YouTube/Kick)                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Cuándo se comprobó por última vez el estado de directo.
+ *
+ * No es un rastro de diagnóstico como `sync.lastRun`: es la memoria que separa la
+ * cadencia del sync (1-3 min) de la de las plataformas de vídeo. YouTube cobra la
+ * cuota por llamada y repetir las comprobaciones en cada pasada agotaría el fondo
+ * diario; con esta marca el paso se ejecuta como mucho cada
+ * `STREAMS_MIN_INTERVAL_MINUTES` (ver `src/lib/streams/cadence.ts`).
+ */
+export const STREAMS_LAST_RUN_KEY = "streams.lastRun";
+
+/**
+ * La última comprobación de directo, o `null` si no hay o no se entiende.
+ *
+ * Un valor ilegible se trata como "nunca": la comprobación se repite y la marca se
+ * reescribe. Es lo que evita que un documento roto deje los directos congelados.
+ */
+export async function readStreamsLastRun(): Promise<Date | null> {
+  try {
+    const setting = await db.setting.findUnique({ where: { key: STREAMS_LAST_RUN_KEY } });
+
+    if (setting === null || typeof setting.value !== "string") {
+      return null;
+    }
+
+    const at = new Date(setting.value);
+
+    return Number.isFinite(at.getTime()) ? at : null;
+  } catch (error) {
+    logDatabaseFailure("settings/streams.lastRun", error);
+
+    return null;
+  }
+}
+
+/**
+ * Deja constancia de la comprobación de directo que acaba de terminar.
+ *
+ * **Nunca lanza**: un fallo al guardar la marca solo hace que la comprobación se
+ * repita en la siguiente pasada; no puede tumbar un sync que ya ha hecho su trabajo.
+ */
+export async function writeStreamsLastRun(
+  now: Date,
+  client: SettingWriter = db,
+): Promise<void> {
+  try {
+    await client.setting.upsert({
+      where: { key: STREAMS_LAST_RUN_KEY },
+      create: { key: STREAMS_LAST_RUN_KEY, value: now.toISOString() },
+      update: { value: now.toISOString() },
+    });
+  } catch (error) {
+    logDatabaseFailure("settings/streams.lastRun/escribir", error);
+  }
 }
 
 /**

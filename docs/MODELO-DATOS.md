@@ -204,12 +204,12 @@ de puntos están siempre presentes en una fila nueva, con ceros si no aplican.
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
   "objectives": {
-    "points": 458,
+    "points": 283,
     "earned": ["victorias", "loco-por-ganar", "rey-1v1"],
     "awards": {
       "victorias": { "points": 168, "count": 84 },
-      "loco-por-ganar": { "points": 50, "count": 1 },
-      "rey-1v1": { "points": 240, "count": 1 }
+      "loco-por-ganar": { "points": 25, "count": 1 },
+      "rey-1v1": { "points": 90, "count": 1 }
     }
   },
   "events": {
@@ -541,6 +541,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 3) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `sync.gamesCursor` | Cursor global de partidas: `updatedAt` (el `updated_since` de la siguiente pasada), `seededAt`, `seededFrom`, la racha de lotes truncados y el mejor `backfillPending` visto. | Worker (`src/lib/aoe4world/sync.ts`), con `writeGamesCursor()` |
+| `streams.lastRun` | Cuándo se comprobó por última vez el estado de directo de YouTube/Kick, en ISO-8601 UTC. Separa el reloj del paso (10 min) del de las partidas (1-3 min) para no gastar la cuota de YouTube. | Worker (`src/lib/aoe4world/sync.ts`), con `writeStreamsLastRun()` |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
 | `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |

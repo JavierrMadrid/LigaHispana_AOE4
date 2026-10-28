@@ -1217,14 +1217,14 @@ async function checkObjectiveCatalogue(): Promise<void> {
       porGrupo.set(definition.group, (porGrupo.get(definition.group) ?? 0) + definition.points);
     }
 
-    assert.equal(porGrupo.get("actividad"), 64, "Actividad");
-    assert.equal(porGrupo.get("racha"), 238, "Racha");
-    assert.equal(porGrupo.get("hazanas"), 165, "Hazañas");
-    assert.equal(porGrupo.get("formato"), 960, "Formatos");
-    assert.equal(porGrupo.get("civilizacion"), 3294, "Civilizaciones");
+    assert.equal(porGrupo.get("actividad"), 39, "Actividad");
+    assert.equal(porGrupo.get("racha"), 138, "Racha");
+    assert.equal(porGrupo.get("hazanas"), 119, "Hazañas");
+    assert.equal(porGrupo.get("formato"), 360, "Formatos");
+    assert.equal(porGrupo.get("civilizacion"), 2098, "Civilizaciones");
     assert.equal(
       [...porGrupo.values()].reduce((total, puntos) => total + puntos, 0),
-      4721,
+      2754,
       "Total de puntos (sin el objetivo de victorias, que no es un premio fijo)",
     );
   });

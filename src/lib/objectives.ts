@@ -384,14 +384,19 @@ export const FORMAT_IDS = ["1v1", "2v2", "3v3", "4v4"] as const;
 export type FormatId = (typeof FORMAT_IDS)[number];
 
 /** Puntos de un `rey-*`, los mismos para los cuatro formatos. */
-const REY_POINTS = 240;
+const REY_POINTS = 90;
 
 /** Puntos de un `masterizando-<civ>`. */
-const MASTERIZANDO_POINTS = 120;
+const MASTERIZANDO_POINTS = 75;
 
-/** Puntos de un `lider-<civ>` y de un `acolito-<civ>`. */
-const LIDER_POINTS = 12;
-const ACOLITO_POINTS = 6;
+/** Puntos de un `lider-<civ>`. */
+const LIDER_POINTS = 9;
+
+/**
+ * Puntos de un `acolito-<civ>`. La hoja de la organización dice 4,5 y se redondea al
+ * entero normal porque `PlayerScore.total` es `Int` y el panel solo admite enteros.
+ */
+const ACOLITO_POINTS = 5;
 
 /** Ids de familia y de los logros globales. */
 export const POLIFACETICO_ID = "polifacetico";
@@ -472,7 +477,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Loco por ganar",
     description: `El jugador con más partidas clasificatorias jugadas en el torneo. ${TIE_BREAK}`,
     metric: "partidas",
-    points: 50,
+    points: 25,
     parent: null,
     target: null,
   },
@@ -520,7 +525,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Bienhadado",
     description: `La racha de victorias seguidas más larga del torneo. ${TIE_BREAK}`,
     metric: "racha",
-    points: 200,
+    points: 100,
     parent: null,
     target: null,
   },
@@ -578,7 +583,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Avance relámpago: Feudal",
     description: `Llega a la Edad Feudal antes de ${FAST_FEUDAL_SECONDS / 60} minutos en una partida clasificatoria.`,
     metric: "partidas",
-    points: 4,
+    points: 3,
     parent: null,
     target: HAZANA_MATCHES,
   },
@@ -589,7 +594,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Avance relámpago: Castillos",
     description: `Llega a la Edad de los Castillos antes de ${FAST_CASTLE_SECONDS / 60} minutos en una partida clasificatoria.`,
     metric: "partidas",
-    points: 8,
+    points: 6,
     parent: null,
     target: HAZANA_MATCHES,
   },
@@ -600,7 +605,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Avance relámpago: Imperial",
     description: `Llega a la Edad Imperial antes de ${FAST_IMPERIAL_SECONDS / 60} minutos en una partida clasificatoria.`,
     metric: "partidas",
-    points: 12,
+    points: 9,
     parent: null,
     target: HAZANA_MATCHES,
   },
@@ -622,7 +627,8 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Por tierra y agua",
     description: `Juega al menos ${MATCHES_PER_MAP} partidas en cada mapa del pool activo.`,
     metric: "mapas",
-    points: 81,
+    // 40,5 en la hoja de la organización: entero porque `PlayerScore.total` es `Int`.
+    points: 41,
     parent: null,
     // El umbral es el tamaño del pool activo, que solo se conoce al calcular.
     target: null,
@@ -656,7 +662,8 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Polifacético",
     description: `Gana al menos ${WINS_PER_CIV} partidas con cada una de las ${CIVILIZATIONS.length} civilizaciones.`,
     metric: "civilizaciones",
-    points: 96,
+    // 40,5 en la hoja de la organización: entero porque `PlayerScore.total` es `Int`.
+    points: 41,
     parent: null,
     target: CIVILIZATION_IDS.length,
   },
@@ -678,7 +685,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Jugón",
     description: `Juega al menos ${MATCHES_PER_CIV} partidas con cada una de las ${CIVILIZATIONS.length} civilizaciones.`,
     metric: "civilizaciones",
-    points: 24,
+    points: 10,
     parent: null,
     target: CIVILIZATION_IDS.length,
   },

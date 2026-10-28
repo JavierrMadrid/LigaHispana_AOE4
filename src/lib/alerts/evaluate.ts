@@ -47,7 +47,7 @@ import {
  * **No sale a la red.** Todo sale de `Match` y de su `rawJson`, con la única
  * excepción de los cortes de división, que no se derivan aquí sino que se leen de
  * `Setting` (ver `derive-cutoffs.ts`): derivarlos son del orden de 130 llamadas
- * por familia de ladder, y esto corre cada 10 minutos. Esos cortes no son para
+ * por familia de ladder, y esto corre en cada pasada del sync (cada 1-3 minutos). Esos cortes no son para
  * ninguna regla de alertas, sino para el **filtro**: el motor de alertas solo
  * puede mirar las partidas que puntúan, y la condición de equipos de
  * `ranked-match.ts` es parte de lo que decide eso. Sin cortes, las partidas de
@@ -441,7 +441,7 @@ export async function evaluateAlerts(
   // **Cierre de torneo**: una única evaluación completa cuando la ventana ya ha
   // terminado, y se vuelve a hacer si la ventana cambia (por eso la marca guarda
   // la ventana y no solo una fecha). La marca va en `Setting`, así que el cron no
-  // repite la pasada entera cada 10 minutos a partir del `to`.
+  // repite la pasada entera cada 1-3 minutos a partir del `to`.
   const mark = tournamentEnded ? await readTournamentCloseMark() : null;
   const closePending =
     tournamentEnded &&
