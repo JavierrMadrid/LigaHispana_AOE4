@@ -1,5 +1,6 @@
 import "server-only";
 
+import { missingVerificationEnv } from "@/lib/discord/verification";
 import { readRuntimeEnv } from "@/lib/runtime-env";
 
 /**
@@ -30,7 +31,9 @@ import { readRuntimeEnv } from "@/lib/runtime-env";
  * de OAuth la inscripción sigue sin Discord, y sin token de bot no hay nada que
  * comprobar aunque el vínculo exista. Desde la issue 119 hay una tercera,
  * `isDiscordVerificationConfigured()`, que apaga la confirmación del alta por privado
- * cuando falta la clave pública o el `clientId`.
+ * mientras falte cualquiera de sus cuatro variables, y
+ * `missingDiscordVerificationEnv()`, que dice **cuáles** faltan para que el panel lo
+ * avise en vez de degradar en silencio.
  *
  * **En producción las dos son obligatorias** (ver `docs/OPERACION.md`), y el secreto
  * de firma es parte de la primera: sin él el vínculo no se puede habilitar, porque una
@@ -401,6 +404,11 @@ export function isDiscordCheckConfigured(
  * es la misma degradación que el resto de Discord y la que permite que el proyecto
  * arranque sin configurar nada nuevo. En producción es obligatoria (ver
  * `docs/OPERACION.md`).
+ *
+ * La lista de variables **no** se repite aquí: sale de `missingVerificationEnv()`,
+ * el mismo helper que alimenta el aviso del panel (`missingDiscordVerificationEnv()`).
+ * El tipo estrecho del predicado sí va a mano, así que si algún día cambia la lista,
+ * cambia también la firma de esta función.
  */
 export function isDiscordVerificationConfigured(
   config: DiscordConfig = getDiscordConfig(),
@@ -410,12 +418,25 @@ export function isDiscordVerificationConfigured(
   clientId: string;
   publicKey: string;
 } {
-  return (
-    config.botToken !== null &&
-    config.guildId !== null &&
-    config.clientId !== null &&
-    config.publicKey !== null
-  );
+  return missingVerificationEnv(config).length === 0;
+}
+
+/**
+ * Qué credenciales de la verificación del alta faltan, leídas del entorno.
+ *
+ * Lo usa el **panel de participantes** para avisar de que la verificación está
+ * apagada y decir cuáles hay que poner. Sin ese aviso, que falte una variable en
+ * producción solo se nota por lo que **no** pasa: el alta queda aprobada sin que
+ * nadie reciba un privado. En producción las cuatro son obligatorias (ver
+ * `docs/OPERACION.md`).
+ *
+ * Se puede llamar con una configuración ya leída (`config`) para no leer el entorno
+ * dos veces en el mismo render.
+ */
+export function missingDiscordVerificationEnv(
+  config: DiscordConfig = getDiscordConfig(),
+): string[] {
+  return missingVerificationEnv(config);
 }
 
 /**

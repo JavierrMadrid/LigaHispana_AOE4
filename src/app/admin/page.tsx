@@ -10,7 +10,7 @@ import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
 import { getAdminAccess, requireAdmin } from "@/lib/auth";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { db } from "@/lib/db";
-import { isDiscordVerificationConfigured } from "@/lib/discord/env";
+import { missingDiscordVerificationEnv } from "@/lib/discord/env";
 import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
 import { RULESET_VERSION } from "@/lib/scoring";
 import { readRegistrationOpen } from "@/lib/settings";
@@ -96,6 +96,13 @@ export default async function AdminPage() {
     readRegistrationOpen().catch(() => DEFAULT_REGISTRATION_OPEN),
   ]);
 
+  // La verificación del alta por privado se apaga sola si falta cualquiera de sus
+  // cuatro credenciales, y sin aviso eso solo se nota por lo que **no** pasa: el
+  // alta queda aprobada y la persona no recibe nada. Se lee una vez y alimenta las
+  // dos caras del mismo hecho: el aviso de arriba y la pista del campo de estado.
+  const missingVerificationEnv = missingDiscordVerificationEnv();
+  const discordVerificationEnabled = missingVerificationEnv.length === 0;
+
   // `syncHealth` es un `PublicRead`: `status` distingue "no se ha podido leer" de
   // "leído", y `data.degraded`/`data.stale` son el estado del sincronizador. Son
   // dos cosas distintas y por eso no comparten nombre.
@@ -133,6 +140,68 @@ export default async function AdminPage() {
           en la clasificación pública.
         </p>
       </section>
+
+      {/* El aviso va aquí, entre el titular y el resumen, porque es lo primero que
+          hay que leer antes de dar un alta y así entra en la primera pantalla sin
+          desplazarse. Es un estado persistente, no un suceso: no lleva `role` ni se
+          anuncia solo, y el icono acompaña al texto en vez de sustituirlo, porque
+          quien no distinga el rojo tiene que enterarse igual. Se dice la
+          consecuencia concreta —aprobar aprueba— porque el fallo real no es que
+          falte una variable, es que el alta se da por buena sin que nadie lo sepa. */}
+      {discordVerificationEnabled ? null : (
+        <section className="rounded-lg border border-danger/40 bg-danger/5 px-5 py-4">
+          <div className="flex gap-3">
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+              className="mt-0.5 size-4 shrink-0 text-danger"
+            >
+              <path
+                d="M8 2.25 1.5 13.5h13L8 2.25Z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M8 6.25v3"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+              <circle cx="8" cy="11.25" r="0.8" fill="currentColor" />
+            </svg>
+
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-danger-soft">
+                Verificación del alta por privado desactivada
+              </h2>
+              <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-muted">
+                Mientras falte, dar de alta como «Aprobado» aprueba directamente: no
+                se pide confirmación a la persona ni se envía el privado de Discord.
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-muted">
+                {missingVerificationEnv.length === 1
+                  ? "Falta esta variable:"
+                  : "Faltan estas variables:"}{" "}
+                {missingVerificationEnv.map((name) => (
+                  <code
+                    key={name}
+                    className="mr-1.5 inline-block rounded-sm border border-line bg-background px-1.5 py-0.5 font-mono text-xs text-foreground"
+                  >
+                    {name}
+                  </code>
+                ))}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                Se configuran en las variables del Worker de producción:
+                DISCORD_PUBLIC_KEY es la Public Key de la aplicación de Discord. En
+                cuanto estén puestas, este aviso desaparece.
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Resumen y sincronización, en dos tarjetas de la mitad de ancho cada una
           (`lg:grid-cols-2`): el resumen son cuatro cifras cortas y el estado es
@@ -337,7 +406,7 @@ export default async function AdminPage() {
             <PlayerForm
               countries={countries}
               disabled={!registrationOpen}
-              discordVerificationEnabled={isDiscordVerificationConfigured()}
+              discordVerificationEnabled={discordVerificationEnabled}
             />
           </div>
         </details>
