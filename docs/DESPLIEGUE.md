@@ -67,8 +67,9 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
   hereda los secretos del Worker de producción. Sin `CRON_SECRET`, `DISCORD_*`, `YOUTUBE_API_KEY` ni
   `TURNSTILE_SECRET_KEY` de producción: degrada sin ellos.
 - Un cambio en **Previews Base** (variable o secreto) solo se aplica a las Previews **nuevas**: las
-  que ya existen conservan lo que tenían hasta que se redespliegan o se borran. Si una feature depende
-  de una variable recién añadida, hay que volver a desplegar la rama para probarla.
+  que ya existen conservan lo que tenían hasta que se borran y se vuelven a crear, o hasta que se fija
+  el valor en esa Preview con `npx wrangler preview secret put NOMBRE --name <preview>`. Si una feature
+  depende de una variable recién añadida, hay que recrear la Preview o fijar el valor en ella.
 - Las `NEXT_PUBLIC_*` se compilan dentro del bundle. Cambiarlas exige un build nuevo, y los Previews
   ya existentes **no se actualizan solos**: hay que redesplegarlos o borrarlos.
 - La build de *Previews Base* comprueba que `previews.hyperdrive` apunte al proyecto de desarrollo
