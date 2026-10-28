@@ -754,6 +754,16 @@ solo, con el `@usuario` que ya se escribe.
 funcionalidad se apaga y el alta se comporta como siempre; el endpoint de interacciones contesta `503`.
 En producción es obligatoria.
 
+**El aviso del panel.** El panel de participantes comprueba la configuración con
+`missingDiscordVerificationEnv()` y, si falta alguna, muestra un aviso con los **nombres** de las que
+faltan (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_CLIENT_ID`, `DISCORD_PUBLIC_KEY`, en ese
+orden). Mientras se vea ese aviso, la verificación está apagada: dar de alta a alguien como
+`APPROVED` lo deja `APPROVED` directamente, **sin privado y sin confirmación**, porque
+`planApproval()` devuelve `approve` en cuanto la configuración falta. Es la degradación documentada
+—el alta sigue funcionando—, pero no es lo que se quiere en producción: si el aviso aparece, hay que
+configurar la variable que nombre antes de dar de alta a nadie. La lista de variables es la misma que
+usa el guard (`missingVerificationEnv()`), así que el aviso no puede contradecirlo.
+
 **Qué pasa al dar de alta** (`createPlayer`):
 
 | Estado pedido | Qué se crea | Privado |

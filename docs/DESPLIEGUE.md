@@ -154,6 +154,10 @@ La tabla siguiente es la de **producción**:
   interacciones del botón del privado de verificación del alta; sin ella esa confirmación se apaga y el
   endpoint `/api/discord/interactions` contesta `503`. El resto de la configuración del bot está en
   [`OPERACION.md`](./OPERACION.md#discord).
+- `DISCORD_PUBLIC_KEY` es de **texto** y su ausencia **no da ningún error de arranque**: el Worker
+  arranca, el alta se aprueba y nadie recibe el privado. Por eso no basta con mirar que el Worker
+  esté sano: se comprueba en la configuración del Worker, y el panel de participantes lo avisa con
+  los nombres de las variables que faltan (`missingDiscordVerificationEnv()`).
 - Sin la variable de Hyperdrive en build, el `next build` termina bien y el `npx wrangler deploy` muere con
   un mensaje engañoso que habla de *developing locally*; mientras tanto, producción se queda en la versión anterior.
 

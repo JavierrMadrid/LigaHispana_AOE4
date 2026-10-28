@@ -35,6 +35,55 @@
 export type VerificationPlayerStatus = "PENDING" | "APPROVED" | "REJECTED" | "BANNED";
 
 /* -------------------------------------------------------------------------- */
+/* La configuración                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** Las cuatro credenciales de la verificación, ya leídas del entorno. */
+export type VerificationConfig = {
+  /** `DISCORD_BOT_TOKEN`. */
+  botToken: string | null;
+  /** `DISCORD_GUILD_ID`. */
+  guildId: string | null;
+  /** `DISCORD_CLIENT_ID`. */
+  clientId: string | null;
+  /** `DISCORD_PUBLIC_KEY`. */
+  publicKey: string | null;
+};
+
+/**
+ * Cada credencial con el nombre de la variable de la que sale, en el orden en que
+ * se lee y se informa. Es la **única** lista: el guard de `env.ts` y el aviso del
+ * panel deciden con ella.
+ */
+const VERIFICATION_ENV: readonly (readonly [name: string, key: keyof VerificationConfig])[] = [
+  ["DISCORD_BOT_TOKEN", "botToken"],
+  ["DISCORD_GUILD_ID", "guildId"],
+  ["DISCORD_CLIENT_ID", "clientId"],
+  ["DISCORD_PUBLIC_KEY", "publicKey"],
+];
+
+/** Los nombres de las cuatro variables, en el mismo orden que `missingVerificationEnv()`. */
+export const VERIFICATION_ENV_NAMES: readonly string[] = VERIFICATION_ENV.map(
+  ([name]) => name,
+);
+
+/**
+ * Qué credenciales faltan para la verificación del alta, por su nombre de variable.
+ *
+ * Existe para que el aviso del panel pueda decir **cuál** falta en vez de un "no
+ * está configurada" que obliga a adivinar entre cuatro. Y para que el guard de
+ * `env.ts` y ese aviso decidan con la misma lista: si divergieran, el panel podría
+ * decir que todo está puesto mientras el alta se aprueba sin privado —que es justo
+ * la degradación silenciosa que se quiere dejar de tener—.
+ *
+ * Devuelve los nombres en el orden de `VERIFICATION_ENV_NAMES`, y el array vacío
+ * cuando están las cuatro.
+ */
+export function missingVerificationEnv(config: VerificationConfig): string[] {
+  return VERIFICATION_ENV.filter(([, key]) => config[key] === null).map(([name]) => name);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Los botones                                                                 */
 /* -------------------------------------------------------------------------- */
 
