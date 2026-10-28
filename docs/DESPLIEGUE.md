@@ -33,7 +33,7 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
 | Custom Domain (Cloudflare) | `laligahispana.es` apuntando al Worker. |
 | Supabase Postgres | Base de datos. |
 | Supabase Auth | Cuentas del panel. El **Site URL** y las **plantillas de correo** (Authentication → URL Configuration / Email Templates) deciden a dónde llevan los correos de invitación y recuperación. |
-| Supabase Cron (`pg_cron` + `pg_net`) | Reloj del torneo: `POST /api/sync` cada 10 minutos. |
+| Supabase Cron (`pg_cron` + `pg_net`) | Reloj del torneo: `POST /api/sync` cada minuto; el candado deja una pasada cada 1-3 minutos según el coste de la anterior. |
 
 ## Canales de despliegue
 

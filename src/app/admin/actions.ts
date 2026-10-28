@@ -23,7 +23,7 @@ import {
 import { sendPlayerVerificationDm } from "@/lib/discord/verification-send";
 import { parseMatcherinoDonations, type MatcherinoDonations } from "@/lib/donations";
 import { formatAbsoluteTime } from "@/lib/format";
-import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
+import { consumeManualSyncLock, readSyncCadence } from "@/lib/manual-sync";
 import {
   campoSiCambia,
   camposQueCambian,
@@ -262,7 +262,7 @@ function actorEmail(user: User): string {
  *
  * El alta **solo escribe la fila**. No trae partidas ni recalcula en línea: el
  * jugador entra en la clasificación en la siguiente pasada del sincronizador
- * (hasta 10 minutos) o cuando la organización pulse «Sincronizar ahora» en esta
+ * (1-3 minutos) o cuando la organización pulse «Sincronizar ahora» en esta
  * misma pestaña. Es una decisión de producto, no un olvido: en el plan Free de
  * Cloudflare el presupuesto es de 10 ms de CPU por invocación y una pasada gasta
  * ~500 ms, así que lanzarla dentro de la petición del alta muere con `Worker
@@ -537,7 +537,7 @@ export async function createPlayer(
   if (status === PlayerStatus.APPROVED) {
     return {
       error: null,
-      message: `Se ha dado de alta a ${name}. Aparecerá en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias; puedes forzarla con «Sincronizar ahora» en esta misma pestaña.`,
+      message: `Se ha dado de alta a ${name}. Aparecerá en la clasificación en la próxima pasada del sincronizador (1-3 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias; puedes forzarla con «Sincronizar ahora» en esta misma pestaña.`,
     };
   }
 
@@ -546,7 +546,7 @@ export async function createPlayer(
       error: null,
       message: verificationConfigured
         ? `Se ha dado de alta a ${name} como pendiente. Cuando la apruebes se le enviará un privado de verificación y no entrará en la clasificación hasta que confirme desde su cuenta.`
-        : `Se ha dado de alta a ${name} como pendiente. Al aprobarlo aparecerá en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`,
+        : `Se ha dado de alta a ${name} como pendiente. Al aprobarlo aparecerá en la clasificación en la próxima pasada del sincronizador (1-3 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`,
     };
   }
 
@@ -977,7 +977,7 @@ export async function updatePlayer(
  * ## Lo que no hace
  *
  * Sigue **sin traer partidas ni recalcular**: al pasar a `APPROVED` el jugador entra
- * en el siguiente cálculo del sincronizador, y ese cálculo lo hace el cron (cada 10
+ * en el siguiente cálculo del sincronizador, y ese cálculo lo hace el cron (cada 1-3
  * minutos) o la llamada manual (`syncNow`), no esta petición. Una pasada gasta
  * ~500 ms de CPU y el plan Free de Cloudflare da 10 ms por invocación, así que
  * lanzarla dentro del aprobado mataba el *isolate* con `Worker exceeded CPU time
@@ -2028,12 +2028,21 @@ export type SyncNowState = {
 };
 
 /**
- * Minutos que dice el mensaje de cooldown.
+ * Cuánto dice el mensaje de cooldown que dura el candado.
  *
- * Salen de la constante del candado y no de un número escrito a mano, para que el texto
- * no pueda mentir si algún día cambia la ventana. Ver `src/lib/manual-sync.ts`.
+ * Sale de la ventana que acaba de usar el candado (`lock.windowSeconds`) y no de un número
+ * escrito a mano, para que el texto no pueda mentir cuando la cadencia cambia entre 1 y 3
+ * minutos. Ver `src/lib/manual-sync.ts`.
  */
-const MINUTOS_DE_CANDADO = MANUAL_SYNC_COOLDOWN_SECONDS / 60;
+function fraseDeCandado(windowSeconds: number): string {
+  if (windowSeconds <= 60) {
+    return "el candado deja una pasada cada minuto";
+  }
+
+  const minutos = Math.round(windowSeconds / 60);
+
+  return `el candado deja una pasada cada ${minutos} minutos`;
+}
 
 /**
  * Lanza una pasada del sincronizador a mano, para cuando el cron no llega.
@@ -2050,8 +2059,8 @@ const MINUTOS_DE_CANDADO = MANUAL_SYNC_COOLDOWN_SECONDS / 60;
  * propio. Con dos candados, un admin podía encadenar pasadas seguidas mientras el cron
  * seguía creyendo que su ventana estaba libre: el trabajo real —las peticiones a la API
  * de AoE4World y el presupuesto de CPU del plan Free— lo pagan las dos, y el candado
- * compartido es lo que impide que se apilen. El precio es que la cadencia real del
- * torneo sigue siendo la de un sync cada 5-10 minutos, no mejor.
+ * compartido es lo que impide que se apilen. La cadencia real es la de un sync cada
+ * 1-3 minutos, la misma que la del cron (`src/lib/sync-cadence.ts`).
  *
  * ## Por qué no registra `AdminAction`
  *
@@ -2070,10 +2079,14 @@ const MINUTOS_DE_CANDADO = MANUAL_SYNC_COOLDOWN_SECONDS / 60;
 export async function syncNow(): Promise<SyncNowState> {
   await requireAdmin();
 
+  // La ventana sale del rastro de la última pasada, igual que en `/api/sync`: si cada
+  // vía usara una cadencia distinta, el candado compartido dejaría de coordinar.
+  const cadence = await readSyncCadence();
+
   let lock: ManualSyncLock;
 
   try {
-    lock = await consumeManualSyncLock();
+    lock = await consumeManualSyncLock(cadence.intervalSeconds);
   } catch (error) {
     // Sin candado comprobado **no** se lanza la pasada. Al revés, el botón sería una
     // forma de pedir tantas pasadas como se pulsara, que es justo lo que el candado
@@ -2096,7 +2109,7 @@ export async function syncNow(): Promise<SyncNowState> {
     // Por eso tiene su propio estado y no se pinta como fallo.
     return {
       status: "cooldown",
-      message: `Se ha sincronizado hace poco; el candado deja una pasada cada ${MINUTOS_DE_CANDADO} minutos.`,
+      message: `Se ha sincronizado hace poco; ${fraseDeCandado(lock.windowSeconds)}.`,
     };
   }
 
@@ -2105,8 +2118,11 @@ export async function syncNow(): Promise<SyncNowState> {
   try {
     // La pasada son ~15 s de llamadas a AoE4World más el recálculo, así que el botón
     // tiene que aguantar en estado de "pendiente" ese rato. Es normal que tarde: no es
-    // una escritura de formulario corta.
-    summary = await syncApprovedPlayers();
+    // una escritura de formulario corta. El tope de 60 s es para el admin, que está
+    // esperando: lo que no quepa lo completa el cron en la pasada siguiente.
+    summary = await syncApprovedPlayers({
+      signal: AbortSignal.timeout(Math.min(cadence.timeoutMs, 60_000)),
+    });
   } catch (error) {
     // `syncApprovedPlayers()` no propaga ni el fallo de un jugador ni el del recálculo:
     // los deja en el resumen. Lo que llega aquí es que la pasada no se pudo hacer

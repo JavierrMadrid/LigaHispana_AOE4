@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
  * panel de admin (`syncNow`), que es la única vía manual que queda.
  *
  * Los 150 s no son arbitrarios: la frescura de los datos la marca el sync (cada
- * 10 minutos), así que sondear más a menudo no adelanta nada, y cada refresco es
+ * 1-3 minutos), así que sondear más a menudo no adelanta nada, y cada refresco es
  * una render dinámica con consultas a Postgres dentro del presupuesto de CPU del
  * plan Free (ver `docs/OPERACION.md`, "El límite de CPU del plan Free").
  *
