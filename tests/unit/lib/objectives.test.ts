@@ -20,6 +20,7 @@ import {
   currentTournamentStreak,
   hasFixedPrize,
   matchAchievements,
+  objectiveRepeatable,
   objectiveStanding,
   objectivesSnapshotFingerprint,
   readObjectivesSnapshotValue,
@@ -399,6 +400,23 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
     );
 
     expect(total).toBe(2754);
+  });
+});
+
+describe("objectiveRepeatable: qué objetivos se cobran más de una vez", () => {
+  it("solo `victorias` e `imparable` se repiten", () => {
+    expect(objectiveRepeatable(VICTORIAS_ID)).toBe(true);
+    expect(objectiveRepeatable(IMPARABLE_ID)).toBe(true);
+  });
+
+  it("ni las competiciones ni los logros de una sola vez se repiten", () => {
+    expect(objectiveRepeatable("loco-por-ganar")).toBe(false);
+    expect(objectiveRepeatable("lider-japanese")).toBe(false);
+    expect(objectiveRepeatable(POR_TIERRA_ID)).toBe(false);
+  });
+
+  it("un id desconocido no se repite", () => {
+    expect(objectiveRepeatable("objetivo-que-no-existe")).toBe(false);
   });
 });
 

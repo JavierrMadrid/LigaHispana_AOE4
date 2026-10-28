@@ -223,6 +223,18 @@ enum ObjectiveLeadKind {
   GAINED
 }
 
+/// Qué le ha pasado al **progreso** de un objetivo (`ObjectiveProgressEvent`).
+///
+/// Son los tres tipos del contrato de la API del overlay (v1.1.0). **El orden no
+/// significa nada**: el feed se ordena por `at`, no por el tipo, así que este enum
+/// no se usa como desempate (al revés que `ObjectiveLeadKind`). El que se añada va
+/// al final, como en todos los enums de Postgres.
+enum ObjectiveProgressKind {
+  CUMPLIDO
+  PERDIDO
+  PROGRESADO
+}
+
 model Player {
   id               String       @id @default(cuid())
   profileId        Int          @unique
@@ -521,6 +533,8 @@ model Player {
   scores          PlayerScore[]
   objectiveEvents ObjectiveEvent[]
   leadEvents      ObjectiveLeadEvent[]
+  progressEvents  ObjectiveProgressEvent[]
+  progressStates  ObjectiveProgressState[]
   alerts          Alert[]
   // Actuaciones administrativas del jugador. La relación es `SetNull`: una actuación
   // sobrevive al borrado del jugador con la foto de `playerName`/`profileId`.
@@ -746,7 +760,7 @@ model ObjectiveEvent {
   /// Fin del torneo (la ventana ya cerrada) cuando se registra el objetivo.
   achievedAt DateTime
   /// Cuándo se escribió la fila. `achievedAt` es el dato del torneo; esto es solo
-  /// el rastro de que alguien lo registró (el motor corre cada 5 minutos).
+  /// el rastro de que alguien lo registró (el motor corre cada 10 minutos).
   recordedAt DateTime @default(now())
 
   // Un evento por objetivo y jugador: un logro tiene varios beneficiarios.
@@ -840,7 +854,7 @@ model ObjectiveLeadEvent {
   editionFrom DateTime
 
   /// Cuándo se escribió la fila. `at` es el dato del torneo; esto es solo el rastro
-  /// de que el motor lo registró (corre cada 5 minutos).
+  /// de que el motor lo registró (corre cada 10 minutos).
   recordedAt DateTime @default(now())
 
   // Feed: la cohorte y el rango de `at` de la consulta, con el orden del merge
@@ -850,6 +864,158 @@ model ObjectiveLeadEvent {
   // Filtro por jugador y cascada; la cohorte y la fecha de detrás sostienen su historial.
   // Sustituye al índice simple de `playerId`, que era su prefijo.
   @@index([playerId, editionFrom, at])
+}
+
+/// Un cambio de **progreso** de un objetivo: cuándo un jugador lo cumplió, lo perdió
+/// o avanzó hacia él, **con los valores** de progreso de ese instante.
+///
+/// Es el feed que lee la API del overlay (v1.1.0): `GET /api/v0/clasificacion`
+/// publica, por objetivo, los eventos de esta tabla con su `tipo`, su `fechahora` y su
+/// `progreso { propio, ajeno? }`. Sin estos valores no se puede pintar la barra del
+/// overlay, y **ninguna de las tablas de historial que ya existen los guarda**:
+/// `ObjectiveEvent` solo anota el cierre de la ventana (un logro, sin cifras) y
+/// `ObjectiveLeadEvent` solo el cambio de poseedor de una competición.
+///
+/// ## Append-only, y no un espejo
+///
+/// Al revés que `ObjectiveEvent`, aquí la fila describe un hecho que ocurrió en un
+/// instante —"a las 21:04 pasó de 7 a 8 victorias"— y eso no deja de ser cierto
+/// porque después se revierta una partida: lo que hay que anotar es el cambio
+/// siguiente. Un espejo no serviría: el overlay necesita la secuencia, no el estado
+/// final.
+///
+/// `ObjectiveProgressState` es lo otro: el estado **interno** con el que la
+/// reconciliación compara para saber qué cambió. Esta tabla es el registro
+/// publicado; aquella, la memoria de trabajo. No son el mismo dato y no se pueden
+/// reducir a uno.
+///
+/// ## Sin FK al catálogo
+///
+/// `objectiveId` es el id estable del catálogo (`victorias`, `imparable`,
+/// `loco-por-ganar`…), una constante de código (`src/lib/objectives.ts`), igual que en
+/// `ObjectiveEvent` y `ObjectiveLeadEvent`: no hay tabla de objetivos que referenciar
+/// y un enum obligaría a una migración por cada objetivo nuevo.
+///
+/// ## La cohorte de edición
+///
+/// `editionFrom` es el `window.from` de la edición que sella la fila, como en
+/// `ObjectiveLeadEvent`. Aísla las ediciones: la API filtra por la edición activa, así
+/// que una edición nueva arranca su propio feed sin mezclar el progreso de la
+/// anterior.
+///
+/// ## Por qué guarda los valores
+///
+/// `ownValue` es el progreso propio en el instante del evento; `otherValue` es el del
+/// **nuevo poseedor** en un `PERDIDO` (`null` si no hay nadie) y `repetition` es la
+/// repetición en los objetivos que la tienen (`victorias`, `imparable`; `null` en el
+/// resto). El contrato del overlay pide el progreso histórico **exacto**, y el valor
+/// de hoy no sirve para reconstruir el de ayer.
+///
+/// ## Qué instante es `at`
+///
+/// El del **recálculo que detectó el cambio**, no la fecha de la partida. La siembra
+/// **no reconstruye el pasado**: el primer estado de un objetivo se anota con el
+/// instante del pase que lo descubre, porque el momento en que empezó a progresar no
+/// consta en ninguna parte. En la siembra de un logro con la ventana ya cerrada sí es
+/// `window.to`, que es cuando el torneo lo da por cumplido.
+///
+/// ## Quién la escribe
+///
+/// `recomputeScores()`, en la misma transacción que la clasificación.
+///
+/// ## El borrado en cascada
+///
+/// Igual que en las otras dos tablas de historial: si se borra un participante, sus
+/// eventos no pueden quedarse sin dueño. `playerId` abre un índice compuesto porque
+/// Postgres no indexa las FK por su cuenta y el `Cascade` las recorre (y porque la API
+/// filtra por jugador).
+model ObjectiveProgressEvent {
+  id String @id @default(cuid())
+
+  /// Id del catálogo de objetivos (`victorias`, `imparable`, `loco-por-ganar`…).
+  objectiveId String
+
+  /// El jugador al que le cambió el progreso.
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  /// Qué le ha pasado: lo cumplió, lo perdió o avanzó hacia él.
+  kind ObjectiveProgressKind
+
+  /// Instante del recálculo que detectó el cambio; en la siembra de un logro con la
+  /// ventana cerrada, `window.to`. Ver el docblock.
+  at DateTime
+
+  /// `window.from` de la edición que sella la cohorte; la API filtra por la activa.
+  editionFrom DateTime
+
+  /// Progreso propio en el momento del evento.
+  ownValue Int
+
+  /// Valor del **nuevo poseedor** en un `PERDIDO`; `null` si no hay poseedor. En los
+  /// otros dos tipos no hay "ajeno" que anotar y también es `null`.
+  otherValue Int?
+
+  /// Repetición en los objetivos repetibles (`victorias`, `imparable`); `null` en el
+  /// resto.
+  repetition Int?
+
+  /// Cuándo se escribió la fila. `at` es el dato del torneo; esto es solo el rastro
+  /// de que el motor lo registró (corre cada 10 minutos).
+  recordedAt DateTime @default(now())
+
+  // La consulta de la API: jugador, edición y `at >= desde`, en el orden del feed.
+  @@index([playerId, editionFrom, at])
+  // Cohorte y orden del feed, para publicar una edición entera.
+  @@index([editionFrom, at, objectiveId])
+}
+
+/// El **estado actual** del progreso de un jugador en un objetivo, dentro de una
+/// edición: la memoria de trabajo de la reconciliación.
+///
+/// Existe para que el recálculo sepa **qué cambió** sin releer el feed entero: carga
+/// el estado de la edición, lo compara con el cómputo de este pase y, por cada
+/// diferencia, anexa el evento correspondiente en `ObjectiveProgressEvent`. El feed
+/// publicado y este estado son dos cosas distintas a propósito: uno es historia y no
+/// se toca; el otro se reescribe en cada pase.
+///
+/// Una fila por jugador, objetivo y edición (la clave primaria), porque el progreso
+/// **se reinicia con la edición**: la misma persona vuelve a empezar de cero en la
+/// siguiente. `value` es el progreso **recortado al máximo** en los objetivos con
+/// tope (un logro con tope no sigue subiendo aunque se cumpla más veces);
+/// `completed` dice si posee la competición o ha completado el logro, que no es lo
+/// mismo que "tiene el máximo"; `repetition` es la repetición actual en los
+/// repetibles.
+///
+/// Lo escribe `recomputeScores()` en la misma transacción que la clasificación. El
+/// `Cascade` borra el estado al borrar el jugador, igual que los eventos: un estado
+/// sin dueño no le sirve a nadie.
+model ObjectiveProgressState {
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  /// Id del catálogo de objetivos, como en `ObjectiveProgressEvent`.
+  objectiveId String
+
+  /// `window.from` de la edición a la que pertenece este estado.
+  editionFrom DateTime
+
+  /// Progreso actual, recortado al máximo en los objetivos con tope.
+  value Int
+
+  /// Posee la competición o ha completado el logro.
+  completed Boolean
+
+  /// Repeticiones actuales en los objetivos repetibles; `null` en el resto.
+  repetition Int?
+
+  updatedAt DateTime @updatedAt
+
+  // Una fila por jugador, objetivo y edición. `playerId` a la izquierda indexa
+  // también la FK, que es la que recorre el `Cascade`.
+  @@id([playerId, objectiveId, editionFrom])
+  // Carga del estado de una edición entera en la reconciliación.
+  @@index([editionFrom, objectiveId])
 }
 
 model Setting {
@@ -1018,7 +1184,7 @@ model AdminAction {
 /// estado no tiene remate: o se cumple o no se cumple, y su corrección es que
 /// deje de cumplirse (el jugador abre el historial; la ladder vuelve a coincide
 /// con lo que nos llega). Si su clave llevara la partida ancla o el número
-/// medido, y estos se reevalúan **cada 5 minutos**, insertaría una fila nueva
+/// medido, y estos se reevalúan **cada 10 minutos**, insertaría una fila nueva
 /// cada 12 horas para siempre. Por eso su clave es solo (regla, tipo, jugador):
 /// una alerta por jugador y por hecho, y la fila dice "esto se detectó", no
 /// "esto se detectó por nth vez".
