@@ -63,12 +63,14 @@ cambia sin desplegar. La página `/puntuacion` muestra el periodo con las fechas
 de la base falla, cae al texto genérico y no inventa fechas.
 
 La página `/puntuacion` lee además el **ruleset activo** para las demás cifras: los puntos por victoria
-y los **objetivos activos**, de los que salen el recuento y el total que reparten (hoy 88 y 4.721
-puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de resumen no se pinta y
-los párrafos caen a su forma genérica, en vez de enseñar los números de la edición anterior.
+y los **objetivos activos**, de los que salen el recuento y el total que reparten (con el catálogo por
+defecto, 88 y 2.754 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de
+resumen no se pinta y los párrafos caen a su forma genérica, en vez de enseñar los números de la
+edición anterior.
 
-La suma de 4.721 es la de los objetivos de **premio fijo** (cada uno contado una vez, `imparable` a su
-tope): `victorias` queda fuera, porque no reparte un premio sino `pointsPerWin` por victoria y sin tope
+La suma de 2.754 es la de los objetivos de **premio fijo** del catálogo (cada uno contado una vez,
+`imparable` a su tope): `victorias` queda fuera, porque no reparte un premio sino `pointsPerWin` por
+victoria y sin tope
 (ver [`OBJETIVOS.md`](./OBJETIVOS.md#total-de-puntos)). El criterio está en código (`hasFixedPrize()`);
 en una tarjeta ya resuelta se reconoce en `kind === "achievement" && target === null`.
 
@@ -193,7 +195,7 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
   "window": { "from": "2026-09-15T00:00:00.000Z", "to": "2026-10-15T00:00:00.000Z" },
   "pointsPerWin": 2,
   "countRandomizedCivs": false,
-  "objectives": { "loco-por-ganar": 50, "bienhadado": 200, "rey-1v1": 240 },
+  "objectives": { "loco-por-ganar": 25, "bienhadado": 100, "rey-1v1": 90 },
   "disabledObjectives": []
 }
 ```
@@ -248,12 +250,12 @@ aplican. Una fila escrita antes de que existieran los eventos no trae `events`.
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
   "objectives": {
-    "points": 458,
+    "points": 283,
     "earned": ["victorias", "loco-por-ganar", "rey-1v1"],
     "awards": {
       "victorias": { "points": 168, "count": 84 },
-      "loco-por-ganar": { "points": 50, "count": 1 },
-      "rey-1v1": { "points": 240, "count": 1 }
+      "loco-por-ganar": { "points": 25, "count": 1 },
+      "rey-1v1": { "points": 90, "count": 1 }
     }
   },
   "events": {

@@ -200,12 +200,12 @@ de puntos están siempre presentes en una fila nueva, con ceros si no aplican.
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
   "objectives": {
-    "points": 458,
+    "points": 283,
     "earned": ["victorias", "loco-por-ganar", "rey-1v1"],
     "awards": {
       "victorias": { "points": 168, "count": 84 },
-      "loco-por-ganar": { "points": 50, "count": 1 },
-      "rey-1v1": { "points": 240, "count": 1 }
+      "loco-por-ganar": { "points": 25, "count": 1 },
+      "rey-1v1": { "points": 90, "count": 1 }
     }
   },
   "events": {

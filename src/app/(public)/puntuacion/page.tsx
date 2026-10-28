@@ -34,7 +34,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Miles con el separador de español, el punto. Con CLDR, `es-ES` no agrupa las
- * cifras de cuatro dígitos —4721, no 4.721—, así que el total del torneo se lee
+ * cifras de cuatro dígitos —2754, no 2.754—, así que el total del torneo se lee
  * entero y solo los millones llevan punto.
  */
 const countFormat = new Intl.NumberFormat("es-ES");
