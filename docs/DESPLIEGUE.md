@@ -66,6 +66,9 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
   secretos de desarrollo (`SUPABASE_SERVICE_ROLE_KEY`, `SUPERADMIN_EMAIL`, `RATE_LIMIT_SALT`). No
   hereda los secretos del Worker de producción. Sin `CRON_SECRET`, `DISCORD_*`, `YOUTUBE_API_KEY` ni
   `TURNSTILE_SECRET_KEY` de producción: degrada sin ellos.
+- Un cambio en **Previews Base** (variable o secreto) solo se aplica a las Previews **nuevas**: las
+  que ya existen conservan lo que tenían hasta que se redespliegan o se borran. Si una feature depende
+  de una variable recién añadida, hay que volver a desplegar la rama para probarla.
 - Las `NEXT_PUBLIC_*` se compilan dentro del bundle. Cambiarlas exige un build nuevo, y los Previews
   ya existentes **no se actualizan solos**: hay que redesplegarlos o borrarlos.
 - La build de *Previews Base* comprueba que `previews.hyperdrive` apunte al proyecto de desarrollo
