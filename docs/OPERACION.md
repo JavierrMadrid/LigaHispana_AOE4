@@ -51,7 +51,7 @@ Dos puntos de entrada, el mismo trabajo (`syncApprovedPlayers()`):
 
 - `/api/cron/sync` acepta `GET` porque Vercel Cron solo emite `GET`.
 - `/api/sync` es el que dispara el cron de Supabase. Exige `content-type: application/json` (lo que
-  descarta un POST de formulario ajeno) y un candado **global** de 5 minutos. Si se pide antes de
+  descarta un POST de formulario ajeno) y un candado **global** de ventana variable (1-3 minutos). Si se pide antes de
   tiempo responde `200` con `{"status":"cooldown"}`; si el candado no se puede comprobar, **no** lanza
   la pasada y responde `503`.
 
@@ -63,7 +63,7 @@ deja el rastro en `Setting["sync.lastRun"]`.
 **Aprobar o dar de alta no lanza una pasada.** Tanto el aprobado de una solicitud (`approvePlayer`)
 como el alta de admin (`createPlayer`) **escriben sin lanzar una pasada**: el estado (o el jugador,
 en el alta), con su línea en `AdminAction`, y el jugador entra en la clasificación en la siguiente
-pasada del cron (hasta 10 minutos) o con la llamada manual (`syncNow`). Tampoco lanza una pasada el
+pasada del cron (1-3 minutos) o con la llamada manual (`syncNow`). Tampoco lanza una pasada el
 privado de verificación del alta: se manda **después del commit** de la fila y son dos llamadas de red
 (abrir el canal y publicar), no una pasada de sincronización. No es un olvido, es lo que
 permite que el botón no se cuelgue: una pasada gasta ~500 ms de CPU y el plan Free de Cloudflare da
@@ -81,15 +81,30 @@ curl -X POST localhost:3000/api/cron/sync -H "Authorization: Bearer $CRON_SECRET
 curl -X POST localhost:3000/api/sync -H "content-type: application/json" -d '{}'
 ```
 
-**Cadencia: cada 10 minutos.** La API ya ha devuelto 429; por debajo de 3 minutos se disparan
-demasiadas peticiones. Con más jugadores, sube `AOE4WORLD_MIN_REQUEST_INTERVAL_MS` antes que la
-frecuencia. Para las partidas en directo, 10 minutos basta: se detectan en la siguiente pasada. Son
-10 y no 5 por el presupuesto de CPU del plan Free de Cloudflare: la mitad de pasadas es la mitad de
-CPU gastada (ver [El límite de CPU del plan Free](#el-límite-de-cpu-del-plan-free)).
+**Cadencia: variable entre 1 y 3 minutos.** El reloj de `pg_cron` dispara cada minuto
+(`scripts/db-cron.ts`), pero no cada disparo es una pasada: el candado global (`public/manual-sync`)
+deja pasar una según `nextSyncIntervalSeconds()` (`src/lib/sync-cadence.ts`), que sale del rastro de
+la última pasada. La fórmula coge el mayor de estos frenos y lo acota entre 60 y 180 segundos:
 
-Los **300 ms** entre peticiones y la cadencia de **10 minutos** son empíricos: AoE4World no publica
+- **15 jugadores por minuto**: `ceil(jugadores / 15) × 60`. Un torneo de 50-60 jugadores ya pide
+  3 minutos por sí solo.
+- **45 peticiones por minuto**: `ceil(peticiones / 45) × 60`. Es el presupuesto con el que se vieron
+  los `429` con ~136 jugadores a 3 minutos.
+- **3× la duración de la pasada**: deja margen para que no se apilen dos.
+- Si la última pasada comió un `429`, se fuerza el máximo.
+
+El minuto solo sale en torneos pequeños o al arrancar; con 50-60 jugadores la cadencia es de
+3 minutos. El plazo de la pasada es la ventana menos 10 s, así que siempre termina o se cancela antes
+del siguiente disparo, y lo que quede a medias lo recoge la pasada siguiente. El botón manual
+(`syncNow`) comparte candado y ventana, y el cron de GitHub (`/api/cron/sync`) sigue sin candado como
+red de seguridad.
+
+Los **300 ms** entre peticiones y el presupuesto de la cadencia son empíricos: AoE4World no publica
 un contrato de rate limit ni devuelve cabeceras `X-RateLimit-*`. Se han visto 429 por debajo de 3
-minutos, así que no bajes la cadencia sin medir CPU y 429, y habla antes con AoE4World.
+minutos con el torneo grande, así que la cadencia no sustituye la medición: si aparecen 429, la
+pasada siguiente se va sola a 3 minutos; si aun así aparecen, sube `AOE4WORLD_MIN_REQUEST_INTERVAL_MS`
+y habla con AoE4World. La detección de directo tiene su **propio reloj** de 10 minutos
+(`STREAMS_MIN_INTERVAL_MINUTES`) para no gastar la cuota de YouTube con el sync más rápido.
 
 ### Cursor global y relleno (F2)
 
@@ -125,10 +140,10 @@ El incremental ya no pide el histórico jugador a jugador. El cursor es **global
 | Relleno | Hasta `BACKFILL_MAX_PLAYERS × min(BACKFILL_PAGES_PER_PLAYER, SYNC_MAX_PAGES)` mientras haya ventanas pendientes o completas con el sello vencido (F2b) |
 | Detalle | 0–2 para reconciliar partidas sin resolver |
 
-Con N=13 y todos en la ladder: **2 peticiones** (1 masiva + 1 ladder) y 0–2 de detalle; el perfil es
-0 y el relleno solo aparece con ventanas pendientes. El presupuesto del masivo es **por lote**
-(`BULK_MAX_PAGES`); el del relleno es **por jugador** (`BACKFILL_PAGES_PER_PLAYER`, limitado por
-`SYNC_MAX_PAGES`). Si el cursor supera los 30 días, la página viene vacía con
+Con N=50-60 y todos en la ladder: **2-4 peticiones** (2 lotes de masivo + 2 de ladder) y 0–2 de
+detalle; el perfil es 0 y el relleno solo aparece con ventanas pendientes. El presupuesto del masivo
+es **por lote** (`BULK_MAX_PAGES`); el del relleno es **por jugador** (`BACKFILL_PAGES_PER_PLAYER`,
+limitado por `SYNC_MAX_PAGES`). Si el cursor supera los 30 días, la página viene vacía con
 `_important_notice_`; no significa "sin partidas" (ver **Aviso de la API**).
 
 **Cesión y fallos**:
@@ -268,7 +283,7 @@ Hay **dos relojes**, y el primario no es GitHub:
 
 | Reloj | Qué es | Frecuencia real |
 |---|---|---|
-| **Supabase Cron** (primario) | Job de `pg_cron` que llama por HTTP a `POST /api/sync` con `pg_net` | 10 minutos |
+| **Supabase Cron** (primario) | Job de `pg_cron` que llama por HTTP a `POST /api/sync` con `pg_net` | Cada minuto; el candado deja una pasada cada 1-3 minutos |
 | [Workflow de GitHub](../.github/workflows/cron-sync.yml) (red de seguridad) | `POST /api/cron/sync` con `Bearer $CRON_SECRET` | GitHub lo retrasa a una cada 4-6 h |
 
 ## El reloj: Supabase Cron
@@ -290,7 +305,7 @@ create extension if not exists pg_net with schema extensions;
 
 select cron.schedule(
   'ligahispana-sync',
-  '*/10 * * * *',
+  '* * * * *',
   $$select net.http_post(
        url := 'https://laligahispana.es/api/sync',
        body := '{}'::jsonb,
@@ -305,10 +320,9 @@ Cuatro decisiones que no son obvias:
 - **Apunta a `/api/sync` (público), no a `/api/cron/sync`.** `cron.job.command` es texto plano y
   `cron.job_run_details` guarda una copia de cada ejecución, así que un secreto allí quedaría escrito
   en la base. El endpoint público no es una puerta abierta: lo cierran el `content-type` y el candado
-  global, **compartido con la llamada manual de admin**. Con el reloj a 10 minutos y el candado a 5, el
-  cron ya no llega al filo de la ventana anterior (era el motivo del "se salta 1 de cada 5" cuando el
-  reloj iba a 5), así que esa vuelta solo se pierde si una pasada manual cae justo antes del disparo; en
-  el día a día la cadencia es de 10 minutos clavados.
+  global, **compartido con la llamada manual de admin**. Con el reloj cada minuto y la ventana
+  adaptativa, el cron solo pierde la vuelta si una pasada manual cae dentro de la ventana; en el día a
+  día la cadencia es la que marca `sync-cadence.ts` (1-3 minutos).
 - **El nombre del job es fijo** (`ligahispana-sync`): `cron.schedule(nombre, …)` hace *upsert* sobre
   `jobname_username_uniq`, así que repetir el script actualiza en vez de crear un segundo job.
 - **`timeout_milliseconds` a 240 s**: el valor por defecto de `net.http_post` son 2-5 s y una pasada
@@ -398,8 +412,10 @@ tolera pasarse de forma esporádica; de forma consistente lo mata con `Worker ex
 
 No hay cambio de plan a la vista, así que se mitiga **recortando el trabajo**, en tres frentes:
 
-- **Menos pasadas**: el reloj pasa de 5 a **10 minutos**. La mitad de CPU gastada, y las partidas se
-  siguen viendo (en la pasada siguiente).
+- **Menos pasadas, pero medidas**: el reloj de `pg_cron` dispara cada minuto y el candado deja pasar
+  una pasada cada **1-3 minutos** según lo que costó la anterior (`src/lib/sync-cadence.ts`). Un torneo
+  de 50-60 jugadores va a 3 minutos; uno pequeño puede ir a 1. No es una cadencia fija: el presupuesto
+  se controla por coste medido (jugadores, peticiones, duración y 429), no por un número elegido a ojo.
 - **Menos trabajo por visita**: `/objetivos` y la ficha de participante ya **no** barren todas las
   clasificatorias ni recomputan el catálogo en JS. `recomputeScores()` publica la vista de objetivos
   entera (objetivos, rankings, pool y ventana) en `Setting["scoring.objectives"]`, en la misma
@@ -407,7 +423,7 @@ No hay cambio de plan a la vista, así que se mitiga **recortando el trabajo**, 
   valida o es de otra versión de las reglas, caen al cómputo en vivo de siempre, de modo que la
   degradación es segura.
 - **Menos sondeos del navegador**: el refresco automático de `/` y `/partidas` (`LiveRefresh`) pasa de
-  75 s a **150 s**. La frescura real la marca el sync (cada 10 minutos), así que la mitad de sondeos
+  75 s a **150 s**. La frescura real la marca el sync (cada 1-3 minutos), así que la mitad de sondeos
   apenas se nota en pantalla y recorta a la mitad las renders dinámicas de las pestañas abiertas.
 
 Cómo se llegó aquí:
@@ -423,9 +439,11 @@ Cómo se llegó aquí:
   morir con 1102, la conclusión es que hace falta el **plan Workers Paid** ($5/mes): 30 s por Cron
   Trigger y 5 min por petición. El mecanismo ya está andado (un `scheduled` sobre un *custom worker* de
   OpenNext funcionó); lo que no cabía era la CPU.
-- Mientras se siga en Free, la llamada manual de un admin está sujeta a lo mismo. Por eso su candado
-  es de **5 minutos** y comparte el del cron: insistir es lo único que garantiza que Cloudflare
-  empiece a matar pasadas. Con el reloj a 10 minutos, además, las dos vías ya no se solapan.
+- Mientras se siga en Free, la llamada manual de un admin está sujeta a lo mismo. Por eso comparte
+  candado y ventana con el cron (`src/lib/sync-cadence.ts`): insistir es lo único que garantiza que
+  Cloudflare empiece a matar pasadas, y la ventana adaptativa ya deja 3 minutos cuando el torneo es
+  grande. Un fallo de 1102 en los logs se investiga como siempre: es la señal de que el coste real ha
+  crecido y hay que subir el freno o pasar a Paid.
 
 ## Inscripción pública
 
@@ -972,7 +990,7 @@ de cada bloque.
 |---|---|
 | Familias | Solo `rm_team`, la única que compara compañeros. El `rm_solo` que se derivaba antes se poda al reescribir la caché |
 | Coste | ~130-150 peticiones por familia, con la separación mínima entre peticiones |
-| Cadencia | A mano, cuando cambie el reparto de la temporada. El motor **nunca** los deriva: el sincronizador corre cada 10 minutos |
+| Cadencia | A mano, cuando cambie el reparto de la temporada. El motor **nunca** los deriva: el sincronizador corre cada 1-3 minutos |
 
 - **Sin cortes, la condición no se aplica**: las partidas de equipo cuentan (no se puede demostrar la
   infracción), y el aviso sale en el rastro del recálculo —`Setting["scoring.lastRun"]`, campo
@@ -985,14 +1003,16 @@ de cada bloque.
 
 ## Directos (YouTube y Kick)
 
-La detección de YouTube y Kick **cuelga del worker**, no de la web (una vez por pasada, para los
-aprobados con canal): preguntar a dos plataformas en cada visita gastaría la cuota de YouTube y ataría
-la web a dos APIs externas. El DAL solo lee lo que el worker escribió. Twitch no se comprueba: su
-`twitchIsLive` sale de la ladder.
+La detección de YouTube y Kick **cuelga del worker**, no de la web: se ejecuta como mucho **una vez
+cada 10 minutos** (`STREAMS_MIN_INTERVAL_MINUTES`), para los aprobados con canal, aunque el sync de
+partidas corra cada 1-3 minutos. Preguntar a dos plataformas en cada visita gastaría la cuota de
+YouTube y ataría la web a dos APIs externas. El DAL solo lee lo que el worker escribió. Twitch no se
+comprueba: su `twitchIsLive` sale de la ladder.
 
 | Variable | Uso |
 |---|---|
 | `YOUTUBE_API_KEY` | Clave de la Data API v3. **Opcional**: sin ella la detección de YouTube no se hace (ni una petición) y el estado queda en `false` con un aviso |
+| `STREAMS_MIN_INTERVAL_MINUTES` | Minutos mínimos entre dos comprobaciones del estado de directo (**10**). Es el reloj propio del paso, independiente del sync |
 | `STREAMS_MAX_CHECKS_PER_RUN` | Tope de comprobaciones por pasada (24 = 12 participantes con las dos plataformas) |
 | `STREAMS_TIMEOUT_MS`, `STREAMS_MIN_REQUEST_INTERVAL_MS`, `STREAMS_MAX_RETRIES`, `STREAMS_RETRY_BASE_MS`, `STREAMS_RETRY_MAX_MS` | Presupuesto, ritmo y *backoff* del cliente (5000 / 200 / 2 / 400 / 8000) |
 | `STREAMS_USER_AGENT`, `YOUTUBE_API_BASE`, `KICK_API_BASE` | Cliente (valores por defecto) |
@@ -1029,7 +1049,7 @@ de `<home-leaderboard>` con el JSON escapado.
 | Qué | Cuánto |
 |---|---|
 | Petición | Una a `https://aoe4world.com/`, HTML, mismo `User-Agent` y plazo que el cliente de AoE4World |
-| Cadencia | Una vez cada **24 h** (`MAP_POOL_REFRESH_INTERVAL_HOURS`); la rotación es mensual y el worker corre cada 10 min |
+| Cadencia | Una vez cada **24 h** (`MAP_POOL_REFRESH_INTERVAL_HOURS`); la rotación es mensual y el worker corre en cada pasada |
 | Claves | `scoring.mapPool` (lo que lee el motor) y `scoring.mapPoolSync` (fecha y metadatos) |
 
 - **Parseo frágil, fallo contenido**: `parseMapPoolHomepage()` es puro y **nunca lanza**; si el HTML no
@@ -1333,7 +1353,7 @@ recálculo de la clasificación).
   comprobación de pertenencia. Solo decide quién cobra.
 - **Sin snapshot no hay bono**: si el evento empieza y termina entre dos pasadas del cron, no
   hay comprobación retroactiva y sus victorias no pagan extra. Es una limitación conocida del
-  cron de 5–10 minutos.
+  cron de 1-3 minutos.
 - Sin `DISCORD_BOT_TOKEN` o `DISCORD_GUILD_ID` no se escribe nada y el motivo va en
   `discordError`: el evento que exige Discord no repartirá bono hasta que se configure.
 
@@ -1456,7 +1476,7 @@ npm run countries:seed           # publica la lista de países del formulario
 npm run db:window                # publica la ventana de fechas del torneo (recomendado)
 npm run alerts:cutoffs           # deriva los cortes de división de la condición de equipo
 npm run backfill:objective-leads # reconstruye el historial de liderazgos de la edición
-npm run db:cron                  # programa el reloj cada 10 minutos
+npm run db:cron                  # programa el reloj cada minuto
 ```
 
 - `db:check` es de solo lectura y va antes del `db:push`: **0** = la base tiene el schema, **2** = le

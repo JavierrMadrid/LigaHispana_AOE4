@@ -391,7 +391,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
     expect(hasFixedPrize(definition(VICTORIAS_ID))).toBe(false);
   });
 
-  it("el catálogo nominal sigue sumando 4.721 puntos", () => {
+  it("el catálogo nominal sigue sumando 2.754 puntos", () => {
     // Es la cifra de `docs/OBJETIVOS.md`, que es la que resume la banda de
     // `/puntuacion`. `victorias` queda fuera porque reparte por victoria y sin tope.
     const total = OBJECTIVE_DEFINITIONS.filter(hasFixedPrize).reduce(
@@ -399,7 +399,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
       0,
     );
 
-    expect(total).toBe(4721);
+    expect(total).toBe(2754);
   });
 });
 
@@ -518,8 +518,8 @@ describe("los objetivos del summary", () => {
     const { options } = computeObjectives(players, DEFAULT_RULESET, []);
 
     const esperado = [
-      [FAST_FEUDAL_ID, 4, 2],
-      [FAST_CASTLE_ID, 8, 1],
+      [FAST_FEUDAL_ID, 3, 2],
+      [FAST_CASTLE_ID, 6, 1],
     ] as const;
 
     for (const [id, points, value] of esperado) {
@@ -534,7 +534,7 @@ describe("los objetivos del summary", () => {
 
     // Sin imperial rápido, el objetivo existe pero no lo cobra nadie.
     const imperial = optionById(options, FAST_IMPERIAL_ID);
-    expect(imperial.points).toBe(12);
+    expect(imperial.points).toBe(9);
     expect(imperial.beneficiaries).toEqual([]);
     expect(imperial.ranking).toEqual([]);
   });
@@ -826,7 +826,7 @@ describe("objectivesSnapshotFingerprint", () => {
               label: "Loco por ganar",
               description: "…",
               metric: "partidas",
-              points: 50,
+              points: 25,
               parent: null,
               holder: null,
               ranking: [],

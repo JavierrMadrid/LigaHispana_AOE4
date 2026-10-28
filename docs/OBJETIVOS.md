@@ -40,10 +40,10 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 
 | Objetivo | Puntos | Métrica | Condición |
 |---|---|---|---|
-| Bienhadado | 200 | racha | La racha de victorias seguidas más larga. |
-| Loco por ganar | 50 | partidas | Quien más partidas clasificatorias ha jugado. Sin mínimo. |
-| Masterizando `<civ>` (×23) | 120 | victorias | Quien más victorias tiene con esa civilización. Sin mínimo. |
-| Rey del 1v1 / 2v2 / 3v3 / 4v4 | 240 | victorias | Quien más victorias tiene en ese formato. |
+| Bienhadado | 100 | racha | La racha de victorias seguidas más larga. |
+| Loco por ganar | 25 | partidas | Quien más partidas clasificatorias ha jugado. Sin mínimo. |
+| Masterizando `<civ>` (×23) | 75 | victorias | Quien más victorias tiene con esa civilización. Sin mínimo. |
+| Rey del 1v1 / 2v2 / 3v3 / 4v4 | 90 | victorias | Quien más victorias tiene en ese formato. |
 
 - El `id` de `masterizando-*` es el de AoE4World de la civilización (`masterizando-japanese`), que es
   lo que guarda `Match.civ`. El catálogo con los nombres en español es `src/lib/civs.ts`.
@@ -64,19 +64,22 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 | Ansioso | 6 | Encadenar 3 partidas clasificatorias seguidas con 120 APM o más. |
 | Agresor | 24 | Ganar al menos 3 partidas de menos de 10 minutos. |
 | Estratega | 24 | Ganar al menos 3 partidas de más de 20 minutos. |
-| Avance relámpago: Feudal | 4 | Llegar a la Edad Feudal antes de 4 minutos en una partida clasificatoria. |
-| Avance relámpago: Castillos | 8 | Llegar a la Edad de los Castillos antes de 9 minutos en una partida clasificatoria. |
-| Avance relámpago: Imperial | 12 | Llegar a la Edad Imperial antes de 16 minutos en una partida clasificatoria. |
+| Avance relámpago: Feudal | 3 | Llegar a la Edad Feudal antes de 4 minutos en una partida clasificatoria. |
+| Avance relámpago: Castillos | 6 | Llegar a la Edad de los Castillos antes de 9 minutos en una partida clasificatoria. |
+| Avance relámpago: Imperial | 9 | Llegar a la Edad Imperial antes de 16 minutos en una partida clasificatoria. |
 | Defensor del pueblo | 12 | Terminar una partida de 15 minutos o más perdiendo menos de 3 aldeanos, menos de 2 aldeanos dorados y ningún aldeano montado. |
-| Por tierra y agua | 81 | Jugar al menos 3 partidas en **cada** mapa del pool activo. |
-| Polifacético | 96 | Ganar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
-| Líder `<civ>` (×23) | 12 | Ganar al menos 3 partidas con esa civilización. |
-| Jugón | 24 | Jugar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
-| Acólito `<civ>` (×23) | 6 | Jugar al menos 3 partidas con esa civilización. |
+| Por tierra y agua | 41 | Jugar al menos 3 partidas en **cada** mapa del pool activo. |
+| Polifacético | 41 | Ganar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
+| Líder `<civ>` (×23) | 9 | Ganar al menos 3 partidas con esa civilización. |
+| Jugón | 10 | Jugar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
+| Acólito `<civ>` (×23) | 5 | Jugar al menos 3 partidas con esa civilización. |
 
 - `victorias` **no tiene premio propio**: cada victoria vale lo que diga `pointsPerWin` del ruleset (hoy
   2). Es la única fuente de lo que vale una victoria, así que un `objectives["victorias"]` retocado en
   `Setting` se ignora. Su `points` en el catálogo (2) es documental.
+- La hoja de la organización expresa algunos valores con decimales (40,5, 10,125 y 4,5). El catálogo los
+  redondea al entero normal —41, 10 y 5— porque `PlayerScore.total` es un entero y el panel solo admite
+  enteros.
 - En `agresor`/`estratega` las partidas sin duración quedan fuera. Umbrales: `< 600 s` y `> 1200 s`.
 - **`ansioso`, los tres `avance-relampago` y `defensor-del-pueblo`** salen del **resumen de partida**
   (APM, tiempos de edad y pérdidas), que vive en el sitio de AoE4World —no en su API— y el worker pide
@@ -185,7 +188,7 @@ logro (que no decide puntos: todos los que cumplen cobran):
 A diferencia del catálogo anterior, el total en juego **no es un número cerrado**: un logro lo cobra
 cada participante que lo cumple, así que su reparto se multiplica por el número de beneficiarios.
 `imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo de
-premio fijo contado una vez, `imparable` a su tope de 14— es **4.721 puntos**: es la cifra que resume la
+premio fijo contado una vez, `imparable` a su tope de 14— es **2.754 puntos**: es la cifra que resume la
 banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no reparte un premio fijo sino
 `pointsPerWin` por victoria y sin tope: contarlo una vez diría que el catálogo reparte una cifra que no
 reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en
