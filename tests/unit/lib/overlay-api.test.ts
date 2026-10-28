@@ -168,7 +168,7 @@ describe("overlayObjectives", () => {
 
   it("loco-por-ganar: competición con premio fijo y sin icono", () => {
     expect(objetivos.get("loco-por-ganar")).toMatchObject({
-      puntos: 50,
+      puntos: 25,
       volatil: true,
       repetible: false,
       max_progreso: null,
@@ -408,11 +408,11 @@ describe("overlayStanding", () => {
   }
 
   it("reparte el total entre volátiles y permanentes con el desglose de la fila", () => {
-    // `loco-por-ganar` es una competición de 50 puntos y `objectives.points` dice
-    // 100, así que los otros 50 son de logros: el reparto es el de la web.
+    // `loco-por-ganar` es una competición de 25 puntos y el total de la fila es 150,
+    // así que los otros 125 son de logros: el reparto es el de la web.
     expect(overlayStanding(fila(), lookup, {}).puntos).toEqual({
-      volatiles: 50,
-      permanentes: 100,
+      volatiles: 25,
+      permanentes: 125,
     });
   });
 
