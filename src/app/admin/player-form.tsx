@@ -18,7 +18,8 @@ const initialState: PlayerFormState = { error: null, message: null };
  * cuando la verificación por Discord está configurada, manda el privado. El estado
  * que se elija manda: «Aprobado» no aprueba, deja el alta pendiente hasta que la
  * persona confirme, y por eso la pista del campo de estado lo dice en vez de dejar
- * que se descubra después.
+ * que se descubra después. Con la verificación caída la pista dice lo contrario,
+ * porque entonces «Aprobado» aprueba de verdad y no hay privado.
  *
  * Con el plazo cerrado (`disabled`) el formulario entero se apaga y una nota
  * explica por qué, en vez de desaparecer: el panel es una herramienta y un bloque
@@ -36,9 +37,12 @@ export function PlayerForm({
   /** El plazo cerrado bloquea el alta; el servidor lo rechaza igualmente. */
   disabled?: boolean;
   /**
-   * `isDiscordVerificationConfigured()` leído en el servidor. Decide si se explica
-   * la puerta del privado en el campo de estado: sin configurar, el alta se aprueba
-   * como siempre y anunciar una confirmación que no va a llegar sería mentir.
+   * Si la verificación del alta por privado está configurada, leído en el servidor
+   * (`missingDiscordVerificationEnv()`). Decide **qué** dice la pista del campo de
+   * estado, no si se pinta: con la verificación puesta, «Aprobado» deja el alta
+   * pendiente de confirmación; sin ella, la aprueba de verdad y no manda privado.
+   * Anunciar una confirmación que no va a llegar sería mentir, y callar que el alta
+   * entra sola también.
    */
   discordVerificationEnabled?: boolean;
 }) {
@@ -189,9 +193,7 @@ export function PlayerForm({
             id="alta-estado"
             name="status"
             defaultValue="APPROVED"
-            aria-describedby={
-              discordVerificationEnabled ? "alta-estado-hint" : undefined
-            }
+            aria-describedby="alta-estado-hint"
             className="h-10 rounded-md border border-line bg-background px-3 text-foreground"
           >
             <option value="APPROVED">Aprobado</option>
@@ -200,15 +202,15 @@ export function PlayerForm({
           </select>
           {/* Fuera del `<label>` y enlazada con `aria-describedby`, como la pista
               del usuario de Discord: así no forma parte del nombre accesible del
-              campo. Solo se pinta con la verificación configurada; sin ella no hay
-              privado que esperar. */}
-          {discordVerificationEnabled ? (
-            <span id="alta-estado-hint" className="text-xs leading-relaxed text-muted">
-              Si eliges Aprobado, el alta quedará pendiente hasta que la persona confirme
-              por privado de Discord. Si eliges Pendiente, el privado se enviará al
-              aprobarla.
-            </span>
-          ) : null}
+              campo. Se pinta siempre: el mismo valor del campo significa una cosa con
+              la verificación puesta y otra sin ella, así que las dos se dicen. La
+              lista de variables que faltan no se repite aquí: eso es el aviso de
+              arriba, y esta pista es una línea. */}
+          <span id="alta-estado-hint" className="text-xs leading-relaxed text-muted">
+            {discordVerificationEnabled
+              ? "Si eliges Aprobado, el alta quedará pendiente hasta que la persona confirme por privado de Discord. Si eliges Pendiente, el privado se enviará al aprobarla."
+              : "La verificación por privado está desactivada: si eliges Aprobado, el alta se aprueba directamente y no se envía ningún privado."}
+          </span>
         </div>
 
         {state.error !== null ? (
