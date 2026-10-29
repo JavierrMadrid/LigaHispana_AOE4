@@ -44,15 +44,17 @@ import { deletePlayerSyncState } from "@/lib/settings";
  * tiene el usuario para firmar el rastro). Aquí no se comprueba el permiso: este módulo
  * es la operación, no la puerta.
  *
- * Solo se deshacen los tipos de `REVERTIBLE`. La baja de un jugador no, porque el dato
- * ya no existe; la gestión de admins tampoco, porque su baja ya tiene su propia acción
- * reversible; y una configuración se cambia publicando otra, que deja su propio rastro.
+ * Solo se deshacen los tipos de `REVERTIBLE`. Los que dejan el dato fuera —la baja
+ * destructiva que ya no se ofrece en el panel, o cualquier otro que borrase la fila— no
+ * pueden deshacerse porque el dato ya no está; la gestión de admins tampoco, porque su
+ * baja ya tiene su propia acción reversible; y una configuración se cambia publicando
+ * otra, que deja su propio rastro.
  *
  * ## Por qué un fallo del recálculo no deshace la reversión
  *
  * La clasificación se recalcula después de confirmar el cambio, y si falla se **avisa**
- * en vez de compensar. Es el mismo criterio que la baja de un jugador (`deletePlayer`)
- * y el de una actuación administrativa (`createAdminActRecord`): lo que se ha deshecho
+ * en vez de compensar. Es el mismo criterio que el de una actuación administrativa
+ * (`createAdminActRecord`): lo que se ha deshecho
  * está escrito y es coherente consigo mismo, y la clasificación que se queda es la
  * anterior, que la próxima pasada del sincronizador vuelve a poner al día —el recálculo
  * es lo último que hace cada pasada—. Compensar aquí obligaría a deshacer la marca de
@@ -62,9 +64,10 @@ import { deletePlayerSyncState } from "@/lib/settings";
  * ## Lo que comparte con las acciones que ya deshacían algo
  *
  * `countsWithoutRevertMark()`, `deletePlayerCascade()` y `recomputeWithWarning()` viven
- * aquí y las usan también `deletePlayer()` y la actuación de anulación
- * (`createAdminActRecord()`): la reversión y las acciones de siempre tienen que hacer
- * **exactamente lo mismo**, y la alternativa era una segunda copia de cada regla.
+ * aquí porque las necesitan varias operaciones: deshacer un alta y la actuación de
+ * anulación (`createAdminActRecord()`), entre otras. La reversión y las acciones de
+ * siempre tienen que hacer **exactamente lo mismo**, y la alternativa era una segunda
+ * copia de cada regla.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -80,11 +83,11 @@ import { deletePlayerSyncState } from "@/lib/settings";
  *
  * | Tipo | ¿Se deshace? | Qué hace |
  * |---|---|---|
- * | `PLAYER_CREATED` | Sí | Borra al jugador y todo lo suyo, como la baja. **No se puede rehacer.** |
+ * | `PLAYER_CREATED` | Sí | Borra al jugador y todo lo suyo. **No se puede rehacer.** |
  * | `PLAYER_EDITED` | Sí | Devuelve los valores anteriores, validados otra vez. |
  * | `PLAYER_APPROVED` / `PLAYER_REJECTED` | Sí | Devuelve el estado que tenía el jugador. |
  * | `MATCH_POINTS_REVERTED` / `MATCH_POINTS_RESTORED` | Sí | Quita o vuelve a poner la marca de la partida. |
- * | `PLAYER_REMOVED` | No | El dato ya no existe: no hay nada que restaurar. |
+ * | `PLAYER_REMOVED` | No | Tipo histórico (la baja destructiva ya no existe) y el dato ya no está: no hay nada que restaurar. |
  * | `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED` | No | La baja de un admin ya se deshace con `reactivateAdmin`, y quién puede entrar no se reescribe desde el historial. |
  * | `ACTION_REVERTED` | No | Una reversión no se revierte: para volver atrás está la acción que se deshizo. |
  * | `CONFIG_CHANGED` | No | La configuración se cambia publicando otra, que es otra acción con su propio rastro. |
@@ -175,8 +178,9 @@ export function countsWithoutRevertMark(
 /**
  * Borra a un jugador con todo lo suyo y con su cursor de sincronización.
  *
- * La usan la baja del panel (`deletePlayer`) y la reversión de un alta: las dos tienen
- * que hacer exactamente lo mismo, y por eso vive aquí y no en cada una.
+ * La usa deshacer un alta, que es el **único** camino que queda para borrar un
+ * jugador desde el panel: la baja destructiva (`deletePlayer`) se retiró en la issue
+ * 167 y retirar a un aprobado es una actuación de expulsión.
  *
  * - El borrado de `Player` arrastra en cascada sus partidas, sus filas de clasificación
  *   y sus objetivos.
@@ -553,9 +557,9 @@ function readPlayerStatus(value: unknown): PlayerStatus | null {
  *
  * Es lo acordado y es irreversible: un alta no deja nada detrás que se pueda "restaurar",
  * así que deshacerla es quitar la fila. El jugador y sus partidas se van en cascada y el
- * cursor de sync se borra en la misma transacción, con el mismo tratamiento que la baja
- * del panel (`deletePlayerCascade()`); la interfaz pide confirmación antes de llegar
- * aquí.
+ * cursor de sync se borra en la misma transacción, con `deletePlayerCascade()`, la misma
+ * operación que hacía la baja destructiva del panel (retirada en la issue 167); la
+ * interfaz pide confirmación antes de llegar aquí.
  *
  * Si el jugador ya no está, el alta **ya está deshecha**: se dice y no se escribe ni el
  * rastro, porque no hay cambio que compensar.
@@ -563,7 +567,7 @@ function readPlayerStatus(value: unknown): PlayerStatus | null {
  * **No se borra por debajo de una actuación vigente.** Si el jugador está `BANNED` o
  * tiene una expulsión o anulación sin revertir, deshacer el alta dejaría el expediente
  * huérfano (`AdminAct.playerId = null`) y ya no se podría revertir. Es la misma guarda
- * que la baja del panel: primero se revierte desde Actuaciones.
+ * que tenía la baja destructiva del panel cuando existía.
  */
 async function revertPlayerCreated(
   action: RevertibleAction,

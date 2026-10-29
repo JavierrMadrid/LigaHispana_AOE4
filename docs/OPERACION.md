@@ -550,6 +550,23 @@ reactivar lo deshace. Todo queda registrado en `/admin/acciones`.
 La tabla `Admin` **arranca vacía**: al desplegar esto solo entra el superadministrador, y él invita
 al resto. Los admins actuales pierden el acceso hasta que los añada —por el camino 3, sin correo—.
 
+### Participantes
+
+Qué se puede hacer con un participante y **dónde** se ofrece cada acción:
+
+| Acción | Dónde | Qué hace |
+|---|---|---|
+| **Aprobar** / **rechazar** una solicitud | Solo en la **cola de solicitudes pendientes** de `/admin` | Cambia el estado; aprobar mete al jugador en la clasificación y rechazar lo deja fuera |
+| **Editar** los datos | Listado de participantes («Todos los jugadores») | Corrige nombre, país, correo, canales y `@usuario`; no toca el estado |
+| **Expulsar** a un aprobado | Actuaciones (`BAN`); el listado enlaza a la actuación ya prefijada | Deja `BANNED`, reversible y sin perder datos |
+| **Anular** partidas | Actuaciones (`MATCH_ANNULMENT`) | La victoria deja de puntuar sin borrarse |
+
+- **El listado completo no cambia estados**: no ofrece rechazar (retirar) a un aprobado ni aprobar
+  (restaurar) a un rechazado. Esas decisiones viven en la cola de pendientes y en Actuaciones.
+- **No hay baja destructiva desde el panel**: retirar a alguien aprobado es una expulsión, que conserva
+  los datos y se puede revertir. La única forma de que desaparezca una fila es deshacer su alta desde
+  `/admin/acciones`, y eso es irreversible.
+
 ### Deshacer una acción
 
 El superadministrador puede **deshacer** desde `/admin/acciones` lo que hicieron los admins regulares.
@@ -567,7 +584,8 @@ marca dice que la acción ya no está vigente.
 | `PLAYER_CREATED` | **Borra al jugador** y todo lo suyo, con su cursor de sincronización. Se rechaza si está `BANNED` o tiene actuaciones vigentes: primero se revierten | **No**: es irreversible |
 
 - **Solo los tipos revertibles** (`isRevertibleActionType()`, `src/lib/admin-revert.ts`) y **una acción
-  ya revertida no se revierte dos veces**. `PLAYER_REMOVED` no está: el dato ya no existe. Tampoco
+  ya revertida no se revierte dos veces**. `PLAYER_REMOVED` es un tipo **histórico** —la baja
+  destructiva ya no existe— y no está: el dato ya no existe. Tampoco
   `ADMIN_*` (la baja de un admin se deshace reactivándolo), `ACTION_REVERTED` ni `CONFIG_CHANGED` (la
   configuración se cambia publicando otra).
 - **Si algo ha cambiado después, se dice y no se escribe nada.** Deshacer una aprobación cuando el
@@ -577,7 +595,8 @@ marca dice que la acción ya no está vigente.
   formulario. Un `@usuario` que entonces estaba libre y hoy es de otra fila da un error claro y no
   escribe nada: la reversión es todo o nada.
 - **Deshacer un alta es la excepción irreversible**: borra al jugador, sus partidas y su cursor de
-  sincronización, con el mismo tratamiento que la baja del panel. La interfaz pide confirmación.
+  sincronización, con la misma operación que hacía la baja destructiva del panel (retirada en la issue
+  167). La interfaz pide confirmación.
 - **Los cambios de puntos de una partida sueltos son legado**: `revertMatchPoints` y `restoreMatchPoints`
   ya no existen. Las anulaciones de ahora son actuaciones (`AdminAct`) con razón pública, y se revierten
   desde Actuaciones, no desde el historial de acciones. Las filas antiguas de
@@ -591,7 +610,7 @@ en Discord. Vive en `AdminAct` (`/admin/actuaciones`) y es un historial **aparte
 
 | Tipo | Qué hace | Quién puede crearla | Al revertirla |
 |---|---|---|---|
-| **Expulsión** (`BAN`) | Pone `Player.status = BANNED`. Conserva todos los datos; no es la baja destructiva | Cualquier admin | Restaura el estado que tenía antes (`statusBefore`) |
+| **Expulsión** (`BAN`) | Pone `Player.status = BANNED`. Conserva todos los datos; es la forma de **retirar** a un participante aprobado, porque el panel ya no tiene baja destructiva | Cualquier admin | Restaura el estado que tenía antes (`statusBefore`) |
 | **Anulación de partidas** (`MATCH_ANNULMENT`) | Marca `Match.revertedAt` en victorias que hoy puntúan. La fila sigue en el historial | Cualquier admin | Quita la marca de esas partidas |
 | **Reversión** (`REVERSAL`) | Deshace una o varias actuaciones vigentes del mismo jugador | **Solo el superadministrador** | **No se revierte**: es final |
 
@@ -602,13 +621,13 @@ en Discord. Vive en `AdminAct` (`/admin/actuaciones`) y es un historial **aparte
   de la ventana y del corte de inscripción, con el ruleset actual y con el equipo equilibrado. Las
   derrotas no se anulan.
 - **La expulsión requiere un `APPROVED`** y no admite una segunda expulsión vigente. El estado `BANNED`
-  bloquea aprobar, rechazar y borrar: la única salida es revertir la expulsión.
+  bloquea aprobar y rechazar —y no hay borrado que ofrecer—: la única salida es revertir la expulsión.
 - **Se aplica al guardar.** El cambio y la actuación van en la misma transacción, con guardas
   condicionales para que dos admins no se pisen. Después se recalcula la clasificación y se reevalúan las
   alertas del jugador.
 - **Si el recálculo falla, no se compensa.** La actuación queda aplicada y la respuesta avisa de que la
-  clasificación se pondrá al día en la próxima pasada del sincronizador. Es el mismo criterio que la
-  baja de un jugador.
+  clasificación se pondrá al día en la próxima pasada del sincronizador. Es el mismo criterio que
+  deshacer una acción.
 - **La razón pública es obligatoria** (máx. 600 caracteres). **La información privada es opcional** (máx.
   4000) y **nunca** sale del panel: ni al canal, ni al DM, ni al log. El aviso recibe un tipo que no la
   admite.
@@ -1253,31 +1272,16 @@ hace el worker en su pasada (`announceDailyStandings()`, en `src/lib/standings-r
 
 ### Avisos de las acciones de administración
 
-Cuando la organización quita algo del torneo con una **baja de participante**, el bot lo cuenta: un
-**privado** a la persona afectada y un **mensaje global** al canal de avisos. Lo hace la propia Server
-Action, después de la transacción (`dispatchAdminNotice()`, `src/lib/admin-notice-send.ts`).
+Desde la issue 167 el bot **no anuncia acciones sobre participantes**: solo anuncia las **actuaciones
+administrativas** (expulsiones, anulaciones y reversiones), que llevan razón pública y sin información
+privada; ver [la sección de actuaciones](#avisos-de-las-actuaciones).
 
-| Acción | Cuándo avisa |
-|---|---|
-| **Baja de participante** (`deletePlayer`, `PLAYER_REMOVED`) | siempre |
-
-No avisan **deshacer** una acción ni aprobar o rechazar: no quitan nada ni son noticia. Las
-**actuaciones administrativas** (expulsiones, anulaciones y reversiones) tienen su propio aviso, con
-razón pública y sin información privada: ver
-[la sección de actuaciones](#avisos-de-las-actuaciones).
-
-| Qué | Cómo |
-|---|---|
-| Privado (DM) | `POST /users/@me/channels` + publicar. Necesita `discordUserId`; si solo hay `@usuario`, se resuelve contra el roster cacheado |
-| Global | Al canal de avisos, por `postChannelMessage()`. Corto, sin decir quién lo hizo (eso está en el historial del panel) |
-| Texto de la baja | «Retirado del torneo» si estaba `APPROVED`; si era una solicitud (`PENDING`/`REJECTED`), «solicitud descartada». Un `BANNED` no llega aquí: la baja se rechaza y hay que revertir primero la expulsión |
-
-- **No bloquea la acción y no puede hacerla fallar**: el aviso se aplaza con `ctx.waitUntil()` (o se deja
-  correr fuera del Worker), va después de la transacción —si el cambio falla no hay nada que avisar— y un
-  fallo de Discord queda en el log con el prefijo `[admin-notice]` **sin** cambiar lo que ve el
-  administrador ni el historial.
-- **Sin cuenta resoluble no hay privado**, y sin canal no hay global; los dos son **independientes** y
-  ninguno es un fallo. Sin `DISCORD_BOT_TOKEN` no se avisa de nada (solo queda el log).
+- **Retirar a un participante aprobado es una expulsión**, no una baja: se anuncia como actuación y
+  conserva sus datos.
+- La **baja destructiva** del panel ya no existe y con ella se retiró su aviso (`[admin-notice]`,
+  `src/lib/admin-notice-send.ts`). `AdminActionType.PLAYER_REMOVED` se queda solo para leer las filas
+  históricas del historial de acciones.
+- No avisan **deshacer** una acción ni aprobar o rechazar: no quitan nada ni son noticia.
 
 ## Eventos puntuales
 
