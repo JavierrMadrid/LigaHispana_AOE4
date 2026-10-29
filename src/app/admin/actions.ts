@@ -7,8 +7,6 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, PlayerStatus } from "@/generated/prisma/enums";
 import { recordAdminAction } from "@/lib/admin-actions";
-import { dispatchAdminNotice } from "@/lib/admin-notice-send";
-import { deletePlayerCascade, recomputeWithWarning } from "@/lib/admin-revert";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { requireAdmin, requireSuperadmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
@@ -33,9 +31,8 @@ import {
   type CamposEditables,
 } from "@/lib/player-fields";
 import { parseProfileId } from "@/lib/player-input";
-import { rankedMatchWhere, parseMadridLocalInstant } from "@/lib/ranked-match";
+import { parseMadridLocalInstant } from "@/lib/ranked-match";
 import { registrationClosedMessage } from "@/lib/registration-open";
-import { readRuleset } from "@/lib/scoring";
 import {
   readMatcherinoDonations,
   readRegistrationState,
@@ -75,10 +72,10 @@ import {
 /**
  * Estado de una acción que necesita poder **informar del resultado**.
  *
- * Es lo que permite que un diálogo de confirmación diga "no se ha podido borrar" en
- * vez de cerrarse en silencio. Sin estado de vuelta, un borrado que fallara con la
- * base caída sería indistinguible de uno que funcionó: el formulario desaparecería
- * igual y quien lo pulsó se quedaría creyendo lo contrario.
+ * Es lo que permite que un diálogo de confirmación diga "no se ha podido aprobar" en
+ * vez de cerrarse en silencio. Sin estado de vuelta, un cambio de estado que fallara con
+ * la base caída sería indistinguible de uno que funcionó: el diálogo se cerraría igual y
+ * quien lo pulsó se quedaría creyendo lo contrario.
  *
  * - `idle`: todavía no se ha enviado nada.
  * - `success`: se hizo, y `message` dice qué pasó.
@@ -592,8 +589,8 @@ function filaInexistente(error: unknown): boolean {
  * `youtubeChannel`, `kickChannel`, `country` y `discordUsername`— y nada más. Se
  * quedan fuera a propósito:
  *
- * - **El estado**, que ya tiene su aprobar/rechazar/eliminar y cuya decisión tiene
- *   su propio recorrido en la cola de revisión.
+ * - **El estado**, que ya tiene su aprobar/rechazar y cuya decisión tiene su propio
+ *   recorrido en la cola de revisión.
  * - **`profileId`**, que es la identidad del jugador en AoE4World y además único:
  *   cambiarlo sería cambiar de persona, y todas sus partidas vienen colgadas de él.
  * - **`aoe4WorldName`, el avatar y todo lo que escribe el worker** (elo, división,
@@ -1804,211 +1801,6 @@ export async function setMatcherinoDonations(
   revalidatePath("/(public)", "layout");
 
   return { status: "success", message };
-}
-
-/* -------------------------------------------------------------------------- */
-/* Baja de jugador                                                             */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Borra un jugador con todo lo suyo y deja la clasificación coherente.
- *
- * El borrado de `Player` arrastra en cascada sus partidas y sus filas de
- * clasificación, así que la web deja de listarlo de inmediato. Aun así se recalcula:
- * es lo que garantiza que la pasada que se escriba a continuación describa la
- * clasificación que realmente queda, en vez de dejarlo para que lo arregle el cron.
- *
- * El **cursor de sincronización** (`Setting["aoe4world.sync.player.<profileId>"]`)
- * no cae con la cascada —vive en `Setting`, sin FK al jugador— y por eso se borra
- * aquí, en la misma transacción: dejar el cursor huérfano hacía que un alta
- * posterior del mismo perfil creyera que ya tenía el histórico y solo pidiera
- * partidas desde esa fecha, importando cero.
- *
- * **A diferencia de una actuación que anula partidas, aquí un fallo del recálculo no
- * se compensa**, y es a propósito: el jugador ya está borrado y no se puede deshacer un
- * borrado sin inventar un "deshacer" que nadie pidió. Pero tampoco queda nada incoherente: los
- * puntos de cada jugador son de sus propias partidas, así que quitar a un jugador no
- * cambia los totales de los demás, y su fila de `PlayerScore` ya no existe. Lo único
- * pendiente es el rastro de `scoring.lastRun`, que se rellena en la siguiente
- * pasada. Por eso el estado devuelto es de **éxito con un aviso**: el borrado sí ha
- * pasado, y callarlo sería peor que decirlo.
- *
- * ## Qué cuenta como "sus partidas"
- *
- * El número del rastro no son las filas de `Match` que caen en cascada —el jugador
- * tiene importado su histórico entero, con modos que no puntúan y partidas anteriores
- * a la inscripción, y ese número no significa nada para el torneo—, sino sus
- * **partidas clasificatorias dentro de la ventana**, con la misma definición única que
- * el motor y que la columna "Partidas" del panel: `rankedMatchWhere()` con los `modes`
- * y la `window` del ruleset activo y el `registeredAt` del propio jugador. Es un
- * `db.match.count()` y no el `_count` de la cascada precisamente para leer esa regla y
- * no inventar una segunda.
- *
- * El estado del jugador **no** entra en la cuenta: `ranked-match.ts` dice que la
- * definición de partida clasificatoria no incluye el estado y que lo pone quien
- * consulta. La baja trata con un APPROVED, pero añadirlo como condición sería una
- * sexta regla que las otras traducciones no tienen.
- *
- * **La baja se rechaza si hay una actuación vigente o el jugador está `BANNED`.** El
- * expediente se revierte primero y después se decide la baja: borrar por debajo de una
- * expulsión o de una anulación dejaría el registro describiendo algo que ya no existe.
- * Las actuaciones históricas no se pierden (`AdminAct.playerId` pasa a `null`).
- */
-export async function deletePlayer(
-  _prevState: AdminActionResult,
-  formData: FormData,
-): Promise<AdminActionResult> {
-  const admin = await requireAdmin();
-  const playerId = readField(formData, "playerId");
-
-  if (!playerId) {
-    return { status: "error", message: "No se ha podido saber qué jugador hay que borrar." };
-  }
-
-  let encontrado: {
-    id: string;
-    name: string;
-    profileId: number;
-    matchCount: number;
-    /**
-     * Actuaciones **vigentes y revertibles** del jugador. Con una sola, la baja se
-     * rechaza: el expediente tiene que revertirse primero, y así no se borra a quien
-     * está expulsado ni se deja una anulación apuntando a un jugador que ya no existe.
-     * Las reversiones no cuentan: son finales y no bloquean nada.
-     */
-    activeActs: number;
-    /** Columnas capturadas antes del borrado: la fila desaparece en la transacción. */
-    status: PlayerStatus;
-    discordUserId: string | null;
-    discordUsername: string | null;
-  } | null;
-
-  try {
-    const row = await db.player.findUnique({
-      where: { id: playerId },
-      select: {
-        id: true,
-        name: true,
-        profileId: true,
-        registeredAt: true,
-        status: true,
-        discordUserId: true,
-        discordUsername: true,
-      },
-    });
-
-    if (row === null) {
-      encontrado = null;
-    } else {
-      const ruleset = await readRuleset();
-      const [matchCount, activeActs] = await Promise.all([
-        db.match.count({
-          where: {
-            playerId: row.id,
-            ...rankedMatchWhere(ruleset.modes, ruleset.window, row.registeredAt),
-          },
-        }),
-        db.adminAct.count({
-          where: { playerId: row.id, revertedAt: null, kind: { not: "REVERSAL" } },
-        }),
-      ]);
-
-      encontrado = {
-        id: row.id,
-        name: row.name,
-        profileId: row.profileId,
-        matchCount,
-        activeActs,
-        status: row.status,
-        discordUserId: row.discordUserId,
-        discordUsername: row.discordUsername,
-      };
-    }
-  } catch (error) {
-    logDatabaseFailure("admin/deletePlayer", error);
-
-    return { status: "error", message: SAVE_FAILED_MESSAGE };
-  }
-
-  if (encontrado === null) {
-    return { status: "error", message: "Ese jugador ya no está en el panel." };
-  }
-
-  // `const` a propósito: se usa dentro de un cierre (la transacción) y TypeScript
-  // solo estrecha un `let` si no puede haber sido reasignado entre medias.
-  const player = encontrado;
-
-  // La baja es destructiva y no se puede deshacer, así que no puede convivir con una
-  // actuación vigente: la expulsión se revierte, la anulación se revierte y después se
-  // decide la baja. El historial de actuaciones no se pierde (`playerId` pasa a
-  // `null`), pero el jugador sí.
-  if (player.status === PlayerStatus.BANNED) {
-    return {
-      status: "error",
-      message:
-        "Ese jugador está expulsado. Revierte primero la expulsión desde Actuaciones; borrarlo ahora dejaría el expediente sin efecto.",
-    };
-  }
-
-  if (player.activeActs > 0) {
-    return {
-      status: "error",
-      message:
-        "Ese jugador tiene actuaciones vigentes. Revierte primero la expulsión o la anulación desde Actuaciones; después se puede borrar.",
-    };
-  }
-
-  try {
-    await db.$transaction(async (tx) => {
-      // El borrado en cascada y el cursor de sincronización viven en
-      // `deletePlayerCascade()` (`src/lib/admin-revert.ts`), que es lo mismo que hace
-      // la reversión de un alta: las dos tienen que borrar exactamente lo mismo.
-      await deletePlayerCascade(player, tx);
-
-      await recordAdminAction(tx, {
-        type: AdminActionType.PLAYER_REMOVED,
-        actorEmail: actorEmail(admin),
-        targetId: player.id,
-        name: player.name,
-        profileId: player.profileId,
-        matchCount: player.matchCount,
-      });
-    });
-  } catch (error) {
-    logDatabaseFailure("admin/deletePlayer", error);
-
-    return { status: "error", message: SAVE_FAILED_MESSAGE };
-  }
-
-  revalidatePath("/admin");
-
-  // El aviso va **después** de la transacción —si hubiera fallado no habría nada que
-  // avisar—, no bloquea ni puede cambiar lo que ve el administrador (ver
-  // `dispatchAdminNotice()`), y las columnas de Discord se capturaron antes del borrado.
-  dispatchAdminNotice({
-    kind: "player-removed",
-    player: {
-      name: player.name,
-      status: player.status,
-      discordUserId: player.discordUserId,
-      discordUsername: player.discordUsername,
-    },
-    matchCount: player.matchCount,
-  });
-
-  const partidas =
-    player.matchCount === 0
-      ? "No tenía partidas clasificatorias."
-      : `Sus ${player.matchCount} ${player.matchCount === 1 ? "partida clasificatoria" : "partidas clasificatorias"} se han borrado con ella.`;
-
-  return {
-    status: "success",
-    message: frase(
-      `Se ha eliminado a ${player.name} (AoE4World ${player.profileId}).`,
-      partidas,
-      await recomputeWithWarning("admin/deletePlayer"),
-    ),
-  };
 }
 
 /* -------------------------------------------------------------------------- */

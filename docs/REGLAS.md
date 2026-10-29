@@ -107,7 +107,7 @@ Facultades internas para gestionar el torneo.
 |---|---|
 | **Aprobar, rechazar y editar** participantes. | Panel |
 | Aprobar un alta **sin la confirmación de la persona**: solo el superadministrador, con confirmación explícita y registro en el historial («Aprobación sin verificación»). | Panel |
-| **Expulsar** a un participante: deja de puntuar y conserva todos sus datos; se puede revertir. | Panel |
+| **Expulsar** a un participante: es la forma de retirarlo; deja de puntuar, conserva todos sus datos y se puede revertir. | Panel |
 | **Anular** partidas ganadas: dejan de contar sin borrarlas; se pueden revertir. | Panel |
 | **Versionar el reglamento**: un cambio de estructura sube la versión y recalcula la clasificación. | Panel |
 | Publicar el **premio base** de la edición y la **campaña de donaciones** de la comunidad, que se suma a él. | Panel (configuración de la edición) |
