@@ -41,7 +41,7 @@ con `AdminAct` y con `Match`. El resto de tablas son independientes.
 | `MatchResult` | `WIN`, `LOSS` |
 | `ObjectiveLeadKind` | `LOST`, `GAINED` (en ese orden, y no es decorativo: ver abajo) |
 | `ObjectiveProgressKind` | `CUMPLIDO`, `PERDIDO`, `PROGRESADO` (el orden no significa nada: el feed va por `at`) |
-| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
+| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED` (histórico), `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
 | `AdminActKind` | `BAN`, `MATCH_ANNULMENT`, `REVERSAL` |
 | `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión), `NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP`, `NO_RESOURCES_GAP`, `SUMMARY_NOT_REVIEWED` |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED`, `MATCH_DETECTED` |
@@ -56,8 +56,9 @@ consulta deja la ganancia delante en descendente (el estado que queda: el nuevo 
 que reordenarlo; el que se añada va al final.
 
 `PlayerStatus.BANNED` es un estado **reversible**: lo pone una actuación administrativa (`AdminAct` de
-tipo `BAN`) y solo se sale de él revirtiéndola. No es la baja destructiva (`deletePlayer`): conserva
-todos los datos del participante y el motor lo trata como no aprobado (solo publica `APPROVED`).
+tipo `BAN`) y solo se sale de él revirtiéndola. Es la forma de retirar a un participante —el panel no
+tiene baja destructiva—: conserva todos los datos del participante y el motor lo trata como no aprobado
+(solo publica `APPROVED`).
 
 Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con un compañero) y
 `LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
@@ -407,10 +408,12 @@ cerrado (lo confirmó el sondeo) y `SUMMARY_NOT_REVIEWED` dice que no se pudo co
 
 Una acción del panel, para poder pintar su historial. **Append-only**: quién hizo qué y sobre qué
 fila. `summary` va ya redactado en español. Registra lo que cambia datos que se ven desde fuera:
-altas, bajas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
+altas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
 jugador en la clasificación y rechazar lo deja fuera), los revert/restore de puntos de una partida,
 la gestión de admins, los cambios de configuración de la edición y la **reversión** de una acción
-anterior (`ACTION_REVERTED`). La única escritura sobre una fila ya existente es la marca de revertida
+anterior (`ACTION_REVERTED`). `PLAYER_REMOVED` queda para las filas **históricas**: la baja destructiva
+dejó de ofrecerse en el panel (issue 167; retirar a un aprobado es una actuación de expulsión). La
+única escritura sobre una fila ya existente es la marca de revertida
 (`revertedAt`/`revertedByEmail`): el rastro de lo hecho sobrevive a que se deshaga, y lo único que
 dice la marca es que ya no está vigente. Qué tipos se pueden deshacer y qué hace cada uno está en
 [`OPERACION.md`](./OPERACION.md#deshacer-una-acción).
@@ -462,9 +465,10 @@ ser una actuación vigente que no sea `REVERSAL`. Una expulsión y una anulació
 **dos** actuaciones; la única que selecciona varias filas es la reversión, y siempre del mismo
 participante.
 
-El **borrado del jugador** se rechaza mientras tenga actuaciones vigentes y revertibles
-(`revertedAt null` y `kind != REVERSAL`) o esté `BANNED`: primero se revierte, después se decide la
-baja. Las actuaciones históricas quedan con `playerId = null` y su foto de nombre y perfil.
+El **borrado de un jugador** —que hoy solo ocurre al deshacer un alta— se rechaza mientras tenga
+actuaciones vigentes y revertibles (`revertedAt null` y `kind != REVERSAL`) o esté `BANNED`: primero se
+revierte, después se borra. Las actuaciones históricas quedan con `playerId = null` y su foto de nombre
+y perfil.
 
 ## `AdminActMatch`
 
@@ -558,7 +562,7 @@ Claves vivas en producción, con quién las escribe:
 | `edition.announcements` | Memoria de los avisos de la edición en Discord: comienzo y final (`startedAt`/`finishedAt`, o `null`), los hitos nuevos ya avisados (`sent`: clave de hito → instante) y si el plazo de inscripción llegó a estar abierto (`registrationWasOpen`). Una marca puesta no se quita nunca. | Worker (`src/lib/edition-announcements.ts`) |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube y su playlist de subidas, ya resueltos (30 días). | Worker |
-| `aoe4world.sync.player.<profileId>` | Estado de **auditoría** del último relleno del jugador: `since`, `maxStartedAt`, `lastSyncedAt` y abandonos. Ya no es el cursor de petición; ese es global (`sync.gamesCursor`). | Worker; la baja de `/admin` lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede una auditoría vieja. |
+| `aoe4world.sync.player.<profileId>` | Estado de **auditoría** del último relleno del jugador: `since`, `maxStartedAt`, `lastSyncedAt` y abandonos. Ya no es el cursor de petición; ese es global (`sync.gamesCursor`). | Worker; deshacer un alta lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede una auditoría vieja. |
 
 ## Índices
 
