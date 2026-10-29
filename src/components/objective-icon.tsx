@@ -1,10 +1,7 @@
 import type { ComponentType, ReactNode } from "react";
+import { civilizationFile, objectiveCivilization } from "@/lib/civs";
 import type { ObjectiveOption } from "@/lib/public";
-import {
-  CivilizationIcon,
-  CivilizationPlaceholderIcon,
-  civilizationFile,
-} from "@/components/civilization-icon";
+import { CivilizationIcon, CivilizationPlaceholderIcon } from "@/components/civilization-icon";
 
 /**
  * Icono de un objetivo especial, al inicio de su tarjeta.
@@ -29,9 +26,6 @@ import {
  * así que no se pide texto alternativo.
  */
 
-/** Prefijos de id que llevan la civilización pegada (`lider-japanese` → `japanese`). */
-const CIV_PREFIXES = ["masterizando-", "lider-", "acolito-"] as const;
-
 /**
  * Forma mínima que necesita el icono. La comparten `ObjectiveOption` (tarjetas
  * de `/objetivos`) y `StandingObjective` (fila de la clasificación), así que el
@@ -47,19 +41,8 @@ type ObjectiveIconProps = {
   className?: string;
 };
 
-/** La civilización de un id de objetivo, o `null` si el id no es de civilización. */
-function objectiveCiv(id: string): string | null {
-  for (const prefix of CIV_PREFIXES) {
-    if (id.startsWith(prefix)) {
-      return id.slice(prefix.length);
-    }
-  }
-
-  return null;
-}
-
 export function ObjectiveIcon({ option, className = "size-6 shrink-0" }: ObjectiveIconProps) {
-  const civ = objectiveCiv(option.id);
+  const civ = objectiveCivilization(option.id);
   const civFile = civ === null ? null : civilizationFile(civ);
 
   if (civFile !== null) {

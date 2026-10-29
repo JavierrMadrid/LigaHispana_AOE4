@@ -17,6 +17,8 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `PlayerScore` | La clasificación agregada, por version de reglas. | pk `(playerId, ruleSetVersion)` |
 | `ObjectiveEvent` | Un **logro** cobrado por un jugador y cuándo. | único `(objectiveId, playerId)` |
 | `ObjectiveLeadEvent` | Un cambio de poseedor de una **competición** (append-only). | `id` |
+| `ObjectiveProgressEvent` | Un cambio de **progreso** de un objetivo, con sus valores (append-only). Lo lee la API del overlay. | `id` |
+| `ObjectiveProgressState` | El progreso **actual** de un jugador en un objetivo, por edición. Uso interno de la reconciliación. | pk `(playerId, objectiveId, editionFrom)` |
 | `Alert` | Un comportamiento anómalo detectado (append-only). | `id`; único `dedupeKey` |
 | `AdminAction` | Una acción del panel (append-only). | `id` |
 | `AdminAct` | Una **actuación administrativa**: expulsión, anulación o reversión, con razón pública. | `id` |
@@ -25,8 +27,9 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `RateLimitCounter` | Un contador de frecuencia por IP hasheada. | `key` |
 | `Setting` | Configuración y memoria de los procesos. | `key` |
 
-Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent`, `ObjectiveLeadEvent` y `Alert` apuntan a
-`Player` con `onDelete: Cascade`. `AdminAct` apunta a `Player` con `onDelete: SetNull` (la actuación
+Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent`, `ObjectiveLeadEvent`,
+`ObjectiveProgressEvent`, `ObjectiveProgressState` y `Alert` apuntan a `Player` con
+`onDelete: Cascade`. `AdminAct` apunta a `Player` con `onDelete: SetNull` (la actuación
 sobrevive al borrado del jugador con la foto de nombre y perfil), y `AdminActMatch` cae en cascada
 con `AdminAct` y con `Match`. El resto de tablas son independientes.
 
@@ -37,7 +40,8 @@ con `AdminAct` y con `Match`. El resto de tablas son independientes.
 | `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED`, `BANNED` |
 | `MatchResult` | `WIN`, `LOSS` |
 | `ObjectiveLeadKind` | `LOST`, `GAINED` (en ese orden, y no es decorativo: ver abajo) |
-| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED`, `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
+| `ObjectiveProgressKind` | `CUMPLIDO`, `PERDIDO`, `PROGRESADO` (el orden no significa nada: el feed va por `at`) |
+| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED` (histórico), `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
 | `AdminActKind` | `BAN`, `MATCH_ANNULMENT`, `REVERSAL` |
 | `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión), `NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP`, `NO_RESOURCES_GAP`, `SUMMARY_NOT_REVIEWED` |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED`, `MATCH_DETECTED` |
@@ -52,8 +56,9 @@ consulta deja la ganancia delante en descendente (el estado que queda: el nuevo 
 que reordenarlo; el que se añada va al final.
 
 `PlayerStatus.BANNED` es un estado **reversible**: lo pone una actuación administrativa (`AdminAct` de
-tipo `BAN`) y solo se sale de él revirtiéndola. No es la baja destructiva (`deletePlayer`): conserva
-todos los datos del participante y el motor lo trata como no aprobado (solo publica `APPROVED`).
+tipo `BAN`) y solo se sale de él revirtiéndola. Es la forma de retirar a un participante —el panel no
+tiene baja destructiva—: conserva todos los datos del participante y el motor lo trata como no aprobado
+(solo publica `APPROVED`).
 
 Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con un compañero) y
 `LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
@@ -200,12 +205,12 @@ de puntos están siempre presentes en una fila nueva, con ceros si no aplican.
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
   },
   "objectives": {
-    "points": 458,
+    "points": 283,
     "earned": ["victorias", "loco-por-ganar", "rey-1v1"],
     "awards": {
       "victorias": { "points": 168, "count": 84 },
-      "loco-por-ganar": { "points": 50, "count": 1 },
-      "rey-1v1": { "points": 240, "count": 1 }
+      "loco-por-ganar": { "points": 25, "count": 1 },
+      "rey-1v1": { "points": 90, "count": 1 }
     }
   },
   "events": {
@@ -296,6 +301,74 @@ activo), como en `ObjectiveEvent`. En una competición el importe es el mismo pa
 la ganancia (premio fijo), así que las dos filas de un cambio llevan la misma cifra y el signo lo
 decide quien pinta.
 
+## `ObjectiveProgressEvent`
+
+Un **cambio de progreso** de un objetivo: cuándo un jugador lo cumplió (`CUMPLIDO`), lo perdió
+(`PERDIDO`) o avanzó hacia él (`PROGRESADO`), **con los valores** de progreso de ese instante. Es el
+feed que lee la API del overlay (`GET /api/v0/clasificacion`), que publica por objetivo el `tipo`, la
+`fechahora` y el `progreso { propio, ajeno? }` de cada evento. **No alimenta la clasificación.**
+
+El contrato que lo publica —endpoints, campos, tipos y errores— está en
+[`API-OVERLAY.md`](./API-OVERLAY.md).
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `objectiveId` | `String` | Id del catálogo (`victorias`, `imparable`, `loco-por-ganar`…). Sin FK: son constantes de código, como en `ObjectiveEvent` y `ObjectiveLeadEvent`. |
+| `playerId` | `String` | FK a `Player.id`, cascada. |
+| `kind` | `ObjectiveProgressKind` | `CUMPLIDO`, `PERDIDO` o `PROGRESADO`. |
+| `at` | `DateTime` | Instante del **recálculo que detectó el cambio**, no la fecha de la partida. En la siembra de un logro con la ventana cerrada, `window.to`. |
+| `editionFrom` | `DateTime` | `window.from` de la edición que sella la cohorte (ver abajo). |
+| `ownValue` | `Int` | Progreso propio en el momento del evento. |
+| `otherValue` | `Int?` | Solo en `PERDIDO`: valor del **nuevo poseedor**. `null` si no hay poseedor, y `null` en los otros dos tipos. |
+| `repetition` | `Int?` | Solo en los objetivos repetibles (`victorias`, `imparable`); `null` en el resto. |
+| `recordedAt` | `DateTime` | Cuándo lo registró el motor. |
+
+Índices: `(playerId, editionFrom, at)` (consulta de la API por jugador y `desde`, con el orden del
+feed detrás) y `(editionFrom, at, objectiveId)` (cohorte y orden del feed completo de una edición).
+
+Es **append-only**, al revés que `ObjectiveEvent`, y **no es un espejo**: describe un hecho de un
+instante —"pasó de 7 a 8 victorias"— que no deja de ser cierto porque después se revierta una partida;
+lo que hay que anotar es el cambio siguiente. Un espejo no serviría, porque el overlay necesita la
+secuencia, no el estado final.
+
+**Cohortes.** `editionFrom` es la cohorte de la fila, como en `ObjectiveLeadEvent`: la API filtra por
+la edición activa, así que una edición nueva arranca su feed sin mezclar el progreso de la anterior.
+
+**Por qué guarda los valores.** Las tablas de historial anteriores no los guardan: `ObjectiveEvent`
+solo anota el cierre de la ventana y `ObjectiveLeadEvent` solo el cambio de poseedor. El contrato del
+overlay pide el progreso histórico **exacto**, y el valor de hoy no sirve para reconstruir el de ayer.
+
+**Siembra.** La primera fila de un objetivo **no reconstruye el pasado**: se anota con el instante del
+pase que la descubre, porque el momento en que el progreso empezó no consta en ninguna parte.
+
+**Quién la escribe.** `recomputeScores()`, en la misma transacción que la clasificación.
+
+## `ObjectiveProgressState`
+
+El **estado actual** del progreso de un jugador en un objetivo, dentro de una edición: la memoria de
+trabajo de la reconciliación. **No se publica** y no tiene relación con la API.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `playerId` | `String` | FK a `Player.id`, cascada. |
+| `objectiveId` | `String` | Id del catálogo de objetivos. |
+| `editionFrom` | `DateTime` | `window.from` de la edición a la que pertenece el estado. |
+| `value` | `Int` | Progreso actual, **recortado al máximo** en los objetivos con tope. |
+| `completed` | `Boolean` | Posee la competición o ha completado el logro. No es lo mismo que "tiene el máximo". |
+| `repetition` | `Int?` | Repeticiones actuales en los repetibles; `null` en el resto. |
+| `updatedAt` | `DateTime` | |
+
+Clave primaria `(playerId, objectiveId, editionFrom)` —una fila por jugador, objetivo y edición, porque
+el progreso se reinicia con la edición— e índice `(editionFrom, objectiveId)` para cargar el estado de
+una edición entera de una vez.
+
+**Evento y estado no son lo mismo.** El evento es historia y no se toca; el estado se reescribe en cada
+pase y existe solo para que el recálculo sepa **qué cambió** sin releer el feed entero: carga el estado
+de la edición, lo compara con el cómputo del pase y anexa un evento por cada diferencia.
+
+**Quién la escribe.** `recomputeScores()`, igual que el feed.
+
 ## `Alert`
 
 Un comportamiento anómalo, detectado sobre las partidas clasificatorias. Es **append-only**: una
@@ -335,10 +408,12 @@ cerrado (lo confirmó el sondeo) y `SUMMARY_NOT_REVIEWED` dice que no se pudo co
 
 Una acción del panel, para poder pintar su historial. **Append-only**: quién hizo qué y sobre qué
 fila. `summary` va ya redactado en español. Registra lo que cambia datos que se ven desde fuera:
-altas, bajas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
+altas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
 jugador en la clasificación y rechazar lo deja fuera), los revert/restore de puntos de una partida,
 la gestión de admins, los cambios de configuración de la edición y la **reversión** de una acción
-anterior (`ACTION_REVERTED`). La única escritura sobre una fila ya existente es la marca de revertida
+anterior (`ACTION_REVERTED`). `PLAYER_REMOVED` queda para las filas **históricas**: la baja destructiva
+dejó de ofrecerse en el panel (issue 167; retirar a un aprobado es una actuación de expulsión). La
+única escritura sobre una fila ya existente es la marca de revertida
 (`revertedAt`/`revertedByEmail`): el rastro de lo hecho sobrevive a que se deshaga, y lo único que
 dice la marca es que ya no está vigente. Qué tipos se pueden deshacer y qué hace cada uno está en
 [`OPERACION.md`](./OPERACION.md#deshacer-una-acción).
@@ -390,9 +465,10 @@ ser una actuación vigente que no sea `REVERSAL`. Una expulsión y una anulació
 **dos** actuaciones; la única que selecciona varias filas es la reversión, y siempre del mismo
 participante.
 
-El **borrado del jugador** se rechaza mientras tenga actuaciones vigentes y revertibles
-(`revertedAt null` y `kind != REVERSAL`) o esté `BANNED`: primero se revierte, después se decide la
-baja. Las actuaciones históricas quedan con `playerId = null` y su foto de nombre y perfil.
+El **borrado de un jugador** —que hoy solo ocurre al deshacer un alta— se rechaza mientras tenga
+actuaciones vigentes y revertibles (`revertedAt null` y `kind != REVERSAL`) o esté `BANNED`: primero se
+revierte, después se borra. Las actuaciones históricas quedan con `playerId = null` y su foto de nombre
+y perfil.
 
 ## `AdminActMatch`
 
@@ -469,6 +545,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 3) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `sync.gamesCursor` | Cursor global de partidas: `updatedAt` (el `updated_since` de la siguiente pasada), `seededAt`, `seededFrom`, la racha de lotes truncados y el mejor `backfillPending` visto. | Worker (`src/lib/aoe4world/sync.ts`), con `writeGamesCursor()` |
+| `streams.lastRun` | Cuándo se comprobó por última vez el estado de directo de YouTube/Kick, en ISO-8601 UTC. Separa el reloj del paso (10 min) del de las partidas (1-3 min) para no gastar la cuota de YouTube. | Worker (`src/lib/aoe4world/sync.ts`), con `writeStreamsLastRun()` |
 | `alerts.ruleset` | Umbrales de las reglas de alerta. | `npm run alerts:*` / código |
 | `alerts.divisionCutoffs` | Cortes rating → subdivisión por familia de ladder (hoy solo `rm_team`): los usa la **condición de equipo** del motor de puntuación, y el de alertas los lee para filtrar con la misma regla. | `npm run alerts:cutoffs` |
 | `discord.roster` | Lista de miembros del servidor cacheada (TTL 12 h). | `src/lib/discord/roster-cache.ts` |
@@ -485,7 +562,7 @@ Claves vivas en producción, con quién las escribe:
 | `edition.announcements` | Memoria de los avisos de la edición en Discord: comienzo y final (`startedAt`/`finishedAt`, o `null`), los hitos nuevos ya avisados (`sent`: clave de hito → instante) y si el plazo de inscripción llegó a estar abierto (`registrationWasOpen`). Una marca puesta no se quita nunca. | Worker (`src/lib/edition-announcements.ts`) |
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube y su playlist de subidas, ya resueltos (30 días). | Worker |
-| `aoe4world.sync.player.<profileId>` | Estado de **auditoría** del último relleno del jugador: `since`, `maxStartedAt`, `lastSyncedAt` y abandonos. Ya no es el cursor de petición; ese es global (`sync.gamesCursor`). | Worker; la baja de `/admin` lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede una auditoría vieja. |
+| `aoe4world.sync.player.<profileId>` | Estado de **auditoría** del último relleno del jugador: `since`, `maxStartedAt`, `lastSyncedAt` y abandonos. Ya no es el cursor de petición; ese es global (`sync.gamesCursor`). | Worker; deshacer un alta lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede una auditoría vieja. |
 
 ## Índices
 
@@ -506,6 +583,8 @@ aparece en una consulta, no se crea.**
 | `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, ordenada por `rank` y, dentro del puesto compartido, por `Player.profileId`. |
 | `ObjectiveEvent` | `(objectiveId, playerId)` (único), `(achievedAt, objectiveId)`, `(playerId, achievedAt)` | Reconciliación; feed paginado por ventanas (fecha y desempate por objetivo); filtro por jugador y cascada. |
 | `ObjectiveLeadEvent` | `(editionFrom, at, objectiveId, kind)`, `(playerId, editionFrom, at)` | Feed paginado por ventanas (cohorte, rango de fecha y orden del merge); filtro por jugador y cascada. |
+| `ObjectiveProgressEvent` | `(playerId, editionFrom, at)`, `(editionFrom, at, objectiveId)` | Consulta de la API del overlay por jugador, edición y `at >= desde`; cohorte y orden del feed de una edición. |
+| `ObjectiveProgressState` | pk `(playerId, objectiveId, editionFrom)`, `(editionFrom, objectiveId)` | Estado de un jugador y cascada desde su primera columna; carga del estado de una edición en la reconciliación. |
 | `Alert` | `dedupeKey` (único), `createdAt`, `(playerId, rule)` | Idempotencia, listado, detalle por jugador. |
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
 | `AdminAct` | `createdAt`, `(kind, createdAt)`, `(playerId, createdAt)`, `(revertedAt, kind)`, `(reversedByActId)` | Listado y filtros por tipo, jugador y estado; autorrelación de la reversión. |
@@ -529,6 +608,8 @@ aparece en una consulta, no se crea.**
 | Inscripción | `RateLimitCounter` con `ON CONFLICT` | `key` (pk) |
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
 | Motor (recálculo) | `Match where mode = any(...) and startedAt en ventana and result/finishedAt no nulos` | `(mode, startedAt)` |
+| API del overlay (`GET /api/v0/clasificacion`) | `ObjectiveProgressEvent where playerId = X and editionFrom = edición and at >= desde order by at` | `(playerId, editionFrom, at)` |
+| Motor (reconciliación del progreso) | `ObjectiveProgressState where editionFrom = edición`, y una fila por `(playerId, objectiveId, editionFrom)` al comparar | `(editionFrom, objectiveId)`; pk `(playerId, objectiveId, editionFrom)` |
 
 El filtro de qué cuenta es **uno solo**: `src/lib/ranked-match.ts` (ventana, corte de inscripción,
 marca de revertida y la condición de equipo de las partidas por equipos) y lo reparte como
@@ -538,7 +619,7 @@ marca de revertida y la condición de equipo de las partidas por equipos) y lo r
 
 ## RLS y privilegios
 
-Postura **cerrada**, aplicada a las doce tablas de `public`:
+Postura **cerrada**, aplicada a las catorce tablas de `public`:
 
 | Paso | Qué |
 |---|---|
@@ -547,7 +628,7 @@ Postura **cerrada**, aplicada a las doce tablas de `public`:
 | 3 | **Ningún `grant`** a `anon` ni a `authenticated`. |
 | 4 | Comprobar con `npm run db:security -- --check`. |
 
-Estado real: RLS activa y 0 políticas en las doce tablas, y sin permisos para `anon` ni
+Estado real: RLS activa y 0 políticas en las catorce tablas, y sin permisos para `anon` ni
 `authenticated`. `service_role` conserva sus permisos y su `BYPASSRLS`: es un rol de infraestructura
 de Supabase, no un cliente del torneo. Consecuencia en la Data API: **`401 permission denied`** (el
 permiso de tabla se comprueba antes que RLS). No se "arregla" concediendo `SELECT`; si algún día
@@ -558,8 +639,9 @@ hace falta servir una tabla, sería con una vista `security_invoker = true` y un
 - Antes de activar RLS, el script comprueba que el rol de `DATABASE_URL` tenga `BYPASSRLS`; si no,
   se niega a aplicar nada (la web dejaría de ver datos en silencio).
 - La lista de tablas del script es **explícita**: al añadir una tabla hay que añadirla ahí, porque
-  una tabla nueva nace con los permisos por defecto de Supabase. `Admin`, `AdminAct` y `AdminActMatch`
-  ya están en esa lista.
+  una tabla nueva nace con los permisos por defecto de Supabase. Las catorce están en esa lista;
+  `ObjectiveProgressEvent` y `ObjectiveProgressState` entraron con la API del overlay y se leen solo
+  por el DAL, nunca por la Data API.
 
 ## Cambios de esquema
 

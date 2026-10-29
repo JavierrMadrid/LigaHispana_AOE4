@@ -7,8 +7,6 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@/generated/prisma/client";
 import { AdminActionType, PlayerStatus } from "@/generated/prisma/enums";
 import { recordAdminAction } from "@/lib/admin-actions";
-import { dispatchAdminNotice } from "@/lib/admin-notice-send";
-import { deletePlayerCascade, recomputeWithWarning } from "@/lib/admin-revert";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
 import { requireAdmin, requireSuperadmin } from "@/lib/auth";
 import { readCountries } from "@/lib/countries";
@@ -23,7 +21,7 @@ import {
 import { sendPlayerVerificationDm } from "@/lib/discord/verification-send";
 import { parseMatcherinoDonations, type MatcherinoDonations } from "@/lib/donations";
 import { formatAbsoluteTime } from "@/lib/format";
-import { consumeManualSyncLock, MANUAL_SYNC_COOLDOWN_SECONDS } from "@/lib/manual-sync";
+import { consumeManualSyncLock, readSyncCadence } from "@/lib/manual-sync";
 import {
   campoSiCambia,
   camposQueCambian,
@@ -33,9 +31,8 @@ import {
   type CamposEditables,
 } from "@/lib/player-fields";
 import { parseProfileId } from "@/lib/player-input";
-import { rankedMatchWhere, parseMadridLocalInstant } from "@/lib/ranked-match";
+import { parseMadridLocalInstant } from "@/lib/ranked-match";
 import { registrationClosedMessage } from "@/lib/registration-open";
-import { readRuleset } from "@/lib/scoring";
 import {
   readMatcherinoDonations,
   readRegistrationState,
@@ -75,10 +72,10 @@ import {
 /**
  * Estado de una acción que necesita poder **informar del resultado**.
  *
- * Es lo que permite que un diálogo de confirmación diga "no se ha podido borrar" en
- * vez de cerrarse en silencio. Sin estado de vuelta, un borrado que fallara con la
- * base caída sería indistinguible de uno que funcionó: el formulario desaparecería
- * igual y quien lo pulsó se quedaría creyendo lo contrario.
+ * Es lo que permite que un diálogo de confirmación diga "no se ha podido aprobar" en
+ * vez de cerrarse en silencio. Sin estado de vuelta, un cambio de estado que fallara con
+ * la base caída sería indistinguible de uno que funcionó: el diálogo se cerraría igual y
+ * quien lo pulsó se quedaría creyendo lo contrario.
  *
  * - `idle`: todavía no se ha enviado nada.
  * - `success`: se hizo, y `message` dice qué pasó.
@@ -262,7 +259,7 @@ function actorEmail(user: User): string {
  *
  * El alta **solo escribe la fila**. No trae partidas ni recalcula en línea: el
  * jugador entra en la clasificación en la siguiente pasada del sincronizador
- * (hasta 10 minutos) o cuando la organización pulse «Sincronizar ahora» en esta
+ * (1-3 minutos) o cuando la organización pulse «Sincronizar ahora» en esta
  * misma pestaña. Es una decisión de producto, no un olvido: en el plan Free de
  * Cloudflare el presupuesto es de 10 ms de CPU por invocación y una pasada gasta
  * ~500 ms, así que lanzarla dentro de la petición del alta muere con `Worker
@@ -537,7 +534,7 @@ export async function createPlayer(
   if (status === PlayerStatus.APPROVED) {
     return {
       error: null,
-      message: `Se ha dado de alta a ${name}. Aparecerá en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias; puedes forzarla con «Sincronizar ahora» en esta misma pestaña.`,
+      message: `Se ha dado de alta a ${name}. Aparecerá en la clasificación en la próxima pasada del sincronizador (1-3 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias; puedes forzarla con «Sincronizar ahora» en esta misma pestaña.`,
     };
   }
 
@@ -546,7 +543,7 @@ export async function createPlayer(
       error: null,
       message: verificationConfigured
         ? `Se ha dado de alta a ${name} como pendiente. Cuando la apruebes se le enviará un privado de verificación y no entrará en la clasificación hasta que confirme desde su cuenta.`
-        : `Se ha dado de alta a ${name} como pendiente. Al aprobarlo aparecerá en la clasificación en la próxima pasada del sincronizador (hasta 10 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`,
+        : `Se ha dado de alta a ${name} como pendiente. Al aprobarlo aparecerá en la clasificación en la próxima pasada del sincronizador (1-3 minutos), con 0 puntos y 0 partidas hasta que tenga partidas clasificatorias.`,
     };
   }
 
@@ -592,8 +589,8 @@ function filaInexistente(error: unknown): boolean {
  * `youtubeChannel`, `kickChannel`, `country` y `discordUsername`— y nada más. Se
  * quedan fuera a propósito:
  *
- * - **El estado**, que ya tiene su aprobar/rechazar/eliminar y cuya decisión tiene
- *   su propio recorrido en la cola de revisión.
+ * - **El estado**, que ya tiene su aprobar/rechazar y cuya decisión tiene su propio
+ *   recorrido en la cola de revisión.
  * - **`profileId`**, que es la identidad del jugador en AoE4World y además único:
  *   cambiarlo sería cambiar de persona, y todas sus partidas vienen colgadas de él.
  * - **`aoe4WorldName`, el avatar y todo lo que escribe el worker** (elo, división,
@@ -977,7 +974,7 @@ export async function updatePlayer(
  * ## Lo que no hace
  *
  * Sigue **sin traer partidas ni recalcular**: al pasar a `APPROVED` el jugador entra
- * en el siguiente cálculo del sincronizador, y ese cálculo lo hace el cron (cada 10
+ * en el siguiente cálculo del sincronizador, y ese cálculo lo hace el cron (cada 1-3
  * minutos) o la llamada manual (`syncNow`), no esta petición. Una pasada gasta
  * ~500 ms de CPU y el plan Free de Cloudflare da 10 ms por invocación, así que
  * lanzarla dentro del aprobado mataba el *isolate* con `Worker exceeded CPU time
@@ -1807,211 +1804,6 @@ export async function setMatcherinoDonations(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Baja de jugador                                                             */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Borra un jugador con todo lo suyo y deja la clasificación coherente.
- *
- * El borrado de `Player` arrastra en cascada sus partidas y sus filas de
- * clasificación, así que la web deja de listarlo de inmediato. Aun así se recalcula:
- * es lo que garantiza que la pasada que se escriba a continuación describa la
- * clasificación que realmente queda, en vez de dejarlo para que lo arregle el cron.
- *
- * El **cursor de sincronización** (`Setting["aoe4world.sync.player.<profileId>"]`)
- * no cae con la cascada —vive en `Setting`, sin FK al jugador— y por eso se borra
- * aquí, en la misma transacción: dejar el cursor huérfano hacía que un alta
- * posterior del mismo perfil creyera que ya tenía el histórico y solo pidiera
- * partidas desde esa fecha, importando cero.
- *
- * **A diferencia de una actuación que anula partidas, aquí un fallo del recálculo no
- * se compensa**, y es a propósito: el jugador ya está borrado y no se puede deshacer un
- * borrado sin inventar un "deshacer" que nadie pidió. Pero tampoco queda nada incoherente: los
- * puntos de cada jugador son de sus propias partidas, así que quitar a un jugador no
- * cambia los totales de los demás, y su fila de `PlayerScore` ya no existe. Lo único
- * pendiente es el rastro de `scoring.lastRun`, que se rellena en la siguiente
- * pasada. Por eso el estado devuelto es de **éxito con un aviso**: el borrado sí ha
- * pasado, y callarlo sería peor que decirlo.
- *
- * ## Qué cuenta como "sus partidas"
- *
- * El número del rastro no son las filas de `Match` que caen en cascada —el jugador
- * tiene importado su histórico entero, con modos que no puntúan y partidas anteriores
- * a la inscripción, y ese número no significa nada para el torneo—, sino sus
- * **partidas clasificatorias dentro de la ventana**, con la misma definición única que
- * el motor y que la columna "Partidas" del panel: `rankedMatchWhere()` con los `modes`
- * y la `window` del ruleset activo y el `registeredAt` del propio jugador. Es un
- * `db.match.count()` y no el `_count` de la cascada precisamente para leer esa regla y
- * no inventar una segunda.
- *
- * El estado del jugador **no** entra en la cuenta: `ranked-match.ts` dice que la
- * definición de partida clasificatoria no incluye el estado y que lo pone quien
- * consulta. La baja trata con un APPROVED, pero añadirlo como condición sería una
- * sexta regla que las otras traducciones no tienen.
- *
- * **La baja se rechaza si hay una actuación vigente o el jugador está `BANNED`.** El
- * expediente se revierte primero y después se decide la baja: borrar por debajo de una
- * expulsión o de una anulación dejaría el registro describiendo algo que ya no existe.
- * Las actuaciones históricas no se pierden (`AdminAct.playerId` pasa a `null`).
- */
-export async function deletePlayer(
-  _prevState: AdminActionResult,
-  formData: FormData,
-): Promise<AdminActionResult> {
-  const admin = await requireAdmin();
-  const playerId = readField(formData, "playerId");
-
-  if (!playerId) {
-    return { status: "error", message: "No se ha podido saber qué jugador hay que borrar." };
-  }
-
-  let encontrado: {
-    id: string;
-    name: string;
-    profileId: number;
-    matchCount: number;
-    /**
-     * Actuaciones **vigentes y revertibles** del jugador. Con una sola, la baja se
-     * rechaza: el expediente tiene que revertirse primero, y así no se borra a quien
-     * está expulsado ni se deja una anulación apuntando a un jugador que ya no existe.
-     * Las reversiones no cuentan: son finales y no bloquean nada.
-     */
-    activeActs: number;
-    /** Columnas capturadas antes del borrado: la fila desaparece en la transacción. */
-    status: PlayerStatus;
-    discordUserId: string | null;
-    discordUsername: string | null;
-  } | null;
-
-  try {
-    const row = await db.player.findUnique({
-      where: { id: playerId },
-      select: {
-        id: true,
-        name: true,
-        profileId: true,
-        registeredAt: true,
-        status: true,
-        discordUserId: true,
-        discordUsername: true,
-      },
-    });
-
-    if (row === null) {
-      encontrado = null;
-    } else {
-      const ruleset = await readRuleset();
-      const [matchCount, activeActs] = await Promise.all([
-        db.match.count({
-          where: {
-            playerId: row.id,
-            ...rankedMatchWhere(ruleset.modes, ruleset.window, row.registeredAt),
-          },
-        }),
-        db.adminAct.count({
-          where: { playerId: row.id, revertedAt: null, kind: { not: "REVERSAL" } },
-        }),
-      ]);
-
-      encontrado = {
-        id: row.id,
-        name: row.name,
-        profileId: row.profileId,
-        matchCount,
-        activeActs,
-        status: row.status,
-        discordUserId: row.discordUserId,
-        discordUsername: row.discordUsername,
-      };
-    }
-  } catch (error) {
-    logDatabaseFailure("admin/deletePlayer", error);
-
-    return { status: "error", message: SAVE_FAILED_MESSAGE };
-  }
-
-  if (encontrado === null) {
-    return { status: "error", message: "Ese jugador ya no está en el panel." };
-  }
-
-  // `const` a propósito: se usa dentro de un cierre (la transacción) y TypeScript
-  // solo estrecha un `let` si no puede haber sido reasignado entre medias.
-  const player = encontrado;
-
-  // La baja es destructiva y no se puede deshacer, así que no puede convivir con una
-  // actuación vigente: la expulsión se revierte, la anulación se revierte y después se
-  // decide la baja. El historial de actuaciones no se pierde (`playerId` pasa a
-  // `null`), pero el jugador sí.
-  if (player.status === PlayerStatus.BANNED) {
-    return {
-      status: "error",
-      message:
-        "Ese jugador está expulsado. Revierte primero la expulsión desde Actuaciones; borrarlo ahora dejaría el expediente sin efecto.",
-    };
-  }
-
-  if (player.activeActs > 0) {
-    return {
-      status: "error",
-      message:
-        "Ese jugador tiene actuaciones vigentes. Revierte primero la expulsión o la anulación desde Actuaciones; después se puede borrar.",
-    };
-  }
-
-  try {
-    await db.$transaction(async (tx) => {
-      // El borrado en cascada y el cursor de sincronización viven en
-      // `deletePlayerCascade()` (`src/lib/admin-revert.ts`), que es lo mismo que hace
-      // la reversión de un alta: las dos tienen que borrar exactamente lo mismo.
-      await deletePlayerCascade(player, tx);
-
-      await recordAdminAction(tx, {
-        type: AdminActionType.PLAYER_REMOVED,
-        actorEmail: actorEmail(admin),
-        targetId: player.id,
-        name: player.name,
-        profileId: player.profileId,
-        matchCount: player.matchCount,
-      });
-    });
-  } catch (error) {
-    logDatabaseFailure("admin/deletePlayer", error);
-
-    return { status: "error", message: SAVE_FAILED_MESSAGE };
-  }
-
-  revalidatePath("/admin");
-
-  // El aviso va **después** de la transacción —si hubiera fallado no habría nada que
-  // avisar—, no bloquea ni puede cambiar lo que ve el administrador (ver
-  // `dispatchAdminNotice()`), y las columnas de Discord se capturaron antes del borrado.
-  dispatchAdminNotice({
-    kind: "player-removed",
-    player: {
-      name: player.name,
-      status: player.status,
-      discordUserId: player.discordUserId,
-      discordUsername: player.discordUsername,
-    },
-    matchCount: player.matchCount,
-  });
-
-  const partidas =
-    player.matchCount === 0
-      ? "No tenía partidas clasificatorias."
-      : `Sus ${player.matchCount} ${player.matchCount === 1 ? "partida clasificatoria" : "partidas clasificatorias"} se han borrado con ella.`;
-
-  return {
-    status: "success",
-    message: frase(
-      `Se ha eliminado a ${player.name} (AoE4World ${player.profileId}).`,
-      partidas,
-      await recomputeWithWarning("admin/deletePlayer"),
-    ),
-  };
-}
-
-/* -------------------------------------------------------------------------- */
 /* Sincronización a mano                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -2028,12 +1820,21 @@ export type SyncNowState = {
 };
 
 /**
- * Minutos que dice el mensaje de cooldown.
+ * Cuánto dice el mensaje de cooldown que dura el candado.
  *
- * Salen de la constante del candado y no de un número escrito a mano, para que el texto
- * no pueda mentir si algún día cambia la ventana. Ver `src/lib/manual-sync.ts`.
+ * Sale de la ventana que acaba de usar el candado (`lock.windowSeconds`) y no de un número
+ * escrito a mano, para que el texto no pueda mentir cuando la cadencia cambia entre 1 y 3
+ * minutos. Ver `src/lib/manual-sync.ts`.
  */
-const MINUTOS_DE_CANDADO = MANUAL_SYNC_COOLDOWN_SECONDS / 60;
+function fraseDeCandado(windowSeconds: number): string {
+  if (windowSeconds <= 60) {
+    return "el candado deja una pasada cada minuto";
+  }
+
+  const minutos = Math.round(windowSeconds / 60);
+
+  return `el candado deja una pasada cada ${minutos} minutos`;
+}
 
 /**
  * Lanza una pasada del sincronizador a mano, para cuando el cron no llega.
@@ -2050,8 +1851,8 @@ const MINUTOS_DE_CANDADO = MANUAL_SYNC_COOLDOWN_SECONDS / 60;
  * propio. Con dos candados, un admin podía encadenar pasadas seguidas mientras el cron
  * seguía creyendo que su ventana estaba libre: el trabajo real —las peticiones a la API
  * de AoE4World y el presupuesto de CPU del plan Free— lo pagan las dos, y el candado
- * compartido es lo que impide que se apilen. El precio es que la cadencia real del
- * torneo sigue siendo la de un sync cada 5-10 minutos, no mejor.
+ * compartido es lo que impide que se apilen. La cadencia real es la de un sync cada
+ * 1-3 minutos, la misma que la del cron (`src/lib/sync-cadence.ts`).
  *
  * ## Por qué no registra `AdminAction`
  *
@@ -2070,10 +1871,14 @@ const MINUTOS_DE_CANDADO = MANUAL_SYNC_COOLDOWN_SECONDS / 60;
 export async function syncNow(): Promise<SyncNowState> {
   await requireAdmin();
 
+  // La ventana sale del rastro de la última pasada, igual que en `/api/sync`: si cada
+  // vía usara una cadencia distinta, el candado compartido dejaría de coordinar.
+  const cadence = await readSyncCadence();
+
   let lock: ManualSyncLock;
 
   try {
-    lock = await consumeManualSyncLock();
+    lock = await consumeManualSyncLock(cadence.intervalSeconds);
   } catch (error) {
     // Sin candado comprobado **no** se lanza la pasada. Al revés, el botón sería una
     // forma de pedir tantas pasadas como se pulsara, que es justo lo que el candado
@@ -2096,7 +1901,7 @@ export async function syncNow(): Promise<SyncNowState> {
     // Por eso tiene su propio estado y no se pinta como fallo.
     return {
       status: "cooldown",
-      message: `Se ha sincronizado hace poco; el candado deja una pasada cada ${MINUTOS_DE_CANDADO} minutos.`,
+      message: `Se ha sincronizado hace poco; ${fraseDeCandado(lock.windowSeconds)}.`,
     };
   }
 
@@ -2105,8 +1910,11 @@ export async function syncNow(): Promise<SyncNowState> {
   try {
     // La pasada son ~15 s de llamadas a AoE4World más el recálculo, así que el botón
     // tiene que aguantar en estado de "pendiente" ese rato. Es normal que tarde: no es
-    // una escritura de formulario corta.
-    summary = await syncApprovedPlayers();
+    // una escritura de formulario corta. El tope de 60 s es para el admin, que está
+    // esperando: lo que no quepa lo completa el cron en la pasada siguiente.
+    summary = await syncApprovedPlayers({
+      signal: AbortSignal.timeout(Math.min(cadence.timeoutMs, 60_000)),
+    });
   } catch (error) {
     // `syncApprovedPlayers()` no propaga ni el fallo de un jugador ni el del recálculo:
     // los deja en el resumen. Lo que llega aquí es que la pasada no se pudo hacer
