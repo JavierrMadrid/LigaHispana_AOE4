@@ -556,11 +556,13 @@ Qué se puede hacer con un participante y **dónde** se ofrece cada acción:
 
 | Acción | Dónde | Qué hace |
 |---|---|---|
-| **Aprobar** / **rechazar** una solicitud | En la **cola de solicitudes pendientes** de `/admin` y en el listado | Cambia el estado; aprobar mete al jugador en la clasificación y rechazar lo deja fuera |
+| **Aprobar** / **rechazar** una solicitud | Solo en la **cola de solicitudes pendientes** de `/admin` | Cambia el estado; aprobar mete al jugador en la clasificación y rechazar lo deja fuera |
 | **Editar** los datos | Listado de participantes («Todos los jugadores») | Corrige nombre, país, correo, canales y `@usuario`; no toca el estado |
 | **Expulsar** a un aprobado | Actuaciones (`BAN`); el listado enlaza a la actuación ya prefijada | Deja `BANNED`, reversible y sin perder datos |
 | **Anular** partidas | Actuaciones (`MATCH_ANNULMENT`) | La victoria deja de puntuar sin borrarse |
 
+- **El listado completo no cambia estados**: no ofrece rechazar (retirar) a un aprobado ni aprobar
+  (restaurar) a un rechazado. Esas decisiones viven en la cola de pendientes y en Actuaciones.
 - **No hay baja destructiva desde el panel**: retirar a alguien aprobado es una expulsión, que conserva
   los datos y se puede revertir. La única forma de que desaparezca una fila es deshacer su alta desde
   `/admin/acciones`, y eso es irreversible.

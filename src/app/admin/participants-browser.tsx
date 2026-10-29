@@ -19,7 +19,6 @@ import {
 } from "@/components/sortable-header";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { PlayerEditDialog } from "./player-edit-dialog";
-import { PlayerStatusActions } from "./player-status-actions";
 import { VerificationBadge } from "./participant-verification";
 import { PLAYER_STATUS_LABELS, PLAYER_STATUS_STYLES } from "./participant-status";
 
@@ -155,8 +154,9 @@ function comparePlayers(
  * con `aria-sort` y chevron. "Quitar filtros" **no** toca el orden; cambiar filtros,
  * búsqueda u orden vuelve a la primera página.
  *
- * La columna de acciones no da de baja a nadie: edita la ficha y, si el participante
- * está aprobado, abre una actuación de expulsión con él ya elegido. La baja destructiva
+ * La columna de acciones no da de alta ni de baja a nadie: edita la ficha y, si el
+ * participante está aprobado, abre una actuación de expulsión con él ya elegido.
+ * Aprobar y rechazar son de la cola de pendientes de `/admin`, y la baja destructiva
  * ya no existe.
  */
 export function ParticipantsBrowser({
@@ -692,13 +692,12 @@ function ParticipantRow({
           <div className="flex flex-wrap items-center justify-end gap-2">
             {/* Editar va primero y en tono neutro: es la acción que se usa a
                 diario, y el filete tenue la deja cerca del nombre sin competir con
-                aprobar o rechazar, que sí cambian el estado. Este listado no da de
-                baja: a un aprobado se le retira con «Expulsar», que abre una
-                actuación de expulsión con el participante ya elegido —reversible,
-                y sin borrar su ficha ni sus partidas—. */}
+                nada. Este listado no decide altas ni bajas: aprobar y rechazar
+                viven solo en la cola de pendientes de `/admin`, y a un aprobado se
+                le retira con «Expulsar», que abre una actuación de expulsión con el
+                participante ya elegido —reversible, y sin borrar su ficha ni sus
+                partidas—. Las filas pendientes y rechazadas solo se editan aquí. */}
             <PlayerEditDialog player={player} countries={countries} canReverse={canReverse} />
-
-            <PlayerStatusActions player={player} canReverse={canReverse} />
 
             {player.status === "APPROVED" ? (
               <Link

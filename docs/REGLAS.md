@@ -105,7 +105,7 @@ Facultades internas para gestionar el torneo.
 
 | Regla | Cómo se controla |
 |---|---|
-| **Aprobar, rechazar y editar** participantes. | Panel |
+| **Aprobar o rechazar** solicitudes de inscripción, solo en la cola de solicitudes pendientes, y **editar** los datos de un participante en el listado. | Panel |
 | Aprobar un alta **sin la confirmación de la persona**: solo el superadministrador, con confirmación explícita y registro en el historial («Aprobación sin verificación»). | Panel |
 | **Expulsar** a un participante: es la forma de retirarlo; deja de puntuar, conserva todos sus datos y se puede revertir. | Panel |
 | **Anular** partidas ganadas: dejan de contar sin borrarlas; se pueden revertir. | Panel |
