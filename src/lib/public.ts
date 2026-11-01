@@ -329,7 +329,7 @@ export type StandingRow = {
  * publicarlos aquí sería enseñar en la ficha de un participante un objetivo que ya
  * no existe (y una fila de `PlayerScore` de antes de desactivarlo podría nombrarlo).
  */
-function objectiveLookup(ruleset: ScoringRuleset): Map<string, StandingObjective> {
+export function objectiveLookup(ruleset: ScoringRuleset): Map<string, StandingObjective> {
   const lookup = new Map<string, StandingObjective>();
   const desactivados = new Set(ruleset.disabledObjectives);
 

@@ -24,9 +24,11 @@ import {
   readGamesCursor,
   readPlayerSyncState,
   readScoringLastRun,
+  readStreamsLastRun,
   readSyncRunTrace,
   writeGamesCursor,
   writePlayerSyncState,
+  writeStreamsLastRun,
   writeSyncRunTrace,
   type GamesBatchError,
   type GamesCursorSeedSource,
@@ -48,6 +50,8 @@ import {
   refreshStreamLiveStatus,
   type StreamRefreshResult,
 } from "@/lib/streams/refresh";
+import { shouldRefreshStreams } from "@/lib/streams/cadence";
+import { getStreamsConfig } from "@/lib/streams/env";
 import { announceDailyStandings } from "@/lib/standings-report";
 import {
   backfillMatchSummaries,
@@ -2704,16 +2708,25 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
 
   try {
     if (options.streams !== false) {
-      streams = await refreshStreamLiveStatus({ signal });
+      // El sync de partidas puede correr cada 1-3 minutos, pero YouTube cobra cuota por
+      // llamada: este paso tiene su propio reloj (`STREAMS_MIN_INTERVAL_MINUTES`) y no
+      // se ejecuta en cada pasada. Sin marca previa sí; después, solo cuando vence.
+      const streamsConfig = getStreamsConfig();
+      const lastStreamsRun = await readStreamsLastRun();
 
-      // Lo que devuelve `describeStreamRefresh()` va al rastro tal cual, avisos
-      // incluidos: es el sitio donde se ve que la detección está apagada por falta de
-      // `YOUTUBE_API_KEY` o que una plataforma lleva fallando. Va también al log, con
-      // `warn` y no con `error`, porque no es un fallo del sincronizador.
-      streamsError = describeStreamRefresh(streams);
+      if (shouldRefreshStreams(lastStreamsRun, new Date(), streamsConfig.minIntervalMinutes)) {
+        streams = await refreshStreamLiveStatus({ signal });
+        await writeStreamsLastRun(new Date());
 
-      if (streamsError !== null) {
-        console.warn(`[sync] ${streamsError}`);
+        // Lo que devuelve `describeStreamRefresh()` va al rastro tal cual, avisos
+        // incluidos: es el sitio donde se ve que la detección está apagada por falta de
+        // `YOUTUBE_API_KEY` o que una plataforma lleva fallando. Va también al log, con
+        // `warn` y no con `error`, porque no es un fallo del sincronizador.
+        streamsError = describeStreamRefresh(streams);
+
+        if (streamsError !== null) {
+          console.warn(`[sync] ${streamsError}`);
+        }
       }
     }
   } catch (error) {

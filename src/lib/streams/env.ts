@@ -1,6 +1,7 @@
 import "server-only";
 
 import { readRuntimeEnv } from "@/lib/runtime-env";
+import { STREAMS_MIN_INTERVAL_MINUTES } from "@/lib/streams/cadence";
 
 /**
  * Configuración de la detección de directos en YouTube y Kick.
@@ -71,6 +72,14 @@ export type StreamsConfig = {
    * en el resumen como `skipped`, nunca como un error.
    */
   maxChecksPerRun: number;
+  /**
+   * Minutos mínimos entre dos comprobaciones del estado de directo.
+   *
+   * El sync puede correr cada 1-3 minutos, pero YouTube cobra cuota por llamada: este
+   * paso tiene su propio reloj (ver `src/lib/streams/cadence.ts`) y no se ejecuta en
+   * cada pasada. El valor por defecto está en `STREAMS_MIN_INTERVAL_MINUTES`.
+   */
+  minIntervalMinutes: number;
 };
 
 function readString(name: string, fallback: string): string {
@@ -128,6 +137,10 @@ export function getStreamsConfig(): StreamsConfig {
     // decenas de participantes y casi ninguno con canal en las dos, así que el tope
     // solo muerde cuando la lista crece de verdad, y es configurable.
     maxChecksPerRun: readPositiveInt("STREAMS_MAX_CHECKS_PER_RUN", 24),
+    minIntervalMinutes: readPositiveInt(
+      "STREAMS_MIN_INTERVAL_MINUTES",
+      STREAMS_MIN_INTERVAL_MINUTES,
+    ),
   };
 }
 

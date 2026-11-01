@@ -9,7 +9,12 @@ import { isYoutubeChannelLive } from "./youtube";
 
 /**
  * Refresco del estado de directo de YouTube y Kick para los participantes que
- * tienen canal, una vez por pasada del sincronizador.
+ * tienen canal, como mucho una vez cada `STREAMS_MIN_INTERVAL_MINUTES` (10).
+ *
+ * El sync de partidas puede correr cada 1-3 minutos, pero este paso tiene su propio
+ * reloj: YouTube cobra cuota por llamada y repetirlo en cada pasada agotaría el fondo
+ * diario. La marca vive en `Setting["streams.lastRun"]` y la decide
+ * `src/lib/streams/cadence.ts`.
  *
  * ## Por qué va en el worker y no en el DAL ni en la web
  *

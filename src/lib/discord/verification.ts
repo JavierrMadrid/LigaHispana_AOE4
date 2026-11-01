@@ -26,9 +26,10 @@
  *
  * ## Por qué los estados son literales y no el enum de Prisma
  *
- * Igual que en `admin-notices.ts`: para que el módulo no arrastre el cliente
- * generado y se pueda importar en un test sin nada alrededor. `PlayerStatus` es
- * asignable a esta unión sin conversión en las dos direcciones que se usan.
+ * Igual que `AdminActPlayerStatus` en `admin-acts.ts`: para que el módulo no
+ * arrastre el cliente generado y se pueda importar en un test sin nada alrededor.
+ * `PlayerStatus` es asignable a esta unión sin conversión en las dos direcciones que
+ * se usan.
  */
 
 /** Los estados de `PlayerStatus` que le importan a la puerta. */

@@ -23,6 +23,7 @@
     "backfill:model": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/backfill-model.ts",
     "backfill:objective-leads": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/backfill-objective-leads.ts",
     "verify:sync": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/verify-sync.ts",
+    "verify:overlay-api": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/verify-overlay-api.ts",
     "verify:aoe4world": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/verify-aoe4world.ts",
     "alerts:check": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/alerts-check.ts",
     "alerts:cutoffs": "tsx --import ./scripts/prisma-wasm-node.mjs --conditions=react-server scripts/alerts-cutoffs.ts",

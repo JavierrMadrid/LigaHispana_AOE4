@@ -42,8 +42,8 @@ const WORD_BOUNDARY_SLACK = 80;
  * Los tipos de actuación, como unión local.
  *
  * Es asignable desde el enum de Prisma (`AdminActKind`) y evita que este módulo
- * arrastre el cliente generado, igual que `RemovedPlayerStatus` en
- * `admin-notices.ts`.
+ * arrastre el cliente generado, igual que `AdminActPlayerStatus` unas líneas más
+ * abajo.
  */
 export type AdminActKind = "BAN" | "MATCH_ANNULMENT" | "REVERSAL";
 

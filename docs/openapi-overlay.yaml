@@ -1,0 +1,659 @@
+openapi: 3.2.1
+info:
+  title: API Liga Hispana - Overlay
+  description: |
+    API de consulta para los participantes, la clasificación y los objetivos
+    de la Liga Hispana. Solo lectura, sin autenticación y con CORS abierto.
+
+    Flujo de uso de la API:
+
+    ```mermaid
+    flowchart TD
+      A[Inicio] --> B[GET /participantes]
+      B --> C[GET /objetivos]
+      C --> D["GET /clasificacion?id=Y"]
+      D --> E["Guardar la fecha/hora más reciente como Z"]
+      E --> F["Esperar 30 segundos"]
+      F --> G["GET /clasificacion?id=Y&desde=Z"]
+      G --> H{¿Continuar actualizando?}
+      H -->|Sí| E
+      H -->|No| I[Fin]
+    ```
+
+    Donde `Y` es el identificador del participante y `Z` es la fecha/hora del último evento
+    procesado en formato ISO 8601 con zona, por ejemplo `2026-10-24T14:30:00Z`. El overlay debe
+    sondear cada 30 segundos: el dato de fondo cambia al ritmo del recálculo (10 minutos), así que
+    pedir más a menudo no adelanta nada.
+
+    La primera llamada sin `desde` devuelve la foto completa (el último evento de cada objetivo).
+    Las siguientes, con `desde`, devuelven solo lo nuevo. El parámetro `desde` se interpreta de
+    forma inclusiva (`>=`) y el cliente debe deduplicar los eventos por `id` + `fechahora`, porque
+    dos eventos pueden compartir instante.
+
+    `eventos_objetivos` sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` en cada
+    pasada del motor (cada 10 minutos). Los logros y las competiciones aparecen **en vivo**, con el
+    retraso del recálculo, no solo al cierre de la edición. La primera pasada de una edición siembra
+    `cumplido` y `progresado`; no hay `perdido` en la siembra, porque no había nada que perder. `at`
+    es el instante del pase, salvo la siembra de un logro con la ventana ya cerrada, que usa el
+    cierre de la ventana.
+
+    `eventos_objetivos` es un mapa cuyas claves son los identificadores de objetivo. Cada objetivo
+    aparece como máximo una vez y su valor contiene `tipo`, `fechahora`, `progreso` y, si procede,
+    `repeticion`. El backend agrupa los eventos por objetivo y envía únicamente el evento más
+    reciente; si un objetivo se cumplió y se perdió en el mismo turno, prevalece el más reciente.
+    Solo aparecen objetivos activos.
+
+    `perdido` existe únicamente para objetivos `volatil: true` (las competiciones). Un logro
+    revertido no genera evento, porque un logro no se des-cumple. `perdido` nunca lleva
+    `repeticion`: el catálogo actual no tiene competiciones repetibles.
+
+    `progreso.ajeno` es mayor o igual que 1 y se omite si no hay nuevo poseedor. `progreso.propio`
+    es mayor o igual que 1 salvo en `perdido`, que admite 0 cuando todas las partidas que sostenían
+    la competición se revirtieron. `repeticion` solo aparece en objetivos repetibles (`victorias`,
+    `imparable`) y es mayor o igual que 1.
+
+    Una bajada de progreso no genera evento (no hay un tipo `retrocedido`): actualiza el estado
+    interno y la siguiente subida vuelve a anotarse. En competiciones, perder el liderazgo sí genera
+    `perdido`.
+
+    La clasificación devuelve hasta tres filas: en un extremo, dos vecinos del lado disponible
+    cuando existan; en una posición intermedia, uno por encima y uno por debajo. Solo la fila
+    solicitada lleva `eventos_objetivos`; los vecinos llevan un mapa vacío.
+
+    `rango` es anulable: `null` cuando el jugador no tiene ELO, división o subrango conocido.
+    `racha` es la racha del torneo, **firmada**: positiva = victorias seguidas, negativa = derrotas
+    seguidas, `null` sin partidas clasificatorias. Nunca vale 0.
+
+    `repetible` indica que el mismo jugador puede cobrar el objetivo más de una vez; `volatil`
+    indica si el poseedor puede cambiar. `max_progreso` es anulable: `null` en las competiciones y
+    en `victorias`, el umbral del logro en los objetivos con tope y el tamaño del pool activo en
+    `por-tierra-y-agua`. Un `null` no es un cero: es "no hay tope".
+
+    Todas las respuestas, también las de error, llevan `Cache-Control: no-store`.
+  version: 1.1.1
+  contact:
+    name: Equipo de la Liga Hispana
+servers:
+  - url: https://laligahispana.es/api/v0
+    description: API de producción
+security: []
+tags:
+  - name: Participantes
+    description: Información pública de los participantes
+  - name: Clasificación
+    description: Posiciones y estadísticas
+  - name: Objetivos
+    description: Objetivos del torneo
+paths:
+  /participantes:
+    options:
+      summary: Preflight de CORS
+      operationId: participantesPreflight
+      responses:
+        '204':
+          $ref: '#/components/responses/OpcionesCORS'
+    get:
+      tags:
+        - Participantes
+      summary: Lista los participantes
+      operationId: participantes
+      parameters:
+        - name: id
+          in: query
+          description: |
+            Identificador del participante (`profileId` de AoE4World) como cadena. Si se indica y no
+            existe o no está aprobado, se devuelve 404; si no es un entero positivo, 400.
+          required: false
+          schema:
+            type: string
+          example: '7099800'
+      responses:
+        '400':
+          $ref: '#/components/responses/ParametroInvalido'
+        '404':
+          $ref: '#/components/responses/ParticipanteNoEncontrado'
+        '503':
+          $ref: '#/components/responses/ServicioNoDisponible'
+        '200':
+          description: Lista de participantes, ordenada por identificador.
+          headers:
+            Cache-Control:
+              description: La lista no se sirve desde caché para el polling del overlay.
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Participante'
+              example:
+                - id: '7099800'
+                  alias: Miguel Narvaez
+                - id: '6946414'
+                  alias: Mecroid
+                - id: '2194511'
+                  alias: Gorik
+
+  /clasificacion:
+    options:
+      summary: Preflight de CORS
+      operationId: clasificacionPreflight
+      responses:
+        '204':
+          $ref: '#/components/responses/OpcionesCORS'
+    get:
+      tags:
+        - Clasificación
+      summary: Consulta la clasificación
+      operationId: clasificacion
+      parameters:
+        - name: id
+          in: query
+          description: |
+            Identificador del participante solicitado. La respuesta incluye este participante y
+            sus vecinos: hasta dos del lado disponible si está en un extremo, o uno por encima
+            y uno por debajo en una posición intermedia. Es obligatorio: sin él se devuelve 400.
+          required: true
+          schema:
+            type: string
+          example: '6946414'
+        - name: desde
+          in: query
+          description: |
+            Fecha y hora desde la que se consultan los eventos de objetivos, en ISO 8601 con zona.
+            Inclusiva (`>=`). Sin este parámetro se devuelve la foto completa de la edición.
+          required: false
+          schema:
+            type: string
+            format: date-time
+          example: '2026-10-24T14:30:00Z'
+      responses:
+        '400':
+          $ref: '#/components/responses/ParametroInvalido'
+        '404':
+          $ref: '#/components/responses/ParticipanteNoEncontrado'
+        '503':
+          $ref: '#/components/responses/ServicioNoDisponible'
+        '200':
+          description: |
+            Fragmento de la clasificación ordenado por posición. Incluye siempre al participante
+            solicitado y hasta dos participantes colindantes. En los extremos se incluyen dos
+            vecinos del lado disponible cuando existan; en una posición intermedia se incluye
+            uno por encima y uno por debajo.
+          headers:
+            Cache-Control:
+              description: La clasificación no se sirve desde caché para el polling del overlay.
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                minItems: 1
+                maxItems: 3
+                description: |
+                  El primer elemento colindante, si existe, está por encima del participante
+                  solicitado; el último, si existe, está por debajo. Solo el elemento cuyo id
+                  coincide con el parámetro `id` contiene `eventos_objetivos`. Los demás elementos
+                  tienen un mapa vacío. Cada objetivo aparece como máximo una vez y se conserva el
+                  evento más reciente.
+                items:
+                  $ref: '#/components/schemas/Clasificacion'
+              example:
+                - id: '7099800'
+                  posicion: 1
+                  partidas: 29
+                  puntos:
+                    volatiles: 836
+                    permanentes: 106
+                  rango: null
+                  victorias: 13
+                  derrotas: 16
+                  racha: null
+                  eventos_objetivos: {}
+                - id: '6946414'
+                  posicion: 2
+                  partidas: 17
+                  puntos:
+                    volatiles: 480
+                    permanentes: 94
+                  rango:
+                    puntos: 1618
+                    liga: conquistador
+                    division: 3
+                  victorias: 6
+                  derrotas: 11
+                  racha: -2
+                  eventos_objetivos:
+                    loco-por-ganar:
+                      tipo: perdido
+                      fechahora: '2026-10-24T14:30:30Z'
+                      progreso:
+                        propio: 0
+                        ajeno: 29
+                    victorias:
+                      tipo: progresado
+                      fechahora: '2026-10-24T14:30:00Z'
+                      progreso:
+                        propio: 6
+                      repeticion: 6
+                    imparable:
+                      tipo: cumplido
+                      fechahora: '2026-10-24T14:20:00Z'
+                      progreso:
+                        propio: 9
+                      repeticion: 9
+                - id: '2194511'
+                  posicion: 3
+                  partidas: 4
+                  puntos:
+                    volatiles: 360
+                    permanentes: 7
+                  rango:
+                    puntos: 1033
+                    liga: platino
+                    division: 1
+                  victorias: 3
+                  derrotas: 1
+                  racha: -1
+                  eventos_objetivos: {}
+
+  /objetivos:
+    options:
+      summary: Preflight de CORS
+      operationId: objetivosPreflight
+      responses:
+        '204':
+          $ref: '#/components/responses/OpcionesCORS'
+    get:
+      tags:
+        - Objetivos
+      summary: Lista los objetivos
+      operationId: objetivos
+      responses:
+        '503':
+          $ref: '#/components/responses/ServicioNoDisponible'
+        '200':
+          description: Lista de objetivos activos, en orden de presentación.
+          headers:
+            Cache-Control:
+              description: El catálogo no se sirve desde caché para el polling del overlay.
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Objetivo'
+              example:
+                - id: loco-por-ganar
+                  nombre: Loco por ganar
+                  descripcion: El jugador con más partidas clasificatorias jugadas en el torneo. En caso de empate, lo cobra quien alcanzó esta cifra antes.
+                  icono_url: ''
+                  puntos: 50
+                  volatil: true
+                  repetible: false
+                  max_progreso: null
+                - id: lider-japanese
+                  nombre: Líder Japoneses
+                  descripcion: Gana al menos 3 partidas con Japoneses.
+                  icono_url: https://laligahispana.es/imagenes/civilizaciones/Japanese_AoE4.webp
+                  puntos: 12
+                  volatil: false
+                  repetible: false
+                  max_progreso: 3
+components:
+  responses:
+    ParametroInvalido:
+      description: Falta un parámetro obligatorio o tiene un formato no válido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: parametro_invalido
+            mensaje: El identificador del participante no es válido.
+    ParticipanteNoEncontrado:
+      description: El participante no existe, no está aprobado o no tiene fila publicada.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: participante_no_encontrado
+            mensaje: No se encontró un participante con el identificador indicado.
+    ServicioNoDisponible:
+      description: La base de datos no responde.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            codigo: servicio_no_disponible
+            mensaje: La base de datos no responde.
+    OpcionesCORS:
+      description: CORS preflight sin contenido.
+      headers:
+        Access-Control-Allow-Origin:
+          schema:
+            type: string
+            example: '*'
+        Access-Control-Allow-Methods:
+          schema:
+            type: string
+            example: GET, OPTIONS
+        Access-Control-Allow-Headers:
+          schema:
+            type: string
+            example: Accept, Content-Type
+        Cache-Control:
+          schema:
+            type: string
+            example: no-store
+  schemas:
+    Participante:
+      type: object
+      required:
+        - id
+        - alias
+      properties:
+        id:
+          type: string
+          description: Identificador del participante (`Player.profileId` como cadena).
+          example: '7099800'
+        alias:
+          type: string
+          description: Nombre visible del participante (`Player.name`).
+          example: Miguel Narvaez
+      additionalProperties: false
+
+    Clasificacion:
+      type: object
+      required:
+        - id
+        - posicion
+        - partidas
+        - puntos
+        - rango
+        - victorias
+        - derrotas
+        - racha
+        - eventos_objetivos
+      properties:
+        id:
+          type: string
+          description: Identificador del participante al que pertenece la clasificación.
+          example: '6946414'
+        posicion:
+          type: integer
+          minimum: 1
+          description: Puesto publicado; los empates comparten puesto.
+          example: 2
+        partidas:
+          type: integer
+          minimum: 0
+          example: 17
+        puntos:
+          $ref: '#/components/schemas/Puntos'
+        rango:
+          oneOf:
+            - $ref: '#/components/schemas/Rango'
+            - type: 'null'
+        victorias:
+          type: integer
+          minimum: 0
+          example: 6
+        derrotas:
+          type: integer
+          minimum: 0
+          example: 11
+        racha:
+          type:
+            - integer
+            - 'null'
+          description: |
+            Racha del torneo, firmada: positiva = victorias seguidas, negativa = derrotas seguidas;
+            `null` sin partidas clasificatorias. Nunca vale 0.
+          example: -2
+        eventos_objetivos:
+          $ref: '#/components/schemas/EventosObjetivos'
+      additionalProperties: false
+
+    Puntos:
+      type: object
+      required:
+        - volatiles
+        - permanentes
+      description: |
+        Reparto del total de la fila: `volatiles` son los puntos de las competiciones y
+        `permanentes` los de los logros más el bono de eventos. Suman el total.
+      properties:
+        volatiles:
+          type: integer
+          example: 480
+        permanentes:
+          type: integer
+          example: 94
+      additionalProperties: false
+
+    Rango:
+      type: object
+      required:
+        - puntos
+        - liga
+        - division
+      properties:
+        puntos:
+          type: integer
+          minimum: 0
+          description: ELO de la ladder.
+          example: 1618
+        liga:
+          type: string
+          description: Liga competitiva del participante, por su id en español.
+          enum:
+            - bronce
+            - plata
+            - oro
+            - platino
+            - diamante
+            - conquistador
+          example: conquistador
+        division:
+          type: integer
+          enum:
+            - 1
+            - 2
+            - 3
+          description: División competitiva.
+          example: 3
+      additionalProperties: false
+
+    EventosObjetivos:
+      type: object
+      description: |
+        Mapa indexado por id de objetivo. Cada objetivo aparece como máximo una vez y se
+        conserva únicamente su evento más reciente. Los vecinos de la clasificación llevan un mapa
+        vacío. Solo aparecen objetivos activos.
+      additionalProperties:
+        $ref: '#/components/schemas/EventoObjetivo'
+
+    EventoObjetivo:
+      type: object
+      description: Evento más reciente de un objetivo.
+      oneOf:
+        - $ref: '#/components/schemas/EventoObjetivoCumplido'
+        - $ref: '#/components/schemas/EventoObjetivoPerdido'
+        - $ref: '#/components/schemas/EventoObjetivoProgresado'
+
+    EventoObjetivoCumplido:
+      type: object
+      required:
+        - tipo
+        - fechahora
+        - progreso
+      properties:
+        tipo:
+          const: cumplido
+        fechahora:
+          type: string
+          format: date-time
+        progreso:
+          $ref: '#/components/schemas/ProgresoEventoObjetivo'
+        repeticion:
+          type: integer
+          minimum: 1
+          description: Solo aparece si el objetivo es repetible; se omite si no lo es.
+      additionalProperties: false
+
+    EventoObjetivoPerdido:
+      type: object
+      description: |
+        Solo es válido para objetivos cuyo catálogo tenga `volatil: true`. Nunca lleva
+        `repeticion`: el catálogo actual no tiene competiciones repetibles.
+      required:
+        - tipo
+        - fechahora
+        - progreso
+      properties:
+        tipo:
+          const: perdido
+        fechahora:
+          type: string
+          format: date-time
+        progreso:
+          $ref: '#/components/schemas/ProgresoEventoPerdido'
+      additionalProperties: false
+
+    EventoObjetivoProgresado:
+      type: object
+      required:
+        - tipo
+        - fechahora
+        - progreso
+      properties:
+        tipo:
+          const: progresado
+        fechahora:
+          type: string
+          format: date-time
+        progreso:
+          $ref: '#/components/schemas/ProgresoEventoObjetivo'
+        repeticion:
+          type: integer
+          minimum: 1
+          description: Solo aparece si el objetivo es repetible; se omite si no lo es.
+      additionalProperties: false
+
+    ProgresoEventoObjetivo:
+      type: object
+      description: Progreso propio para eventos cumplidos o progresados.
+      required:
+        - propio
+      properties:
+        propio:
+          type: integer
+          minimum: 1
+          description: Progreso propio; siempre mayor o igual que 1.
+          example: 6
+      additionalProperties: false
+
+    ProgresoEventoPerdido:
+      type: object
+      description: |
+        Progreso propio y, si hay nuevo poseedor, el valor con el que le superó.
+      required:
+        - propio
+      properties:
+        propio:
+          type: integer
+          minimum: 0
+          description: |
+            Progreso propio en el momento de perderlo. Puede ser 0 si todas las partidas que
+            sostenían la competición se revirtieron.
+          example: 0
+        ajeno:
+          type: integer
+          minimum: 1
+          description: |
+            Valor del nuevo poseedor; mayor o igual que 1. Se omite si no hay nuevo poseedor.
+          example: 29
+      additionalProperties: false
+
+    Error:
+      type: object
+      required:
+        - codigo
+        - mensaje
+      properties:
+        codigo:
+          type: string
+          description: Identificador estable del error, en `snake_case`.
+          example: participante_no_encontrado
+        mensaje:
+          type: string
+          description: Frase en español para enseñar tal cual; puede cambiar.
+          example: No se encontró un participante con el identificador indicado.
+      additionalProperties: false
+
+    Objetivo:
+      type: object
+      required:
+        - id
+        - nombre
+        - descripcion
+        - icono_url
+        - puntos
+        - volatil
+        - repetible
+        - max_progreso
+      properties:
+        id:
+          type: string
+          description: Id estable del catálogo.
+          example: loco-por-ganar
+        nombre:
+          type: string
+          example: Loco por ganar
+        descripcion:
+          type: string
+          example: El jugador con más partidas clasificatorias jugadas en el torneo.
+        icono_url:
+          type: string
+          format: uri-reference
+          description: |
+            URL absoluta del icono en los objetivos de civilización; cadena vacía en el resto.
+          example: ''
+        puntos:
+          type: integer
+          minimum: 0
+          description: |
+            Puntos con la regla activa. En `victorias` es el precio por victoria
+            (`pointsPerWin`), no un premio único.
+          example: 50
+        volatil:
+          type: boolean
+          description: |
+            `true` en las competiciones (se poseen y se pierden); `false` en los logros.
+          example: true
+        repetible:
+          type: boolean
+          description: ¿Se puede cobrar más de una vez? (`victorias`, `imparable`).
+          example: false
+        max_progreso:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          description: |
+            Tope de progreso. `null` en las competiciones (no se progresa hacia ellas, se poseen)
+            y en `victorias` (paga por unidad y no se completa nunca). En los logros con tope es
+            su umbral y en `por-tierra-y-agua`, el tamaño del pool activo. Un `null` no es un
+            cero: es "no hay tope".
+          example: null
+      additionalProperties: false

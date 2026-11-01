@@ -499,8 +499,8 @@ function toErrorMessage(error: unknown): string {
 /*
  * La petición vive en `discord/channel.ts` y se reexporta aquí porque este es el
  * módulo desde el que la usan el informe diario de clasificación
- * (`src/lib/standings-report.ts`) y los avisos de administración
- * (`src/lib/admin-notice-send.ts`). Está allí para que los avisos de los eventos
+ * (`src/lib/standings-report.ts`) y los avisos de las actuaciones
+ * (`src/lib/admin-act-notice-send.ts`). Está allí para que los avisos de los eventos
  * (`edition-event-announcements.ts`) puedan usarla sin que los dos módulos de avisos
  * se importen en círculo.
  */

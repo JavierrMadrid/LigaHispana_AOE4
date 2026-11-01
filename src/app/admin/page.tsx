@@ -344,9 +344,9 @@ export default async function AdminPage() {
           </p>
 
           {/* La banda de avisos va una sola vez por cola y por encima de las filas:
-              los botones de cada fila son los mismos del listado
-              (`PlayerStatusActions`), y su éxito se pinta ahí porque la fila
-              afectada deja de estar pendiente y desaparece de esta lista. */}
+              aquí viven los botones de estado (`PlayerStatusActions`), que ya solo
+              usa esta cola, y su éxito se pinta ahí porque la fila afectada deja
+              de estar pendiente y desaparece de esta lista. */}
           <div className="mt-4">
             <ActionFeedbackProvider>
               <ul className="flex flex-col gap-2">

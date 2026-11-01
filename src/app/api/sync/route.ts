@@ -1,17 +1,23 @@
 import type { ManualSyncLock } from "@/lib/manual-sync";
 import { syncApprovedPlayers } from "@/lib/aoe4world/sync";
-import { consumeManualSyncLock } from "@/lib/manual-sync";
+import { consumeManualSyncLock, readSyncCadence } from "@/lib/manual-sync";
 
 /**
  * Disparo periódico del sync desde la propia base de datos: Supabase Cron
- * (`pg_cron` + `pg_net`) llama a este endpoint cada 5 minutos. El job está escrito y
+ * (`pg_cron` + `pg_net`) llama a este endpoint **cada minuto**. El job está escrito y
  * versionado en `scripts/db-cron.ts`.
+ *
+ * Cada minuto **no** significa una pasada cada minuto: el candado global tiene una
+ * ventana variable (1-3 min, la decide `readSyncCadence()` en `src/lib/manual-sync.ts`
+ * a partir del rastro de la última pasada), así que el disparo que llega antes de
+ * tiempo recibe `{"status":"cooldown"}` con 200 y no gasta ni una petición a
+ * AoE4World. El reloj solo despierta; la cadencia la filtra el candado.
  *
  * Hace exactamente el mismo trabajo que `/api/cron/sync`, por la misma función, pero
  * **sin secreto**: lo llama la base de datos y no lleva ni sesión ni `Authorization`.
  * Por eso sigue siendo un endpoint público, y por eso no puede perder las dos
  * condiciones que lo cierran (ver el cuerpo del `POST`): el `content-type` de JSON y
- * un candado global de una pasada cada 5 minutos.
+ * el candado global.
  *
  * El candado es el mismo que usa la llamada manual del panel de admin
  * (`syncNow` en `src/app/admin/actions.ts`, sobre `src/lib/manual-sync.ts`), así que
@@ -28,10 +34,15 @@ export const maxDuration = 300;
 /**
  * Resumen reducido: quien dispara solo necesita saber si fue bien. No se devuelve el
  * detalle por jugador, que no aporta nada aquí y engorda la respuesta.
+ *
+ * `intervalSeconds` va también en el `cooldown`: es lo que permite leer en
+ * `net._http_response` con qué ventana estaba trabajando el candado cuando un disparo
+ * se quedó fuera, sin tener que abrir el rastro de `Setting`.
  */
 type ManualSyncPayload = {
   status: "ok" | "cooldown" | "rejected" | "unavailable" | "error";
   retryAfterSeconds?: number;
+  intervalSeconds?: number;
   playersTotal?: number;
   playersOk?: number;
   playersFailed?: number;
@@ -55,10 +66,15 @@ export async function POST(request: Request): Promise<Response> {
     return json({ status: "rejected" }, 415);
   }
 
+  // Antes del candado: la ventana sale de lo que costó la última pasada. No lanza
+  // nunca —si el rastro no se puede leer, devuelve la cadencia máxima—, así que un
+  // fallo del diagnóstico no deja el endpoint sin candado.
+  const cadence = await readSyncCadence();
+
   let lock: ManualSyncLock;
 
   try {
-    lock = await consumeManualSyncLock();
+    lock = await consumeManualSyncLock(cadence.intervalSeconds);
   } catch (error) {
     // Si no se puede comprobar el candado, **no** se lanza la pasada: sin el
     // candado el endpoint quedaría abierto a cualquiera que lo machaque.
@@ -73,14 +89,26 @@ export async function POST(request: Request): Promise<Response> {
   if (!lock.allowed) {
     // No es un error para quien dispara: la pasada se hizo hace nada. Se responde
     // 200 para no ensuciar la consola ni pedir que se reintente.
-    return json({ status: "cooldown", retryAfterSeconds: lock.retryAfterSeconds });
+    return json({
+      status: "cooldown",
+      retryAfterSeconds: lock.retryAfterSeconds,
+      intervalSeconds: lock.windowSeconds,
+    });
   }
 
   try {
-    const summary = await syncApprovedPlayers();
+    // El plazo corto manda: `syncApprovedPlayers()` combina esta señal con su propio
+    // deadline (`AOE4WORLD_SYNC_DEADLINE_MS`) mediante `AbortSignal.any()`, y aquí se
+    // pasa el que deja terminar antes de que el siguiente disparo pueda abrir el
+    // candado. Lo que quede a medias se marca como cancelado en el rastro y lo recoge
+    // la pasada siguiente.
+    const summary = await syncApprovedPlayers({
+      signal: AbortSignal.timeout(cadence.timeoutMs),
+    });
 
     return json({
       status: "ok",
+      intervalSeconds: cadence.intervalSeconds,
       playersTotal: summary.playersTotal,
       playersOk: summary.playersOk,
       playersFailed: summary.playersFailed,

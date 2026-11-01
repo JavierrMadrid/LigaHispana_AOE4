@@ -25,7 +25,7 @@ import { isRecord } from "@/lib/json";
  *
  * ## El prefijo del log
  *
- * Cada funcionalidad que manda privados tiene su prefijo (`[admin-notice]`,
+ * Cada funcionalidad que manda privados tiene su prefijo (`[admin-act-notice]`,
  * `[discord-verification]`), y se pasa para que un fallo de la caché del roster se
  * pueda buscar por el módulo que lo sufrió. Nunca se loguea el cuerpo del mensaje
  * ni el token: lo único que sale es el `@usuario` que no se pudo resolver.
@@ -47,11 +47,12 @@ function toErrorMessage(error: unknown): string {
  *
  * `discordUserId` manda; si no lo hay, se busca el `@usuario` en el roster cacheado.
  * Un fallo leyendo el roster sale como aviso y deja la cuenta en `null`: perder el
- * privado es preferible a tumbar la acción que lo pidió.
+ * privado es preferible a tumbar la acción que lo pidió. `logPrefix` lo pone quien
+ * llama, para que el aviso se pueda buscar por el módulo que lo sufrió.
  */
 export async function resolveDiscordAccount(
   player: DiscordDmTarget,
-  logPrefix = "[admin-notice]",
+  logPrefix: string,
 ): Promise<string | null> {
   if (player.discordUserId !== null) {
     return player.discordUserId;

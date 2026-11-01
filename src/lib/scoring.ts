@@ -18,6 +18,7 @@ import {
 import { isRecord } from "@/lib/json";
 import { reconcileObjectiveEvents } from "@/lib/objective-events";
 import { reconcileObjectiveLeadEvents } from "@/lib/objective-leads";
+import { reconcileObjectiveProgress } from "@/lib/objective-progress-events";
 import {
   OBJECTIVES_SNAPSHOT_VERSION,
   OBJECTIVE_DEFINITIONS,
@@ -160,8 +161,13 @@ export const LEGACY_RULESET_VERSION = 3;
  *
  * No es `RULESET_VERSION`: esa describe la forma del documento de reglas y su
  * lectura ya invalida el recálculo por su cuenta.
+ *
+ * La **v2** es por la reconciliación del progreso del overlay (issue 154): las tablas
+ * `ObjectiveProgressState` y `ObjectiveProgressEvent` nacen vacías, y sin este salto
+ * el primer pase tras el despliegue podría saltarse el recálculo y el feed no se
+ * sembraría hasta la siguiente partida.
  */
-export const SCORING_CACHE_VERSION = 1;
+export const SCORING_CACHE_VERSION = 2;
 
 /**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
@@ -1574,6 +1580,19 @@ export async function recomputeScores(): Promise<RecomputeScoresResult> {
       // que cuenta no es quién la posee al final sino cuándo la ganó y cuándo la
       // perdió cada uno. Y no escribe nada mientras no cambie ningún poseedor.
       await reconcileObjectiveLeadEvents(tx, ruleset, objectives.awarded);
+
+      // Y el progreso de los objetivos, que es lo que alimenta el overlay: el estado
+      // interno de la edición y el feed `append-only` de avances, cumplimientos y
+      // pérdidas. Sale del catálogo que se acaba de calcular (`objectives.options`) y
+      // de los mismos jugadores que lo alimentaron, así que no puede describir un
+      // reparto distinto del que se está publicando. Va aquí, con las otras dos
+      // reconciliaciones, por el mismo motivo: dentro de la transacción, o el feed y
+      // la clasificación describen lo mismo o no cambia ninguno. Es idempotente y solo
+      // escribe lo que difiere del estado guardado, así que una pasada sin novedades
+      // no toca ninguna de las dos tablas. Su resultado no se publica: como el de
+      // `reconcileObjectiveEvents`, es un registro que se lee, no una cifra del
+      // resumen de la pasada.
+      await reconcileObjectiveProgress(tx, ruleset, objectives.options, objectivePlayers);
 
       // La vista pública, en la misma transacción que el cómputo del que sale: así
       // las páginas de objetivos leen el snapshot en vez de repetir el barrido, y el

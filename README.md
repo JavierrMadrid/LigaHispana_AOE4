@@ -132,12 +132,27 @@ Supabase Cron ──► Worker (Cloudflare) ──► API de AoE4World
                        └── Panel /admin (solo organización)
 ```
 
-- El **reloj** es un job de `pg_cron` en la base de datos que dispara la sincronización cada 10 minutos;
+- El **reloj** es un job de `pg_cron` en la base de datos que despierta la sincronización cada minuto, y un candado adaptativo que deja una pasada cada 1-3 minutos según el coste de la anterior;
   un workflow de GitHub queda como red de seguridad.
 - El **motor de puntuación** lee las partidas guardadas, aplica el ruleset activo y escribe la
   clasificación. Se recalcula solo.
 - Las **reglas y los puntos** son configurables sin desplegar antes de que empiece la edición (viven
   en la tabla `Setting`); después, solo se puede fijar el fin de la ventana.
+
+### API para el overlay
+
+El overlay del stream lee de una API pública de solo lectura, sin autenticación:
+
+| Endpoint | Devuelve |
+|---|---|
+| `GET /api/v0/participantes` | Los participantes aprobados (`id` y `alias`). Admite `?id=`. |
+| `GET /api/v0/clasificacion` | La fila de un participante y hasta dos vecinos, con su feed de objetivos. |
+| `GET /api/v0/objetivos` | El catálogo de objetivos activos con puntos e icono. |
+
+- Base: `https://laligahispana.es/api/v0`. CORS abierto y `Cache-Control: no-store`.
+- Polling recomendado: **30 s**; el dato cambia al ritmo del recálculo (10 min).
+- Contrato: [`docs/API-OVERLAY.md`](docs/API-OVERLAY.md) y
+  [`docs/openapi-overlay.yaml`](docs/openapi-overlay.yaml).
 
 ### Acceso al panel
 
@@ -211,6 +226,7 @@ npm run dev          # http://localhost:3000
 | `npm run db:push` / `npm run db:security` | Sincroniza el schema y aplica la postura de RLS en el entorno de `DATABASE_URL` (por defecto, desarrollo). |
 | `npm run db:check` | Compara el schema del repositorio con la base de `DATABASE_URL` sin escribir: imprime la deriva y sale con **2** si la hay (0 = al día, 1 = error). |
 | `npm run db:cron` | Programa el reloj del torneo en producción (Supabase Cron). No ejecutar contra desarrollo. |
+| `npm run verify:overlay-api` | Comprueba la API del overlay contra `DATABASE_URL` (solo lectura). |
 | `npm run mock:tournament` / `npm run mock:clean` | Simula el torneo con fixtures locales y lo deshace. |
 | `npm run deploy` / `npm run preview` | Despliega el Worker (producción manual / preview local). |
 
@@ -236,6 +252,8 @@ producción o usar Workers Builds. El detalle está en
 | [`docs/MODELO-DATOS.md`](docs/MODELO-DATOS.md) | El esquema de la base de datos, tabla por tabla. |
 | [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md) | Producción y previews, variables, Hyperdrive y problemas conocidos. |
 | [`docs/OPERACION.md`](docs/OPERACION.md) | Sincronización, alertas, simulaciones y operativa diaria. |
+| [`docs/API-OVERLAY.md`](docs/API-OVERLAY.md) | La API pública del overlay: endpoints, campos y errores. |
+| [`docs/openapi-overlay.yaml`](docs/openapi-overlay.yaml) | El contrato OpenAPI de esa API. |
 
 ### Desarrollo con agentes
 

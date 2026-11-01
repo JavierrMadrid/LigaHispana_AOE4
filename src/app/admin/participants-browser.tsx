@@ -3,11 +3,9 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { PlayerStatus } from "@/generated/prisma/enums";
-import { deletePlayer } from "@/app/admin/actions";
 import type { AdminParticipant } from "@/lib/admin";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { ChannelLinks } from "@/components/channel-links";
-import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
 import {
   DEFAULT_PAGE_SIZE_VALUE,
@@ -21,7 +19,6 @@ import {
 } from "@/components/sortable-header";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { PlayerEditDialog } from "./player-edit-dialog";
-import { PlayerStatusActions } from "./player-status-actions";
 import { VerificationBadge } from "./participant-verification";
 import { PLAYER_STATUS_LABELS, PLAYER_STATUS_STYLES } from "./participant-status";
 
@@ -156,6 +153,11 @@ function comparePlayers(
  * descendente → orden original del servidor, que aquí es `status` y después `name`),
  * con `aria-sort` y chevron. "Quitar filtros" **no** toca el orden; cambiar filtros,
  * búsqueda u orden vuelve a la primera página.
+ *
+ * La columna de acciones no da de alta ni de baja a nadie: edita la ficha y, si el
+ * participante está aprobado, abre una actuación de expulsión con él ya elegido.
+ * Aprobar y rechazar son de la cola de pendientes de `/admin`, y la baja destructiva
+ * ya no existe.
  */
 export function ParticipantsBrowser({
   participants,
@@ -683,43 +685,33 @@ function ParticipantRow({
             <p className="max-w-[24rem] text-right text-xs leading-relaxed text-muted">
               Expulsado: se levanta con una actuación de reversión.
               {canReverse ? null : " Solo el superadministrador puede revertirla."} No
-              se puede aprobar, rechazar ni eliminar mientras la expulsión siga
-              vigente.
+              se puede aprobar ni rechazar mientras la expulsión siga vigente.
             </p>
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-end gap-2">
             {/* Editar va primero y en tono neutro: es la acción que se usa a
                 diario, y el filete tenue la deja cerca del nombre sin competir con
-                aprobar, rechazar o eliminar, que sí cambian el estado o borran.
-                Los botones de estado (aprobar, rechazar, reenviar la verificación)
-                van juntos en `PlayerStatusActions`, que es el mismo componente que
-                usa la cola de pendientes: un alta sujeta a verificación no puede
-                ofrecer «Aprobar» aquí y «Reenviar» allí. */}
+                nada. Este listado no decide altas ni bajas: aprobar y rechazar
+                viven solo en la cola de pendientes de `/admin`, y a un aprobado se
+                le retira con «Expulsar», que abre una actuación de expulsión con el
+                participante ya elegido —reversible, y sin borrar su ficha ni sus
+                partidas—. Las filas pendientes y rechazadas solo se editan aquí. */}
             <PlayerEditDialog player={player} countries={countries} canReverse={canReverse} />
 
-            <PlayerStatusActions player={player} canReverse={canReverse} />
-
-            <ConfirmAction
-              action={deletePlayer}
-              fields={{ playerId: player.id }}
-              title="Eliminar jugador"
-              body={
-                <>
-                  Se eliminará a {player.name} (AoE4World {player.profileId}) y todas sus
-                  partidas. Esta acción no se puede deshacer.
-                  <span className="mt-2 block text-xs text-muted">
-                    Si tiene actuaciones vigentes, la baja se rechazará hasta que se
-                    reviertan desde Actuaciones.
-                  </span>
-                </>
-              }
-              triggerLabel="Eliminar"
-              triggerClassName="h-10 rounded-md border border-loss/40 px-3 text-xs text-loss transition-colors hover:bg-loss/10"
-              confirmLabel="Eliminar jugador"
-              confirmPendingLabel="Eliminando…"
-              confirmClassName="bg-loss text-accent-ink hover:brightness-110"
-            />
+            {player.status === "APPROVED" ? (
+              <Link
+                href={`/admin/actuaciones/nueva?accion=BAN&participante=${player.id}`}
+                title="Abre una actuación de expulsión con este participante ya elegido. Conserva su ficha y sus partidas, y se puede revertir."
+                className="inline-flex h-10 items-center rounded-md border border-loss/40 px-3 text-xs text-loss transition-colors hover:bg-loss/10"
+              >
+                Expulsar
+                {/* El texto del enlace es igual en todas las filas: el nombre va
+                    solo para quien navega con lector de pantalla, que si no oiría
+                    una lista de «Expulsar» sin saber de quién. */}
+                <span className="sr-only"> a {player.name}</span>
+              </Link>
+            ) : null}
           </div>
         )}
       </td>

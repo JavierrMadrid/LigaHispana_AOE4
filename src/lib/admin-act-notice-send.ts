@@ -9,8 +9,8 @@ import {
   openDmChannel,
   postToChannel,
   resolveDiscordAccount,
-  type AdminNoticeTarget,
-} from "@/lib/admin-notice-send";
+  type DiscordDmTarget,
+} from "@/lib/discord/dm";
 import { adminNoticePlan } from "@/lib/admin-notices";
 import { getDiscordConfig } from "@/lib/discord/env";
 import { createDiscordHttpClient } from "@/lib/discord/http";
@@ -23,8 +23,8 @@ import { readPublicOrigin } from "@/lib/site-url";
  * Envío de los avisos de las actuaciones administrativas.
  *
  * Una actuación se anuncia **siempre** que se aplica: al canal de avisos y por
- * privado a la persona afectada. No es un aviso de "algo se ha quitado" como los de
- * `admin-notice-send.ts`, sino la comunicación de una decisión con su razón pública.
+ * privado a la persona afectada. No es el aviso de un cambio cualquiera: es la
+ * comunicación de una decisión con su razón pública.
  *
  * ## Solo la razón pública
  *
@@ -42,7 +42,7 @@ import { readPublicOrigin } from "@/lib/site-url";
  */
 
 /** La persona afectada, con lo que hace falta para resolver su cuenta de Discord. */
-export type AdminActNoticeTarget = AdminNoticeTarget;
+export type AdminActNoticeTarget = DiscordDmTarget;
 
 /** Lo que hay que avisar de una actuación, ya decidido por el servicio. */
 export type AdminActNoticeRequest = {
@@ -57,6 +57,9 @@ export type AdminActNoticeRequest = {
   /** Resúmenes públicos de las actuaciones revertidas (solo `REVERSAL`). */
   targetSummaries: readonly string[];
 };
+
+/** Prefijo del log de este módulo, el que se pasa a la resolución de la cuenta. */
+const LOG_PREFIX = "[admin-act-notice]";
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : `Error desconocido: ${String(error)}`;
@@ -78,7 +81,7 @@ async function notifyAdminAct(request: AdminActNoticeRequest): Promise<void> {
 
   const botToken = config.botToken;
 
-  const account = await resolveDiscordAccount(request.player);
+  const account = await resolveDiscordAccount(request.player, LOG_PREFIX);
   const plan = adminNoticePlan({
     hasToken: true,
     hasAccount: account !== null,
@@ -112,7 +115,7 @@ async function notifyAdminAct(request: AdminActNoticeRequest): Promise<void> {
       );
     } catch (error) {
       console.error(
-        `[admin-act-notice] No se ha podido avisar en el canal de la actuación sobre ${destinatario}: ${toErrorMessage(error)}`,
+        `${LOG_PREFIX} No se ha podido avisar en el canal de la actuación sobre ${destinatario}: ${toErrorMessage(error)}`,
       );
     }
   }
@@ -124,7 +127,7 @@ async function notifyAdminAct(request: AdminActNoticeRequest): Promise<void> {
       await postToChannel(client, botToken, dmChannelId, adminActDmText(notice));
     } catch (error) {
       console.error(
-        `[admin-act-notice] No se ha podido avisar por privado a ${destinatario}: ${toErrorMessage(error)}`,
+        `${LOG_PREFIX} No se ha podido avisar por privado a ${destinatario}: ${toErrorMessage(error)}`,
       );
     }
   }
@@ -140,7 +143,7 @@ async function notifyAdminAct(request: AdminActNoticeRequest): Promise<void> {
  */
 export function dispatchAdminActNotice(request: AdminActNoticeRequest): void {
   const promise = notifyAdminAct(request).catch((error) => {
-    console.error(`[admin-act-notice] Fallo inesperado al avisar: ${toErrorMessage(error)}`);
+    console.error(`${LOG_PREFIX} Fallo inesperado al avisar: ${toErrorMessage(error)}`);
   });
 
   const ctx = readCloudflareContext()?.ctx;

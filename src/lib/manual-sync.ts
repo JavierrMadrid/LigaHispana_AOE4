@@ -1,9 +1,15 @@
 import "server-only";
 
 import { consumeRateLimit } from "@/lib/rate-limit";
+import { readSyncRunTrace } from "@/lib/settings";
+import {
+  SYNC_INTERVAL_MAX_SECONDS,
+  nextSyncIntervalSeconds,
+  syncPassTimeoutMs,
+} from "@/lib/sync-cadence";
 
 /**
- * Candado global de las pasadas de sincronización a mano.
+ * Candado global de las pasadas de sincronización.
  *
  * Vive aquí, y no dentro del endpoint, porque hay **dos** consumidores: el disparo
  * del cron de Supabase (`POST /api/sync`, programado en `scripts/db-cron.ts`) y la
@@ -22,23 +28,23 @@ import { consumeRateLimit } from "@/lib/rate-limit";
  * incremento es una sola sentencia, así que dos pulsaciones simultáneas no se cuelan
  * (ver `src/lib/rate-limit.ts`).
  *
- * Que ahora lo use también un admin, que sí está autenticado, **no** cambia el
- * criterio: el candado protege la API, no la interfaz. Sigue siendo global porque lo
- * que se mide es cuántas veces sale el Worker a por partidas, y eso no depende de
- * quién lo pida.
+ * Que lo use también un admin, que sí está autenticado, **no** cambia el criterio: el
+ * candado protege la API, no la interfaz. Sigue siendo global porque lo que se mide es
+ * cuántas veces sale el Worker a por partidas, y eso no depende de quién lo pida.
  *
- * ## Por qué 5 minutos y no menos
+ * ## La ventana ya no es fija
  *
- * Es el **plan Free de Cloudflare**, no una manía: cada invocación tiene 10 ms de CPU
- * y una pasada del sync gasta ~500 ms, así que el *isolate* solo lo tolera si es
- * esporádico. Insistir es justo lo que hace que Cloudflare empiece a matar pasadas con
- * `Worker exceeded CPU time limit` (error 1102). Ver docs/OPERACION.md, "El límite de CPU del
- * plan Free".
+ * Antes eran 5 minutos clavados, y el motivo era el **plan Free de Cloudflare**: cada
+ * invocación tiene 10 ms de CPU y una pasada del sync gasta ~500 ms, así que el
+ * *isolate* solo lo tolera si es esporádica. Insistir es justo lo que hace que
+ * Cloudflare empiece a matar pasadas con `Worker exceeded CPU time limit` (error 1102).
+ * Ver docs/OPERACION.md, "El límite de CPU del plan Free".
  *
- * De ahí que el cron de Supabase reutilice este mismo candado en vez de tener el suyo:
- * es el precio de no llevar un secreto en la base de datos. Con el reloj a 10 minutos,
- * una ventana de 5 solo recorta una vuelta si una pasada manual cae justo antes del
- * disparo, así que las dos vías ya no se pisan en el día a día.
+ * Ahora la ventana la decide la cadencia de `sync-cadence.ts` según lo que costó la
+ * última pasada: entre 1 y 3 minutos, con el freno automático en cuanto AoE4World
+ * devuelve un `429`. El candado sigue siendo **uno solo** para cron y admin: el reloj
+ * dispara cada minuto y es la ventana la que filtra cuántos disparos se convierten en
+ * pasadas, así que dos vías con ventanas distintas volverían a apilar trabajo.
  */
 
 /**
@@ -49,32 +55,31 @@ import { consumeRateLimit } from "@/lib/rate-limit";
 export const MANUAL_SYNC_LOCK_KEY = "public/manual-sync";
 
 /**
- * Lo que hay que esperar entre dos pasadas a mano. El cron de Supabase **comparte** este
- * candado para que las dos vías no se pisen; con su reloj ya a 10 minutos, esta ventana
- * solo corta una vuelta del cron si una pasada manual cae justo antes del disparo.
- */
-export const MANUAL_SYNC_COOLDOWN_SECONDS = 300;
-
-/**
  * Antigüedad a partir de la cual la fila del contador se considera caducada.
  *
  * Solo afecta a la limpieza de filas viejas (`purgeStaleCounters`), no a la ventana:
  * `bumpCounter()` reinicia el contador por sí solo en cuanto la ventana expira. Una
- * hora es muy superior a la de 5 minutos para que la fila siga ahí —y se pueda mirar
- * en la tabla— cuando alguien va a comprobar si el candado está haciendo su trabajo.
+ * hora es muy superior a la ventana máxima de 3 minutos para que la fila siga ahí —y
+ * se pueda mirar en la tabla— cuando alguien va a comprobar si el candado está
+ * haciendo su trabajo.
  */
 const MANUAL_SYNC_STALE_SECONDS = 3_600;
 
-/** Lo que decide `consumeManualSyncLock()`: si se pasa ahora, y cuánto queda. */
+/** Lo que decide `consumeManualSyncLock()`: si se pasa ahora, cuánto queda y con qué ventana. */
 export type ManualSyncLock = {
   /** Si se puede lanzar la pasada ahora mismo. */
   allowed: boolean;
   /** Cuánto queda para que la ventana se reinicie, en segundos. */
   retryAfterSeconds: number;
+  /** Longitud de la ventana con la que se ha contado este intento, en segundos. */
+  windowSeconds: number;
 };
 
 /**
  * Cuenta un intento contra el candado global y decide si se puede pasar.
+ *
+ * `windowSeconds` es la cadencia decidida por `readSyncCadence()`; por defecto, la
+ * máxima, que es la opción segura si alguien llama sin calcularla.
  *
  * **Lanza** si no se puede comprobar el candado (base caída, contador que no
  * responde), y es deliberado: quien llama tiene que poder distinguir "todavía no" de
@@ -82,17 +87,62 @@ export type ManualSyncLock = {
  * de verdad sería indistinguible de un fallo, y el fallo que se tragaría una pasada sin
  * candado es justo el que hay que evitar.
  *
-* Los dos consumidores lo tratan por eso igual: `catch` para registrar el motivo y
+ * Los dos consumidores lo tratan por eso igual: `catch` para registrar el motivo y
  * responder "ahora no se puede", sin pasar. Y consume el intento **antes** de lanzar la
  * pasada, no después: al revés, dos pulsaciones simultáneas pasarían las dos antes de
  * que ninguna hubiera escrito en el contador.
  */
-export async function consumeManualSyncLock(): Promise<ManualSyncLock> {
+export async function consumeManualSyncLock(
+  windowSeconds: number = SYNC_INTERVAL_MAX_SECONDS,
+): Promise<ManualSyncLock> {
   const limit = await consumeRateLimit(MANUAL_SYNC_LOCK_KEY, "global", {
     maxAttempts: 1,
-    windowSeconds: MANUAL_SYNC_COOLDOWN_SECONDS,
+    windowSeconds,
     staleSeconds: MANUAL_SYNC_STALE_SECONDS,
   });
 
-  return { allowed: limit.allowed, retryAfterSeconds: limit.retryAfterSeconds };
+  return {
+    allowed: limit.allowed,
+    retryAfterSeconds: limit.retryAfterSeconds,
+    windowSeconds,
+  };
+}
+
+/** Cadencia efectiva: cada cuánto se puede pasar, y cuánto tiempo tiene la pasada. */
+export type SyncCadence = {
+  /** Segundos entre dos inicios de pasada. Es también la ventana del candado. */
+  intervalSeconds: number;
+  /** Plazo para que la pasada termine antes del siguiente disparo, en ms. */
+  timeoutMs: number;
+};
+
+/**
+ * Lee el rastro de la última pasada y traduce a cadencia y plazo.
+ *
+ * Es el único sitio donde se juntan la lectura (`readSyncRunTrace()`) y la fórmula
+ * (`sync-cadence.ts`), para que `/api/sync` y `syncNow` no puedan decidir distinto.
+ *
+ * **No lanza.** Un fallo del diagnóstico no puede tumbar el sync: si el rastro no se
+ * puede leer, se devuelve la cadencia máxima (3 min, 170 s de plazo), que es la
+ * opción conservadora —menos pasadas, no más— y el motivo se queda en el log. Es el
+ * mismo criterio que la lectura del candado: lo que no se sabe no se usa para correr
+ * más.
+ */
+export async function readSyncCadence(): Promise<SyncCadence> {
+  try {
+    const trace = await readSyncRunTrace();
+    const intervalSeconds = nextSyncIntervalSeconds(trace);
+
+    return { intervalSeconds, timeoutMs: syncPassTimeoutMs(intervalSeconds) };
+  } catch (error) {
+    console.error(
+      "[sync] No se ha podido leer el rastro para calcular la cadencia; se usa la máxima:",
+      error instanceof Error ? error.message : String(error),
+    );
+
+    return {
+      intervalSeconds: SYNC_INTERVAL_MAX_SECONDS,
+      timeoutMs: syncPassTimeoutMs(SYNC_INTERVAL_MAX_SECONDS),
+    };
+  }
 }

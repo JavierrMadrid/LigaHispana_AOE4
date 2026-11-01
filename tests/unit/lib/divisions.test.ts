@@ -7,6 +7,7 @@ import {
   divisionFromRankLevel,
   divisionTier,
   subdivisionIndex,
+  subdivisionNumber,
 } from "@/lib/divisions";
 
 /**
@@ -154,5 +155,35 @@ describe("divisionTier", () => {
 
     expect(escalones).toEqual([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5]);
     expect(SUBDIVISIONS_PER_DIVISION).toBe(3);
+  });
+});
+
+describe("subdivisionNumber", () => {
+  it("devuelve el subrango del `rank_level`", () => {
+    expect(subdivisionNumber("gold_2")).toBe(2);
+    expect(subdivisionNumber("silver_1")).toBe(1);
+    expect(subdivisionNumber("conqueror_3")).toBe(3);
+  });
+
+  it("sin subrango o fuera del catálogo devuelve `null`", () => {
+    // No se parsea el sufijo a propósito: `gold_4` y `gold_0` no existen en el
+    // catálogo y un número inventado pintaría una subdivisión que no es.
+    for (const valor of [null, "", "gold", "gold_4", "gold_0", "basura"]) {
+      expect(subdivisionNumber(valor), String(valor)).toBeNull();
+    }
+  });
+
+  it("el número está entre 1 y las subdivisiones por división, para todo el catálogo", () => {
+    for (const nivel of SUBDIVISION_RANK_LEVELS) {
+      const numero = subdivisionNumber(nivel);
+
+      expect(numero, nivel).not.toBeNull();
+      expect(numero ?? 0, nivel).toBeGreaterThanOrEqual(1);
+      expect(numero ?? 0, nivel).toBeLessThanOrEqual(SUBDIVISIONS_PER_DIVISION);
+    }
+  });
+
+  it("no le importa cómo venga escrito el `rank_level`", () => {
+    expect(subdivisionNumber("  GOLD_2 ")).toBe(2);
   });
 });

@@ -29,10 +29,13 @@ type Tone = keyof typeof TONES;
 /**
  * Los botones de estado de una fila, en un solo sitio.
  *
- * Los usan el listado de participantes (cliente) y la cola de pendientes
- * (servidor), y por eso viven aquí: si cada pantalla compusiera los suyos, una
- * podría ofrecer «Aprobar» en un alta que no se aprueba con eso, que es justo el
- * error que esta funcionalidad introduce. El reparto es el mismo en las dos:
+ * Lo usa **solo** la cola de pendientes de `/admin`, no el listado completo: aquí
+ * se decide el alta, y por eso este es el único sitio donde se ofrece aprobar y
+ * rechazar. El listado de participantes solo edita la ficha y, si está aprobado,
+ * abre la actuación de expulsión. Tenerlo en un componente sigue valiendo la pena:
+ * si la cola compusiera sus propios botones, podría ofrecer «Aprobar» en un alta
+ * que no se aprueba con eso, que es justo el error que esta funcionalidad
+ * introduce. El reparto es este:
  *
  * | Fila | Acciones |
  * |---|---|
@@ -59,15 +62,15 @@ export function PlayerStatusActions({
   player: AdminParticipant;
   /** `getAdminAccess() === "superadmin"`: habilita «Aprobar sin verificación». */
   canReverse: boolean;
-  /** A qué lado se pegan los botones: en el listado a la derecha, en la cola a la izquierda. */
+  /** A qué lado se pegan los botones: la cola los pone a la izquierda de la fila. */
   align?: "start" | "end";
 }) {
   const [error, setError] = useState<string | null>(null);
   const end = align === "end";
 
   // Un expulsado no se aprueba ni se rechaza desde aquí: su salida es revertir la
-  // actuación. El listado ya lo aparta (`BANNED` tiene su propio bloque), y esto
-  // evita que un uso nuevo pinte botones que el servidor va a denegar.
+  // actuación. La cola no pinta expulsados, y esto evita que un uso nuevo pinte
+  // botones que el servidor va a denegar.
   if (player.status === "BANNED") {
     return null;
   }

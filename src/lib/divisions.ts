@@ -138,3 +138,24 @@ export const SUBDIVISIONS_PER_DIVISION = SUBDIVISION_RANK_LEVELS.length / DIVISI
 export function divisionTier(index: number): number {
   return Math.floor(index / SUBDIVISIONS_PER_DIVISION);
 }
+
+/**
+ * Número de subdivisión de un `rank_level` (`gold_2` → 2), o `null` si no lo
+ * tiene o no está en el catálogo. El número es el que publica la API del overlay
+ * como `rango.division` (1..3).
+ *
+ * Se resuelve contra `SUBDIVISION_RANK_LEVELS` y no parseando el sufijo, para que
+ * la respuesta sea la misma que la del resto del catálogo: `gold`, `gold_4` y
+ * `gold_0` no están en la lista y devuelven `null` en vez de un 4 o un 0 que no
+ * existen. El catálogo va de la subdivisión más fuerte a la más débil dentro de
+ * cada división (3 → 2 → 1), así que el número es el complemento del resto.
+ */
+export function subdivisionNumber(rankLevel: string | null): number | null {
+  const index = subdivisionIndex(rankLevel);
+
+  if (index === null) {
+    return null;
+  }
+
+  return SUBDIVISIONS_PER_DIVISION - (index % SUBDIVISIONS_PER_DIVISION);
+}

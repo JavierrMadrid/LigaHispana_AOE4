@@ -103,7 +103,7 @@ export type TotalAlertRule =
  * lee las clasificatorias de cada aprobado en cada pasada.
  *
  * Su `dedupeKey` es estable por (regla, tipo, jugador) —sin partida ancla ni número—,
- * porque si no, reevaluarlas cada 10 minutos insertaría una fila nueva cada 12 horas
+ * porque si no, reevaluarlas cada 1-3 minutos insertaría una fila nueva cada 12 horas
  * para siempre. Ver el docblock de `alertDedupeKey()`.
  *
  * `NO_STREAM_CHANNEL` es la única **condicional**: solo se evalúa si la edición
@@ -588,7 +588,7 @@ export type TriggeredAlert = {
  * (regla, tipo, jugador, sujeto)**: una alerta por jugador y por hecho.
  *
  * Es la decisión de la que depende que estas reglas no llenen la tabla. Las dos
- * se reevalúan **cada 10 minutos** (la del historial con una caché de 12 h), así
+ * se reevalúan **en cada pasada** (1-3 minutos; la del historial con una caché de 12 h), así
  * que una clave con la partida sondeada o con los minutos de desfase insertaría
  * una fila nueva cada vez que cambiara el número, y en la práctica una alarma
  * cada 12 horas para siempre por jugador. Sin `anchorGameId` ni `count` en la
