@@ -1547,8 +1547,10 @@ export async function setRegistrationOpen(formData: FormData): Promise<void> {
 
   // El valor del interruptor se lee en tres sitios: la Administración donde se
   // cambia, el alta de `/admin`, que se deshabilita con el plazo cerrado, y el
-  // formulario público.
+  // formulario público. La subpestaña `Fechas` lo enseña junto a la fecha de cierre,
+  // así que también relee.
   revalidatePath("/admin/administracion/inscripciones");
+  revalidatePath("/admin/administracion/fechas");
   revalidatePath("/admin");
   revalidatePath("/participar");
 }
@@ -1562,6 +1564,8 @@ export async function setRegistrationOpen(formData: FormData): Promise<void> {
  * pudiendo cerrar antes, y para **reabrir** después de la fecha el superadministrador
  * quita o mueve la fecha. Va **detrás de `requireSuperadmin()`**, como el interruptor:
  * decide quién puede inscribirse y no se deja al criterio de quien llame a la acción.
+ * La subpestaña `Fechas` la reutiliza tal cual: la fecha de cierre es parte de la
+ * configuración temporal de la edición, junto a la ventana del torneo.
  *
  * ## Qué espera y qué devuelve
  *
@@ -1590,8 +1594,9 @@ export async function setRegistrationOpen(formData: FormData): Promise<void> {
  *
  * ## Qué revalida
  *
- * Las mismas tres rutas que el interruptor, porque la fecha cambia el mismo estado:
- * la Administración donde se configura, el alta de `/admin` y el formulario público.
+ * Las mismas rutas que el interruptor más la subpestaña `Fechas`, que es donde se edita
+ * la fecha junto a la ventana del torneo: la Administración donde se configura, el alta
+ * de `/admin`, el formulario público y esa subpestaña.
  */
 export async function setRegistrationClosesAt(
   _prevState: AdminActionResult,
@@ -1653,6 +1658,7 @@ export async function setRegistrationClosesAt(
   }
 
   revalidatePath("/admin/administracion/inscripciones");
+  revalidatePath("/admin/administracion/fechas");
   revalidatePath("/admin");
   revalidatePath("/participar");
 

@@ -64,23 +64,25 @@ de la base falla, cae al texto genérico y no inventa fechas.
 
 La página `/puntuacion` lee además el **ruleset activo** para las demás cifras: los puntos por victoria
 y los **objetivos activos**, de los que salen el recuento y el total que reparten (con el catálogo por
-defecto, 88 y 2.754 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de
+defecto, 94 y 2.932 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de
 resumen no se pinta y los párrafos caen a su forma genérica, en vez de enseñar los números de la
 edición anterior.
 
-La suma de 2.754 es la de los objetivos de **premio fijo** del catálogo (cada uno contado una vez,
+La suma de 2.932 es la de los objetivos de **premio fijo** del catálogo (cada uno contado una vez,
 `imparable` a su tope): `victorias` queda fuera, porque no reparte un premio sino `pointsPerWin` por
 victoria y sin tope
 (ver [`OBJETIVOS.md`](./OBJETIVOS.md#total-de-puntos)). El criterio está en código (`hasFixedPrize()`);
 en una tarjeta ya resuelta se reconoce en `kind === "achievement" && target === null`.
 
-En el panel (`/admin/administracion/puntuacion`) la ventana se escribe como **fecha y hora local de
-Europe/Madrid** (`datetime-local`), que es la zona con la que la organización lee el torneo; el
-servidor la interpreta en Madrid y guarda el instante **ISO-8601 UTC**. El campo sigue aceptando un
-ISO con zona escrito a mano. `parseMadridLocalInstant()` / `formatMadridLocalInstant()`
-(`src/lib/ranked-match.ts`) hacen la conversión: en las horas del cambio de hora, la ambigua de
-octubre se resuelve con la segunda ocurrencia (invierno) y la inexistente de marzo, con el instante
-justo después del salto.
+En la subpestaña `Fechas` (`/admin/administracion/fechas`, acción `saveTournamentWindow`) la ventana
+se escribe como **fecha y hora local de Europe/Madrid** (`datetime-local`), que es la zona con la que
+la organización lee el torneo; el servidor la interpreta en Madrid y guarda el instante **ISO-8601
+UTC**. El campo sigue aceptando un ISO con zona escrito a mano. `parseMadridLocalInstant()` /
+`formatMadridLocalInstant()` (`src/lib/ranked-match.ts`) hacen la conversión: en las horas del cambio
+de hora, la ambigua de octubre se resuelve con la segunda ocurrencia (invierno) y la inexistente de
+marzo, con el instante justo después del salto. En esa misma subpestaña vive la **fecha de cierre de
+inscripciones** (`setRegistrationClosesAt`): las dos son la configuración temporal de la edición, no
+reglas de puntuación.
 
 ### El corte de inscripción
 
@@ -190,7 +192,7 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
 ```json
 {
   "version": 4,
-  "label": "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
+  "label": "2 puntos por victoria clasificatoria más 94 objetivos: 31 competiciones y 63 logros",
   "modes": ["rm_solo", "rm_team"],
   "window": { "from": "2026-09-15T00:00:00.000Z", "to": "2026-10-15T00:00:00.000Z" },
   "pointsPerWin": 2,
@@ -216,27 +218,47 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
   y `to <= from` se rechaza entero. El panel convierte antes la fecha y hora local de Madrid a UTC
   (ver [La ventana](#la-ventana)), así que lo guardado siempre cumple esto.
 - **La etiqueta (`label`) la calcula el código** (`ruleLabel()`), no el documento: sale de
-  `pointsPerWin` y de los objetivos **activos** ("2 puntos por victoria clasificatoria más 87 objetivos:
-  28 competiciones y 59 logros" con un objetivo apagado). El `label` guardado se ignora y
+  `pointsPerWin` y de los objetivos **activos** ("2 puntos por victoria clasificatoria más 93 objetivos:
+  30 competiciones y 63 logros" con un objetivo apagado). El `label` guardado se ignora y
   `ensureRuleset` corrige la copia de la tabla.
 - **`objectives["victorias"]` se ignora** por el motor: lo que vale una victoria lo dice `pointsPerWin`
   (ver [Cómo se cobra una victoria](#cómo-se-cobra-una-victoria)). El panel no deja editarlo.
 - Cada recálculo escribe `PlayerScore` solo en la versión activa; las versiones anteriores se quedan
   como histórico. El rastro de la última pasada va en `Setting["scoring.lastRun"]`.
 
-**Quién lo cambia.** El ruleset lo publica el **superadministrador** desde el panel de administración
-(`saveScoringRuleset`): valida antes de escribir y deja el rastro en `AdminAction` (`CONFIG_CHANGED`).
-Un cambio que mueva puntos —ventana, familias, puntos por victoria, civ aleatoria, puntos de objetivos
-u objetivos desactivados— recalcula la clasificación al guardar; si el recálculo falla, las reglas
-quedan guardadas y el aviso lo dice (la clasificación se pone al día en la siguiente pasada). El
-detalle operativo está en [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
+**Quién lo cambia.** El ruleset lo publica el **superadministrador** desde el panel de administración,
+con una acción para cada cosa:
 
-**Con la edición empezada solo se puede cerrar la ventana.** Desde `window.from` (`editionStarted()`)
-quedan congelados `window.from`, las familias de ladder, los puntos por victoria, el recuento de civs
-aleatorias, los puntos de objetivos y los objetivos desactivados: cambiarlos reescribiría una
-clasificación que ya está publicada. Lo único que se puede fijar o cambiar es `window.to`, que es cómo
-se cierra la edición. El bloqueo está en el servidor (`saveScoringRuleset`); la pantalla esconde los
-campos congelados y solo deja fijar el fin.
+| Qué se toca | Acción | Dónde |
+|---|---|---|
+| Las fechas: `window.from` y `window.to` | `saveTournamentWindow` | Subpestaña `Fechas` (`/admin/administracion/fechas`) |
+| Las reglas: familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` | Subpestaña `Puntuación` (`/admin/administracion/puntuacion`) |
+
+Las dos validan antes de escribir y dejan el rastro en `AdminAction` (`CONFIG_CHANGED`). Un cambio
+que mueva puntos —la ventana, las familias, los puntos por victoria, la civ aleatoria, los puntos de
+objetivos u objetivos desactivados— recalcula la clasificación al guardar; si el recálculo falla, las
+reglas quedan guardadas y el aviso lo dice (la clasificación se pone al día en la siguiente pasada).
+`saveScoringRuleset` **rechaza** los campos `windowFrom` y `windowTo` en lugar de ignorarlos: las
+fechas no se editan en Puntuación. El detalle operativo está en
+[`OPERACION.md`](./OPERACION.md#configurar-la-edición).
+
+**Mientras la edición está en marcha, las reglas y el inicio quedan congelados.** Desde `window.from`
+(`editionStarted()`) y hasta `window.to` (`editionEnded()`), quedan congelados la fecha de inicio, las
+familias de ladder, los puntos por victoria, el recuento de civs aleatorias, los puntos de objetivos y
+los objetivos desactivados: cambiarlos reescribiría una clasificación que ya está publicada. En ese
+tramo lo único que se puede fijar o cambiar es `window.to`, que es cómo se cierra la edición, y se
+hace desde `Fechas` con `saveTournamentWindow`. El bloqueo está en el servidor:
+`saveScoringRuleset` se niega a guardar ninguna regla y `saveTournamentWindow` rechaza la fecha de
+inicio y cualquier campo congelado que llegue en el formulario. Las pantallas esconden los campos
+bloqueados y solo dejan fijar el fin.
+
+**Cuando la edición ya ha terminado, el inicio se puede mover para empezar la siguiente.** Pasado
+`window.to` (`editionEnded()`), el torneo ya no reparte puntos y `Fechas` vuelve a admitir las dos
+fechas. Mover el inicio **empieza una edición nueva**: se exige la confirmación `confirmNewEdition`, la
+clasificación se recalcula contra la ventana nueva y la edición anterior deja de mostrarse en la web,
+aunque sus partidas y sus historiales siguen guardados. Mover solo el fin no pide confirmación. Con el
+inicio nuevo en el futuro la ventana vuelve a estar sin empezar, así que las reglas de `Puntuación`
+vuelven a ser editables.
 
 Forma del desglose (`PlayerScore.breakdown`): las dos familias y el bloque de eventos, con ceros si no
 aplican. Una fila escrita antes de que existieran los eventos no trae `events`.
@@ -244,7 +266,7 @@ aplican. Una fila escrita antes de que existieran los eventos no trae `events`.
 ```json
 {
   "ruleSetVersion": 4,
-  "rule": "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
+  "rule": "2 puntos por victoria clasificatoria más 94 objetivos: 31 competiciones y 63 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }

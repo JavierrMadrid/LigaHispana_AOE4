@@ -32,7 +32,7 @@ import {
 import { campoSiCambia } from "@/lib/player-fields";
 import { parseEmail } from "@/lib/player-input";
 import { VICTORIAS_ID } from "@/lib/objectives";
-import { editionStarted, parseMadridLocalInstant } from "@/lib/ranked-match";
+import { editionEnded, editionStarted, parseMadridLocalInstant } from "@/lib/ranked-match";
 import {
   lockedRulesetChanges,
   mergeRuleset,
@@ -48,9 +48,9 @@ import {
  * Cuatro grupos que comparten una cosa: **solo las puede llamar el
  * superadministrador** (`requireSuperadmin()`). El primero da y retira acceso al panel;
  * el segundo publica lo que describe la edición —su nombre, su premio, su marca, si la
- * retransmisión es obligatoria, las reglas de puntuación y la lista de países
- * admitidos—; el tercero deshace una acción del historial; y el cuarto comprueba el
- * canal de avisos del bot.
+ * retransmisión es obligatoria, las fechas del torneo, las reglas de puntuación y la
+ * lista de países admitidos—; el tercero deshace una acción del historial; y el cuarto
+ * comprueba el canal de avisos del bot.
  *
  * Viven bajo `/admin/**` por el mismo motivo que las de `src/app/admin/actions.ts`:
  * el `matcher` del Proxy cubre `/admin/:path*` y **excluir una ruta excluye también
@@ -416,6 +416,10 @@ export async function saveEditionConfig(
 const RULESET_SAVE_FAILED_MESSAGE =
   "No se han podido guardar las reglas. Inténtalo de nuevo en unos minutos.";
 
+/** Fallo de base de la subpestaña `Fechas`. Distinto del de las reglas: no se ha escrito lo mismo. */
+const WINDOW_SAVE_FAILED_MESSAGE =
+  "No se han podido guardar las fechas del torneo. Inténtalo de nuevo en unos minutos.";
+
 const POINTS_PER_WIN_INVALID_ERROR =
   "Los puntos por victoria tienen que ser un número entero mayor que cero.";
 
@@ -424,6 +428,10 @@ const OBJECTIVE_POINTS_INVALID_ERROR =
 
 const WINDOW_FROM_INVALID_ERROR =
   "La fecha de inicio de la ventana no vale. Escribe fecha y hora (por ejemplo 2026-09-15T18:00, hora de Madrid) o un instante ISO-8601 con zona.";
+
+/** La fecha de inicio no es opcional: sin ella no hay corte desde el que contar. */
+const WINDOW_FROM_REQUIRED_ERROR =
+  "La fecha de inicio de la ventana del torneo es obligatoria: marca desde cuándo cuentan las partidas.";
 
 const WINDOW_TO_INVALID_ERROR =
   "La fecha de fin de la ventana no vale. Escribe fecha y hora (por ejemplo 2026-10-15T23:59, hora de Madrid), un instante ISO-8601 con zona, o déjala vacía para que la ventana no tenga fin.";
@@ -441,21 +449,54 @@ const WINDOW_TO_INVALID_ERROR =
 const OBJECTIVE_POINTS_PREFIX = "objectivePoints.";
 
 /**
- * El error de "la edición ya ha empezado".
+ * El error de "la edición ya ha empezado" al guardar las **reglas**.
  *
- * Es el mismo mensaje para los dos casos que lo producen —un formulario que trae un
- * campo congelado y un documento que movería puntos pese a todo— porque la regla que se
- * incumple es la misma y el camino que le queda a quien lo lee también.
+ * Aquí ya no queda nada editable: la fecha de fin de la ventana tiene su propia acción
+ * (`saveTournamentWindow`) y su propia subpestaña (`Fechas`), así que el mensaje no
+ * promete un cambio que esta pantalla ya no puede hacer.
  */
 const RULESET_LOCKED_ERROR =
-  "La edición ya ha empezado: los puntos y las reglas de puntuación ya no se pueden cambiar. Solo se puede fijar la fecha de fin de la ventana.";
+  "La edición ya ha empezado: los puntos y las reglas de puntuación ya no se pueden cambiar. La fecha de fin de la ventana se edita en la subpestaña Fechas.";
+
+/**
+ * El error de "la edición ya ha empezado" al guardar la **ventana**.
+ *
+ * Es lo que sale cuando el formulario de `Fechas` trae, con la edición en marcha, algún
+ * campo que ya no se puede tocar: la fecha de inicio o cualquier regla de puntuación.
+ * El fin sí se puede fijar, mover o vaciar.
+ */
+const WINDOW_LOCKED_ERROR =
+  "La edición ya ha empezado: de las fechas solo se puede cambiar la fecha de fin. La fecha de inicio y el resto de reglas quedan congelados.";
+
+/**
+ * El formulario de reglas ya no lleva fechas.
+ *
+ * Se rechaza en lugar de ignorarlas: quien envía una fecha espera que se guarde, y
+ * guardar los puntos mientras se cree que la ventana ha cambiado es el peor resultado de
+ * los dos.
+ */
+const RULESET_WINDOW_MOVED_ERROR =
+  "Las fechas del torneo no se editan aquí: se cambian en la subpestaña Fechas. Este formulario guarda solo los puntos y las reglas.";
+
+/**
+ * Mover el inicio de una edición terminada empieza otra.
+ *
+ * No se hace sin confirmación porque el efecto no se ve en el formulario: la
+ * clasificación se recalcula contra la ventana nueva y la edición anterior desaparece de
+ * la web. Es el mismo criterio de los borrados: una operación con consecuencias que no se
+ * deshacen con volver a escribir lo de antes se pide dos veces.
+ */
+const NEW_EDITION_CONFIRMATION_REQUIRED_ERROR =
+  "Se ha movido la fecha de inicio, y eso empieza una edición nueva: la clasificación se recalcula contra la ventana nueva y la edición anterior deja de mostrarse en la web (sus partidas y sus historiales siguen guardados). Marca la confirmación de la edición nueva para guardarla; si solo querías mover el fin, deja el inicio como está.";
 
 /**
  * Los campos del formulario que quedan congelados cuando la edición ha empezado.
  *
- * `windowTo` **no** está: es el único que se puede seguir tocando. Los puntos por
- * objetivo no se pueden listar aquí —son hasta 88 claves `objectivePoints.<id>`— y se
- * detectan por su prefijo.
+ * No se editan desde `saveScoringRuleset()` —con la edición en marcha no deja guardar
+ * nada—, sino desde `saveWindowEnd()`, que los usa para rechazar cualquier envío que los
+ * traiga: con la edición en marcha el formulario bueno es el que solo manda `windowTo`.
+ * Los puntos por objetivo no se pueden listar aquí —son hasta 94 claves
+ * `objectivePoints.<id>`— y se detectan por su prefijo.
  */
 const LOCKED_RULESET_FIELDS = [
   "windowFrom",
@@ -500,8 +541,8 @@ function disabledObjectivesText(ids: readonly string[]): string {
 /**
  * Los puntos de objetivos que han cambiado, como un solo campo del rastro.
  *
- * Va junto y no un campo por objetivo a propósito: son hasta 88 valores, y una frase
- * de historial con 88 campos no se lee. Lo que sí se ve es **cuáles** han cambiado y
+ * Va junto y no un campo por objetivo a propósito: son hasta 94 valores, y una frase
+ * de historial con 94 campos no se lee. Lo que sí se ve es **cuáles** han cambiado y
  * de qué valor a qué valor.
  */
 function objectivesChanged(
@@ -525,31 +566,35 @@ function objectivesChanged(
 }
 
 /**
- * Guarda el ruleset de puntuación: ventana, familias, puntos, civ aleatoria y objetivos.
+ * Guarda las reglas de puntuación: familias, puntos, civ aleatoria y objetivos.
  *
  * Escribe `Setting["scoring.ruleset"]`, que es el documento del que salen **todas** las
  * reglas de la clasificación. Va **detrás de `requireSuperadmin()`**, como la
- * configuración de la edición: mover la ventana o desactivar un objetivo cambia quién
+ * configuración de la edición: desactivar un objetivo o mover los puntos cambia quién
  * cobra qué, y no se deja al criterio de quien llame a la acción.
+ *
+ * ## Las fechas no se editan aquí
+ *
+ * La **ventana del torneo** (`window.from` y `window.to`) tiene su propia acción,
+ * `saveTournamentWindow()`, y su propia subpestaña, `Fechas`. Si este formulario trae
+ * `windowFrom` o `windowTo` se **rechaza** con `RULESET_WINDOW_MOVED_ERROR`; el
+ * candidato conserva la ventana guardada.
  *
  * ## Parte del documento que ya está
  *
  * El formulario manda los campos que se editan, y lo que no manda se conserva: los
  * puntos por objetivo, si no vienen como `objectivePoints.<id>`, siguen con el valor
  * que tenían. Es lo contrario de "foto completa" de la edición y es deliberado: el
- * catálogo tiene 88 puntos y la pantalla puede no editarlos todos, así que un
+ * catálogo tiene 94 puntos y la pantalla puede no editarlos todos, así que un
  * formulario que no los mencione **no puede borrarlos**.
  *
  * ## Validación
  *
  * Los dos números que se escriben a mano (puntos por victoria y puntos de un objetivo)
- * se comprueban aquí con su mensaje. La **ventana** también: el campo es fecha y hora
- * local de Madrid, se convierte a ISO-8601 UTC con `parseMadridLocalInstant()` y un
- * texto que no sea ni eso ni un instante con zona se rechaza con el mensaje del campo
- * —el aviso técnico de `mergeRuleset` diría lo mismo, pero en el idioma del parser—.
- * El resto —las familias, la lista de objetivos desactivados— se valida con
- * `mergeRuleset()`, cuyos avisos ya dicen qué campo falla y por qué, así que se enseñan
- * tal cual. Si queda algún aviso no se escribe nada.
+ * se comprueban aquí con su mensaje. El resto —las familias, la lista de objetivos
+ * desactivados, la ventana que ya estaba— se valida con `mergeRuleset()`, cuyos avisos
+ * ya dicen qué campo falla y por qué, así que se enseñan tal cual. Si queda algún aviso
+ * no se escribe nada.
  *
  * ## Qué escribe y qué recalcula
  *
@@ -561,31 +606,35 @@ function objectivesChanged(
  * Revalida las pantallas que leen las reglas: el panel, la clasificación, los objetivos
  * y la puntuación.
  *
- * ## Con la edición empezada solo queda el fin de la ventana
+ * ## Con la edición empezada las reglas quedan congeladas
  *
  * Desde `window.from` (`editionStarted()`) los puntos y las reglas que los mueven
- * quedan **congelados**: la fecha de inicio, las familias de ladder, los puntos por
- * victoria, la civ aleatoria, los puntos de objetivos y los objetivos desactivados.
- * Cambiarlos a mitad de edición reescribiría una clasificación que ya está publicada.
- * Lo único que se puede hacer después del inicio es **fijar o mover `window.to`**, que
- * es cómo se cierra la edición (ver `docs/PUNTUACION.md` y `docs/OPERACION.md`).
+ * quedan **congelados**: las familias de ladder, los puntos por victoria, la civ
+ * aleatoria, los puntos de objetivos y los objetivos desactivados. Cambiarlos a mitad
+ * de edición reescribiría una clasificación que ya está publicada. Aquí no queda nada
+ * editable; el único cambio de fechas que se permite después del inicio es **fijar o
+ * mover `window.to`**, y eso se hace en la subpestaña `Fechas`
+ * (`saveTournamentWindow()` → `saveWindowEnd()`).
  *
  * El bloqueo lo decide **este servidor**: la interfaz puede deshabilitar campos y
  * explicar el motivo, pero una Server Action es un endpoint público y quien se niega es
- * esta función. Se comprueba dos veces: primero, qué campos trae el formulario; y como
- * guarda final, que el documento resultante no mueva ningún campo bloqueado
- * (`lockedRulesetChanges()`), aunque el formulario hubiera mentido.
+ * esta función.
  */
 export async function saveScoringRuleset(
   _prevState: AdminActionResult,
   formData: FormData,
 ): Promise<AdminActionResult> {
   const admin = await requireSuperadmin();
-  const windowTo = readField(formData, "windowTo");
+
+  // Las fechas ya no son parte de este formulario. Se miran antes de leer nada: no hay
+  // por qué pagar una consulta para rechazar un campo que se edita en otra pantalla.
+  if (formData.has("windowFrom") || formData.has("windowTo")) {
+    return { status: "error", message: RULESET_WINDOW_MOVED_ERROR };
+  }
 
   // El ruleset guardado se lee **antes** de validar los campos: si la edición ya ha
-  // empezado, casi todo el formulario deja de tener sentido y lo que decide el camino
-  // es la ventana guardada, no la que traiga el campo de la fecha de inicio.
+  // empezado no hay nada que guardar aquí y lo que decide el camino es la ventana
+  // guardada, no lo que traiga el formulario.
   let actual: ScoringRuleset;
 
   try {
@@ -597,30 +646,13 @@ export async function saveScoringRuleset(
   }
 
   if (editionStarted(actual.window, new Date())) {
-    return saveWindowEnd(admin, formData, windowTo, actual);
+    return { status: "error", message: RULESET_LOCKED_ERROR };
   }
 
-  const windowFrom = readField(formData, "windowFrom");
   const modes = readList(formData, "modes");
   const pointsPerWinRaw = readField(formData, "pointsPerWin");
   const countRandomizedCivs = readField(formData, "countRandomizedCivs") === "true";
   const disabledObjectives = readList(formData, "disabledObjectives");
-
-  // El panel escribe fecha y hora **local de Madrid** (`datetime-local`) y se guarda
-  // ISO-8601 UTC, que es lo que lee `parseWindow()`. El parser acepta también el ISO
-  // con zona por si el campo se rellena a mano, y el mensaje de error es el del
-  // campo, no el aviso técnico de `mergeRuleset`.
-  const windowFromInstant = parseMadridLocalInstant(windowFrom);
-
-  if (windowFromInstant === null) {
-    return { status: "error", message: WINDOW_FROM_INVALID_ERROR };
-  }
-
-  const windowToInstant = windowTo === "" ? null : parseMadridLocalInstant(windowTo);
-
-  if (windowTo !== "" && windowToInstant === null) {
-    return { status: "error", message: WINDOW_TO_INVALID_ERROR };
-  }
 
   const pointsPerWin = Number(pointsPerWinRaw);
 
@@ -675,10 +707,8 @@ export async function saveScoringRuleset(
   const candidato = {
     ...documento,
     modes,
-    // Un `to` vacío es la ventana abierta: hay que pedirlo dejando el campo vacío, y
-    // `null` explícito es lo que `mergeRuleset` exige para no heredar el del documento
-    // por defecto.
-    window: { from: windowFromInstant, to: windowToInstant },
+    // La ventana se conserva tal cual: este formulario no la edita (ver el docblock).
+    window: actual.window,
     pointsPerWin,
     countRandomizedCivs,
     objectives,
@@ -695,8 +725,10 @@ export async function saveScoringRuleset(
   }
 
   const despues = merged.ruleset;
+  // La ventana no entra en la comparación: no es un campo de este formulario y el
+  // candidato la conserva, así que un cambio suyo aquí solo podría venir de una
+  // normalización del documento guardado, no de quien envía.
   const cambios = [
-    ...campoSiCambia(windowText(actual.window), windowText(despues.window), "window", "ventana del torneo"),
     ...campoSiCambia(actual.modes.join(", "), despues.modes.join(", "), "modes", "familias de ladder"),
     ...campoSiCambia(
       String(actual.pointsPerWin),
@@ -756,16 +788,21 @@ export async function saveScoringRuleset(
 }
 
 /**
- * La única escritura que se permite con la edición ya empezada: el **fin** de la
- * ventana.
+ * La única escritura que se permite con la edición **activa**: el **fin** de la ventana.
+ *
+ * La llama `saveTournamentWindow()`, que es la acción de la subpestaña `Fechas`, cuando
+ * la edición ha empezado y todavía no ha terminado: en ese tramo el inicio está
+ * congelado, porque moverlo cambiaría el corte de todas las partidas ya publicadas.
+ * Cuando la edición termina (`editionEnded()`), `saveTournamentWindow()` deja de pasar
+ * por aquí y admite las dos fechas como en una edición nueva.
  *
  * Se niega si el formulario trae un campo congelado, y no solo si lo cambia: con la
  * edición en marcha el formulario bueno es el que manda solo `windowTo`, así que un
- * campo de puntos en el `FormData` es una petición de cambiarlo. Después se arma el
- * documento con **los valores guardados** de todo lo bloqueado y solo el `to` del
- * formulario, de modo que lo que se escribe no puede mover puntos ni aunque llegue un
- * documento manipulado; y aun así se compara el resultado con el guardado
- * (`lockedRulesetChanges()`) antes de tocar la base, como última guarda.
+ * campo de puntos o la fecha de inicio en el `FormData` es una petición de cambiarlos.
+ * Después se arma el documento con **los valores guardados** de todo lo bloqueado y
+ * solo el `to` del formulario, de modo que lo que se escribe no puede mover puntos ni
+ * aunque llegue un documento manipulado; y aun así se compara el resultado con el
+ * guardado (`lockedRulesetChanges()`) antes de tocar la base, como última guarda.
  *
  * Un `to` vacío deja la ventana **abierta** por la derecha, igual que en el camino
  * normal: es lo que permite reabrir el fin de una edición que se cerró antes de tiempo.
@@ -777,7 +814,7 @@ async function saveWindowEnd(
   actual: ScoringRuleset,
 ): Promise<AdminActionResult> {
   if (touchesLockedRulesetFields(formData)) {
-    return { status: "error", message: RULESET_LOCKED_ERROR };
+    return { status: "error", message: WINDOW_LOCKED_ERROR };
   }
 
   const windowToInstant = windowTo === "" ? null : parseMadridLocalInstant(windowTo);
@@ -805,7 +842,7 @@ async function saveWindowEnd(
   const bloqueados = lockedRulesetChanges(actual, despues);
 
   if (bloqueados.length > 0) {
-    return { status: "error", message: RULESET_LOCKED_ERROR };
+    return { status: "error", message: WINDOW_LOCKED_ERROR };
   }
 
   const cambios = campoSiCambia(
@@ -827,15 +864,16 @@ async function saveWindowEnd(
   try {
     resultado = await writeScoringRuleset(despues, cambios, actorEmail(admin));
   } catch (error) {
-    logDatabaseFailure("admin/saveScoringRuleset/fin-ventana", error);
+    logDatabaseFailure("admin/saveTournamentWindow/fin", error);
 
-    return { status: "error", message: RULESET_SAVE_FAILED_MESSAGE };
+    return { status: "error", message: WINDOW_SAVE_FAILED_MESSAGE };
   }
 
   // El fin de la ventana mueve puntos (las partidas que quedan fuera del corte dejan de
   // contar), así que el recálculo y su aviso se conservan tal cual: las pantallas que
   // leen las reglas son las mismas que en el camino normal.
   revalidatePath("/admin/administracion");
+  revalidatePath("/admin/administracion/fechas");
   revalidatePath("/admin/acciones");
   revalidatePath("/");
   revalidatePath("/objetivos");
@@ -845,6 +883,181 @@ async function saveWindowEnd(
     status: "success",
     message: frase(
       "Se ha guardado la fecha de fin de la ventana del torneo.",
+      resultado.recomputed
+        ? "La clasificación se ha recalculado con las reglas nuevas."
+        : resultado.recomputeWarning ?? "El cambio no mueve la puntuación, así que no ha hecho falta recalcular.",
+    ),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Ventana del torneo                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Guarda las fechas del torneo: el inicio y el fin de la ventana.
+ *
+ * Escribe `Setting["scoring.ruleset"].window`, el intervalo `[from, to)` sobre
+ * `Match.startedAt` del que depende qué partidas puntúan. Va **detrás de
+ * `requireSuperadmin()`**, como el resto de la configuración: mover el corte cambia
+ * quién cobra qué.
+ *
+ * ## Por qué tiene acción propia
+ *
+ * Hasta la issue 173 la ventana se editaba en el formulario de Puntuación, mezclada con
+ * las reglas. Ahora `saveScoringRuleset()` **rechaza** `windowFrom` y `windowTo`, y las
+ * fechas viven en la subpestaña `Fechas` junto a la fecha de cierre de inscripciones
+ * (`setRegistrationClosesAt`): son la configuración temporal de la edición, no las
+ * reglas de puntuación.
+ *
+ * ## Tres estados de la ventana
+ *
+ * | Estado | Quién lo dice | Qué se puede editar |
+ * |---|---|---|
+ * | **No empezada** | `!editionStarted()` | Inicio y fin: es la configuración inicial del torneo |
+ * | **Activa** | `editionStarted()` y `!editionEnded()` | Solo el fin (`saveWindowEnd()`): mover el inicio cambiaría el corte de las partidas ya publicadas |
+ * | **Terminada** | `editionEnded()` | Inicio y fin, como en una edición nueva: el torneo ya no reparte puntos y la organización puede preparar el siguiente |
+ *
+ * Los dos predicados son de `src/lib/ranked-match.ts` y puros. El estado se decide con
+ * la ventana **guardada**, no con lo que traiga el formulario.
+ *
+ * ## La confirmación al empezar otra edición
+ *
+ * Mover la fecha de inicio de una edición terminada **empieza una edición nueva**: la
+ * clasificación se recalcula contra la ventana nueva y la anterior deja de mostrarse en
+ * la web (sus partidas y sus historiales siguen guardados). Por eso se exige el campo
+ * `confirmNewEdition` con `"true"` cuando el inicio enviado difiere del guardado. Solo
+ * se pide si se mueve el inicio: mover el fin de una edición terminada —por ejemplo para
+ * corregir la fecha de cierre— no reemplaza nada.
+ *
+ * ## Validación, rastro y recálculo
+ *
+ * Las dos fechas se escriben como **fecha y hora local de Madrid** (`datetime-local`) o
+ * como un instante ISO-8601 con zona; `parseMadridLocalInstant()` hace la conversión y
+ * un texto que no sea ninguna de las dos cosas se rechaza con el mensaje de su campo.
+ * `to` vacío es `null` (ventana abierta por la derecha). El resto del ruleset se
+ * conserva y se valida entero con `mergeRuleset()`.
+ *
+ * `writeScoringRuleset()` hace el `upsert`, el rastro (`CONFIG_CHANGED`, en la misma
+ * transacción) y el recálculo de la clasificación, porque la ventana mueve puntos.
+ *
+ * Revalida las pantallas que leen las fechas: la Administración, la propia subpestaña de
+ * fechas, el historial, la clasificación, los objetivos y la puntuación.
+ */
+export async function saveTournamentWindow(
+  _prevState: AdminActionResult,
+  formData: FormData,
+): Promise<AdminActionResult> {
+  const admin = await requireSuperadmin();
+
+  const windowFrom = readField(formData, "windowFrom");
+  const windowTo = readField(formData, "windowTo");
+
+  let actual: ScoringRuleset;
+
+  try {
+    actual = await readRuleset();
+  } catch (error) {
+    logDatabaseFailure("admin/saveTournamentWindow/leer", error);
+
+    return { status: "error", message: WINDOW_SAVE_FAILED_MESSAGE };
+  }
+
+  const now = new Date();
+  const terminada = editionEnded(actual.window, now);
+
+  // Edición **activa**: empezada y sin terminar. El único campo que se puede tocar es el
+  // fin; mover la fecha de inicio cambiaría el corte de todas las partidas ya
+  // publicadas. Una edición **terminada** sí deja mover el inicio, para empezar la
+  // siguiente.
+  if (editionStarted(actual.window, now) && !terminada) {
+    return saveWindowEnd(admin, formData, windowTo, actual);
+  }
+
+  // El panel escribe fecha y hora **local de Madrid** (`datetime-local`) y se guarda
+  // ISO-8601 UTC, que es lo que lee `parseWindow()`. El parser acepta también el ISO
+  // con zona por si el campo se rellena a mano, y el mensaje de error es el del campo,
+  // no el aviso técnico de `mergeRuleset`.
+  if (windowFrom === "") {
+    return { status: "error", message: WINDOW_FROM_REQUIRED_ERROR };
+  }
+
+  const windowFromInstant = parseMadridLocalInstant(windowFrom);
+
+  if (windowFromInstant === null) {
+    return { status: "error", message: WINDOW_FROM_INVALID_ERROR };
+  }
+
+  const windowToInstant = windowTo === "" ? null : parseMadridLocalInstant(windowTo);
+
+  if (windowTo !== "" && windowToInstant === null) {
+    return { status: "error", message: WINDOW_TO_INVALID_ERROR };
+  }
+
+  // Los dos lados se comparan ya normalizados por sus parsers, así que el mismo instante
+  // escrito distinto no pide confirmación.
+  const empiezaOtraEdicion = terminada && windowFromInstant !== actual.window.from;
+
+  if (empiezaOtraEdicion && readField(formData, "confirmNewEdition") !== "true") {
+    return { status: "error", message: NEW_EDITION_CONFIRMATION_REQUIRED_ERROR };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- la etiqueta la recalcula `mergeRuleset`
+  const { label: _etiquetaCalculada, ...documento } = actual;
+
+  const merged = mergeRuleset({
+    ...documento,
+    // Un `to` vacío es la ventana abierta: `null` explícito es lo que `mergeRuleset`
+    // exige para no heredar el del documento por defecto.
+    window: { from: windowFromInstant, to: windowToInstant },
+  });
+
+  if (merged.warnings.length > 0) {
+    return {
+      status: "error",
+      message: `No se han guardado las fechas del torneo: ${merged.warnings.join("; ")}.`,
+    };
+  }
+
+  const despues = merged.ruleset;
+  const cambios = campoSiCambia(
+    windowText(actual.window),
+    windowText(despues.window),
+    "window",
+    "ventana del torneo",
+  );
+
+  if (cambios.length === 0) {
+    return {
+      status: "success",
+      message: "No había ningún cambio que guardar en las fechas del torneo.",
+    };
+  }
+
+  let resultado;
+
+  try {
+    resultado = await writeScoringRuleset(despues, cambios, actorEmail(admin));
+  } catch (error) {
+    logDatabaseFailure("admin/saveTournamentWindow", error);
+
+    return { status: "error", message: WINDOW_SAVE_FAILED_MESSAGE };
+  }
+
+  revalidatePath("/admin/administracion");
+  revalidatePath("/admin/administracion/fechas");
+  revalidatePath("/admin/acciones");
+  revalidatePath("/");
+  revalidatePath("/objetivos");
+  revalidatePath("/puntuacion");
+
+  return {
+    status: "success",
+    message: frase(
+      "Se han guardado las fechas del torneo.",
+      empiezaOtraEdicion
+        ? "Al mover el inicio empieza una edición nueva: la anterior deja de mostrarse en la web, aunque sus partidas y sus historiales siguen guardados."
+        : "",
       resultado.recomputed
         ? "La clasificación se ha recalculado con las reglas nuevas."
         : resultado.recomputeWarning ?? "El cambio no mueve la puntuación, así que no ha hecho falta recalcular.",

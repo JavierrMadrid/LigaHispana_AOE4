@@ -13,6 +13,7 @@ type AdministrationTab = {
 const TABS: readonly AdministrationTab[] = [
   { href: "/admin/administracion", label: "Administradores", exact: true },
   { href: "/admin/administracion/edicion", label: "Edición" },
+  { href: "/admin/administracion/fechas", label: "Fechas" },
   { href: "/admin/administracion/puntuacion", label: "Puntuación" },
   { href: "/admin/administracion/eventos", label: "Eventos" },
   { href: "/admin/administracion/inscripciones", label: "Inscripciones" },
@@ -37,7 +38,7 @@ const TABS: readonly AdministrationTab[] = [
  * subruta la marcaría como activa.
  *
  * En móvil el carril se desplaza en horizontal en lugar de partirse: a 320 px
- * las siete opciones no caben y es preferible que corran a que se apilen en tres
+ * las ocho opciones no caben y es preferible que corran a que se apilen en tres
  * filas.
  */
 export function AdministrationTabs() {

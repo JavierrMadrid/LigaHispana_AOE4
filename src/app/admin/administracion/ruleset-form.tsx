@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useEffect, useState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
 import type { ScoringRuleset } from "@/lib/scoring";
@@ -48,21 +49,17 @@ type RulesetFormProps = {
   modeOptions: ModeOption[];
   groups: ObjectiveGroupBlock[];
   /**
-   * Los límites de la ventana ya convertidos al `datetime-local` de Madrid
-   * (`formatMadridLocalInstant`). Vienen del servidor y no se calculan aquí: la
-   * conversión vive en `@/lib/ranked-match`, que es `server-only` y no se puede
-   * importar desde un componente de cliente. Llegan otra vez con cada render del
-   * servidor, y el formulario los vuelve a adoptar: es lo que devuelve su valor a
-   * los campos después de guardar.
-   */
-  windowFrom: string;
-  windowTo: string;
-  /**
    * ¿Ha empezado ya la edición? Con la ventana en marcha los puntos y las reglas
-   * están congelados y solo queda fijar el fin (`editionStarted()` en el servidor).
-   * La pantalla lo usa para no ofrecer lo que la acción va a rechazar.
+   * están congelados (`editionStarted()` en el servidor). La pantalla lo usa para no
+   * ofrecer lo que la acción va a rechazar.
    */
   locked: boolean;
+  /**
+   * ¿Terminó ya la edición guardada? Sigue bloqueada —son las reglas de la edición
+   * cerrada—, pero el aviso cambia: ya no se va a fijar el fin, sino que hay que mover el
+   * inicio en `Fechas` para configurar las reglas de la siguiente (`editionEnded()`).
+   */
+  editionEnded: boolean;
   /**
    * La fecha de inicio de la ventana en hora de Madrid, ya formateada, o `null` si
    * el instante guardado no se puede leer. Solo se usa para explicar el bloqueo.
@@ -88,33 +85,35 @@ function objectivePointTexts(groups: ObjectiveGroupBlock[]): Record<string, stri
 /**
  * Las reglas de puntuación, en el estado que toque.
  *
- * Son dos formularios distintos, no uno con campos deshabilitados: con la edición
- * en marcha la acción rechaza **cualquier** envío que traiga un campo congelado,
- * aunque lleve el valor que ya estaba, así que un campo deshabilitado no basta —
- * deshabilitado no viaja, pero un `readonly` sí—. Cada estado monta sus propios
- * hooks dentro de su componente, y este despachador no tiene ninguno: así no hay
- * forma de que cambie el orden en que se llaman.
+ * Son dos componentes distintos, no uno con campos deshabilitados: con la edición en
+ * marcha la acción rechaza **cualquier** envío que traiga un campo congelado, aunque
+ * lleve el valor que ya estaba, así que un campo deshabilitado no basta —
+ * deshabilitado no viaja, pero un `readonly` sí—. El bloqueado no monta formulario
+ * siquiera; el editable monta sus hooks dentro de su componente, y este despachador no
+ * tiene ninguno: así no hay forma de que cambie el orden en que se llaman.
  */
 export function RulesetForm({ locked, ...props }: RulesetFormProps) {
   return locked ? <LockedRulesetForm {...props} /> : <EditableRulesetForm {...props} />;
 }
 
 /**
- * Lo que reciben los dos formularios: el documento y los campos de la ventana, ya
- * sin el estado —lo decidió el despachador—. Cada uno toma de aquí lo que le sirve
- * (`windowFrom` no lo usa el bloqueado, que ya no lo manda).
+ * Lo que reciben los dos formularios, ya sin el estado —lo decidió el despachador—.
  */
 type RulesetFormStateProps = Omit<RulesetFormProps, "locked">;
 
 /**
- * Las reglas de puntuación: ventana, familias, puntos, civ aleatoria y objetivos.
+ * Las reglas de puntuación: familias, puntos, civ aleatoria y objetivos.
  *
  * Es el documento del que sale **toda** la clasificación, así que la pantalla
  * enseña los cuatro ajustes que mueven puntos y, debajo, el catálogo de
  * objetivos agrupado por grupos. Cada grupo es un bloque plegable —cerrado por
- * defecto, con su recuento— porque el catálogo tiene 88 entradas y desplegarlo
+ * defecto, con su recuento— porque el catálogo tiene 94 entradas y desplegarlo
  * entero convertiría el formulario en una lista interminable; los controles
  * siguen viajando con el formulario aunque el bloque esté cerrado.
+ *
+ * Las fechas **no** están aquí: la ventana del torneo vive en la subpestaña `Fechas`
+ * y la acción de este formulario rechaza el envío entero si le llega un `windowFrom` o
+ * un `windowTo`, así que no se pintan ni como campos de lectura.
  *
  * Un objetivo **marcado está activo**: se apaga desmarcándolo, que es como se lee
  * de forma natural. Los apagados viajan en campos ocultos, porque `FormData` solo
@@ -125,21 +124,17 @@ type RulesetFormStateProps = Omit<RulesetFormProps, "locked">;
  * este formulario no pueda borrar un ajuste por no mencionarlo.
  *
  * Todo lo que se edita aquí es estado del cliente que **nace** de lo que manda el
- * servidor: ventana, puntos, familias y objetivos activos. Cuando el servidor manda
- * algo nuevo —cada render suyo trae objetos nuevos— el formulario lo vuelve a
- * adoptar, porque React resetea los campos al terminar una Server Action.
+ * servidor: puntos, familias y objetivos activos. Cuando el servidor manda algo
+ * nuevo —cada render suyo trae objetos nuevos— el formulario lo vuelve a adoptar,
+ * porque React resetea los campos al terminar una Server Action.
  */
 function EditableRulesetForm({
   ruleset,
   modeOptions,
   groups,
-  windowFrom: serverWindowFrom,
-  windowTo: serverWindowTo,
 }: RulesetFormStateProps) {
   const [state, formAction, pending] = useActionState(saveScoringRuleset, initialState);
 
-  const [windowFrom, setWindowFrom] = useState(serverWindowFrom);
-  const [windowTo, setWindowTo] = useState(serverWindowTo);
   const [pointsPerWin, setPointsPerWin] = useState(String(ruleset.pointsPerWin));
   const [countRandomizedCivs, setCountRandomizedCivs] = useState(ruleset.countRandomizedCivs);
   const [modes, setModes] = useState<string[]>(ruleset.modes);
@@ -155,14 +150,12 @@ function EditableRulesetForm({
   // otro estado, es el mismo dato del servidor, y por eso se silencia la regla.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reaplica al DOM las reglas que el servidor acaba de guardar
-    setWindowFrom(serverWindowFrom);
-    setWindowTo(serverWindowTo);
     setPointsPerWin(String(ruleset.pointsPerWin));
     setCountRandomizedCivs(ruleset.countRandomizedCivs);
     setModes(ruleset.modes);
     setDisabled(ruleset.disabledObjectives);
     setPoints(objectivePointTexts(groups));
-  }, [groups, ruleset, serverWindowFrom, serverWindowTo]);
+  }, [groups, ruleset]);
 
   function toggleMode(mode: string) {
     setModes((current) =>
@@ -182,26 +175,7 @@ function EditableRulesetForm({
 
   return (
     <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <TextField
-          name="windowFrom"
-          label="Inicio de la ventana"
-          type="datetime-local"
-          value={windowFrom}
-          onChange={setWindowFrom}
-          hint="Fecha y hora local de Madrid; se guarda en UTC. Cuenta la partida que empezó a partir de aquí."
-          required
-        />
-
-        <TextField
-          name="windowTo"
-          label="Fin de la ventana (opcional)"
-          type="datetime-local"
-          value={windowTo}
-          onChange={setWindowTo}
-          hint="Fecha y hora local de Madrid, exclusiva; se guarda en UTC. Déjalo vacío para una ventana abierta: el fin se fija más tarde sin tocar nada más."
-        />
-
+      <div className="max-w-md">
         <TextField
           name="pointsPerWin"
           label="Puntos por victoria"
@@ -345,38 +319,27 @@ function EditableRulesetForm({
 type LockedRulesetFormProps = RulesetFormStateProps;
 
 /**
- * Las reglas de puntuación con la edición ya empezada: lectura de lo congelado y un
- * solo ajuste vivo, el fin de la ventana.
+ * Las reglas de puntuación con la edición empezada —o ya terminada—: lectura de lo
+ * congelado.
  *
- * El formulario **no manda** ningún campo congelado —ni el inicio, ni los puntos por
- * victoria, ni las familias, ni la civ aleatoria, ni los objetivos, ni sus puntos—:
- * la acción rechaza el envío entero en cuanto ve uno, aunque venga con el valor que
- * ya estaba (ver `touchesLockedRulesetFields()`). Por eso no hay campos
- * deshabilitados ni ocultos: los congelados se enseñan como resumen de lectura y no
- * viajan.
- *
- * Lo único que hay que devolver al DOM después de guardar es el `to`, que es el mismo
- * patrón que en el formulario editable: React resetea los campos al terminar una
- * Server Action y el estado del cliente no cambia, así que el render del servidor es
- * el que devuelve el valor a su sitio.
+ * Aquí no hay formulario. El único ajuste de fechas que queda vivo es el fin de la
+ * ventana, y su formulario vive en la subpestaña `Fechas` con su propia acción
+ * (`saveTournamentWindow`): esta pantalla solo explica el bloqueo y remite allí. Con la
+ * edición terminada el cambio tampoco se hace aquí: hay que mover el inicio en `Fechas`,
+ * y cuando sea futuro esta pantalla volverá a estar editable. Y los campos congelados
+ * **no viajan** —ni el inicio, ni los puntos por victoria, ni las familias, ni la civ
+ * aleatoria, ni los objetivos, ni sus puntos—: la acción rechaza el envío entero en
+ * cuanto ve uno, aunque venga con el valor que ya estaba (ver
+ * `touchesLockedRulesetFields()`). Por eso no hay campos deshabilitados ni ocultos: los
+ * congelados se enseñan como resumen de lectura.
  */
 function LockedRulesetForm({
   ruleset,
   modeOptions,
   groups,
-  windowTo: serverWindowTo,
+  editionEnded,
   windowStartLabel,
 }: LockedRulesetFormProps) {
-  const [state, formAction, pending] = useActionState(saveScoringRuleset, initialState);
-  const [windowTo, setWindowTo] = useState(serverWindowTo);
-
-  // El `to` vuelve al campo después de guardar, igual que en el formulario editable:
-  // React resetea los controlados al terminar la acción y este render los devuelve.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reaplica al DOM el fin que el servidor acaba de guardar
-    setWindowTo(serverWindowTo);
-  }, [serverWindowTo]);
-
   const disabled = new Set(ruleset.disabledObjectives);
   const totalObjectives = groups.reduce((total, group) => total + group.objectives.length, 0);
   const activeObjectives = groups.reduce(
@@ -391,19 +354,42 @@ function LockedRulesetForm({
     .map((mode) => modeOptions.find((option) => option.value === mode)?.label ?? mode)
     .join(", ");
 
+  const datesLink = (
+    <Link
+      href="/admin/administracion/fechas"
+      className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
+    >
+      Fechas
+    </Link>
+  );
+
   return (
     <div className="flex flex-col gap-4">
       <p className="max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
-        <strong className="font-semibold text-foreground">
-          Las reglas de puntuación están cerradas
-        </strong>
-        .{" "}
-        {windowStartLabel !== null
-          ? `La edición empezó el ${windowStartLabel}`
-          : "La edición ya ha empezado"}{" "}
-        y, desde ese momento, cambiar los puntos o los objetivos movería una
-        clasificación ya publicada. Solo se puede fijar o cambiar la fecha de fin de
-        la ventana.
+        {editionEnded ? (
+          <>
+            <strong className="font-semibold text-foreground">
+              La edición anterior ya ha terminado
+            </strong>
+            . Sus reglas quedaron congeladas al empezar y no se pueden cambiar. Para
+            configurar las reglas de la siguiente edición hay que mover el inicio en{" "}
+            {datesLink}: cuando el nuevo inicio sea futuro, esta pantalla volverá a estar
+            editable.
+          </>
+        ) : (
+          <>
+            <strong className="font-semibold text-foreground">
+              Las reglas de puntuación están cerradas
+            </strong>
+            .{" "}
+            {windowStartLabel !== null
+              ? `La edición empezó el ${windowStartLabel}`
+              : "La edición ya ha empezado"}{" "}
+            y, desde ese momento, cambiar los puntos o los objetivos movería una
+            clasificación ya publicada. El fin de la ventana se fija o se mueve en{" "}
+            {datesLink}.
+          </>
+        )}
       </p>
 
       <div className="rounded-lg border border-line bg-surface p-4">
@@ -438,30 +424,6 @@ function LockedRulesetForm({
           </div>
         </dl>
       </div>
-
-      <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
-        <div className="max-w-md">
-          <TextField
-            name="windowTo"
-            label="Fin de la ventana (opcional)"
-            type="datetime-local"
-            value={windowTo}
-            onChange={setWindowTo}
-            hint="Fecha y hora local de Madrid, exclusiva; se guarda en UTC. Déjalo vacío para una ventana abierta: el fin se fija más tarde sin tocar nada más."
-          />
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-4">
-          <button
-            type="submit"
-            disabled={pending}
-            className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {pending ? "Guardando…" : "Guardar el fin de la ventana"}
-          </button>
-          <StatusLine state={state} pending={pending} />
-        </div>
-      </form>
     </div>
   );
 }

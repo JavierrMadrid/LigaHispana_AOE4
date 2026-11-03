@@ -13,7 +13,7 @@ const REASON_TEXT: Record<RegistrationClosureReason, string> = {
   switch:
     "Cerradas por el interruptor manual: no se admiten solicitudes nuevas ni altas desde la web ni desde este panel.",
   deadline:
-    "Cerradas por la fecha de cierre, que ya ha pasado: aunque el interruptor siga encendido, no se admiten solicitudes nuevas ni altas. Para reabrirlas hay que quitar o mover la fecha.",
+    "Cerradas por la fecha de cierre, que ya ha pasado: aunque el interruptor siga encendido, no se admiten solicitudes nuevas ni altas. Para reabrirlas hay que quitar o mover la fecha en Fechas.",
 };
 
 /**
@@ -23,8 +23,9 @@ const REASON_TEXT: Record<RegistrationClosureReason, string> = {
  * booleano que aplica el servidor en el envío público (`registerPlayer`) y en el
  * alta de este panel (`createPlayer`). Aquí no decide nada por su cuenta; solo
  * publica el estado y ofrece el cambio. Vive en la subpestaña **Inscripciones** de
- * Administración, junto a la fecha de cierre automático
- * (`RegistrationDeadlineForm`), que es el otro mando del mismo plazo.
+ * Administración; la fecha de cierre automático (`RegistrationDeadlineForm`), que es
+ * el otro mando del mismo plazo, vive en **Fechas** junto a la ventana del torneo, y
+ * el motivo del cierre nombra esa subpestaña cuando es la fecha la que ha cerrado.
  *
  * ## La píldora enseña el estado **efectivo**, no el interruptor
  *

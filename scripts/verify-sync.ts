@@ -75,7 +75,7 @@ const SAMPLE_PROFILE_IDS = [SAMPLE_PROFILE_ID, SAMPLE_BULK_SECOND_PROFILE_ID] as
  * `OBJECTIVE_COUNT` para que el número no pueda cambiar en los dos sitios a la vez
  * sin que se note.
  */
-const EXPECTED_OBJECTIVE_COUNT = 88;
+const EXPECTED_OBJECTIVE_COUNT = 94;
 /**
  * Tercer jugador, solo para la ventana: sus partidas se colocan justo en los bordes
  * de `[from, to)` y son las que deciden qué cuenta.
@@ -1221,10 +1221,10 @@ async function checkObjectiveCatalogue(): Promise<void> {
     assert.equal(porGrupo.get("racha"), 138, "Racha");
     assert.equal(porGrupo.get("hazanas"), 119, "Hazañas");
     assert.equal(porGrupo.get("formato"), 360, "Formatos");
-    assert.equal(porGrupo.get("civilizacion"), 2098, "Civilizaciones");
+    assert.equal(porGrupo.get("civilizacion"), 2276, "Civilizaciones");
     assert.equal(
       [...porGrupo.values()].reduce((total, puntos) => total + puntos, 0),
-      2754,
+      2932,
       "Total de puntos (sin el objetivo de victorias, que no es un premio fijo)",
     );
   });
