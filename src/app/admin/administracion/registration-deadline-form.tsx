@@ -11,10 +11,11 @@ const initialState: AdminActionResult = { status: "idle", message: null };
  *
  * Es la cara visible de `Setting["registration.closesAt"]`: pasada esa hora, el
  * plazo se cierra solo, sin que nadie toque el interruptor. El interruptor
- * (`RegistrationSwitch`) sigue siendo el mando **manual**, y por eso los dos
- * controles van juntos y separados: son dos maneras de cerrar el mismo plazo.
+ * (`RegistrationSwitch`) sigue siendo el mando **manual**, y por eso se explican
+ * juntos aunque cada uno viva en su subpestaña: `Fechas` para la fecha e
+ * `Inscripciones` para el interruptor. Son dos maneras de cerrar el mismo plazo.
  *
- * El campo es un `datetime-local`, como la ventana del ruleset: **sin zona**, y lo
+ * El campo es un `datetime-local`, como la ventana del torneo: **sin zona**, y lo
  * interpreta el servidor en `Europe/Madrid`. Lo que se manda vacío **quita** la
  * fecha, que es la única forma de reabrir después del cierre: con la fecha en el
  * pasado, encender el interruptor no abre nada.

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import {
   RulesetForm,
   type ObjectiveGroupBlock,
@@ -6,7 +7,7 @@ import {
 import { EmptyState } from "@/components/empty-state";
 import { formatMadridDateTime } from "@/lib/format";
 import { OBJECTIVE_DEFINITIONS, OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
-import { editionStarted, formatMadridLocalInstant } from "@/lib/ranked-match";
+import { editionStarted } from "@/lib/ranked-match";
 import { RANKED_MODES, readRuleset, type ScoringRuleset } from "@/lib/scoring";
 
 export const metadata: Metadata = {
@@ -26,17 +27,19 @@ const MODE_LABELS: Record<string, string> = {
 /**
  * Subpestaña de puntuación: el ruleset del que sale toda la clasificación.
  *
- * La pantalla tiene dos estados, y cuál toca no lo decide un campo del formulario
- * sino la **ventana guardada**: antes de `window.from` se editan los puntos y las
- * reglas; desde ese instante (`editionStarted()`) quedan congelados y lo único que
- * se puede fijar es el fin de la ventana. La acción lo vuelve a comprobar por su
- * cuenta —una Server Action es un endpoint público—, así que lo de aquí es la
- * explicación del bloqueo, no su defensa.
+ * Las fechas **no** se editan aquí: la ventana del torneo tiene su propia subpestaña
+ * (`Fechas`) y su propia acción, y `saveScoringRuleset()` rechaza cualquier envío que
+ * traiga `windowFrom` o `windowTo`. Lo que queda es lo que mueve puntos —familias,
+ * puntos por victoria y objetivos—, que tiene dos estados y no los decide un campo del
+ * formulario sino la **ventana guardada**: antes de `window.from` se edita todo; desde
+ * ese instante (`editionStarted()`) queda congelado y la pantalla solo puede explicar el
+ * bloqueo y remitir a `Fechas`. La acción lo vuelve a comprobar por su cuenta —una
+ * Server Action es un endpoint público—, así que lo de aquí es la explicación del
+ * bloqueo, no su defensa.
  *
- * Si el ruleset no se puede leer no se pinta un formulario, ni entero ni a medias:
- * sin las reglas guardadas no se sabe si la edición ha empezado, y caer en el
- * documento por defecto diría "editable" sobre una edición que puede llevar meses
- * en marcha.
+ * Si el ruleset no se puede leer no se pinta un formulario, ni entero ni a medias: sin
+ * las reglas guardadas no se sabe si la edición ha empezado, y caer en el documento por
+ * defecto diría "editable" sobre una edición que puede llevar meses en marcha.
  */
 export default async function AdminScoringPage() {
   let ruleset: ScoringRuleset;
@@ -49,8 +52,8 @@ export default async function AdminScoringPage() {
         <div>
           <h2 className="text-lg font-medium">Puntuación</h2>
           <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            Las fechas que delimitan qué partidas puntúan, las ladders que cuentan, los
-            puntos por victoria y los objetivos activos.
+            Las ladders que cuentan, los puntos por victoria y los objetivos activos. Las
+            fechas de la ventana se editan en Fechas.
           </p>
         </div>
         <EmptyState
@@ -68,14 +71,6 @@ export default async function AdminScoringPage() {
     value: mode,
     label: MODE_LABELS[mode] ?? mode,
   }));
-
-  // La ventana se prefila en el `datetime-local` de Madrid. Se convierte aquí, en
-  // el servidor, porque `formatMadridLocalInstant()` es `server-only`; el formulario
-  // solo recibe los dos textos. Un límite que no se pueda leer deja el campo vacío
-  // en vez de con un valor inventado.
-  const windowFrom = formatMadridLocalInstant(ruleset.window.from) ?? "";
-  const windowTo =
-    ruleset.window.to === null ? "" : (formatMadridLocalInstant(ruleset.window.to) ?? "");
 
   // El catálogo de objetivos agrupado por grupos, en el orden en que aparece en
   // `OBJECTIVE_DEFINITIONS`, para no llevar aquí una segunda copia del orden.
@@ -104,19 +99,24 @@ export default async function AdminScoringPage() {
     <section>
       <h2 className="text-lg font-medium">Puntuación</h2>
       <p className="mt-1 max-w-[70ch] text-sm text-muted">
-        Las fechas que delimitan qué partidas puntúan, las ladders que cuentan, los
-        puntos por victoria y los objetivos activos.{" "}
+        Las ladders que cuentan, los puntos por victoria y los objetivos activos. Las
+        fechas que delimitan qué partidas puntúan se editan en{" "}
+        <Link
+          href="/admin/administracion/fechas"
+          className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
+        >
+          Fechas
+        </Link>
+        .{" "}
         {locked
-          ? "Con la edición ya empezada, todo esto está congelado: solo se puede fijar el fin de la ventana."
-          : "Mover la ventana o apagar un objetivo cambia quién cobra qué, así que al guardar se recalcula la clasificación."}
+          ? "Con la edición ya empezada, todo esto está congelado: moverlo cambiaría una clasificación ya publicada."
+          : "Apagar un objetivo o mover sus puntos cambia quién cobra qué, así que al guardar se recalcula la clasificación."}
       </p>
       <div className="mt-4">
         <RulesetForm
           ruleset={ruleset}
           modeOptions={modeOptions}
           groups={objectiveGroups}
-          windowFrom={windowFrom}
-          windowTo={windowTo}
           locked={locked}
           windowStartLabel={windowStartLabel}
         />

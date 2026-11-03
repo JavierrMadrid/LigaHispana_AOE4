@@ -538,7 +538,7 @@ Claves vivas en producción, con quién las escribe:
 
 | Clave | Qué es | La escribe |
 |---|---|---|
-| `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; puntos, ventana, objetivos y objetivos desactivados). Un documento de la versión anterior se migra al leerlo. | `ensureRuleset()` en `src/lib/scoring.ts`; el panel, con `saveScoringRuleset` |
+| `scoring.ruleset` | Reglas de puntuación activas (versión fija en código; ventana, puntos, objetivos y objetivos desactivados). Un documento de la versión anterior se migra al leerlo. | `ensureRuleset()` en `src/lib/scoring.ts`; el panel, con `saveTournamentWindow` para `window` y `saveScoringRuleset` para el resto |
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo: `ruleSetVersion`, `cacheVersion` (`SCORING_CACHE_VERSION`), `playersRanked` y las cifras del resultado. Lo lee el worker para decidir si puede saltarse el recálculo. | `recomputeScores()` |

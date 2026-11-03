@@ -173,10 +173,11 @@ es **final**. Todo se anuncia en el canal de avisos y por privado al participant
 información privada.
 
 Lo del superadministrador vive en la pestaña **Administración**, que solo él ve y que se organiza en
-subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Puntuación**,
-**Eventos** (el calendario con multiplicador), **Inscripciones** (el plazo y los países admitidos),
-**Donaciones** y **Avisos** (la prueba del canal de Discord). Fuera de Administración y de la
-reversión de actuaciones, el panel es igual para los dos papeles.
+subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Fechas** (el cierre
+de inscripciones y la ventana del torneo), **Puntuación**, **Eventos** (el calendario con
+multiplicador), **Inscripciones** (el interruptor del plazo y los países admitidos), **Donaciones** y
+**Avisos** (la prueba del canal de Discord). Fuera de Administración y de la reversión de
+actuaciones, el panel es igual para los dos papeles.
 
 El alta es **por invitación**: se escribe el correo en el panel y la persona recibe un enlace para
 fijar su contraseña (pasa por `/auth/confirm` y termina en `/login/establecer-contrasena`); un enlace

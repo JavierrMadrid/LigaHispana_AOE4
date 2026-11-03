@@ -663,9 +663,10 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
  * Los campos bloqueados del ruleset que cambian entre dos versiones del documento.
  *
  * Es la **guarda del servidor** de "una vez que empieza la edición no se pueden
- * cambiar los puntos": `saveScoringRuleset()` la usa para negarse a escribir aunque
- * el formulario (o una llamada directa a la Server Action) traiga otro documento. Es
- * pura y no toca la base de datos, así que se prueba entera sin ella.
+ * cambiar los puntos": la usa la escritura del fin de la ventana (`saveWindowEnd()` en
+ * el panel) para negarse a escribir aunque el formulario (o una llamada directa a la
+ * Server Action) traiga otro documento. Es pura y no toca la base de datos, así que se
+ * prueba entera sin ella.
  *
  * Con la edición empezada quedan congelados:
  *
