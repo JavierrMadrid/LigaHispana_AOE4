@@ -8,6 +8,7 @@ import {
   classificatoryWhere,
   countsAsRanked,
   countsWithinWindow,
+  editionEnded,
   editionStarted,
   formatMadridLocalInstant,
   isRankedMode,
@@ -324,6 +325,36 @@ describe("editionStarted", () => {
     const rota: ScoringWindow = { from: "esto no es una fecha", to: null };
 
     expect(editionStarted(rota, new Date("2026-09-20T12:00:00.000Z"))).toBe(false);
+  });
+});
+
+describe("editionEnded", () => {
+  // El predicado que decide cuándo se puede mover el inicio para preparar otra
+  // edición: hasta que el torneo no termina, el inicio sigue congelado.
+  it("no ha terminado un milisegundo antes de `window.to`", () => {
+    expect(editionEnded(VENTANA, new Date("2026-10-14T23:59:59.999Z"))).toBe(false);
+  });
+
+  it("ha terminado justo en `window.to`, que cuenta como terminado", () => {
+    // El fin es exclusivo para las partidas, pero no para "edición terminada": en ese
+    // instante el torneo ya no reparte puntos.
+    expect(editionEnded(VENTANA, new Date("2026-10-15T00:00:00.000Z"))).toBe(true);
+  });
+
+  it("ha terminado en cualquier instante posterior", () => {
+    expect(editionEnded(VENTANA, new Date("2030-01-01T00:00:00.000Z"))).toBe(true);
+  });
+
+  it("una ventana abierta no termina nunca", () => {
+    const abierta: ScoringWindow = { from: VENTANA.from, to: null };
+
+    expect(editionEnded(abierta, new Date("2030-01-01T00:00:00.000Z"))).toBe(false);
+  });
+
+  it("una fecha de fin ilegible no da la edición por terminada", () => {
+    const rota: ScoringWindow = { from: VENTANA.from, to: "esto no es una fecha" };
+
+    expect(editionEnded(rota, new Date("2030-01-01T00:00:00.000Z"))).toBe(false);
   });
 });
 

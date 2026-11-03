@@ -55,6 +55,12 @@ type RulesetFormProps = {
    */
   locked: boolean;
   /**
+   * ¿Terminó ya la edición guardada? Sigue bloqueada —son las reglas de la edición
+   * cerrada—, pero el aviso cambia: ya no se va a fijar el fin, sino que hay que mover el
+   * inicio en `Fechas` para configurar las reglas de la siguiente (`editionEnded()`).
+   */
+  editionEnded: boolean;
+  /**
    * La fecha de inicio de la ventana en hora de Madrid, ya formateada, o `null` si
    * el instante guardado no se puede leer. Solo se usa para explicar el bloqueo.
    */
@@ -313,14 +319,17 @@ function EditableRulesetForm({
 type LockedRulesetFormProps = RulesetFormStateProps;
 
 /**
- * Las reglas de puntuación con la edición ya empezada: lectura de lo congelado.
+ * Las reglas de puntuación con la edición empezada —o ya terminada—: lectura de lo
+ * congelado.
  *
  * Aquí no hay formulario. El único ajuste de fechas que queda vivo es el fin de la
  * ventana, y su formulario vive en la subpestaña `Fechas` con su propia acción
- * (`saveTournamentWindow`): esta pantalla solo explica el bloqueo y remite allí. Y los
- * campos congelados **no viajan** —ni el inicio, ni los puntos por victoria, ni las
- * familias, ni la civ aleatoria, ni los objetivos, ni sus puntos—: la acción rechaza el
- * envío entero en cuanto ve uno, aunque venga con el valor que ya estaba (ver
+ * (`saveTournamentWindow`): esta pantalla solo explica el bloqueo y remite allí. Con la
+ * edición terminada el cambio tampoco se hace aquí: hay que mover el inicio en `Fechas`,
+ * y cuando sea futuro esta pantalla volverá a estar editable. Y los campos congelados
+ * **no viajan** —ni el inicio, ni los puntos por victoria, ni las familias, ni la civ
+ * aleatoria, ni los objetivos, ni sus puntos—: la acción rechaza el envío entero en
+ * cuanto ve uno, aunque venga con el valor que ya estaba (ver
  * `touchesLockedRulesetFields()`). Por eso no hay campos deshabilitados ni ocultos: los
  * congelados se enseñan como resumen de lectura.
  */
@@ -328,6 +337,7 @@ function LockedRulesetForm({
   ruleset,
   modeOptions,
   groups,
+  editionEnded,
   windowStartLabel,
 }: LockedRulesetFormProps) {
   const disabled = new Set(ruleset.disabledObjectives);
@@ -344,25 +354,42 @@ function LockedRulesetForm({
     .map((mode) => modeOptions.find((option) => option.value === mode)?.label ?? mode)
     .join(", ");
 
+  const datesLink = (
+    <Link
+      href="/admin/administracion/fechas"
+      className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
+    >
+      Fechas
+    </Link>
+  );
+
   return (
     <div className="flex flex-col gap-4">
       <p className="max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
-        <strong className="font-semibold text-foreground">
-          Las reglas de puntuación están cerradas
-        </strong>
-        .{" "}
-        {windowStartLabel !== null
-          ? `La edición empezó el ${windowStartLabel}`
-          : "La edición ya ha empezado"}{" "}
-        y, desde ese momento, cambiar los puntos o los objetivos movería una
-        clasificación ya publicada. El fin de la ventana se fija o se mueve en{" "}
-        <Link
-          href="/admin/administracion/fechas"
-          className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
-        >
-          Fechas
-        </Link>
-        .
+        {editionEnded ? (
+          <>
+            <strong className="font-semibold text-foreground">
+              La edición anterior ya ha terminado
+            </strong>
+            . Sus reglas quedaron congeladas al empezar y no se pueden cambiar. Para
+            configurar las reglas de la siguiente edición hay que mover el inicio en{" "}
+            {datesLink}: cuando el nuevo inicio sea futuro, esta pantalla volverá a estar
+            editable.
+          </>
+        ) : (
+          <>
+            <strong className="font-semibold text-foreground">
+              Las reglas de puntuación están cerradas
+            </strong>
+            .{" "}
+            {windowStartLabel !== null
+              ? `La edición empezó el ${windowStartLabel}`
+              : "La edición ya ha empezado"}{" "}
+            y, desde ese momento, cambiar los puntos o los objetivos movería una
+            clasificación ya publicada. El fin de la ventana se fija o se mueve en{" "}
+            {datesLink}.
+          </>
+        )}
       </p>
 
       <div className="rounded-lg border border-line bg-surface p-4">

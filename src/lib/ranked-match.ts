@@ -235,7 +235,9 @@ export function countsWithinWindow(
  * empiezan a contar. A partir de ahí lo que reparte puntos queda congelado (ver
  * `lockedRulesetChanges()` en `scoring.ts` y `editionEventsLocked()` en
  * `edition-events.ts`), porque cambiarlo movería una clasificación que ya está
- * publicada.
+ * publicada. Ese bloqueo dura **mientras la edición está en marcha**: el final lo marca
+ * `editionEnded()`, y a partir de ahí la organización puede mover el inicio para
+ * preparar otra edición.
  *
  * Una fecha de inicio **ilegible no bloquea**: se prefiere dejar arreglar la
  * configuración a encerrar el panel por un documento roto, y la lectura del ruleset
@@ -250,6 +252,32 @@ export function editionStarted(window: ScoringWindow, now: Date): boolean {
   const from = new Date(window.from).getTime();
 
   return Number.isFinite(from) && now.getTime() >= from;
+}
+
+/**
+ * ¿Ha terminado ya la edición?
+ *
+ * La edición termina en `window.to`. El fin es **exclusivo** para las partidas —una que
+ * empieza justo en `to` ya no cuenta—, pero a efectos de "edición terminada" el instante
+ * `to` sí cuenta como terminado: es cuando el torneo deja de repartir puntos, y a partir
+ * de ahí el panel puede mover el inicio para preparar la siguiente edición.
+ *
+ * Una ventana **abierta** (`to: null`) no termina nunca, y un `to` ilegible tampoco
+ * termina: el fallo cae hacia "sigue en marcha", que es la dirección segura porque es la
+ * que mantiene el inicio congelado. La lectura del ruleset ya garantiza una ventana
+ * legible (`parseWindow()`), así que el caso solo aparece en ventanas construidas a mano.
+ *
+ * Es el tercer estado de la ventana, junto a `editionStarted()`: no empezada, activa y
+ * terminada.
+ */
+export function editionEnded(window: ScoringWindow, now: Date): boolean {
+  if (window.to === null) {
+    return false;
+  }
+
+  const to = new Date(window.to).getTime();
+
+  return Number.isFinite(to) && now.getTime() >= to;
 }
 
 /**

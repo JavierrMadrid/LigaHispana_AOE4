@@ -31,9 +31,10 @@ import {
  * puntúa con esas, y el 15 de octubre `startedAt < to` deja de cumplirse para
  * todo lo nuevo: la clasificación se congela en silencio, sin error ni aviso.
  *
- * Es un script y no una pantalla de `/admin` por lo mismo que `db:cron` y
- * `db:security`: escribir el ruleset cambia la clasificación de golpe, y eso pide
- * una orden explícita con su comprobación previa, no un campo de formulario.
+ * No es la única vía: la subpestaña `Fechas` del panel publica la ventana con
+ * validación y, al reemplazar una edición terminada, con confirmación. Este script
+ * sigue siendo la vía de puesta en marcha y de las operaciones que quieren ver el
+ * impacto antes de escribir; es una orden explícita, como `db:cron` y `db:security`.
  *
  * Dos decisiones que no son obvias:
  *

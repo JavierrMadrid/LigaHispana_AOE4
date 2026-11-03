@@ -32,7 +32,7 @@ import {
 import { campoSiCambia } from "@/lib/player-fields";
 import { parseEmail } from "@/lib/player-input";
 import { VICTORIAS_ID } from "@/lib/objectives";
-import { editionStarted, parseMadridLocalInstant } from "@/lib/ranked-match";
+import { editionEnded, editionStarted, parseMadridLocalInstant } from "@/lib/ranked-match";
 import {
   lockedRulesetChanges,
   mergeRuleset,
@@ -479,6 +479,17 @@ const RULESET_WINDOW_MOVED_ERROR =
   "Las fechas del torneo no se editan aquí: se cambian en la subpestaña Fechas. Este formulario guarda solo los puntos y las reglas.";
 
 /**
+ * Mover el inicio de una edición terminada empieza otra.
+ *
+ * No se hace sin confirmación porque el efecto no se ve en el formulario: la
+ * clasificación se recalcula contra la ventana nueva y la edición anterior desaparece de
+ * la web. Es el mismo criterio de los borrados: una operación con consecuencias que no se
+ * deshacen con volver a escribir lo de antes se pide dos veces.
+ */
+const NEW_EDITION_CONFIRMATION_REQUIRED_ERROR =
+  "Se ha movido la fecha de inicio, y eso empieza una edición nueva: la clasificación se recalcula contra la ventana nueva y la edición anterior deja de mostrarse en la web (sus partidas y sus historiales siguen guardados). Marca la confirmación de la edición nueva para guardarla; si solo querías mover el fin, deja el inicio como está.";
+
+/**
  * Los campos del formulario que quedan congelados cuando la edición ha empezado.
  *
  * No se editan desde `saveScoringRuleset()` —con la edición en marcha no deja guardar
@@ -777,11 +788,15 @@ export async function saveScoringRuleset(
 }
 
 /**
- * La única escritura de fechas que se permite con la edición ya empezada: el **fin** de
- * la ventana.
+ * La única escritura que se permite con la edición **activa**: el **fin** de la ventana.
  *
- * La llama `saveTournamentWindow()`, que es la acción de la subpestaña `Fechas`. Se
- * niega si el formulario trae un campo congelado, y no solo si lo cambia: con la
+ * La llama `saveTournamentWindow()`, que es la acción de la subpestaña `Fechas`, cuando
+ * la edición ha empezado y todavía no ha terminado: en ese tramo el inicio está
+ * congelado, porque moverlo cambiaría el corte de todas las partidas ya publicadas.
+ * Cuando la edición termina (`editionEnded()`), `saveTournamentWindow()` deja de pasar
+ * por aquí y admite las dos fechas como en una edición nueva.
+ *
+ * Se niega si el formulario trae un campo congelado, y no solo si lo cambia: con la
  * edición en marcha el formulario bueno es el que manda solo `windowTo`, así que un
  * campo de puntos o la fecha de inicio en el `FormData` es una petición de cambiarlos.
  * Después se arma el documento con **los valores guardados** de todo lo bloqueado y
@@ -895,13 +910,25 @@ async function saveWindowEnd(
  * (`setRegistrationClosesAt`): son la configuración temporal de la edición, no las
  * reglas de puntuación.
  *
- * ## Con la edición empezada solo se puede cerrar
+ * ## Tres estados de la ventana
  *
- * Pasado `window.from` (`editionStarted()`) la fecha de inicio queda congelada y lo
- * único que se admite es `window.to` —fijarlo, moverlo o vaciarlo para reabrir—, que es
- * cómo se cierra la edición. Ese camino es `saveWindowEnd()`, que ya existía y que aquí
- * solo se elige: rechaza explícitamente cualquier otro campo del `FormData` y escribe el
- * documento con los valores guardados de todo lo bloqueado.
+ * | Estado | Quién lo dice | Qué se puede editar |
+ * |---|---|---|
+ * | **No empezada** | `!editionStarted()` | Inicio y fin: es la configuración inicial del torneo |
+ * | **Activa** | `editionStarted()` y `!editionEnded()` | Solo el fin (`saveWindowEnd()`): mover el inicio cambiaría el corte de las partidas ya publicadas |
+ * | **Terminada** | `editionEnded()` | Inicio y fin, como en una edición nueva: el torneo ya no reparte puntos y la organización puede preparar el siguiente |
+ *
+ * Los dos predicados son de `src/lib/ranked-match.ts` y puros. El estado se decide con
+ * la ventana **guardada**, no con lo que traiga el formulario.
+ *
+ * ## La confirmación al empezar otra edición
+ *
+ * Mover la fecha de inicio de una edición terminada **empieza una edición nueva**: la
+ * clasificación se recalcula contra la ventana nueva y la anterior deja de mostrarse en
+ * la web (sus partidas y sus historiales siguen guardados). Por eso se exige el campo
+ * `confirmNewEdition` con `"true"` cuando el inicio enviado difiere del guardado. Solo
+ * se pide si se mueve el inicio: mover el fin de una edición terminada —por ejemplo para
+ * corregir la fecha de cierre— no reemplaza nada.
  *
  * ## Validación, rastro y recálculo
  *
@@ -936,9 +963,14 @@ export async function saveTournamentWindow(
     return { status: "error", message: WINDOW_SAVE_FAILED_MESSAGE };
   }
 
-  // Con la edición en marcha el único campo que se puede tocar es el fin: mover la
-  // fecha de inicio cambiaría el corte de todas las partidas ya publicadas.
-  if (editionStarted(actual.window, new Date())) {
+  const now = new Date();
+  const terminada = editionEnded(actual.window, now);
+
+  // Edición **activa**: empezada y sin terminar. El único campo que se puede tocar es el
+  // fin; mover la fecha de inicio cambiaría el corte de todas las partidas ya
+  // publicadas. Una edición **terminada** sí deja mover el inicio, para empezar la
+  // siguiente.
+  if (editionStarted(actual.window, now) && !terminada) {
     return saveWindowEnd(admin, formData, windowTo, actual);
   }
 
@@ -960,6 +992,14 @@ export async function saveTournamentWindow(
 
   if (windowTo !== "" && windowToInstant === null) {
     return { status: "error", message: WINDOW_TO_INVALID_ERROR };
+  }
+
+  // Los dos lados se comparan ya normalizados por sus parsers, así que el mismo instante
+  // escrito distinto no pide confirmación.
+  const empiezaOtraEdicion = terminada && windowFromInstant !== actual.window.from;
+
+  if (empiezaOtraEdicion && readField(formData, "confirmNewEdition") !== "true") {
+    return { status: "error", message: NEW_EDITION_CONFIRMATION_REQUIRED_ERROR };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- la etiqueta la recalcula `mergeRuleset`
@@ -1015,6 +1055,9 @@ export async function saveTournamentWindow(
     status: "success",
     message: frase(
       "Se han guardado las fechas del torneo.",
+      empiezaOtraEdicion
+        ? "Al mover el inicio empieza una edición nueva: la anterior deja de mostrarse en la web, aunque sus partidas y sus historiales siguen guardados."
+        : "",
       resultado.recomputed
         ? "La clasificación se ha recalculado con las reglas nuevas."
         : resultado.recomputeWarning ?? "El cambio no mueve la puntuación, así que no ha hecho falta recalcular.",

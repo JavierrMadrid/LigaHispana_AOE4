@@ -4,7 +4,7 @@ import { WindowForm } from "@/app/admin/administracion/fechas/window-form";
 import { RegistrationDeadlineForm } from "@/app/admin/administracion/registration-deadline-form";
 import { EmptyState } from "@/components/empty-state";
 import { formatMadridDateTime } from "@/lib/format";
-import { editionStarted, formatMadridLocalInstant } from "@/lib/ranked-match";
+import { editionEnded, editionStarted, formatMadridLocalInstant } from "@/lib/ranked-match";
 import { readRuleset } from "@/lib/scoring";
 import { readRegistrationState } from "@/lib/settings";
 
@@ -49,11 +49,17 @@ function registrationStateText(registration: RegistrationDates | null): string {
  * `saveTournamentWindow()` y el cierre de inscripciones con `setRegistrationClosesAt()`,
  * que se reutiliza tal cual desde el formulario de Inscripciones.
  *
- * La pantalla tiene dos estados, y cuál toca no lo decide un campo del formulario sino
- * la **ventana guardada**: antes de `window.from` se editan las dos fechas; desde ese
- * instante (`editionStarted()`) el inicio queda congelado y solo se puede fijar, mover
- * o vaciar el fin. La acción lo vuelve a comprobar por su cuenta —una Server Action es
- * un endpoint público—, así que lo de aquí es la explicación del bloqueo, no su
+ * La pantalla tiene tres estados, y cuál toca no lo decide un campo del formulario sino
+ * la **ventana guardada**: **no empezada** (`!editionStarted()`), donde se editan las dos
+ * fechas; **activa** (`editionStarted()` y `!editionEnded()`), donde el inicio queda
+ * congelado y solo se puede fijar, mover o vaciar el fin; y **terminada**
+ * (`editionEnded()`), donde las dos vuelven a ser editables porque el torneo ya no
+ * reparte puntos. En la terminada, mover el inicio **empieza una edición nueva** y hay
+ * que confirmarlo (`confirmNewEdition`): la clasificación se recalcula y la anterior deja
+ * de mostrarse en la web, aunque sus partidas e historiales siguen guardados.
+ *
+ * La acción lo vuelve a comprobar por su cuenta —una Server Action es un endpoint
+ * público—, así que lo de aquí es la explicación del bloqueo y de la confirmación, no su
  * defensa: con la edición en marcha el inicio **no viaja** en el formulario.
  *
  * Si el ruleset no se puede leer no se pinta un formulario, ni entero ni a medias: sin
@@ -86,8 +92,15 @@ export default async function AdminDatesPage() {
     );
   }
 
-  const locked = editionStarted(ruleset.window, new Date());
+  // Un solo instante para las dos preguntas: si la edición ha empezado y si ha
+  // terminado. `active` es el único estado que congela el inicio.
+  const now = new Date();
+  const ended = editionEnded(ruleset.window, now);
+  const active = editionStarted(ruleset.window, now) && !ended;
+
   const windowStartLabel = formatMadridDateTime(ruleset.window.from);
+  const windowEndLabel =
+    ruleset.window.to === null ? null : formatMadridDateTime(ruleset.window.to);
 
   // Las fechas se prefilan en el `datetime-local` de Madrid. Se convierten aquí, en el
   // servidor, porque `formatMadridLocalInstant()` es `server-only`; los formularios solo
@@ -151,7 +164,7 @@ export default async function AdminDatesPage() {
           ventana cambia qué partidas puntúan.
         </p>
 
-        {locked ? (
+        {active ? (
           <p className="mt-3 max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
             <strong className="font-semibold text-foreground">
               El inicio de la ventana está congelado
@@ -165,8 +178,29 @@ export default async function AdminDatesPage() {
           </p>
         ) : null}
 
+        {ended ? (
+          <p className="mt-3 max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
+            <strong className="font-semibold text-foreground">
+              La edición anterior ha terminado
+            </strong>
+            .{" "}
+            {windowEndLabel !== null
+              ? `Terminó el ${windowEndLabel}`
+              : "La ventana ya tiene un fin pasado"}{" "}
+            y desde entonces no reparte puntos. Puedes mover el inicio para preparar la
+            siguiente edición: al guardar, la clasificación se recalcula contra la ventana
+            nueva y la edición anterior deja de mostrarse en la web, aunque sus partidas y
+            sus historiales siguen guardados.
+          </p>
+        ) : null}
+
         <div className="mt-3">
-          <WindowForm windowFrom={windowFrom} windowTo={windowTo} locked={locked} />
+          <WindowForm
+            windowFrom={windowFrom}
+            windowTo={windowTo}
+            locked={active}
+            previousEnded={ended}
+          />
         </div>
       </div>
     </section>

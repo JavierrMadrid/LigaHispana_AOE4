@@ -7,7 +7,7 @@ import {
 import { EmptyState } from "@/components/empty-state";
 import { formatMadridDateTime } from "@/lib/format";
 import { OBJECTIVE_DEFINITIONS, OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
-import { editionStarted } from "@/lib/ranked-match";
+import { editionEnded, editionStarted } from "@/lib/ranked-match";
 import { RANKED_MODES, readRuleset, type ScoringRuleset } from "@/lib/scoring";
 
 export const metadata: Metadata = {
@@ -30,12 +30,14 @@ const MODE_LABELS: Record<string, string> = {
  * Las fechas **no** se editan aquí: la ventana del torneo tiene su propia subpestaña
  * (`Fechas`) y su propia acción, y `saveScoringRuleset()` rechaza cualquier envío que
  * traiga `windowFrom` o `windowTo`. Lo que queda es lo que mueve puntos —familias,
- * puntos por victoria y objetivos—, que tiene dos estados y no los decide un campo del
+ * puntos por victoria y objetivos—, que tiene dos modos y no los decide un campo del
  * formulario sino la **ventana guardada**: antes de `window.from` se edita todo; desde
- * ese instante (`editionStarted()`) queda congelado y la pantalla solo puede explicar el
- * bloqueo y remitir a `Fechas`. La acción lo vuelve a comprobar por su cuenta —una
- * Server Action es un endpoint público—, así que lo de aquí es la explicación del
- * bloqueo, no su defensa.
+ * ese instante (`editionStarted()`) queda bloqueado, y sigue bloqueado cuando la edición
+ * ya ha terminado (`editionEnded()`), porque esas son las reglas de la edición cerrada.
+ * El bloqueo cambia de motivo, no de forma. La pantalla solo explica el bloqueo y remite
+ * a `Fechas`, que es donde se mueve el inicio para preparar la siguiente edición. La
+ * acción lo vuelve a comprobar por su cuenta —una Server Action es un endpoint público—,
+ * así que lo de aquí es la explicación del bloqueo, no su defensa.
  *
  * Si el ruleset no se puede leer no se pinta un formulario, ni entero ni a medias: sin
  * las reglas guardadas no se sabe si la edición ha empezado, y caer en el documento por
@@ -64,8 +66,19 @@ export default async function AdminScoringPage() {
     );
   }
 
-  const locked = editionStarted(ruleset.window, new Date());
+  // Un solo instante para los dos predicados: la pantalla está bloqueada mientras la
+  // edición haya empezado, y sigue bloqueada cuando ya ha terminado porque esas reglas
+  // son las de la edición cerrada. Se desbloquea al mover el inicio en `Fechas`.
+  const now = new Date();
+  const ended = editionEnded(ruleset.window, now);
+  const locked = editionStarted(ruleset.window, now);
   const windowStartLabel = formatMadridDateTime(ruleset.window.from);
+
+  const stateNote = ended
+    ? "La edición anterior ya ha terminado: sus reglas siguen congeladas hasta que muevas el inicio en Fechas, que es como se prepara la siguiente."
+    : locked
+      ? "Con la edición ya empezada, todo esto está congelado: moverlo cambiaría una clasificación ya publicada."
+      : "Apagar un objetivo o mover sus puntos cambia quién cobra qué, así que al guardar se recalcula la clasificación.";
 
   const modeOptions = RANKED_MODES.map((mode) => ({
     value: mode,
@@ -108,9 +121,7 @@ export default async function AdminScoringPage() {
           Fechas
         </Link>
         .{" "}
-        {locked
-          ? "Con la edición ya empezada, todo esto está congelado: moverlo cambiaría una clasificación ya publicada."
-          : "Apagar un objetivo o mover sus puntos cambia quién cobra qué, así que al guardar se recalcula la clasificación."}
+        {stateNote}
       </p>
       <div className="mt-4">
         <RulesetForm
@@ -118,6 +129,7 @@ export default async function AdminScoringPage() {
           modeOptions={modeOptions}
           groups={objectiveGroups}
           locked={locked}
+          editionEnded={ended}
           windowStartLabel={windowStartLabel}
         />
       </div>

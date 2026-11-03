@@ -242,14 +242,23 @@ reglas quedan guardadas y el aviso lo dice (la clasificación se pone al día en
 fechas no se editan en Puntuación. El detalle operativo está en
 [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
 
-**Con la edición empezada las reglas quedan congeladas.** Desde `window.from` (`editionStarted()`)
-quedan congelados `window.from`, las familias de ladder, los puntos por victoria, el recuento de civs
-aleatorias, los puntos de objetivos y los objetivos desactivados: cambiarlos reescribiría una
-clasificación que ya está publicada. Lo único que se puede fijar o cambiar es `window.to`, que es cómo
-se cierra la edición, y se hace desde `Fechas` con `saveTournamentWindow`. El bloqueo está en el
-servidor: `saveScoringRuleset` se niega a guardar ninguna regla y `saveTournamentWindow` rechaza la
-fecha de inicio y cualquier campo congelado que llegue en el formulario. Las pantallas esconden los
-campos bloqueados y solo dejan fijar el fin.
+**Mientras la edición está en marcha, las reglas y el inicio quedan congelados.** Desde `window.from`
+(`editionStarted()`) y hasta `window.to` (`editionEnded()`), quedan congelados la fecha de inicio, las
+familias de ladder, los puntos por victoria, el recuento de civs aleatorias, los puntos de objetivos y
+los objetivos desactivados: cambiarlos reescribiría una clasificación que ya está publicada. En ese
+tramo lo único que se puede fijar o cambiar es `window.to`, que es cómo se cierra la edición, y se
+hace desde `Fechas` con `saveTournamentWindow`. El bloqueo está en el servidor:
+`saveScoringRuleset` se niega a guardar ninguna regla y `saveTournamentWindow` rechaza la fecha de
+inicio y cualquier campo congelado que llegue en el formulario. Las pantallas esconden los campos
+bloqueados y solo dejan fijar el fin.
+
+**Cuando la edición ya ha terminado, el inicio se puede mover para empezar la siguiente.** Pasado
+`window.to` (`editionEnded()`), el torneo ya no reparte puntos y `Fechas` vuelve a admitir las dos
+fechas. Mover el inicio **empieza una edición nueva**: se exige la confirmación `confirmNewEdition`, la
+clasificación se recalcula contra la ventana nueva y la edición anterior deja de mostrarse en la web,
+aunque sus partidas y sus historiales siguen guardados. Mover solo el fin no pide confirmación. Con el
+inicio nuevo en el futuro la ventana vuelve a estar sin empezar, así que las reglas de `Puntuación`
+vuelven a ser editables.
 
 Forma del desglose (`PlayerScore.breakdown`): las dos familias y el bloque de eventos, con ceros si no
 aplican. Una fila escrita antes de que existieran los eventos no trae `events`.
