@@ -65,8 +65,8 @@ type ObjectiveFeatureFrameProps = {
  *
  * La ventana mide `100dvh` con tope de `44rem` (`ObjectiveFlipDialog`) y esta
  * cara **no debe desplazar**: toda la información se enseña de una vez. El caso
- * que manda es la cabeza de familia en su peor rango —23 civilizaciones por
- * detallar, que son dos filas de chips en `sm` y cuatro en móvil—: esa cara
+ * que manda es la cabeza de familia en su peor rango —25 civilizaciones por
+ * detallar, que son dos filas de chips en `sm` y cinco en móvil—: esa cara
  * ocupa 595,5px de contenido en `sm` y 617,5px en móvil, y la ventana le deja
  * 684px con el tope (cualquier viewport de 704px o más) y 647px en móvil, así
  * que sobran 88,5px en escritorio y 29,5px en móvil. Con la ventana al mínimo

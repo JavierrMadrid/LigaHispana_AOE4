@@ -16,7 +16,7 @@ type FamilyCivEntry = {
  *
  * Enseña **la lista más corta de las dos**: si quedan más civilizaciones por
  * completar que hechas, se muestran las hechas, y si quedan menos, las que
- * quedan. Con 1 de 23 se ve la hecha; con 22, la que falta. Cada entrada es una
+ * quedan. Con 1 de 25 se ve la hecha; con 24, la que falta. Cada entrada es una
  * cifra y la bandera de su civilización —el nombre va para lectores de pantalla
  * y de paso como título al pasar el ratón—, y la cabecera dice **cuál es esa
  * cifra**: partidas en `Jugón` (los `acolito-*`) y victorias en `Polifacético`
@@ -92,7 +92,7 @@ export function FamilyCivDetail({
         {unit} por civilización
       </p>
 
-      <ul className={`mt-1.5 flex flex-wrap items-center gap-1.5 ${listAlign}`}>
+      <ul className={`mt-1.5 flex flex-wrap items-center gap-1 ${listAlign}`}>
         {visible.map((entry) => (
           <li
             key={entry.civ}

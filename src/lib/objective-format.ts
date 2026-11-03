@@ -109,7 +109,7 @@ export function prizeLabel(objective: {
 /**
  * El valor de un contendiente, listo para pintar.
  *
- * En un **logro** es el avance sobre el umbral (`value/target`, p. ej. `12/23
+ * En un **logro** es el avance sobre el umbral (`value/target`, p. ej. `12/25
  * civilizaciones`, `2/3 victorias`), con la unidad del objetivo. En una
  * **competición** no hay umbral que enseñar: lo que da la posición es el valor
  * de la métrica a secas (`50 partidas`, `5 victorias seguidas`). Los números son
@@ -441,8 +441,8 @@ export type ObjectiveClosenessInput = {
  * es la que se toma: las dos familias se leen como **la fracción del camino
  * recorrida**, para que puedan compararse sin que una aplaste a la otra.
  *
- * - **Logro**: `value/target`, el avance sobre el umbral. Recorrer 12 de 23
- *   civilizaciones es 0,52. Se satura en `1` (pasarse del umbral no acerca más).
+ * - **Logro**: `value/target`, el avance sobre el umbral. Recorrer 12 de 25
+ *   civilizaciones es 0,48. Se satura en `1` (pasarse del umbral no acerca más).
  * - **Competición**: lo que mide es ir primero, así que la cercanía es la
  *   inversa del puesto (`1/position`): líder 1, 2.º 0,5, 3.º 0,33. Cuanto mejor
  *   puesto, más cerca de cobrarlo. El empate a fracción se rompe por distancia

@@ -267,8 +267,10 @@ clasificación y después de calcular los objetivos, con el mismo cerrojo:
   `window.to` (es cuando el torneo lo dio por cumplido).
 - **Solo se escribe lo que difiere**: una pasada sin cambios no toca ninguna de las dos tablas.
 - **`PERDIDO` solo se emite en competiciones**: un logro revertido no genera evento.
-- **`SCORING_CACHE_VERSION` sube a 2** para forzar ese primer pase tras el despliegue: sin el salto,
-  el worker podría saltarse el recálculo y el feed no se sembraría hasta la siguiente partida.
+- **`SCORING_CACHE_VERSION` sube a 3** para forzar ese primer pase tras el despliegue: el salto es
+  por el catálogo de 94 objetivos (Vikingos y Escoceses), y sin él el worker podría saltarse el
+  recálculo y los objetivos nuevos no repartirían hasta la siguiente partida. La v2 fue por el feed
+  del overlay, que no se sembraría sin el salto.
 - **La API del overlay lee `ObjectiveProgressEvent`**: polling recomendado de 30 s. El dato cambia al
   ritmo del recálculo (10 min), así que pedir más a menudo no adelanta nada.
 - **El feed se escribe en cada recálculo**: los logros y las competiciones aparecen **en vivo**, con
@@ -285,6 +287,10 @@ Hay **dos relojes**, y el primario no es GitHub:
 |---|---|---|
 | **Supabase Cron** (primario) | Job de `pg_cron` que llama por HTTP a `POST /api/sync` con `pg_net` | Cada minuto; el candado deja una pasada cada 1-3 minutos |
 | [Workflow de GitHub](../.github/workflows/cron-sync.yml) (red de seguridad) | `POST /api/cron/sync` con `Bearer $CRON_SECRET` | GitHub lo retrasa a una cada 4-6 h |
+
+- El workflow **no se conforma con un 200**: si el JSON de respuesta trae `scoringError`, el step falla y
+  la ejecución queda en rojo. Así una pasada que no ha podido recalcular la clasificación no se confunde
+  con una pasada correcta.
 
 ## El reloj: Supabase Cron
 

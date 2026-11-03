@@ -391,7 +391,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
     expect(hasFixedPrize(definition(VICTORIAS_ID))).toBe(false);
   });
 
-  it("el catálogo nominal sigue sumando 2.754 puntos", () => {
+  it("el catálogo nominal sigue sumando 2.932 puntos", () => {
     // Es la cifra de `docs/OBJETIVOS.md`, que es la que resume la banda de
     // `/puntuacion`. `victorias` queda fuera porque reparte por victoria y sin tope.
     const total = OBJECTIVE_DEFINITIONS.filter(hasFixedPrize).reduce(
@@ -399,7 +399,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
       0,
     );
 
-    expect(total).toBe(2754);
+    expect(total).toBe(2932);
   });
 });
 
@@ -676,9 +676,21 @@ describe("catálogo de puntos", () => {
     }
   });
 
-  it("el catálogo tiene 88 objetivos", () => {
+  it("el catálogo tiene 94 objetivos", () => {
     expect(OBJECTIVE_COUNT).toBe(OBJECTIVE_DEFINITIONS.length);
-    expect(OBJECTIVE_COUNT).toBe(88);
+    expect(OBJECTIVE_COUNT).toBe(94);
+  });
+
+  it("incluye las civilizaciones del DLC y sus familias cuentan 25", () => {
+    const ids = new Set(OBJECTIVE_DEFINITIONS.map((item) => item.id));
+
+    for (const id of ["masterizando-scots", "lider-vikings", "acolito-scots"]) {
+      expect(ids.has(id), id).toBe(true);
+    }
+
+    for (const id of [POLIFACETICO_ID, JUGON_ID]) {
+      expect(OBJECTIVE_DEFINITIONS.find((item) => item.id === id)?.target, id).toBe(25);
+    }
   });
 
   it("las competiciones dicen en su descripción cómo se desempata", () => {
@@ -733,16 +745,20 @@ describe("snapshot de la vista de objetivos", () => {
 
   it("un snapshot de la forma anterior no vale: la vista cambió de forma", () => {
     // La v2 añadió `count` a los beneficiarios y `mapGaps` al contendiente de
-    // `por-tierra-y-agua`, y la v3 el catálogo de 88 objetivos (los cinco del
-    // summary): un documento con la forma o el catálogo viejo se rechaza y la vista
-    // se recalcula en vivo, que es lo que evita publicar un reparto a medias.
+    // `por-tierra-y-agua`, la v3 el catálogo de 88 objetivos (los cinco del
+    // summary) y la v4 el de 94 (Vikingos y Escoceses): un documento con la forma
+    // o el catálogo viejo se rechaza y la vista se recalcula en vivo, que es lo que
+    // evita publicar un reparto a medias.
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: 1 }), RULESET_VERSION),
     ).toBeNull();
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: 2 }), RULESET_VERSION),
     ).toBeNull();
-    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(3);
+    expect(
+      readObjectivesSnapshotValue(snapshot({ snapshotVersion: 3 }), RULESET_VERSION),
+    ).toBeNull();
+    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(4);
   });
 
   it("un snapshot de otra versión de las reglas no vale", () => {

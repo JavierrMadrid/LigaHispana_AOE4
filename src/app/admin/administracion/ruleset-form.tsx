@@ -112,7 +112,7 @@ type RulesetFormStateProps = Omit<RulesetFormProps, "locked">;
  * Es el documento del que sale **toda** la clasificación, así que la pantalla
  * enseña los cuatro ajustes que mueven puntos y, debajo, el catálogo de
  * objetivos agrupado por grupos. Cada grupo es un bloque plegable —cerrado por
- * defecto, con su recuento— porque el catálogo tiene 88 entradas y desplegarlo
+ * defecto, con su recuento— porque el catálogo tiene 94 entradas y desplegarlo
  * entero convertiría el formulario en una lista interminable; los controles
  * siguen viajando con el formulario aunque el bloque esté cerrado.
  *

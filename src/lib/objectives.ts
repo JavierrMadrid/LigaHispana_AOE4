@@ -248,9 +248,11 @@ export type ObjectiveView = {
  *
  * La v3 es el segundo caso: la forma de `ObjectiveView` no cambia, pero el catálogo
  * pasa de 83 a 88 objetivos (los cinco del *summary*), así que un snapshot v2 —que
- * no los tiene— se rechaza en vez de publicarse sin ellos.
+ * no los tiene— se rechaza en vez de publicarse sin ellos. La v4 vuelve a ser el
+ * mismo caso: el catálogo pasa de 88 a 94 con Vikingos y Escoceses, y un snapshot v3
+ * no lleva sus objetivos.
  */
-export const OBJECTIVES_SNAPSHOT_VERSION = 3;
+export const OBJECTIVES_SNAPSHOT_VERSION = 4;
 
 /**
  * La vista de objetivos tal y como se guarda: `ObjectiveView` más la marca de forma
@@ -465,9 +467,9 @@ const DEFENDER_MOUNTED_LOST = 1;
  * (`scoring.ruleset.objectives`) y del desglose de `PlayerScore`: renombrarlo deja
  * huérfanos los puntos ya publicados.
  *
- * Dentro del grupo `civilizacion` el orden respeta la jerarquía: primero las 23
+ * Dentro del grupo `civilizacion` el orden respeta la jerarquía: primero las 25
  * `masterizando-<civ>` (competiciones), después la cabeza `polifacetico` seguida
- * de sus 23 `lider-<civ>`, y por último `jugon` seguida de sus 23 `acolito-<civ>`.
+ * de sus 25 `lider-<civ>`, y por último `jugon` seguida de sus 25 `acolito-<civ>`.
  */
 export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
   {
