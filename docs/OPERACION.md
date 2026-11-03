@@ -288,6 +288,10 @@ Hay **dos relojes**, y el primario no es GitHub:
 | **Supabase Cron** (primario) | Job de `pg_cron` que llama por HTTP a `POST /api/sync` con `pg_net` | Cada minuto; el candado deja una pasada cada 1-3 minutos |
 | [Workflow de GitHub](../.github/workflows/cron-sync.yml) (red de seguridad) | `POST /api/cron/sync` con `Bearer $CRON_SECRET` | GitHub lo retrasa a una cada 4-6 h |
 
+- El workflow **no se conforma con un 200**: si el JSON de respuesta trae `scoringError`, el step falla y
+  la ejecución queda en rojo. Así una pasada que no ha podido recalcular la clasificación no se confunde
+  con una pasada correcta.
+
 ## El reloj: Supabase Cron
 
 ```bash
