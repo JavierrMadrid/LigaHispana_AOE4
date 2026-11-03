@@ -21,10 +21,11 @@ export default async function AdministrationLayout({
           <h1 className="text-2xl font-semibold">Administración</h1>
           <p className="mt-1 max-w-[70ch] text-sm text-muted">
             Los ajustes que solo puede tocar la cuenta de superadministración: quién
-            entra al panel, la configuración de la edición, las reglas de puntuación,
-            el calendario de eventos, quién puede inscribirse, el banner de donaciones
-            y las pruebas del canal de avisos. Cada cambio queda anotado en el
-            historial de acciones.
+            entra al panel, la configuración de la edición, las fechas del plazo de
+            inscripción y de la ventana del torneo, las reglas de puntuación, el
+            calendario de eventos, quién puede inscribirse, el banner de donaciones y
+            las pruebas del canal de avisos. Cada cambio queda anotado en el historial de
+            acciones.
           </p>
         </div>
 

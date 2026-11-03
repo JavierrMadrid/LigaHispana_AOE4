@@ -60,8 +60,9 @@ panel. Una reversión es final y no se puede revertir. El **superadministrador**
 **edición**: su nombre y su premio base, la marca (emblema y color de acento) que se
 aplica a la web pública, si la retransmisión es obligatoria, las reglas de puntuación (ventana,
 familias, puntos y objetivos desactivados) y los **eventos puntuales**, todo sin desplegar. Las
-reglas de puntos y los eventos solo se pueden cambiar antes de que empiece la edición; desde su
-inicio los puntos quedan congelados y solo se puede fijar el fin de la ventana. También puede
+reglas de puntos y los eventos solo se pueden cambiar antes de que empiece la edición; mientras el
+torneo está en marcha los puntos quedan congelados y solo se puede fijar el fin de la ventana, y una
+vez terminado se puede mover el inicio para preparar la siguiente. También puede
 **deshacer** lo que hicieron los admins regulares.
 
 Un **bot de Discord** avisa del comienzo y el final del torneo en el canal de avisos, una sola vez por
@@ -137,7 +138,8 @@ Supabase Cron ──► Worker (Cloudflare) ──► API de AoE4World
 - El **motor de puntuación** lee las partidas guardadas, aplica el ruleset activo y escribe la
   clasificación. Se recalcula solo.
 - Las **reglas y los puntos** son configurables sin desplegar antes de que empiece la edición (viven
-  en la tabla `Setting`); después, solo se puede fijar el fin de la ventana.
+  en la tabla `Setting`); mientras está en marcha, solo se puede fijar el fin de la ventana, y cuando
+  termina, mover el inicio empieza la siguiente edición.
 
 ### API para el overlay
 
@@ -173,10 +175,11 @@ es **final**. Todo se anuncia en el canal de avisos y por privado al participant
 información privada.
 
 Lo del superadministrador vive en la pestaña **Administración**, que solo él ve y que se organiza en
-subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Puntuación**,
-**Eventos** (el calendario con multiplicador), **Inscripciones** (el plazo y los países admitidos),
-**Donaciones** y **Avisos** (la prueba del canal de Discord). Fuera de Administración y de la
-reversión de actuaciones, el panel es igual para los dos papeles.
+subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Fechas** (el cierre
+de inscripciones, la ventana del torneo y el arranque de la siguiente edición), **Puntuación**,
+**Eventos** (el calendario con multiplicador), **Inscripciones** (el interruptor del plazo y los países
+admitidos), **Donaciones** y **Avisos** (la prueba del canal de Discord). Fuera de Administración y de
+la reversión de actuaciones, el panel es igual para los dos papeles.
 
 El alta es **por invitación**: se escribe el correo en el panel y la persona recibe un enlace para
 fijar su contraseña (pasa por `/auth/confirm` y termina en `/login/establecer-contrasena`); un enlace

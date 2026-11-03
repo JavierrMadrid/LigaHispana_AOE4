@@ -662,12 +662,13 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 /**
  * Los campos bloqueados del ruleset que cambian entre dos versiones del documento.
  *
- * Es la **guarda del servidor** de "una vez que empieza la edición no se pueden
- * cambiar los puntos": `saveScoringRuleset()` la usa para negarse a escribir aunque
- * el formulario (o una llamada directa a la Server Action) traiga otro documento. Es
- * pura y no toca la base de datos, así que se prueba entera sin ella.
+ * Es la **guarda del servidor** de "mientras la edición está en marcha no se pueden
+ * cambiar los puntos": la usa la escritura del fin de la ventana (`saveWindowEnd()` en
+ * el panel) para negarse a escribir aunque el formulario (o una llamada directa a la
+ * Server Action) traiga otro documento. Es pura y no toca la base de datos, así que se
+ * prueba entera sin ella.
  *
- * Con la edición empezada quedan congelados:
+ * Con la edición en marcha quedan congelados:
  *
  * | Campo | Por qué |
  * |---|---|
@@ -680,7 +681,9 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
  *
  * **`window.to` se ignora a propósito**: fijar o mover el fin de la ventana es la
  * forma de cerrar la edición, y la documentación ya dice que una ventana abierta se
- * cierra más tarde. Es el único campo editable después del inicio.
+ * cierra más tarde. Es el único campo editable mientras la edición está en marcha; una
+ * vez terminada, la ventana entera se edita por otro camino (`saveTournamentWindow()`),
+ * que no pasa por esta guarda.
  *
  * Se compara el texto de `window.from` y no el instante: las dos versiones llegan
  * pasadas por `mergeRuleset()` → `parseWindow()`, que normaliza a `toISOString()`, así

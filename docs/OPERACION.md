@@ -659,15 +659,20 @@ Cada actuación se anuncia **siempre** que se aplica, con la razón pública y s
 
 La configuración de una edición vive en `Setting` y la cambia **solo el superadministrador** desde el
 panel (`/admin/administracion`): los documentos que describen la edición, sus reglas y a quién admite.
-La sección se organiza en subpestañas —Administradores, Edición, Puntuación, Inscripciones,
-Donaciones y Avisos—, y la **inscripción** y las **donaciones** son opciones solo del
-superadministrador que viven en sus subpestañas (`/admin/administracion/inscripciones` y
-`/admin/administracion/donaciones`), no en ninguna pantalla que vean los admins regulares.
+La sección se organiza en subpestañas —Administradores, Edición, Fechas, Puntuación, Eventos,
+Inscripciones, Donaciones y Avisos—, y la **inscripción**, las **fechas** y las **donaciones** son
+opciones solo del superadministrador que viven en sus subpestañas
+(`/admin/administracion/inscripciones`, `/admin/administracion/fechas` y
+`/admin/administracion/donaciones`), no en ninguna pantalla que vean los admins regulares. `Fechas`
+reúne la **fecha de cierre de inscripciones** y la **ventana del torneo**; las fechas de los eventos
+puntuales no están ahí porque son contenido de cada evento (ver
+[Eventos puntuales](#eventos-puntuales)).
 
 | Clave | Qué toca | Acción |
 |---|---|---|
 | `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento) | `saveEditionConfig` |
-| `scoring.ruleset` | Ventana, familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
+| `scoring.ruleset.window` | La ventana del torneo: inicio obligatorio y fin opcional (ISO-8601 UTC) | `saveTournamentWindow` |
+| `scoring.ruleset` | Familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
 | `registration.countries` | Países admitidos en la inscripción, en el orden del catálogo | `saveCountries` |
 | `registration.open` | El interruptor: si la inscripción está abierta | `setRegistrationOpen` |
 | `registration.closesAt` | La fecha de cierre: pasada, cierra sola la inscripción (ISO-8601 UTC, o quitada) | `setRegistrationClosesAt` |
@@ -678,18 +683,23 @@ superadministrador que viven en sus subpestañas (`/admin/administracion/inscrip
   una ventana mal formada se rechazan con su mensaje y no se escribe nada. Las dos funciones de
   escritura vuelven a validar por su cuenta: un documento que el sistema descartaría al leerlo no se
   publica.
-- **La ventana del torneo se escribe en hora local de Madrid.** El campo del panel es un
-  `datetime-local`; el servidor lo interpreta en `Europe/Madrid` y guarda el instante ISO-8601 UTC que
-  lee el motor (`parseMadridLocalInstant()` en `src/lib/ranked-match.ts`). Un instante ISO con zona
-  escrito a mano también vale. Ver [`PUNTUACION.md`](./PUNTUACION.md#la-ventana).
+- **La ventana del torneo se escribe en la subpestaña `Fechas`, en hora local de Madrid.** El campo
+  del panel es un `datetime-local`; el servidor lo interpreta en `Europe/Madrid` y guarda el instante
+  ISO-8601 UTC que lee el motor (`parseMadridLocalInstant()` en `src/lib/ranked-match.ts`). Un instante
+  ISO con zona escrito a mano también vale. La acción es `saveTournamentWindow`, que **exige** la
+  fecha de inicio y trata el fin vacío como ventana abierta; con la edición **en marcha** (empezada y
+  sin terminar) solo admite el fin, y con la edición **terminada** vuelve a admitir las dos para
+  preparar la siguiente. `saveScoringRuleset` (Puntuación) rechaza `windowFrom` y `windowTo`: las
+  fechas no se editan ahí. Ver [`PUNTUACION.md`](./PUNTUACION.md#la-ventana).
 - **La fecha de cierre de inscripciones se escribe como la ventana, y la interpreta el servidor.** El
   campo `closesAt` de `setRegistrationClosesAt` acepta las dos formas de un formulario: un
   `datetime-local` (**sin zona**), que el servidor interpreta en `Europe/Madrid` con
   `parseMadridLocalInstant()` —la misma función que la ventana—, o un instante ISO-8601 **con zona**.
   En los dos casos se guarda en ISO-8601 UTC. Vacío **quita** la fecha, que es como se reabre después
-  del cierre. La subpestaña la prefila en hora de Madrid y enseña el **estado efectivo** del plazo
-  —abierto, cerrado por el interruptor o cerrado por la fecha— con el motivo al lado, para que con la
-  fecha ya pasada no se lea "abiertas" porque el interruptor siga encendido.
+  del cierre. La subpestaña `Fechas` la prefila en hora de Madrid, la edita junto a la ventana y
+  enseña el **estado efectivo** del plazo —abierto, cerrado por el interruptor o cerrado por la
+  fecha— con el motivo al lado, para que con la fecha ya pasada no se lea "abiertas" porque el
+  interruptor siga encendido.
 - **Todo queda en `/admin/acciones`** como `CONFIG_CHANGED`, con qué campos cambiaron y sus dos valores,
   en la misma transacción que el cambio.
 - **Los países admitidos** solo pueden ser los del catálogo del código (`DEFAULT_COUNTRIES`): la lista no
@@ -698,12 +708,20 @@ superadministrador que viven en sus subpestañas (`/admin/administracion/inscrip
 - **Un cambio de reglas que mueva puntos recalcula la clasificación al guardar.** Si el recálculo falla,
   las reglas **sí** están guardadas y el mensaje lo dice: la clasificación se pone al día en la
   siguiente pasada del sincronizador.
-- **Con la edición empezada, los puntos quedan congelados.** Desde `window.from` (`editionStarted()`),
-  `saveScoringRuleset` rechaza la fecha de inicio, las familias de ladder, los puntos por victoria, el
-  recuento de civs aleatorias, los puntos de objetivos y los objetivos desactivados: moverlos
-  reescribiría una clasificación ya publicada. Lo único que se puede fijar o cambiar es el **fin de la
-  ventana** (`window.to`), que es cómo se cierra la edición. El bloqueo está en el servidor; la
-  pantalla esconde los campos congelados y solo deja fijar el fin.
+- **Mientras la edición está en marcha, la puntuación y el inicio quedan congelados.** Desde
+  `window.from` (`editionStarted()`) y hasta `window.to` (`editionEnded()`), `saveScoringRuleset`
+  rechaza cualquier cambio de reglas y `saveTournamentWindow` rechaza la fecha de inicio: moverlos
+  reescribiría una clasificación ya publicada. En ese tramo lo único que se puede fijar o cambiar es
+  el **fin de la ventana** (`window.to`), que es cómo se cierra la edición, desde la subpestaña
+  `Fechas`. El bloqueo está en el servidor; la pantalla esconde los campos congelados y solo deja
+  fijar el fin.
+- **Una edición terminada se puede reemplazar desde `Fechas`.** Pasado `window.to`, el torneo ya no
+  reparte puntos y `Fechas` vuelve a admitir el inicio y el fin. Mover el inicio empieza una edición
+  nueva y **exige confirmación** (`confirmNewEdition` con `"true"`): recalcula la clasificación y la
+  edición anterior deja de mostrarse en la web, aunque sus partidas y sus historiales siguen guardados.
+  Mover solo el fin no pide confirmación. Con el inicio nuevo en el futuro la edición vuelve a estar
+  sin empezar, así que `Puntuación` vuelve a dejar editar las reglas. La confirmación existe para que
+  un envío con la fecha de inicio cambiada sin querer no reemplace el torneo.
 - **La retransmisión obligatoria** enciende la alerta `NO_STREAM_CHANNEL` (ver
   [Alertas de comportamiento](#alertas-de-comportamiento)). Apagarla **no** borra las alertas ya
   escritas: `Alert` es *append-only*.

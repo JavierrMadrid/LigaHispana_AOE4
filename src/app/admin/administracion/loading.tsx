@@ -1,7 +1,7 @@
 /**
  * Esqueleto de carga de la sección de administración.
  *
- * Es uno solo para las seis subpestañas: la cabecera y la navegación ya las pinta
+ * Es uno solo para todas las subpestañas: la cabecera y la navegación ya las pinta
  * el layout —que no se suspende—, así que aquí solo se reserva el cuerpo: titular,
  * frase y bloques de formulario, con las mismas cajas de `surface`/`line`, para que
  * el contenido no salte al llegar los datos.

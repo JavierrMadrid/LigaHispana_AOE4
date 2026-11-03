@@ -137,9 +137,11 @@ ya no existen. Lo cambia el superadministrador desde el panel; el detalle, en
 [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
 
 Apagar un objetivo **solo se puede antes de que empiece la edición**: desde `window.from`, el ruleset
-está congelado (`saveScoringRuleset` rechaza el cambio) porque un objetivo apagado retiraría puntos que
-la clasificación ya está publicando. Después del inicio, lo único editable del ruleset es el fin de la
-ventana.
+está congelado (`saveScoringRuleset` rechaza cualquier cambio de reglas) porque un objetivo apagado
+retiraría puntos que la clasificación ya está publicando. Mientras la edición está en marcha, lo único
+editable de las fechas es el fin de la ventana, y se hace en la subpestaña `Fechas`. Cuando la edición
+termina (`window.to` ya pasó), mover el inicio desde `Fechas` permite preparar la siguiente y, con el
+inicio nuevo en el futuro, el ruleset vuelve a estar editable.
 
 ## Pool de mapas
 
