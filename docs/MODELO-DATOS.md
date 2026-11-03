@@ -199,7 +199,7 @@ de puntos están siempre presentes en una fila nueva, con ceros si no aplican.
 ```json
 {
   "ruleSetVersion": 4,
-  "rule": "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
+  "rule": "2 puntos por victoria clasificatoria más 94 objetivos: 31 competiciones y 63 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
@@ -542,7 +542,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo: `ruleSetVersion`, `cacheVersion` (`SCORING_CACHE_VERSION`), `playersRanked` y las cifras del resultado. Lo lee el worker para decidir si puede saltarse el recálculo. | `recomputeScores()` |
-| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 3) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
+| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 4) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `sync.gamesCursor` | Cursor global de partidas: `updatedAt` (el `updated_since` de la siguiente pasada), `seededAt`, `seededFrom`, la racha de lotes truncados y el mejor `backfillPending` visto. | Worker (`src/lib/aoe4world/sync.ts`), con `writeGamesCursor()` |
 | `streams.lastRun` | Cuándo se comprobó por última vez el estado de directo de YouTube/Kick, en ISO-8601 UTC. Separa el reloj del paso (10 min) del de las partidas (1-3 min) para no gastar la cuota de YouTube. | Worker (`src/lib/aoe4world/sync.ts`), con `writeStreamsLastRun()` |

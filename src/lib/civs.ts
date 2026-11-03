@@ -49,8 +49,10 @@ export const CIVILIZATIONS = [
   { id: "order_of_the_dragon", name: "Orden del Dragón" },
   { id: "ottomans", name: "Otomanos" },
   { id: "rus", name: "Rus" },
+  { id: "scots", name: "Escoceses" },
   { id: "sengoku_daimyo", name: "Daimyō del Sengoku" },
   { id: "tughlaq_dynasty", name: "Dinastía Tughlaq" },
+  { id: "vikings", name: "Vikingos" },
   { id: "zhu_xis_legacy", name: "Legado de Zhu Xi" },
 ] as const satisfies readonly Civilization[];
 
@@ -114,8 +116,10 @@ export const CIVILIZATION_FILES = {
   order_of_the_dragon: "Order_of_the_Dragon_AoE4.webp",
   ottomans: "Ottomans_AoE4.webp",
   rus: "Rus_AoE4.webp",
+  scots: "Scots_AoE4.webp",
   sengoku_daimyo: "Sengoku_Daimyo_AoE4.webp",
   tughlaq_dynasty: "Tughlaq_Dynasty_AoE4.webp",
+  vikings: "Vikings_AoE4.webp",
   zhu_xis_legacy: "Zhu_Xis_Legacy_AoE4.webp",
 } as const satisfies Record<CivilizationId, string>;
 

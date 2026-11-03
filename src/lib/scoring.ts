@@ -165,9 +165,11 @@ export const LEGACY_RULESET_VERSION = 3;
  * La **v2** es por la reconciliación del progreso del overlay (issue 154): las tablas
  * `ObjectiveProgressState` y `ObjectiveProgressEvent` nacen vacías, y sin este salto
  * el primer pase tras el despliegue podría saltarse el recálculo y el feed no se
- * sembraría hasta la siguiente partida.
+ * sembraría hasta la siguiente partida. La **v3** es por el catálogo de 94 objetivos
+ * (Vikingos y Escoceses): sin el salto, el primer pase podría saltarse el recálculo y
+ * los objetivos nuevos no repartirían hasta la siguiente partida.
  */
-export const SCORING_CACHE_VERSION = 2;
+export const SCORING_CACHE_VERSION = 3;
 
 /**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
@@ -752,7 +754,7 @@ export type ScoreBreakdownMode = {
  * ```json
  * {
  *   "ruleSetVersion": 4,
- *   "rule": "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
+ *   "rule": "2 puntos por victoria clasificatoria más 94 objetivos: 31 competiciones y 63 logros",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
@@ -989,7 +991,7 @@ async function readObjectivesSnapshot(client: RulesetClient = db): Promise<Objec
  *
  * La comparación es contra la huella y no contra el JSON guardado: `jsonb` normaliza
  * el orden de las claves, así que el documento leído nunca es textualmente igual al
- * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (88
+ * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (94
  * objetivos con sus rankings completos) para dejarlos idénticos.
  */
 async function writeObjectivesSnapshot(view: ObjectiveView, client: RulesetClient): Promise<void> {

@@ -454,7 +454,7 @@ const RULESET_LOCKED_ERROR =
  * Los campos del formulario que quedan congelados cuando la edición ha empezado.
  *
  * `windowTo` **no** está: es el único que se puede seguir tocando. Los puntos por
- * objetivo no se pueden listar aquí —son hasta 88 claves `objectivePoints.<id>`— y se
+ * objetivo no se pueden listar aquí —son hasta 94 claves `objectivePoints.<id>`— y se
  * detectan por su prefijo.
  */
 const LOCKED_RULESET_FIELDS = [
@@ -500,8 +500,8 @@ function disabledObjectivesText(ids: readonly string[]): string {
 /**
  * Los puntos de objetivos que han cambiado, como un solo campo del rastro.
  *
- * Va junto y no un campo por objetivo a propósito: son hasta 88 valores, y una frase
- * de historial con 88 campos no se lee. Lo que sí se ve es **cuáles** han cambiado y
+ * Va junto y no un campo por objetivo a propósito: son hasta 94 valores, y una frase
+ * de historial con 94 campos no se lee. Lo que sí se ve es **cuáles** han cambiado y
  * de qué valor a qué valor.
  */
 function objectivesChanged(
@@ -537,7 +537,7 @@ function objectivesChanged(
  * El formulario manda los campos que se editan, y lo que no manda se conserva: los
  * puntos por objetivo, si no vienen como `objectivePoints.<id>`, siguen con el valor
  * que tenían. Es lo contrario de "foto completa" de la edición y es deliberado: el
- * catálogo tiene 88 puntos y la pantalla puede no editarlos todos, así que un
+ * catálogo tiene 94 puntos y la pantalla puede no editarlos todos, así que un
  * formulario que no los mencione **no puede borrarlos**.
  *
  * ## Validación

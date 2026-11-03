@@ -38,6 +38,8 @@ describe("parseMapPool", () => {
   it("el valor por defecto son los nueve mapas reales", () => {
     expect(DEFAULT_MAP_POOL).toHaveLength(9);
     expect(DEFAULT_MAP_POOL).toContain("King of the Hill");
+    expect(DEFAULT_MAP_POOL).toContain("Archipelago");
+    expect(DEFAULT_MAP_POOL).toContain("Marshland");
   });
 });
 
