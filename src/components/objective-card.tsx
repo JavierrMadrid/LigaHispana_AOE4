@@ -11,6 +11,7 @@ import {
   formatMapPool,
   hasNoCap,
   prizeLabel,
+  prizeUnitLabel,
 } from "@/lib/objective-format";
 
 /**
@@ -203,17 +204,34 @@ function gapList(gaps: readonly ObjectiveMapGap[]): string {
  */
 export function PrizePlate({ option }: { option: ObjectiveOption }) {
   const figure = option.pointsPerUnit ?? option.points;
+  const perUnit = option.pointsPerUnit !== undefined;
 
   return (
-    <span className="shrink-0 rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-right">
-      <span className="block font-display text-xl font-semibold leading-none tabular-nums text-accent">
+    <span
+      className={`shrink-0 rounded-md border border-accent/30 bg-accent/5 text-right ${
+        perUnit ? "px-2 py-1" : "px-3 py-1.5"
+      }`}
+    >
+      <span
+        className={`block font-display font-semibold leading-none tabular-nums text-accent ${
+          perUnit ? "text-lg" : "text-xl"
+        }`}
+      >
         +{figure}
       </span>
       {/* En un objetivo sin tope o que cobra por unidad la cifra no es un total y
           el pie lo dice; el `max-w` mantiene la placa estrecha también con el pie
-          de dos renglones, para que no se coma el ancho del título en la tarjeta. */}
-      <span className="mt-1 block max-w-[7rem] text-xs font-medium uppercase leading-tight tracking-wide text-muted">
-        {prizeLabel(option)}
+          de dos renglones, para que no se coma el ancho del título en la tarjeta.
+          Los objetivos por unidad usan un pie más corto (`por victoria`) y una
+          placa más pequeña: el `+1` ya lleva la cifra y el título necesita el ancho. */}
+      <span
+        className={
+          perUnit
+            ? "mt-0.5 block max-w-[4.5rem] text-[10px] font-medium uppercase leading-tight tracking-normal text-muted"
+            : "mt-1 block max-w-[7rem] text-xs font-medium uppercase leading-tight tracking-wide text-muted"
+        }
+      >
+        {perUnit ? prizeUnitLabel(option.metric) : prizeLabel(option)}
       </span>
     </span>
   );

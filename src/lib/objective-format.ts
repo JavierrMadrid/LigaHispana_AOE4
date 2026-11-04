@@ -125,6 +125,16 @@ export function unitPrizeLabel(pointsPerUnit: number, metric: ObjectiveMetric): 
 }
 
 /**
+ * La unidad del pago, sin la palabra `puntos`: `por victoria`, `por día`.
+ *
+ * Es el pie corto de la placa cuando la cifra (`+1`) ya dice cuántos puntos paga
+ * cada unidad y la placa tiene que caber en una tarjeta estrecha.
+ */
+export function prizeUnitLabel(metric: ObjectiveMetric): string {
+  return `por ${metricUnit(metric, 1)}`;
+}
+
+/**
  * El valor de un contendiente, listo para pintar.
  *
  * En un **logro** es el avance sobre el umbral (`value/target`, p. ej. `12/25

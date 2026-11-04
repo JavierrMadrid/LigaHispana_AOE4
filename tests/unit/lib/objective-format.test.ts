@@ -17,6 +17,7 @@ import {
   orderByObjectiveProgress,
   orderByObjectiveRanking,
   prizeLabel,
+  prizeUnitLabel,
   standingsCountLabel,
   unitPrizeLabel,
 } from "@/lib/objective-format";
@@ -289,6 +290,11 @@ describe("prizeLabel: el pie de la placa de premio", () => {
   it("la frase del pago por unidad lleva la cifra y su plural", () => {
     expect(unitPrizeLabel(1, "victorias")).toBe("1 punto por victoria");
     expect(unitPrizeLabel(2, "victorias")).toBe("2 puntos por victoria");
+  });
+
+  it("el pie corto de la placa omite la palabra puntos", () => {
+    expect(prizeUnitLabel("victorias")).toBe("por victoria");
+    expect(prizeUnitLabel("dias")).toBe("por día");
   });
 
   it("la unidad sale de la métrica, no del id", () => {
