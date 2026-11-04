@@ -56,6 +56,7 @@ const SUBCONJUNTO = [
   "rey-1v1",
   "lider-japanese",
   "masterizando-japanese",
+  "maestro-french",
 ].map(definicion);
 
 /** Los objetivos publicados, indexados por id, para no recorrer el array. */
@@ -225,6 +226,18 @@ describe("overlayObjectives", () => {
     expect(masterizando?.icono_url).toBe(
       `${ORIGEN}/imagenes/civilizaciones/Japanese_AoE4.webp`,
     );
+  });
+
+  it("maestro-french: logro de civilización que cobra por victoria con tope 5", () => {
+    const maestro = objetivos.get("maestro-french");
+
+    expect(maestro).toMatchObject({
+      puntos: 5,
+      volatil: false,
+      repetible: true,
+      max_progreso: 5,
+    });
+    expect(maestro?.icono_url).toBe(`${ORIGEN}/imagenes/civilizaciones/French_AoE4.webp`);
   });
 
   it("normaliza el origen sin doblar la barra", () => {

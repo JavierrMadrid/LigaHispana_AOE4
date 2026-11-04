@@ -18,8 +18,13 @@ import { CivilizationIcon } from "@/components/civilization-icon";
  */
 const MASTERIZANDO_PREFIX = "masterizando-";
 
-/** Prefijos de id que llevan la civilización pegada (`lider-japanese` → `japanese`). */
-const FAMILY_CIV_PREFIXES = ["lider-", "acolito-", MASTERIZANDO_PREFIX] as const;
+/**
+ * Prefijos de id que llevan la civilización pegada (`lider-japanese` → `japanese`).
+ *
+ * `maestro-` va con guion: la cabeza de esa familia se llama `maestro` a secas y
+ * no es de ninguna civilización, así que solo los hijos llevan la bandera pegada.
+ */
+const FAMILY_CIV_PREFIXES = ["lider-", "acolito-", MASTERIZANDO_PREFIX, "maestro-"] as const;
 
 /** Separación entre tarjetas (`gap-4`), para avanzar una tarjeta por pulsación. */
 const SCROLL_STEP_GAP = 16;

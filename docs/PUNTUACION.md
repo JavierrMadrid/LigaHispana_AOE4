@@ -64,11 +64,11 @@ de la base falla, cae al texto genérico y no inventa fechas.
 
 La página `/puntuacion` lee además el **ruleset activo** para las demás cifras: los puntos por victoria
 y los **objetivos activos**, de los que salen el recuento y el total que reparten (con el catálogo por
-defecto, 94 y 2.932 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de
+defecto, 120 y 3.107 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de
 resumen no se pinta y los párrafos caen a su forma genérica, en vez de enseñar los números de la
 edición anterior.
 
-La suma de 2.932 es la de los objetivos de **premio fijo** del catálogo (cada uno contado una vez,
+La suma de 3.107 es la de los objetivos de **premio fijo** del catálogo (cada uno contado una vez,
 `imparable` a su tope): `victorias` queda fuera, porque no reparte un premio sino `pointsPerWin` por
 victoria y sin tope
 (ver [`OBJETIVOS.md`](./OBJETIVOS.md#total-de-puntos)). El criterio está en código (`hasFixedPrize()`);
@@ -192,7 +192,7 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
 ```json
 {
   "version": 4,
-  "label": "2 puntos por victoria clasificatoria más 94 objetivos: 31 competiciones y 63 logros",
+  "label": "2 puntos por victoria clasificatoria más 120 objetivos: 31 competiciones y 89 logros",
   "modes": ["rm_solo", "rm_team"],
   "window": { "from": "2026-09-15T00:00:00.000Z", "to": "2026-10-15T00:00:00.000Z" },
   "pointsPerWin": 2,
@@ -218,8 +218,8 @@ El ruleset activo vive en `Setting`, clave **`scoring.ruleset`**:
   y `to <= from` se rechaza entero. El panel convierte antes la fecha y hora local de Madrid a UTC
   (ver [La ventana](#la-ventana)), así que lo guardado siempre cumple esto.
 - **La etiqueta (`label`) la calcula el código** (`ruleLabel()`), no el documento: sale de
-  `pointsPerWin` y de los objetivos **activos** ("2 puntos por victoria clasificatoria más 93 objetivos:
-  30 competiciones y 63 logros" con un objetivo apagado). El `label` guardado se ignora y
+  `pointsPerWin` y de los objetivos **activos** ("2 puntos por victoria clasificatoria más 119 objetivos:
+  30 competiciones y 89 logros" con un objetivo apagado). El `label` guardado se ignora y
   `ensureRuleset` corrige la copia de la tabla.
 - **`objectives["victorias"]` se ignora** por el motor: lo que vale una victoria lo dice `pointsPerWin`
   (ver [Cómo se cobra una victoria](#cómo-se-cobra-una-victoria)). El panel no deja editarlo.
@@ -266,7 +266,7 @@ aplican. Una fila escrita antes de que existieran los eventos no trae `events`.
 ```json
 {
   "ruleSetVersion": 4,
-  "rule": "2 puntos por victoria clasificatoria más 94 objetivos: 31 competiciones y 63 logros",
+  "rule": "2 puntos por victoria clasificatoria más 120 objetivos: 31 competiciones y 89 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }

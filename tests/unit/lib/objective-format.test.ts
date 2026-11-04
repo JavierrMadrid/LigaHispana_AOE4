@@ -18,6 +18,7 @@ import {
   orderByObjectiveRanking,
   prizeLabel,
   standingsCountLabel,
+  unitPrizeLabel,
 } from "@/lib/objective-format";
 import type {
   ObjectiveBeneficiary,
@@ -273,6 +274,21 @@ describe("prizeLabel: el pie de la placa de premio", () => {
 
   it("un objetivo sin tope paga por unidad y lo dice", () => {
     expect(prizeLabel(option("victorias", "achievement", null))).toBe("puntos por victoria");
+  });
+
+  it("un objetivo con umbral que cobra por unidad también lo dice", () => {
+    const perUnit: ObjectiveOption = {
+      ...option("victorias", "achievement", 5),
+      points: 5,
+      pointsPerUnit: 1,
+    };
+
+    expect(prizeLabel(perUnit)).toBe("puntos por victoria");
+  });
+
+  it("la frase del pago por unidad lleva la cifra y su plural", () => {
+    expect(unitPrizeLabel(1, "victorias")).toBe("1 punto por victoria");
+    expect(unitPrizeLabel(2, "victorias")).toBe("2 puntos por victoria");
   });
 
   it("la unidad sale de la métrica, no del id", () => {

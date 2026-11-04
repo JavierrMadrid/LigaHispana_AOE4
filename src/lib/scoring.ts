@@ -167,9 +167,11 @@ export const LEGACY_RULESET_VERSION = 3;
  * el primer pase tras el despliegue podría saltarse el recálculo y el feed no se
  * sembraría hasta la siguiente partida. La **v3** es por el catálogo de 94 objetivos
  * (Vikingos y Escoceses): sin el salto, el primer pase podría saltarse el recálculo y
- * los objetivos nuevos no repartirían hasta la siguiente partida.
+ * los objetivos nuevos no repartirían hasta la siguiente partida. La **v4** es por el
+ * catálogo de la prueba de concepto de subobjetivos (120 objetivos, familia
+ * `maestro`), mismo motivo.
  */
-export const SCORING_CACHE_VERSION = 3;
+export const SCORING_CACHE_VERSION = 4;
 
 /**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
@@ -757,7 +759,7 @@ export type ScoreBreakdownMode = {
  * ```json
  * {
  *   "ruleSetVersion": 4,
- *   "rule": "2 puntos por victoria clasificatoria más 94 objetivos: 31 competiciones y 63 logros",
+ *   "rule": "2 puntos por victoria clasificatoria más 120 objetivos: 31 competiciones y 89 logros",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }

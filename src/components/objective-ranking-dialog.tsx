@@ -40,8 +40,8 @@ type ObjectiveRankingDialogProps = {
   highlightProfileId?: number | null;
   /**
    * Hijos de la familia si el objetivo abierto es su cabeza (`polifacetico`,
-   * `jugon`): con ellos y con jugador resaltado, la cara de clasificación enseña
-   * el avance por civilización de ese jugador. Sin ellos —la clasificación
+   * `jugon`, `maestro`): con ellos y con jugador resaltado, la cara de clasificación
+   * enseña el avance por civilización de ese jugador. Sin ellos —la clasificación
    * general, que se abre sin ficha de jugador— no se pinta nada.
    */
   familyChildren?: readonly ParticipantObjective[];
@@ -86,11 +86,12 @@ type ObjectiveRankingDialogProps = {
  *
  * ## El detalle por civilización
  *
- * En `polifacetico` y `jugon` ocupa ese mismo sitio el avance del jugador en
- * cada civilización, con la lista más corta de las dos —las hechas o las que
- * quedan—. No puede salir del ranking, porque los `lider-<civ>`/`acolito-<civ>`
- * son objetivos aparte: la ficha los pasa por prop (`familyChildren`), y sin
- * ellos —una ventana abierta sin ficha de jugador— no se pinta.
+ * En `polifacetico`, `jugon` y `maestro` ocupa ese mismo sitio el avance del
+ * jugador en cada civilización, con la lista más corta de las dos —las hechas o
+ * las que quedan—. No puede salir del ranking, porque los
+ * `lider-<civ>`/`acolito-<civ>`/`maestro-<civ>` son objetivos aparte: la ficha los
+ * pasa por prop (`familyChildren`), y sin ellos —una ventana abierta sin ficha de
+ * jugador— no se pinta.
  */
 export function ObjectiveRankingDialog({
   option,
@@ -406,12 +407,17 @@ function YouBadge() {
  * La caja crece hasta el alto de la de al lado —el aviso o el poseedor— para que
  * los dos bordes concorden, y su contenido va centrado dentro: la cifra no se
  * quedaría colgada a media altura.
+ *
+ * La cifra es la de la tarjeta: el **pago por unidad** cuando el objetivo cobra así
+ * (`pointsPerUnit`), no su máximo. Ver `PrizePlate` de `objective-card`.
  */
 function PrizePlate({ option }: { option: ObjectiveOption }) {
+  const figure = option.pointsPerUnit ?? option.points;
+
   return (
     <span className="flex flex-col justify-center justify-self-start rounded-md border border-accent/30 bg-accent/5 px-4 py-2 text-right sm:justify-self-end">
       <span className="block font-display text-2xl font-semibold leading-none tabular-nums text-accent">
-        +{option.points}
+        +{figure}
       </span>
       <span className="mt-1 block text-xs font-medium uppercase leading-tight tracking-wide text-muted">
         {prizeLabel(option)}
