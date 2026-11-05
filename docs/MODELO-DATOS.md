@@ -26,12 +26,17 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `Admin` | Una cuenta con acceso al panel de administración. | `id`; `email` único |
 | `RateLimitCounter` | Un contador de frecuencia por IP hasheada. | `key` |
 | `Setting` | Configuración y memoria de los procesos. | `key` |
+| `ObjectAward` | Un objeto utilizable del POC de la issue 134: tipo, día, portador y si sigue pendiente. | `id`; único `(kind, day)` |
+| `ObjectThrow` | Un lanzamiento de un objeto y si se devolvió (append-only). | `id` |
 
 Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent`, `ObjectiveLeadEvent`,
 `ObjectiveProgressEvent`, `ObjectiveProgressState` y `Alert` apuntan a `Player` con
 `onDelete: Cascade`. `AdminAct` apunta a `Player` con `onDelete: SetNull` (la actuación
 sobrevive al borrado del jugador con la foto de nombre y perfil), y `AdminActMatch` cae en cascada
-con `AdminAct` y con `Match`. El resto de tablas son independientes.
+con `AdminAct` y con `Match`. El resto de tablas son independientes salvo
+`ObjectThrow`, que cae en cascada con `ObjectAward`; ninguno de los dos apunta a
+`Player`, porque el histórico del objeto tiene que sobrevivir a un borrado y sus ids
+van como texto suelto, igual que `AdminAction.targetId`.
 
 ## Enums
 
@@ -41,6 +46,7 @@ con `AdminAct` y con `Match`. El resto de tablas son independientes.
 | `MatchResult` | `WIN`, `LOSS` |
 | `ObjectiveLeadKind` | `LOST`, `GAINED` (en ese orden, y no es decorativo: ver abajo) |
 | `ObjectiveProgressKind` | `CUMPLIDO`, `PERDIDO`, `PROGRESADO` (el orden no significa nada: el feed va por `at`) |
+| `ObjectKind` | `RELIQUIA`, `MONEDA`, `MONUMENTO` |
 | `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED` (histórico), `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
 | `AdminActKind` | `BAN`, `MATCH_ANNULMENT`, `REVERSAL` |
 | `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión), `NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP`, `NO_RESOURCES_GAP`, `SUMMARY_NOT_REVIEWED` |
@@ -144,31 +150,35 @@ puntúa lo aplica el motor, no el importador.
 | `apm` | `Int?` | APM de la partida según su resumen. `null` = **sin resumen** (no es `0`), y es la marca de que la partida tiene resumen. |
 | `feudalAgeSeconds`, `castleAgeSeconds`, `imperialAgeSeconds` | `Int?` | Segundos de partida en que se alcanzó cada edad; gana el **primer** instante. |
 | `villagersLost`, `gildedVillagersLost`, `mountedVillagersLost` | `Int?` | Aldeanos perdidos, por tipo. Los dorados y los montados van aparte porque `defensor-del-pueblo` los exige por separado. |
+| `winReason` | `String?` | Motivo de la victoria tal cual lo publica el resumen (`"Surrender"`, `"Conquest"`, `"Elimination"`…). Sin enum: AoE4World puede añadir valores. `null` = no hay resumen o el payload no traía el campo; **no** significa "sin motivo". |
 | `summaryCheckedAt` | `DateTime?` | Cuándo se obtuvo una respuesta **concluyente** del resumen (200 o 404). `null` = nunca. Saca la partida de la cola: ya se sabe si hay resumen o no. |
 | `summaryLastAttemptAt` | `DateTime?` | Cuándo se pidió el resumen por última vez, con **cualquier** desenlace (200, 404, fallo o 429). `null` = nunca se intentó. Sostiene el reintento de 1 h y detecta las partidas que se intentaron y nunca se resolvieron (`SUMMARY_NOT_REVIEWED`). |
 | `summaryAnomalies` | `Json?` | Evidencia compacta del resumen para las alertas. `null` = no hay resumen. Forma: `{ buildOrderReadable, firstVillagerSeconds, militaryNoGrowth: { fromSeconds, toSeconds }[], noResourceGain: { fromSeconds, toSeconds } \| null }`, con `null` en lo que no se pudo leer. `militaryNoGrowth` es una **lista** (todos los tramos sin máximo nuevo, los 10 más largos y de mayor a menor) porque la gracia inicial se descuenta después; `noResourceGain` es solo el más largo. Ver `src/lib/aoe4world/summary-anomalies.ts`. |
 | `points` | `Int` (`0`) | Puntos que aporta según el ruleset: `pointsPerWin` en una victoria clasificatoria, 0 en el resto. Solo lo escribe el motor. |
 | `revertedAt` | `DateTime?` | Marca de "deja de puntuar" (reversible). `null` = puntúa. |
+| `excludedByAwardId` | `String?` | Marca de exclusión por una **desventaja de objeto** (`ObjectAward.id`): la partida la jugó el portador mientras el objeto estaba pendiente. `null` = no está excluida. La escribe `applyObjectBlocks()` y la quita `fulfillObject()`; el motor la lee como una condición más. Ver [`OBJETOS.md`](./OBJETOS.md#exclusión-de-partidas). |
 | `rawJson` | `Json` | La partida tal cual la devolvió la API. **No se borra nunca.** De aquí salen los compañeros y su rating para la condición de equipo. |
 | `createdAt` | `DateTime` | |
 
 Índices: único `(playerId, gameId)` (dedupe del worker); `(playerId, startedAt)`,
-`(playerId, finishedAt)`, `(mode, startedAt)`. Ver [Índices](#índices).
+`(playerId, finishedAt)`, `(mode, startedAt)`, `(excludedByAwardId)`. Ver [Índices](#índices).
 
 `mode` y `civRandomized` se rellenaron con `npm run backfill:model` en las filas anteriores; a
 partir de ahí las escribe el worker con cada partida.
 
-Las **ocho métricas** del resumen de partida (`apm` … `mountedVillagersLost`) más **dos columnas de
-control** (`summaryCheckedAt` y `summaryLastAttemptAt`) y la evidencia (`summaryAnomalies`) las escribe
-el worker desde una ruta del **sitio** de AoE4World (no de su API) que se pide aparte y solo importa a
-las partidas que puntúan; el detalle está en
+Las **siete métricas** del resumen de partida (`apm` … `mountedVillagersLost`), el motivo de victoria
+(`winReason`), **dos columnas de control** (`summaryCheckedAt` y `summaryLastAttemptAt`) y la evidencia
+(`summaryAnomalies`) las escribe el worker desde una ruta del **sitio** de AoE4World (no de su API) que
+se pide aparte y solo importa a las partidas que puntúan; el detalle está en
 [`OPERACION.md`](./OPERACION.md#resumen-de-partida). Las métricas las leen cinco objetivos, y en todas
 ellas `null` significa "**no hay resumen**", nunca "cero": una partida sin resumen no cumple ninguna
-hazaña y corta la racha de `ansioso`. `apm` es la marca de que la partida tiene resumen. Las dos marcas
-de control no son métricas del juego: `summaryCheckedAt` dice si hubo respuesta concluyente y
-`summaryLastAttemptAt` cuándo se intentó por última vez. `summaryAnomalies` no lo lee ningún objetivo:
-es la evidencia que consume el motor de alertas (`NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP` y
-`NO_RESOURCES_GAP`), y `null` ahí es "no hay resumen o no se pudo leer", que no genera alerta.
+hazaña y corta la racha de `ansioso`. `apm` es la marca de que la partida tiene resumen. `winReason` no
+lo lee ningún objetivo: se guarda el literal, sin enum, y su `null` es "no hay resumen o el payload no
+lo traía", no "sin motivo". Las dos marcas de control no son métricas del juego: `summaryCheckedAt` dice
+si hubo respuesta concluyente y `summaryLastAttemptAt` cuándo se intentó por última vez.
+`summaryAnomalies` no lo lee ningún objetivo: es la evidencia que consume el motor de alertas
+(`NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP` y `NO_RESOURCES_GAP`), y `null` ahí es "no hay resumen
+o no se pudo leer", que no genera alerta.
 
 ## `PlayerScore`
 
@@ -555,7 +565,7 @@ Claves vivas en producción, con quién las escribe:
 | `registration.open` | Si la inscripción está abierta. | Panel (**solo superadministrador**), con `setRegistrationOpen`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
 | `registration.closesAt` | Fecha de cierre de inscripciones (ISO-8601 UTC). Pasada, el plazo se cierra solo; el interruptor sigue pudiendo cerrar antes. Ausente = sin fecha. | Panel (**solo superadministrador**), con `setRegistrationClosesAt`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
 | `donations.matcherino` | Campaña de donaciones de Matcherino: si el banner está activo y su URL. | Panel (**solo superadministrador**), con `setMatcherinoDonations`; el cambio deja `CONFIG_CHANGED` en `AdminAction` |
-| `edition.config` | Configuración de la edición: nombre, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento). Versión 1 fija en código. | Panel de admin (**solo el superadministrador**) |
+| `edition.config` | Configuración de la edición: nombre, premio base (importe y nota), retransmisión obligatoria, interruptor de objetos utilizables (apagado por defecto) y marca (emblema y color de acento). Versión 1 fija en código. | Panel de admin (**solo el superadministrador**) |
 | `edition.events` | Eventos puntuales de la edición: id estable, nombre, instrucciones, ventana `[from, to)` en ISO-8601 UTC, multiplicador entero `>= 2` y si exige Discord. Versión 1 fija en código. Solo se crean o editan **antes de `window.from`**; cada evento cae dentro de la ventana del torneo y no se solapa con otro. | Panel de admin (**solo el superadministrador**), con `saveEditionEvent` / `deleteEditionEvent` |
 | `edition.events.state` | Snapshot de elegibilidad por evento, congelado al empezar: `checkedAt`, `checkedPlayerIds` y `eligiblePlayerIds`. Un evento con `discordRequired` sin snapshot no reparte bono. Versión 1. | Proceso de comprobación de Discord (el worker); al borrar un evento, su entrada se borra en la misma transacción |
 | `edition.events.announcements` | Memoria de los avisos de eventos en Discord: `sent` con la clave `${eventId}:24h`/`12h`/`1h`/`start`/`end` → instante ISO en que se mandó. Un documento roto se lee como vacío. Versión 1. | Worker (`src/lib/edition-event-announcements.ts`) |
@@ -563,6 +573,69 @@ Claves vivas en producción, con quién las escribe:
 | `simulation.roster` | Manifiesto de `npm run simulate:tournament`. | `simulate:tournament` |
 | `streams.youtube.channel.<handle>` | `channelId` de YouTube y su playlist de subidas, ya resueltos (30 días). | Worker |
 | `aoe4world.sync.player.<profileId>` | Estado de **auditoría** del último relleno del jugador: `since`, `maxStartedAt`, `lastSyncedAt` y abandonos. Ya no es el cursor de petición; ese es global (`sync.gamesCursor`). | Worker; deshacer un alta lo **borra** con el jugador (misma transacción), para que un alta posterior del mismo perfil no herede una auditoría vieja. |
+
+## `ObjectAward`
+
+Un **objeto utilizable** del POC de la issue 134: quién lo ganó, quién lo tiene y
+cuándo dejó de estar pendiente. Es el estado; las reglas están en
+[`OBJETOS.md`](./OBJETOS.md) y las funciones puras en `src/lib/objects.ts`.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `kind` | `ObjectKind` | `RELIQUIA`, `MONEDA` o `MONUMENTO`. Decide el catálogo de desventajas. |
+| `day` | `DateTime` | Medianoche **UTC** del día de la partida que lo otorga. Normalizado para que el índice único `(kind, day)` sea "un objeto de este tipo por día". |
+| `penaltyId` | `String` | Id de la desventaja del catálogo (`sin-2tc`, `sin-fuertes`…). Se guarda el id y no el texto, como en los objetivos: el texto se resuelve al leer. |
+| `winnerId`, `winnerMatchId` | `String` | `Player.id` y `Match.id` de la partida que lo otorga (la primera del día UTC con un motivo que mapee). |
+| `holderId` | `String?` | `Player.id` del portador actual. `null` = todavía sin portador. |
+| `heldSince` | `DateTime?` | Cuándo le llegó al portador. `null` = sin portador. La exclusión compara con `>`: una partida empezada en el mismo instante no se excluye. |
+| `exitedAt` | `DateTime?` | Cuándo dejó de estar pendiente. `null` = sigue pendiente y las partidas del portador posteriores a `heldSince` no puntúan. Se cierra en el `startedAt` de la partida que cumple la desventaja. |
+| `satisfiedByMatchId` | `String?` | `Match.id` de la partida con la que se dio la desventaja por cumplida. `null` mientras siga pendiente o si se cerró sin una partida concreta. |
+| `createdAt` | `DateTime` | Rastro de proceso, no fecha del torneo: la fecha que manda es `day`. |
+
+Índices: único `(kind, day)` (un objeto por tipo y día UTC: el segundo ganador del
+día no crea fila) y `(holderId)` (objetos de un portador, para la regla de exclusión
+y el panel).
+
+**Sin relaciones con `Player`.** `winnerId`, `holderId`, `penaltyId`,
+`winnerMatchId` y `satisfiedByMatchId` son `String` sueltos, como
+`AdminAction.targetId`: el histórico del objeto tiene que sobrevivir al borrado de un
+participante y una baja no puede arrastrar lo que ya pasó.
+
+**La ventana.** `heldSince`/`exitedAt` describen la ventana **actual** del objeto, no
+un histórico: al lanzarlo sin devolución se consolidan las partidas de la ventana
+anterior y se reabre con el nuevo portador. Al devolverse, no se toca. Los estados y
+la mecánica completa están en [`OBJETOS.md`](./OBJETOS.md#persistencia-y-worker).
+
+**La exclusión.** Mientras `exitedAt` es `null`, las partidas del portador con
+`startedAt > heldSince` no puntúan; si `exitedAt` está informado, solo las de
+`heldSince < startedAt < exitedAt`. Las dos comparaciones son estrictas: la partida
+que le dio el objeto y la que cumple la desventaja **cuentan**. El worker lo
+materializa en `Match.excludedByAwardId` (`applyObjectBlocks()`) y `fulfillObject()`
+desbloquea las de `startedAt >= exitedAt`. Una partida que llega a la base después
+de cerrar la ventana ya no se marca: es la limitación conocida del POC.
+
+**Pendiente de aplicar.** Estas dos tablas y `Match.excludedByAwardId` no están
+todavía en ninguna base. Al aplicarlas hay que añadir las tablas a la lista explícita
+de [`scripts/db-security.ts`](../scripts/db-security.ts), porque una tabla nueva nace
+con los permisos por defecto de Supabase (ver [RLS y privilegios](#rls-y-privilegios)).
+
+## `ObjectThrow`
+
+Un **lanzamiento** de un objeto: quién se lo tiró a quién, con qué tirada y si se
+devolvió. Es **append-only**: el lanzamiento ocurrió aunque el objeto cambie de manos
+después; lo que se anota es el siguiente, no se corrige el anterior.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `awardId` | `String` | FK a `ObjectAward.id`, cascada. |
+| `fromId`, `toId` | `String` | `Player.id` del lanzador y del objetivo del lanzamiento. |
+| `at` | `DateTime` | Instante del lanzamiento. Con su día UTC sostiene la regla Y: un mismo objetivo no recibe el mismo objeto dos veces el mismo día. |
+| `roll` | `Float` | Tirada de la devolución (0-1), tal cual la consumió `returnProbability()`. Se guarda para poder auditar el resultado. |
+| `returned` | `Boolean` | `true` = se devolvió: el objeto sigue en el lanzador y ese día no puede relanzarlo. `false` = el portador pasó a ser el objetivo. |
+
+Índice `(awardId)`: los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`.
 
 ## Índices
 
@@ -579,6 +652,7 @@ aparece en una consulta, no se crea.**
 | `Match` | `(playerId, startedAt)` | Partidas de un jugador por fecha. |
 | `Match` | `(playerId, finishedAt)` | Partidas en curso y orden de hitos. |
 | `Match` | `(mode, startedAt)` | Clasificatorias dentro de la ventana (igualdad + rango). |
+| `Match` | `(excludedByAwardId)` | El motor pregunta `is null` en cada barrido y `fulfillObject()` busca por la marca al desbloquear. |
 | `PlayerScore` | pk `(playerId, ruleSetVersion)` | Ficha del jugador; de paso indexa la FK para el `Cascade`. |
 | `PlayerScore` | `(ruleSetVersion, rank)` | **La consulta más caliente**: la clasificación, ordenada por `rank` y, dentro del puesto compartido, por `Player.profileId`. |
 | `ObjectiveEvent` | `(objectiveId, playerId)` (único), `(achievedAt, objectiveId)`, `(playerId, achievedAt)` | Reconciliación; feed paginado por ventanas (fecha y desempate por objetivo); filtro por jugador y cascada. |
@@ -589,6 +663,8 @@ aparece en una consulta, no se crea.**
 | `AdminAction` | `createdAt`, `(type, createdAt)` | Listado y filtro por tipo. |
 | `AdminAct` | `createdAt`, `(kind, createdAt)`, `(playerId, createdAt)`, `(revertedAt, kind)`, `(reversedByActId)` | Listado y filtros por tipo, jugador y estado; autorrelación de la reversión. |
 | `AdminActMatch` | pk `(actId, matchId)`, `(matchId)` | Vínculos de una anulación; cascada desde `Match`. |
+| `ObjectAward` | único `(kind, day)`, `(holderId)` | Un objeto de cada tipo por día UTC; objetos de un portador (exclusión y panel). |
+| `ObjectThrow` | `(awardId)` | Lanzamientos de un objeto y cascada desde `ObjectAward`. |
 | `Admin` | `email` (único), `authUserId` (único) | Acceso al panel por correo y vínculo con Auth. |
 | `RateLimitCounter` | `key` (pk) | El `INSERT ... ON CONFLICT`. |
 

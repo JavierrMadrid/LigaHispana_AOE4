@@ -55,6 +55,7 @@ export {
  * {
  *   "gameId": 9123456,
  *   "duration": 2400,
+ *   "winReason": "Conquest",
  *   "players": [{
  *     "profileId": 21050396, "name": "…", "civilization": "english",
  *     "team": 1, "apm": 137, "result": "win",
@@ -75,6 +76,11 @@ export {
  * los conjuntos de `PBR_*` de abajo. Ojo con `destroyed`: puede traer el mismo
  * instante repetido (un aldeano destruido dos veces en el mismo segundo), así que
  * el recuento es `array.length` y no un `Set`.
+ *
+ * **El motivo de la victoria (`winReason`) es de la partida, no del jugador**: va
+ * en la raíz del payload y se guarda el literal, sin enum, porque AoE4World puede
+ * añadir motivos (victoria sagrada, maravilla…) sin avisar. Si falta, `null`, que
+ * significa "no lo sé" igual que en el resto de campos.
  *
  * **La evidencia de comportamiento sale de `buildOrder` y de `resources`** y la
  * lee `parseSummaryAnomalies()` (`summary-anomalies.ts`): no se guarda el payload,
@@ -198,6 +204,24 @@ function readServerRequestedWait(headers: Headers): number | null {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * El motivo de la victoria, tal cual, o `null`.
+ *
+ * Se guarda el literal y no se traduce ni se mete en un enum: AoE4World puede
+ * añadir motivos (victoria sagrada, maravilla…) y perder la partida por uno
+ * desconocido sería peor que guardar un texto que aún no usa nadie. Una cadena
+ * vacía o de otro tipo es "no lo sé", igual que el campo ausente.
+ */
+function readWinReason(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed === "" ? null : trimmed;
+}
+
+/**
  * El **primer** instante de una lista de marcas, en segundos.
  *
  * `null` si no es una lista o si no trae ningún número: "no llegó a esa edad" y
@@ -274,6 +298,12 @@ export type GameSummaryMetrics = {
   villagersLost: number | null;
   gildedVillagersLost: number | null;
   mountedVillagersLost: number | null;
+  /**
+   * Motivo de la victoria tal cual lo publica el summary (`"Surrender"`,
+   * `"Conquest"`, `"Elimination"`…). `null` = no hay summary o el payload no traía
+   * el campo; **no** significa "sin motivo".
+   */
+  winReason: string | null;
 };
 
 /**
@@ -321,6 +351,7 @@ export function parseGameSummary(value: unknown, profileId: number): GameSummary
     villagersLost: buildOrder === null ? null : totals.villagers,
     gildedVillagersLost: buildOrder === null ? null : totals.gildedVillagers,
     mountedVillagersLost: buildOrder === null ? null : totals.mountedVillagers,
+    winReason: readWinReason(value.winReason),
   };
 }
 

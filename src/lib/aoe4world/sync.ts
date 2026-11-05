@@ -36,6 +36,12 @@ import {
   type ScoringLastRunState,
   type SyncRunTrace,
 } from "@/lib/settings";
+import { announceNewObjectAwards } from "@/lib/object-announcements";
+import {
+  applyObjectBlocks,
+  syncDailyObjectAwards,
+  type SyncDailyObjectAwardsResult,
+} from "@/lib/object-awards";
 import { countsAsRanked, type TeamTierContext } from "@/lib/ranked-match";
 import {
   recomputeScores,
@@ -209,6 +215,10 @@ export type RecomputeScoresInput = {
   matchesChanged: number;
   /** Summaries rellenados: cambian las métricas de cinco objetivos. */
   summariesFetched: number;
+  /** Premios de objeto creados en esta pasada: cambian la clasificación al bloquear partidas. */
+  objectAwardsCreated: number;
+  /** Partidas marcadas como excluidas por una desventaja de objeto en esta pasada. */
+  objectMatchesBlocked: number;
   /** El pool de mapas se ha reescrito: cambia `por-tierra-y-agua`. */
   mapPoolUpdated: boolean;
   /** Jugadores con un metadato cambiado que lee la vista de objetivos. */
@@ -219,10 +229,10 @@ export type RecomputeScoresInput = {
  * ¿Hay algo que justifique recalcular la clasificación en esta pasada?
  *
  * Es la lista **cerrada** de lo que `recomputeScores()` lee y puede haber
- * cambiado por debajo: partidas, summaries, pool de mapas, el número de aprobados
- * y los tres metadatos de jugador que publica la vista de objetivos. Con todo a
- * cero y las mismas versiones, recalcular solo gasta CPU para escribir exactamente
- * lo mismo.
+ * cambiado por debajo: partidas, summaries, premios de objeto y sus partidas
+ * excluidas, pool de mapas, el número de aprobados y los tres metadatos de jugador
+ * que publica la vista de objetivos. Con todo a cero y las mismas versiones,
+ * recalcular solo gasta CPU para escribir exactamente lo mismo.
  *
  * El número de aprobados entra porque aprobar y rechazar **no recalculan** en su
  * propia petición —una pasada entera no cabe en el presupuesto de CPU— y se
@@ -269,6 +279,8 @@ export function shouldRecomputeScores(input: RecomputeScoresInput): boolean {
   return (
     input.matchesChanged > 0 ||
     input.summariesFetched > 0 ||
+    input.objectAwardsCreated > 0 ||
+    input.objectMatchesBlocked > 0 ||
     input.mapPoolUpdated ||
     input.playersChanged > 0
   );
@@ -769,6 +781,20 @@ export type SyncSummary = {
    * bien o no había nada que pedir.
    */
   summariesError: string | null;
+  /**
+   * Premios de objeto creados en esta pasada (`syncDailyObjectAwards()`), o `null`
+   * si el paso falló. Es lo que después se refleja en `scripts/sync.ts`.
+   */
+  objects: SyncDailyObjectAwardsResult | null;
+  /** Partidas marcadas como excluidas por una desventaja de objeto en esta pasada. */
+  objectsBlocked: number;
+  /**
+   * Por qué no se pudieron actualizar los objetos, si no se pudo (crear premios,
+   * aplicar bloqueos o los dos). Va al rastro pero **no** mueve `lastSuccessAt`:
+   * un fallo de los objetos deja la clasificación sin la exclusión de ese día,
+   * no ha parado ninguna partida.
+   */
+  objectsError: string | null;
   /** Páginas leídas del endpoint masivo en la pasada. */
   gamesPagesRead: number;
   /** Lotes que agotaron su presupuesto de páginas con la ventana abierta. */
@@ -804,9 +830,10 @@ export type SyncSummary = {
   /**
    * `true` cuando la pasada **se ha saltado** el recálculo porque no había nada
    * que lo justificara (`shouldRecomputeScores()`): ni partidas tocadas, ni
-   * summaries, ni pool nuevo, ni metadatos de jugador cambiados, y las versiones
-   * del rastro coinciden con las del código. No es un fallo: la clasificación
-   * publicada sigue siendo la de la última pasada que sí recalculó.
+   * summaries, ni objetos nuevos o excluidos, ni pool nuevo, ni metadatos de
+   * jugador cambiados, y las versiones del rastro coinciden con las del código. No
+   * es un fallo: la clasificación publicada sigue siendo la de la última pasada que
+   * sí recalculó.
    */
   scoringSkipped: boolean;
   /**
@@ -2438,6 +2465,54 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     console.error(`[sync] No se han podido rellenar los summaries de partida: ${summariesError}`);
   }
 
+  // Los **objetos utilizables** (`src/lib/object-awards.ts`) van después de los
+  // summaries y antes de la decisión de recalcular: crear el premio y marcar las
+  // partidas del portador cambia la clasificación. Son dos pasos tolerantes e
+  // independientes: si falla la creación de premios, los bloqueos de los que ya
+  // existen se aplican igual, y el motivo va al rastro sin mover `lastSuccessAt`.
+  let objectAwards: SyncDailyObjectAwardsResult | null = null;
+  let objectMatchesBlocked = 0;
+  let objectsError: string | null = null;
+
+  try {
+    objectAwards = await syncDailyObjectAwards();
+
+    if (objectAwards.created > 0) {
+      console.info(`[sync] Objetos: ${objectAwards.created} premio(s) nuevo(s).`);
+    }
+  } catch (error) {
+    objectsError = toErrorMessage(error);
+    console.warn(`[sync] No se han podido crear los premios de objeto: ${objectsError}`);
+  }
+
+  // Los avisos de premio nuevo van justo después de crearlos y **fuera** del bloque
+  // anterior: que Discord falle no puede contarse como un fallo de los objetos. El
+  // propio módulo de avisos es tolerante; el `try` de aquí es la última red para que
+  // una sorpresa futura no tumbe la pasada.
+  if (objectAwards !== null && objectAwards.awards.length > 0) {
+    try {
+      await announceNewObjectAwards(objectAwards.awards);
+    } catch (error) {
+      console.warn(
+        `[sync] No se han podido avisar los premios de objeto: ${toErrorMessage(error)}`,
+      );
+    }
+  }
+
+  try {
+    objectMatchesBlocked = await applyObjectBlocks();
+
+    if (objectMatchesBlocked > 0) {
+      console.info(
+        `[sync] Objetos: ${objectMatchesBlocked} partida(s) excluida(s) por una desventaja pendiente.`,
+      );
+    }
+  } catch (error) {
+    const message = toErrorMessage(error);
+    objectsError = objectsError === null ? message : `${objectsError} ${message}`;
+    console.warn(`[sync] No se han podido aplicar los bloqueos de objeto: ${message}`);
+  }
+
   // La **elegibilidad de los eventos puntuales** que exigen Discord se congela
   // **antes** del recálculo, que es quien la lee para repartir el bono
   // (`computeEventBonuses()`). Si se escribiera después, el bono de la primera pasada
@@ -2513,6 +2588,8 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     approvedPlayers: directed ? null : players.length,
     matchesChanged,
     summariesFetched: summaries?.fetched ?? 0,
+    objectAwardsCreated: objectAwards?.created ?? 0,
+    objectMatchesBlocked,
     mapPoolUpdated: mapPool?.status === "updated",
     playersChanged,
   });
@@ -2831,6 +2908,9 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
     mapPoolError,
     summaries,
     summariesError,
+    objects: objectAwards,
+    objectsBlocked: objectMatchesBlocked,
+    objectsError,
     gamesPagesRead: bulkResult.pagesRead,
     gamesBatchesIncomplete: bulkResult.batchesIncomplete,
     gamesBatchesFailed: bulkResult.batchesFailed,
@@ -2912,6 +2992,7 @@ async function recordRunTrace(summary: SyncSummary): Promise<void> {
       announceError: summary.announceError,
       mapPoolError: summary.mapPoolError,
       summariesError: summary.summariesError,
+      objectsError: summary.objectsError,
       gamesPagesRead: summary.gamesPagesRead,
       gamesBatchesIncomplete: summary.gamesBatchesIncomplete,
       gamesBatchesFailed: summary.gamesBatchesFailed,

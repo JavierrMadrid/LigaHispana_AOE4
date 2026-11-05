@@ -24,7 +24,7 @@ import { isRecord } from "@/lib/json";
  * sin que uno tenga que importar al otro. Aquí no se importa nada del motor, y los
  * tres caminos (y `verify:sync`) consumen estas funciones.
  *
- * ## Las seis condiciones
+ * ## Las siete condiciones
  *
  * 1. La familia de ladder viene en el ruleset (`rm_solo` / `rm_team` por defecto).
  * 2. La partida está **resuelta** (`result` y `finishedAt` informados): una
@@ -39,6 +39,11 @@ import { isRecord } from "@/lib/json";
  *    más** del jugador (`teammatesWithinTier()`): la partida cuenta solo si el
  *    equipo está equilibrado, y se compara cada compañero con el jugador, nunca
  *    los compañeros entre sí.
+ * 7. La partida no está **excluida por una desventaja de objeto**
+ *    (`Match.excludedByAwardId IS NULL`): mientras un `ObjectAward` está pendiente,
+ *    las partidas del portador que empezaron después de `heldSince` no puntúan.
+ *    La marca la escribe el worker y la quita el admin al dar la desventaja por
+ *    cumplida (ver `docs/OBJETOS.md`).
  *
  * La **ventana de fechas** no está replicada: sus límites y su semántica salen
  * siempre de `windowBounds()` y `scoringCutoff()`, que es lo que usan
@@ -869,7 +874,7 @@ function utcTimestamp(value: Date): string {
 }
 
 /**
- * Solo la primera de las cinco condiciones: la familia de ladder del ruleset.
+ * Solo la primera de las siete condiciones: la familia de ladder del ruleset.
  *
  * Existe para las consultas que **no pueden** usar la regla entera, y hay una
  * sola: `/partidas` lista partidas en curso, y una partida en curso nunca cumple
@@ -879,28 +884,32 @@ function utcTimestamp(value: Date): string {
  * sin que el filtro tenga que mentir sobre su estado.
  *
  * La lista sale siempre de `ruleset.modes`, igual que en las otras tres
- * formas: nadie filtra por `RANKED_MODES` a pelo. Y no es una sexta condición,
+ * formas: nadie filtra por `RANKED_MODES` a pelo. Y no es una condición más,
  * de modo que no la deben usar las consultas del motor: para puntuar, la regla
- * son las cinco.
+ * son las siete.
  */
 export function rankedModesWhere(modes: readonly string[]): Prisma.MatchWhereInput {
   return { mode: { in: [...modes] } };
 }
 
 /**
- * Las condiciones de partida clasificatoria **sin** la marca de revertida.
+ * Las condiciones de partida clasificatoria **sin** las dos marcas de exclusión.
  *
- * Es el filtro de `rankedMatchWhere()` menos una condición, y existe para un solo
- * consumidor: el historial de puntos del panel de admin, que tiene que **listar**
- * las revertidas (marcándolas, para que se vea que no puntúan) en vez de esconderlas.
- * Que el listado historialice en vez de borrar es una decisión de producto: sin la
- * fila no habría nada que deshacer, y el worker de sync la volvería a importar
- * igual.
+ * Es el filtro de `rankedMatchWhere()` menos `revertedAt` y menos
+ * `excludedByAwardId`, y existe para un solo consumidor: el historial de puntos del
+ * panel de admin, que tiene que **listar** las revertidas (marcándolas, para que se
+ * vea que no puntúan) en vez de esconderlas. Que el listado historialice en vez de
+ * borrar es una decisión de producto: sin la fila no habría nada que deshacer, y el
+ * worker de sync la volvería a importar igual.
+ *
+ * Las dos marcas se quedan fuera por el mismo motivo: una partida excluida por una
+ * desventaja de objeto es parte del recorrido del jugador y el panel la enseña con
+ * 0 puntos, igual que una revertida.
  *
  * Por eso no es un `options: { includeReverted }`: una bandera que alguien pueda
  * olvidar es peor que una función con un nombre que dice lo que hace. Aquí el
  * "olvido" no puede existir, porque lo único que se puede pedir con esta función
- * es la regla sin la marca.
+ * es la regla sin las marcas.
  *
  * `registeredAt` va como en `rankedMatchWhere()` y con el mismo sentido: es el
  * `registeredAt` del jugador del que trata la consulta, y el historial del panel
@@ -930,9 +939,10 @@ export function classificatoryWhere(
 /**
  * El filtro completo de partida clasificatoria, como `where` de Prisma.
  *
- * Es `classificatoryWhere()` más la marca de revertida: una partida con
+ * Es `classificatoryWhere()` más las dos marcas de exclusión: una partida con
  * `revertedAt` informado **no** es clasificatoria para el motor, por mucho que lo
- * fuera antes de que el admin la marcara.
+ * fuera antes de que el admin la marcara, y una con `excludedByAwardId` informado
+ * tampoco, porque el portador tenía un objeto pendiente cuando la jugó.
  *
  * `registeredAt` es el del **único** jugador del que trata la consulta y es
  * obligatorio: un `where` de Prisma no compara dos columnas, así que una consulta
@@ -941,8 +951,9 @@ export function classificatoryWhere(
  *
  * ## Y tampoco puede expresar la condición de equipos
  *
- * Es el filtro de las cinco condiciones que un `where` **sí** puede escribir. La
- * sexta necesita leer `Match.rawJson` (los compañeros y su rating) y
+ * Es el filtro de todas las condiciones que un `where` **sí** puede escribir: la
+ * familia, la partida resuelta, el corte, la ventana y las dos marcas. La de
+ * equipos necesita leer `Match.rawJson` (los compañeros y su rating) y
  * `Setting["alerts.divisionCutoffs"]` (los cortes rating → subdivisión), y un
  * `where` de Prisma compara campos con valores: no abre un `Json` ni conoce un
  * `Setting`. Por eso no está aquí, y quien la necesita —el motor de puntos, que va
@@ -964,6 +975,7 @@ export function rankedMatchWhere(
   return {
     ...classificatoryWhere(modes, window, registeredAt),
     revertedAt: null,
+    excludedByAwardId: null,
   };
 }
 
@@ -996,7 +1008,7 @@ export function rankedMatchSql(
   cutoffs: LadderCutoffsTable | null,
 ): Prisma.Sql {
   const modeList = Prisma.join(modes.map((mode) => Prisma.sql`${mode}`));
-  const base = Prisma.sql`${matchTable}."mode" in (${modeList}) and ${matchTable}."result" is not null and ${matchTable}."finishedAt" is not null and ${matchTable}."revertedAt" is null and ${windowMatchSql(matchTable, playerTable, window)}`;
+  const base = Prisma.sql`${matchTable}."mode" in (${modeList}) and ${matchTable}."result" is not null and ${matchTable}."finishedAt" is not null and ${matchTable}."revertedAt" is null and ${matchTable}."excludedByAwardId" is null and ${windowMatchSql(matchTable, playerTable, window)}`;
   const tiers = teammatesWithinTierSql(matchTable, playerTable, cutoffs);
 
   // Sin cortes no se añade nada: la consulta sale exactamente como salía antes de
@@ -1013,8 +1025,9 @@ export function rankedMatchSql(
  *
  * Solo si está **resuelta**, es de una familia rankeada, **empezó después del
  * corte** del jugador, **terminó antes de que acabara la ventana**, **no está
- * revertida** y, en una partida por equipos, **ningún compañero está a dos
- * escalones o más** del jugador. Las seis condiciones son necesarias:
+ * revertida**, **no está excluida por una desventaja de objeto** y, en una partida
+ * por equipos, **ningún compañero está a dos escalones o más** del jugador. Las
+ * siete condiciones son necesarias:
  *
  * - El modo tiene que ser de una familia rankeada: una custom, un `ew_*` o un
  *   `ffa_*` sirven para practicar, no puntúan.
@@ -1027,6 +1040,10 @@ export function rankedMatchSql(
  * - `revertedAt !== null` significa que el panel de admin la ha marcado: la fila
  *   sigue ahí (por eso el worker la puede reimportar y por eso se puede
  *   deshacer), pero para el torneo no cuenta ni a favor ni en contra.
+ * - `excludedByAwardId !== null` significa que la partida la jugó el portador de un
+ *   objeto pendiente y la marcó `applyObjectBlocks()`: no da puntos ni objetivos
+ *   hasta que el admin da la desventaja por cumplida en una partida posterior, que
+ *   además la desbloquea (`src/lib/object-awards.ts`).
  * - En equipos, la condición es la de `teammatesWithinTier()`: si no se puede
  *   demostrar que el equipo está desequilibrado, la partida **cuenta**.
  *
@@ -1049,6 +1066,17 @@ export function rankedMatchSql(
  * "se me olvidó" tiene que ser imposible de escribir, y los tres consumidores
  * reales (`sync.ts`, `admin/actions.ts` y `verify-sync`) lo tienen delante.
  *
+ * ## Por qué `excludedByAwardId` es opcional y `revertedAt` no
+ *
+ * Porque las dos marcas no significan lo mismo en el rastro: `revertedAt` la pone
+ * el panel y una partida revertida deja de ser clasificatoria para siempre, así que
+ * quien construye una partida a mano tiene que decir algo de ella. La exclusión por
+ * objeto es una marca **derivada** que solo escribe `applyObjectBlocks()`, y hay
+ * llamantes que fabrican la partida sin leer la fila (`admin-revert.ts` y
+ * `verify-sync`): un campo ausente ahí significa "no hay marca", que es la misma
+ * degradación que un `null`, y no puede ocultar una partida que sí la tenga porque
+ * esos caminos no leen partidas con marca.
+ *
  * Es la traducción en memoria de `rankedMatchWhere()` / `rankedMatchSql()`; las
  * tres leen las mismas condiciones **salvo la de equipos**, que `rankedMatchWhere()`
  * no puede escribir (ver su docblock), y `verify:sync` las contrasta contra la base
@@ -1062,6 +1090,11 @@ export function countsAsRanked(
     finishedAt: Date | null;
     /** Instante del revert, o `null` si la partida cuenta. */
     revertedAt: Date | null;
+    /**
+     * `Match.excludedByAwardId`: el objeto pendiente que dejó la partida fuera, o
+     * `null`/ausente si no hay ninguna desventaja que la excluya.
+     */
+    excludedByAwardId?: string | null;
     /**
      * El payload con el que llegó la partida (`Match.rawJson`), del que sale el
      * equipo del jugador. Se acepta ausente a propósito: sin payload no se puede
@@ -1079,6 +1112,7 @@ export function countsAsRanked(
     match.finishedAt === null ||
     match.result === null ||
     match.revertedAt !== null ||
+    (match.excludedByAwardId ?? null) !== null ||
     !isRankedMode(match.mode)
   ) {
     return false;

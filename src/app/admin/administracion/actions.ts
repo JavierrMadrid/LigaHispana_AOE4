@@ -32,11 +32,13 @@ import {
 import { campoSiCambia } from "@/lib/player-fields";
 import { parseEmail } from "@/lib/player-input";
 import { VICTORIAS_ID } from "@/lib/objectives";
+import { disableObjectsMode } from "@/lib/object-awards";
 import { editionEnded, editionStarted, parseMadridLocalInstant } from "@/lib/ranked-match";
 import {
   lockedRulesetChanges,
   mergeRuleset,
   readRuleset,
+  recomputeScores,
   writeScoringRuleset,
   type ScoringRuleset,
 } from "@/lib/scoring";
@@ -235,20 +237,57 @@ function amountText(amount: number | null): string | null {
 }
 
 /**
- * Guarda la configuración de la edición: nombre, premio base, retransmisión y marca.
+ * El efecto de que la configuración de la edición quede con el modo de objetos apagado.
+ *
+ * Va **fuera** de la transacción que guarda la configuración: el cambio ya está escrito
+ * y esto es su consecuencia, no parte del guardado. `disableObjectsMode()` es
+ * idempotente, así que también repara un estado anterior a medias. Si ha desbloqueado
+ * partidas se recalcula, y un fallo del recálculo no deshace nada: se avisa en el
+ * mensaje y la pasada siguiente pone la clasificación al día.
+ *
+ * Devuelve la coletilla que se añade al mensaje de éxito.
+ */
+async function objectsDisabledNote(): Promise<string> {
+  try {
+    const { closed, unblocked } = await disableObjectsMode();
+    let recomputeNote = "";
+
+    if (unblocked > 0) {
+      try {
+        await recomputeScores();
+        recomputeNote = " La clasificación se ha recalculado.";
+      } catch (error) {
+        logDatabaseFailure("admin/saveEditionConfig/recompute", error);
+        recomputeNote =
+          " El recálculo de la clasificación ha fallado: se pondrá al día en la próxima pasada del sincronizador.";
+      }
+    }
+
+    return ` El modo de objetos ha quedado apagado (partidas desbloqueadas: ${unblocked}; objetos pendientes cerrados: ${closed}).${recomputeNote}`;
+  } catch (error) {
+    logDatabaseFailure("admin/saveEditionConfig/objetos", error);
+
+    return " El modo de objetos ha quedado apagado, pero no se han podido desbloquear las partidas bloqueadas: vuelve a guardar la configuración para reintentarlo.";
+  }
+}
+
+/**
+ * Guarda la configuración de la edición: nombre, premio base, retransmisión, modo de
+ * objetos y marca.
  *
  * Escribe `Setting["edition.config"]`, que es lo que leen la web pública (la marca y
- * el premio) y el motor de alertas (la retransmisión obligatoria). Va **detrás de
- * `requireSuperadmin()`**: la configuración de la edición es del superadministrador,
- * igual que el ruleset, y no se deja al criterio de quien llame a la acción.
+ * el premio), el motor de alertas (la retransmisión obligatoria) y el servicio de
+ * objetos (el interruptor del modo). Va **detrás de `requireSuperadmin()`**: la
+ * configuración de la edición es del superadministrador, igual que el ruleset, y no
+ * se deja al criterio de quien llame a la acción.
  *
  * ## El formulario es una foto completa
  *
- * Los seis campos se reescriben con lo que venga, como `updatePlayer()` con los suyos:
- * un importe o una nota vacíos son `null` ("no hay premio anunciado"), un `streamingRequired`
- * ausente es `false` (el estado seguro, igual que en `setRegistrationOpen()`) y un
- * emblema o un color vacíos son `null` ("los del sitio"). No hay un "no tocado": si un
- * campo no llega, cuenta como vacío.
+ * Los siete campos se reescriben con lo que venga, como `updatePlayer()` con los suyos:
+ * un importe o una nota vacíos son `null` ("no hay premio anunciado"), un
+ * `streamingRequired` o un `objectsEnabled` ausentes son `false` (el estado seguro,
+ * igual que en `setRegistrationOpen()`) y un emblema o un color vacíos son `null`
+ * ("los del sitio"). No hay un "no tocado": si un campo no llega, cuenta como vacío.
  *
  * ## Qué valida y con qué palabras
  *
@@ -269,7 +308,16 @@ function amountText(amount: number | null): string | null {
  * Un envío sin cambios no escribe nada y sale como lo que es, un acierto: abrir el
  * formulario y cerrarlo sin tocar nada es lo más normal del mundo.
  *
- * No recalcula la clasificación: nada de esto puntúa. Lo único que cambia de
+ * ## El modo de objetos
+ *
+ * Apagarlo tiene efecto **inmediato** y va fuera de la transacción, después de que la
+ * configuración quede guardada: `disableObjectsMode()` cierra los premios pendientes y
+ * desbloquea todas las partidas marcadas. Si ha desbloqueado alguna, se recalcula la
+ * clasificación en un `try`/`catch`: el cambio ya está escrito y un fallo del recálculo
+ * no lo deshace, solo deja la tabla para la pasada siguiente. Encenderlo no tiene
+ * efectos retroactivos.
+ *
+ * Lo demás no recalcula la clasificación: nada de esto puntúa. El otro cambio de
  * comportamiento es el motor de alertas —`streamingRequired` enciende
  * `NO_STREAM_CHANNEL`—, que lo recoge en su siguiente evaluación: una pasada del
  * sincronizador sin partidas nuevas evalúa a todos los aprobados, y el informe de
@@ -285,6 +333,7 @@ export async function saveEditionConfig(
   const prizeAmountRaw = readField(formData, "prizeAmount");
   const prizeNoteRaw = readField(formData, "prizeNote");
   const streamingRequired = readField(formData, "streamingRequired") === "true";
+  const objectsEnabled = readField(formData, "objectsEnabled") === "true";
   const emblemUrlRaw = readField(formData, "emblemUrl");
   const accentColorRaw = readField(formData, "accentColor");
 
@@ -317,6 +366,7 @@ export async function saveEditionConfig(
     name,
     prize: { amount: prizeAmount, note: prizeNoteRaw === "" ? null : prizeNoteRaw },
     streamingRequired,
+    objectsEnabled,
     branding: {
       emblemUrl: emblemUrlRaw === "" ? null : emblemUrlRaw,
       accentColor: accentColorRaw === "" ? null : accentColorRaw.toLowerCase(),
@@ -359,6 +409,12 @@ export async function saveEditionConfig(
       "retransmisión obligatoria",
     ),
     ...campoSiCambia(
+      boolText(actual.objectsEnabled),
+      boolText(despues.objectsEnabled),
+      "objectsEnabled",
+      "objetos utilizables",
+    ),
+    ...campoSiCambia(
       actual.branding.emblemUrl,
       despues.branding.emblemUrl,
       "branding.emblemUrl",
@@ -373,9 +429,17 @@ export async function saveEditionConfig(
   ];
 
   if (cambios.length === 0) {
+    // Aunque no haya nada que guardar, si el modo está apagado se reintenta su efecto:
+    // es idempotente y es lo que repara un desbloqueo que falló en un guardado anterior.
+    const objectsNote = despues.objectsEnabled ? "" : await objectsDisabledNote();
+
+    if (objectsNote !== "") {
+      revalidatePath("/admin/objetos");
+    }
+
     return {
       status: "success",
-      message: "No había ningún cambio que guardar en la configuración de la edición.",
+      message: `No había ningún cambio que guardar en la configuración de la edición.${objectsNote}`,
     };
   }
 
@@ -395,17 +459,23 @@ export async function saveEditionConfig(
     return { status: "error", message: CONFIG_SAVE_FAILED_MESSAGE };
   }
 
+  // Apagar el modo tiene efecto inmediato y va **fuera** de la transacción: la
+  // configuración ya está guardada y esto es su consecuencia, no parte del guardado.
+  const objectsNote = despues.objectsEnabled ? "" : await objectsDisabledNote();
+
   // El nombre, el premio y la marca salen en la web pública; el color de acento, como
-  // variable CSS del layout. Y el historial de acciones es donde queda el rastro.
+  // variable CSS del layout. El panel de objetos conserva su histórico aunque el modo
+  // quede apagado, y el historial de acciones es donde queda el rastro.
   revalidatePath("/admin/administracion");
   revalidatePath("/admin/acciones");
+  revalidatePath("/admin/objetos");
   revalidatePath("/(public)", "layout");
 
   return {
     status: "success",
     message: `Se ha guardado la configuración de la edición. Campos: ${cambios
       .map((cambio) => cambio.etiqueta)
-      .join(", ")}.`,
+      .join(", ")}.${objectsNote}`,
   };
 }
 

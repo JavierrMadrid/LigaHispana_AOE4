@@ -98,7 +98,28 @@ describe("parseGameSummary", () => {
       gildedVillagersLost: 1,
       // El montado no trae `destroyed`: sobrevivió.
       mountedVillagersLost: 0,
+      // El payload de referencia no trae `winReason`: es "no lo sé", no "sin motivo".
+      winReason: null,
     });
+  });
+
+  it("lee `winReason` tal cual, sin traducirlo ni encajarlo en un enum", () => {
+    // Se espera cualquier motivo que publique AoE4World, incluido uno que hoy no
+    // conocemos: lo que se guarda es el literal.
+    expect(parseGameSummary(payload({ winReason: "Surrender" }), PROFILE)?.winReason).toBe(
+      "Surrender",
+    );
+    expect(parseGameSummary(payload({ winReason: "Sacred Victory" }), PROFILE)?.winReason).toBe(
+      "Sacred Victory",
+    );
+  });
+
+  it("si `winReason` falta o no es una cadena no vacía, queda a null", () => {
+    expect(parseGameSummary(payload(), PROFILE)?.winReason).toBeNull();
+    expect(parseGameSummary(payload({ winReason: undefined }), PROFILE)?.winReason).toBeNull();
+    expect(parseGameSummary(payload({ winReason: "" }), PROFILE)?.winReason).toBeNull();
+    expect(parseGameSummary(payload({ winReason: "   " }), PROFILE)?.winReason).toBeNull();
+    expect(parseGameSummary(payload({ winReason: 42 }), PROFILE)?.winReason).toBeNull();
   });
 
   it("de las edades gana el primer instante (se puede volver a pasar de edad)", () => {

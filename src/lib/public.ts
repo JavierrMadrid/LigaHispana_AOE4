@@ -2094,7 +2094,7 @@ function compareTextDesc(a: string, b: string): number {
  *   dentro de `classificatoryWhere()` (familia del ruleset y ventana). El corte de
  *   inscripción y la condición de equipo **no** se pueden añadir a un `where` que abarca a
  *   todos los jugadores, y no hace falta: ya están codificados en `Match.points`, porque el
- *   motor solo puntúa lo que pasa las cinco condiciones (`rankedMatchSql()`). Una victoria
+ *   motor solo puntúa lo que pasa la regla (`rankedMatchSql()`). Una victoria
  *   que nunca puntuó —fuera de la ventana, antes del alta, con el equipo desequilibrado— se
  *   queda con `points = 0`: no es una ganancia y no sale.
  * - **Una ganancia rechazada**: una victoria con `revertedAt` informado. Entra aunque sus

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
 import type { EditionConfig } from "@/lib/edition";
 import { saveEditionConfig } from "./actions";
@@ -17,13 +17,13 @@ type EditionFormProps = {
 };
 
 /**
- * Los datos de la edición: nombre, premio, retransmisión y marca.
+ * Los datos de la edición: nombre, premio, retransmisión, objetos y marca.
  *
- * El formulario es una **foto completa**: se envían siempre los seis campos, y
+ * El formulario es una **foto completa**: se envían siempre los siete campos, y
  * un valor vacío es "no hay premio anunciado" o "el del sitio", nunca un "no lo
  * toco". Por eso los campos son controlados —un envío con error no puede borrar
- * lo escrito— y el interruptor lleva su valor en un campo oculto, como el del
- * plazo de inscripción.
+ * lo escrito— y los dos interruptores llevan su valor en un campo oculto, como el
+ * del plazo de inscripción.
  *
  * El color de acento se escribe a mano en `#rrggbb` y no con un selector de
  * color: un selector no sabe expresar "vacío", que es justo "usa el color del
@@ -38,8 +38,32 @@ export function EditionForm({ edition, nameMaxLength, noteMaxLength }: EditionFo
   );
   const [prizeNote, setPrizeNote] = useState(edition.prize.note ?? "");
   const [streamingRequired, setStreamingRequired] = useState(edition.streamingRequired);
+  const [objectsEnabled, setObjectsEnabled] = useState(edition.objectsEnabled);
   const [emblemUrl, setEmblemUrl] = useState(edition.branding.emblemUrl ?? "");
   const [accentColor, setAccentColor] = useState(edition.branding.accentColor ?? "");
+
+  // React resetea los campos cuando una Server Action termina: los controlados vuelven
+  // al valor con el que se montaron y, como el estado del cliente no cambia, ningún
+  // render los devuelve a su sitio —hasta recargar se ve lo anterior a lo que se acaba
+  // de guardar—. Adoptar lo que manda el servidor es ese render: el estado no deriva de
+  // otro estado, es el mismo dato del servidor, y por eso se silencia la regla.
+  //
+  // Un envío con error se salta el efecto a propósito: la configuración que vuelve es
+  // la anterior y adoptarla borraría justo el formulario que hay que corregir.
+  useEffect(() => {
+    if (state.status === "error") {
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reaplica al DOM la configuración que el servidor acaba de guardar
+    setName(edition.name);
+    setPrizeAmount(edition.prize.amount === null ? "" : String(edition.prize.amount));
+    setPrizeNote(edition.prize.note ?? "");
+    setStreamingRequired(edition.streamingRequired);
+    setObjectsEnabled(edition.objectsEnabled);
+    setEmblemUrl(edition.branding.emblemUrl ?? "");
+    setAccentColor(edition.branding.accentColor ?? "");
+  }, [edition, state.status]);
 
   return (
     <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
@@ -96,13 +120,21 @@ export function EditionForm({ edition, nameMaxLength, noteMaxLength }: EditionFo
         />
       </div>
 
-      <div className="mt-4">
+      <div className="mt-4 flex flex-col gap-3">
         <SwitchField
           name="streamingRequired"
           label="Retransmisión obligatoria"
           hint="Con esto encendido, el motor de alertas avisa de los participantes aprobados que no tienen ningún canal de directo."
           checked={streamingRequired}
           onChange={setStreamingRequired}
+        />
+
+        <SwitchField
+          name="objectsEnabled"
+          label="Objetos utilizables"
+          hint="POC de la issue 134. Encendido, las victorias por conquista, sagrada o maravilla reparten objetos con una desventaja. Al apagarlo se desbloquean de inmediato las partidas excluidas y se cierran los objetos pendientes. Por defecto está apagado."
+          checked={objectsEnabled}
+          onChange={setObjectsEnabled}
         />
       </div>
 
