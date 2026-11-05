@@ -142,8 +142,16 @@ export function civilizationFile(id: string): string | null {
 /**
  * Prefijos de id de objetivo que llevan la civilización pegada detrás
  * (`lider-japanese` → `japanese`).
+ *
+ * `maestro-` va con guion: la cabeza de esa familia se llama `maestro` a secas y no
+ * es de ninguna civilización.
  */
-export const CIV_OBJECTIVE_PREFIXES = ["masterizando-", "lider-", "acolito-"] as const;
+export const CIV_OBJECTIVE_PREFIXES = [
+  "masterizando-",
+  "lider-",
+  "acolito-",
+  "maestro-",
+] as const;
 
 /**
  * La civilización de un id de objetivo de civilización, o `null` si el id no es

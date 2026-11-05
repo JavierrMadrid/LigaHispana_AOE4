@@ -267,10 +267,11 @@ clasificación y después de calcular los objetivos, con el mismo cerrojo:
   `window.to` (es cuando el torneo lo dio por cumplido).
 - **Solo se escribe lo que difiere**: una pasada sin cambios no toca ninguna de las dos tablas.
 - **`PERDIDO` solo se emite en competiciones**: un logro revertido no genera evento.
-- **`SCORING_CACHE_VERSION` sube a 3** para forzar ese primer pase tras el despliegue: el salto es
-  por el catálogo de 94 objetivos (Vikingos y Escoceses), y sin él el worker podría saltarse el
-  recálculo y los objetivos nuevos no repartirían hasta la siguiente partida. La v2 fue por el feed
-  del overlay, que no se sembraría sin el salto.
+- **`SCORING_CACHE_VERSION` sube a 4** para forzar ese primer pase tras el despliegue: el salto es
+  por el catálogo de 120 objetivos (la prueba de concepto de subobjetivos, familia `maestro`), y sin
+  él el worker podría saltarse el recálculo y los objetivos nuevos no repartirían hasta la siguiente
+  partida. La v2 fue por el feed del overlay, que no se sembraría sin el salto; la v3, por el catálogo
+  de 94 objetivos (Vikingos y Escoceses).
 - **La API del overlay lee `ObjectiveProgressEvent`**: polling recomendado de 30 s. El dato cambia al
   ritmo del recálculo (10 min), así que pedir más a menudo no adelanta nada.
 - **El feed se escribe en cada recálculo**: los logros y las competiciones aparecen **en vivo**, con

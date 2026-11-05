@@ -91,19 +91,47 @@ export function completedContenders(option: ObjectiveOption): number {
 
 /**
  * El pie de la placa de premio de un objetivo: `puntos`, o `puntos por victoria`
- * en uno sin tope.
+ * en uno sin tope o que cobra por unidad.
  *
  * La placa de un objetivo normal enseña un premio cerrado —lo que reparte, se cobre
  * entero o no— y con decir `puntos` se entiende. En `victorias` no hay premio: cada
  * victoria paga, así que la cifra de la placa es **por unidad** y el pie tiene que
- * decirlo, o la placa estaría afirmando que el objetivo reparte eso en total.
+ * decirlo, o la placa estaría afirmando que el objetivo reparte eso en total. Los
+ * objetivos con `pointsPerUnit` (los `maestro-<civ>`) cobran igual de repartido
+ * aunque tengan umbral: su `points` es el **máximo**, así que el pie también dice
+ * que la cifra es por unidad.
  */
 export function prizeLabel(objective: {
   kind: ObjectiveKind;
   target: ObjectiveTarget | null;
   metric: ObjectiveMetric;
+  pointsPerUnit?: number;
 }): string {
-  return hasNoCap(objective) ? `puntos por ${metricUnit(objective.metric, 1)}` : "puntos";
+  return hasNoCap(objective) || objective.pointsPerUnit !== undefined
+    ? `puntos por ${metricUnit(objective.metric, 1)}`
+    : "puntos";
+}
+
+/**
+ * Lo que paga **cada unidad** de un objetivo con `pointsPerUnit`, con la cifra
+ * dentro: `1 punto por victoria`, `2 puntos por victoria`.
+ *
+ * Es la frase que necesitan los textos que explican el reparto de una familia (ver
+ * `familyScoringNote`), donde el número de puntos por unidad y la unidad de la
+ * métrica se leen juntos y no en dos piezas.
+ */
+export function unitPrizeLabel(pointsPerUnit: number, metric: ObjectiveMetric): string {
+  return `${pointsPerUnit} ${pointsPerUnit === 1 ? "punto" : "puntos"} por ${metricUnit(metric, 1)}`;
+}
+
+/**
+ * La unidad del pago, sin la palabra `puntos`: `por victoria`, `por día`.
+ *
+ * Es el pie corto de la placa cuando la cifra (`+1`) ya dice cuántos puntos paga
+ * cada unidad y la placa tiene que caber en una tarjeta estrecha.
+ */
+export function prizeUnitLabel(metric: ObjectiveMetric): string {
+  return `por ${metricUnit(metric, 1)}`;
 }
 
 /**

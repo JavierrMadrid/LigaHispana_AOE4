@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { ObjectiveOption } from "@/lib/public";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { MapPool, ObjectiveStatus } from "@/components/objective-card";
-import { prizeLabel } from "@/lib/objective-format";
+import { hasNoCap, prizeLabel } from "@/lib/objective-format";
 
 /**
  * Cara frontal de la tarjeta grande volteable: el resumen de un objetivo en una
@@ -27,7 +27,7 @@ import { prizeLabel } from "@/lib/objective-format";
 /** Lo mínimo para elegir el emblema de un objetivo y leer su premio. */
 export type FeatureTarget = Pick<
   ObjectiveOption,
-  "id" | "group" | "metric" | "kind" | "target" | "points"
+  "id" | "group" | "metric" | "kind" | "target" | "points" | "pointsPerUnit"
 >;
 
 type ObjectiveFeatureFrameProps = {
@@ -40,6 +40,13 @@ type ObjectiveFeatureFrameProps = {
   points: number;
   /** Puntos en oro (lo normal) o neutros (objetivo aún sin cobrar). */
   pointsTone?: "accent" | "neutral";
+  /**
+   * `points` es el **pago por unidad** y no un total: la cifra que se enseña es la
+   * que paga cada unidad (`pointsPerUnit`) y el pie lo dice. Lo usan el catálogo
+   * —un `maestro-<civ>` reparte 1 por victoria— y la ficha de un jugador que aún no
+   * ha cobrado ninguna; en cuanto cobra, `points` ya es lo suyo y va como total.
+   */
+  unitPrice?: boolean;
   /** Bajo el emblema: la regla del objetivo, con la tipografía mayor del frontal. */
   description: ReactNode;
   /** Bajo la descripción, en tamaño menor: el contexto de la regla (la nota de familia y el pool de mapas). */
@@ -110,6 +117,7 @@ export function ObjectiveFeatureFrame({
   badges,
   points,
   pointsTone = "accent",
+  unitPrice = false,
   description,
   detail,
   progress,
@@ -161,7 +169,12 @@ export function ObjectiveFeatureFrame({
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 px-1 pb-4 sm:gap-x-4 sm:px-4">
         <div className="min-w-0 sm:flex-1">{progress}</div>
         <div className="ml-auto">
-          <FeaturePoints target={target} points={points} tone={pointsTone} />
+          <FeaturePoints
+            target={target}
+            points={points}
+            tone={pointsTone}
+            unitPrice={unitPrice}
+          />
         </div>
       </div>
 
@@ -233,6 +246,9 @@ export function ObjectiveFeatureSummary({
       target={option}
       title={option.label}
       points={option.points}
+      // En un objetivo que cobra por unidad el `points` del catálogo es el máximo:
+      // la cara frontal enseña el pago de cada unidad y su tope va en la barra.
+      unitPrice={option.pointsPerUnit !== undefined}
       description={option.description}
       detail={
         note !== undefined || (option.metric === "mapas" && mapPool.length > 0) ? (
@@ -255,20 +271,28 @@ export function ObjectiveFeatureSummary({
 /**
  * Los puntos del objetivo, en línea sobre el filete: la cifra con el peso de la
  * casa —oro, o neutra si el objetivo aún no se cobra— y su unidad en pequeño. Van
- * en una sola línea, sin caja, a la derecha del estado. En un objetivo sin tope la
- * cifra es por unidad y la unidad lo dice (`puntos por victoria`), para que no se lea
- * como un premio que el objetivo reparte una vez.
+ * en una sola línea, sin caja, a la derecha del estado.
+ *
+ * El pie cambia con la cifra, y no al revés: `unitPrice` avisa de que `points` es
+ * el pago de **cada unidad** —el caso de un `maestro-<civ>` en el catálogo o de un
+ * jugador que aún no ha cobrado ninguna—, así que se enseña el precio unitario con
+ * `puntos por victoria`; sin él, la cifra es lo que el jugador lleva o el premio del
+ * objetivo y el pie lo dice en `puntos`. Un logro sin tope (`victorias`) mantiene su
+ * lectura por unidad aunque no llegue la marca, porque su precio ya lo es.
  */
 function FeaturePoints({
   target,
   points,
   tone,
+  unitPrice,
 }: {
   target: FeatureTarget;
   points: number;
   tone: "accent" | "neutral";
+  unitPrice: boolean;
 }) {
   const accent = tone === "accent";
+  const figure = unitPrice ? (target.pointsPerUnit ?? points) : points;
 
   return (
     <span className="inline-flex shrink-0 items-center gap-1">
@@ -277,9 +301,11 @@ function FeaturePoints({
           accent ? "text-accent" : "text-foreground"
         }`}
       >
-        +{points}
+        +{figure}
       </span>
-      <span className="text-xs font-medium text-muted">{prizeLabel(target)}</span>
+      <span className="text-xs font-medium text-muted">
+        {unitPrice || hasNoCap(target) ? prizeLabel(target) : "puntos"}
+      </span>
     </span>
   );
 }
