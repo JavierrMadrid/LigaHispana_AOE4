@@ -22,7 +22,7 @@ export default async function AdminLayout({
       </a>
 
       <header className="thread-bottom relative border-b border-line bg-surface">
-        <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-4 px-4 py-3">
+        <div className="mx-auto flex w-full max-w-[100rem] flex-wrap items-center gap-4 px-4 py-3">
           <Link
             href="/admin"
             className="inline-flex min-w-0 items-center gap-2.5 transition-colors hover:text-accent"
@@ -61,18 +61,17 @@ export default async function AdminLayout({
             caben junto a la marca y el cierre de sesión. En móvil se desplazan en
             horizontal en lugar de partirse. La de administración solo aparece para
             el superadministrador. */}
-        <div className="mx-auto w-full max-w-5xl px-4">
+        <div className="mx-auto w-full max-w-[100rem] px-4">
           <AdminTabs showAdministration={access === "superadmin"} />
         </div>
       </header>
 
-      {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`.
-          El ancho es el que manda aquí y no en las tablas: el listado de
-          participantes tiene nueve columnas y con `max-w-5xl` se salía del
-          contenedor, con la última (Acciones) cortada. Un tope más alto
-          (`max-w-[100rem]`) deja que la tabla crezca con el ancho de la
-          pantalla en pantallas anchas, y en las estrechas manda igual el
-          desplazamiento horizontal del propio `<table>`. */}
+      {/* Cabecera y contenido comparten `max-w-[100rem]` para caer en el mismo
+          eje. El tope lo marca el listado de participantes: tiene nueve columnas
+          y con `max-w-5xl` se salía del contenedor, con la última (Acciones)
+          cortada. En pantallas estrechas manda igual el desplazamiento horizontal
+          del propio `<table>`, y este relleno inferior deja libre la esquina que
+          ocupa `BackToTop`. */}
       <main
         id="contenido"
         className="mx-auto w-full max-w-[100rem] flex-1 px-4 pt-8 pb-20"

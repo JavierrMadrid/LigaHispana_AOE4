@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useActionState, useId, useState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
+import { FieldGrid } from "@/components/admin/field-grid";
+import { SectionCard } from "@/components/admin/section";
 import { StatusLine, TextareaField, TextField } from "@/app/admin/administracion/fields";
 import { saveEditionEvent } from "./actions";
 
@@ -94,92 +96,99 @@ export function EventForm({
   }
 
   return (
-    <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
-      <input type="hidden" name="id" value={event?.id ?? ""} />
+    <form action={formAction}>
+      <SectionCard
+        title={editing ? "Editar el evento" : "Nuevo evento"}
+        description={
+          editing
+            ? "Los cambios se publican al guardar y la clasificación se recalcula."
+            : "El multiplicador se aplica a las partidas que empiezan dentro."
+        }
+        footer={
+          <div className="flex flex-wrap items-center gap-4">
+            <button
+              type="submit"
+              disabled={pending}
+              className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {pending ? "Guardando…" : editing ? "Guardar los cambios" : "Crear el evento"}
+            </button>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <TextField
-          name="name"
-          label="Nombre del evento"
-          value={name}
-          onChange={setName}
-          maxLength={nameMaxLength}
-          placeholder="Noche de ranked"
-          hint="Lo que se lee en el calendario y en el banner de la web."
-          required
-          className="sm:col-span-2"
-        />
+            {editing ? (
+              <Link
+                href="/admin/administracion/eventos"
+                className="h-10 rounded-md border border-line px-3 text-sm leading-10 text-foreground transition-colors hover:border-line-strong"
+              >
+                Cancelar la edición
+              </Link>
+            ) : null}
 
-        <TextareaField
-          name="description"
-          label="Instrucciones (opcional)"
-          value={description}
-          onChange={setDescription}
-          maxLength={descriptionMaxLength}
-          placeholder="Qué hay que hacer para cobrar el multiplicador, si hay algo más que jugar."
-          hint="Se publica tal cual en Reglas, junto a la ventana del evento."
-          className="sm:col-span-2"
-        />
+            <StatusLine state={state} pending={pending} />
+          </div>
+        }
+      >
+        <input type="hidden" name="id" value={event?.id ?? ""} />
 
-        <TextField
-          name="from"
-          label="Inicio"
-          type="datetime-local"
-          value={from}
-          onChange={setFrom}
-          hint="Hora de Madrid. Una partida cuenta si empieza dentro de la ventana."
-          required
-        />
+        <FieldGrid>
+          <TextField
+            name="name"
+            label="Nombre del evento"
+            value={name}
+            onChange={setName}
+            maxLength={nameMaxLength}
+            placeholder="Noche de ranked"
+            hint="Lo que se lee en el calendario y en el banner de la web."
+            required
+            className="sm:col-span-2"
+          />
 
-        <TextField
-          name="to"
-          label="Fin"
-          type="datetime-local"
-          value={to}
-          onChange={setTo}
-          hint="Hora de Madrid. El fin no entra: una partida que empieza justo ahí ya no lo cobra."
-          required
-        />
+          <TextareaField
+            name="description"
+            label="Instrucciones (opcional)"
+            value={description}
+            onChange={setDescription}
+            maxLength={descriptionMaxLength}
+            placeholder="Qué hay que hacer para cobrar el multiplicador."
+            hint="Se publica tal cual en Reglas, junto a la ventana del evento."
+            className="sm:col-span-2"
+          />
 
-        <TextField
-          name="multiplier"
-          label="Multiplicador"
-          type="number"
-          min={minMultiplier}
-          step={1}
-          value={multiplier}
-          onChange={setMultiplier}
-          placeholder={String(minMultiplier)}
-          hint={`Un entero de ${minMultiplier} en adelante. x2 paga el doble de los puntos por victoria; no toca las derrotas ni los objetivos.`}
-          required
-        />
-      </div>
+          <TextField
+            name="from"
+            label="Inicio"
+            type="datetime-local"
+            value={from}
+            onChange={setFrom}
+            hint="Hora de Madrid. Una partida cuenta si empieza dentro de la ventana."
+            required
+          />
 
-      <DiscordField
-        checked={discordRequired}
-        onChange={setDiscordRequired}
-      />
+          <TextField
+            name="to"
+            label="Fin"
+            type="datetime-local"
+            value={to}
+            onChange={setTo}
+            hint="Hora de Madrid; el fin no entra. Una partida que empieza ahí ya no cuenta."
+            required
+          />
 
-      <div className="mt-4 flex flex-wrap items-center gap-4">
-        <button
-          type="submit"
-          disabled={pending}
-          className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {pending ? "Guardando…" : editing ? "Guardar los cambios" : "Crear el evento"}
-        </button>
+          <TextField
+            name="multiplier"
+            label="Multiplicador"
+            type="number"
+            min={minMultiplier}
+            step={1}
+            value={multiplier}
+            onChange={setMultiplier}
+            placeholder={String(minMultiplier)}
+            hint={`Desde x${minMultiplier}. No toca las derrotas ni los objetivos.`}
+            required
+          />
+        </FieldGrid>
 
-        {editing ? (
-          <Link
-            href="/admin/administracion/eventos"
-            className="h-10 rounded-md border border-line px-3 text-sm leading-10 text-foreground transition-colors hover:border-line-strong"
-          >
-            Cancelar la edición
-          </Link>
-        ) : null}
-
-        <StatusLine state={state} pending={pending} />
-      </div>
+        <DiscordField checked={discordRequired} onChange={setDiscordRequired} />
+      </SectionCard>
     </form>
   );
 }
@@ -203,7 +212,7 @@ function DiscordField({
   const hintId = `${id}-hint`;
 
   return (
-    <div className="mt-4 flex items-start gap-3 rounded-md border border-line bg-background px-3 py-3">
+    <div className="mt-5 flex items-start gap-3 rounded-md border border-line bg-background px-3 py-3">
       <input
         id={id}
         name="discordRequired"
@@ -219,9 +228,8 @@ function DiscordField({
           Requiere Discord
         </label>
         <p id={hintId} className="max-w-[70ch] text-xs leading-relaxed text-muted">
-          Solo cobran el multiplicador quienes estén en el servidor de Discord del
-          torneo. La lista se congela al empezar el evento; solo se añade a quien se
-          apruebe durante el evento y cumpla el requisito.
+          Solo cobran el multiplicador quienes estén en el Discord; la lista se congela
+          al empezar.
         </p>
       </div>
     </div>

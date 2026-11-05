@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { getAdminParticipants } from "@/lib/admin";
 import {
@@ -55,25 +56,22 @@ export default async function NewAdminActPage({
   ]);
 
   const cabecera = (
-    <header className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <Link
         href="/admin/actuaciones"
         className="text-sm text-muted underline-offset-4 transition-colors hover:text-accent hover:underline"
       >
         Volver a Actuaciones
       </Link>
-      <div>
-        <h1 className="text-2xl font-semibold">Nueva actuación</h1>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          {canReverse
-            ? "Registra una expulsión, una anulación de partidas ganadas o una reversión."
-            : "Registra una expulsión o una anulación de partidas ganadas."}{" "}
-          La actuación se aplica al guardar y se anuncia en el canal de avisos y por
-          privado al participante. Cada actuación tiene una sola acción: si
-          necesitas dos, se crean por separado.
-        </p>
-      </div>
-    </header>
+      <AdminPageHeader
+        title="Nueva actuación"
+        description={
+          canReverse
+            ? "Registra una expulsión, una anulación de partidas o una reversión."
+            : "Registra una expulsión o una anulación de partidas."
+        }
+      />
+    </div>
   );
 
   if (participantsRead.status === "degraded") {

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { AdminPageHeader } from "@/components/admin/page-header";
+import { Callout } from "@/components/admin/callout";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { EmptyState } from "@/components/empty-state";
 import { requireAdmin } from "@/lib/auth";
@@ -68,35 +70,26 @@ export default async function AdminObjectsPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <section className="min-w-0">
-        <h1 className="text-2xl font-semibold">Objetos</h1>
-        <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-muted">
-          Los objetos que reparten desventaja entre participantes. Cada uno se
-          gana con la primera victoria del día que cumple su condición y, mientras
-          está pendiente, las partidas de su portador no puntúan. Aquí se lanzan a
-          otro jugador y se da la desventaja por cumplida sobre una partida
-          concreta.
-        </p>
+      <div className="flex flex-col gap-4">
+        <AdminPageHeader
+          title="Objetos"
+          description="Objetos que reparten desventaja: aquí se lanzan y se dan por cumplidos."
+        />
 
         {data !== null && !data.objectsEnabled ? (
-          <div className="mt-4 rounded-lg border border-accent/40 bg-accent/5 px-5 py-4">
-            <h2 className="text-sm font-semibold text-accent">
-              Modo de objetos desactivado
-            </h2>
-            <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-muted">
-              En esta edición no se crean objetos ni se excluyen partidas: solo se
-              conserva el historial. Se enciende en{" "}
-              <Link
-                href="/admin/administracion/edicion"
-                className="text-foreground underline-offset-4 transition-colors hover:text-accent hover:underline"
-              >
-                Administración → Edición
-              </Link>
-              , que es una pantalla reservada al superadministrador.
-            </p>
-          </div>
+          <Callout tone="locked" title="Modo de objetos desactivado">
+            En esta edición no se crean objetos ni se excluyen partidas: solo se conserva
+            el historial. Se enciende en{" "}
+            <Link
+              href="/admin/administracion/edicion"
+              className="text-foreground underline underline-offset-4 transition-colors hover:text-accent"
+            >
+              Administración → Edición
+            </Link>
+            , una pantalla reservada al superadministrador.
+          </Callout>
         ) : null}
-      </section>
+      </div>
 
       {/* La banda de avisos vive por encima del contenido y conserva su estado
           entre refrescos de la ruta. Es lo que hace que el éxito de un lanzamiento
@@ -215,8 +208,8 @@ function PendingSection({
         </div>
         <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-muted">
           {enabled
-            ? "El portador puede lanzar el objeto una vez al día UTC. La desventaja se cierra sobre una partida suya posterior a la recepción; el historial de lanzamientos guarda la tirada y el resultado, pero no la probabilidad que se aplicó."
-            : "El modo está apagado, así que estas tarjetas no ofrecen lanzar ni dar por cumplida la desventaja. Vuelve a guardar la configuración de la edición para cerrar los pendientes que hayan quedado de antes."}
+            ? "El portador puede lanzarlo; la desventaja se cierra sobre una partida suya posterior."
+            : "El modo está apagado: estas tarjetas no ofrecen lanzar ni dar por cumplida la desventaja."}
         </p>
       </div>
 
@@ -376,8 +369,8 @@ function PendingAwardCard({
             ) : thrownToday ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
                 <span className="text-foreground">{playerName(holder)}</span> ya ha
-                lanzado este objeto hoy. El límite es una vez por portador y día UTC,
-                así que la acción vuelve a estar disponible mañana.
+                lanzado este objeto hoy. El límite es una vez por portador y día UTC, así
+                que la acción vuelve a estar disponible a medianoche UTC.
               </p>
             ) : available.length === 0 ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
@@ -488,7 +481,6 @@ function HistorySection({ awards }: { awards: ObjectAwardAdminView[] }) {
         </div>
         <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-muted">
           Los objetos que ya no están pendientes, del más reciente al más antiguo.
-          Una desventaja cumplida enlaza a la partida con la que se cerró.
         </p>
       </div>
 

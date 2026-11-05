@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import {
   RulesetForm,
   type ObjectiveGroupBlock,
 } from "@/app/admin/administracion/ruleset-form";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { formatMadridDateTime } from "@/lib/format";
 import { OBJECTIVE_DEFINITIONS, OBJECTIVE_GROUP_LABELS } from "@/lib/objectives";
@@ -25,7 +25,7 @@ const MODE_LABELS: Record<string, string> = {
 };
 
 /**
- * Subpestaña de puntuación: el ruleset del que sale toda la clasificación.
+ * Subpestaña de puntuación: las reglas de las que sale toda la clasificación.
  *
  * Las fechas **no** se editan aquí: la ventana del torneo tiene su propia subpestaña
  * (`Fechas`) y su propia acción, y `saveScoringRuleset()` rechaza cualquier envío que
@@ -50,19 +50,17 @@ export default async function AdminScoringPage() {
     ruleset = await readRuleset();
   } catch {
     return (
-      <section className="flex flex-col gap-6">
-        <div>
-          <h2 className="text-lg font-medium">Puntuación</h2>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            Las ladders que cuentan, los puntos por victoria y los objetivos activos. Las
-            fechas de la ventana se editan en Fechas.
-          </p>
-        </div>
+      <div className="flex flex-col gap-6">
+        <AdminPageHeader
+          level={2}
+          title="Puntuación"
+          description="Las ladders que puntúan, los puntos por victoria y los objetivos activos."
+        />
         <EmptyState
           title="No se han podido leer las reglas de puntuación"
-          body="La base de datos no ha respondido. Sin las reglas guardadas no se puede saber si la edición ya ha empezado ni qué está congelado, así que no se ofrece el formulario: vuelve a intentarlo en unos minutos."
+          body="La base de datos no ha respondido. Sin las reglas guardadas no se puede saber si la edición ya ha empezado ni qué está congelado, así que no se ofrece el formulario. Vuelve a intentarlo en unos minutos."
         />
-      </section>
+      </div>
     );
   }
 
@@ -73,12 +71,6 @@ export default async function AdminScoringPage() {
   const ended = editionEnded(ruleset.window, now);
   const locked = editionStarted(ruleset.window, now);
   const windowStartLabel = formatMadridDateTime(ruleset.window.from);
-
-  const stateNote = ended
-    ? "La edición anterior ya ha terminado: sus reglas siguen congeladas hasta que muevas el inicio en Fechas, que es como se prepara la siguiente."
-    : locked
-      ? "Con la edición ya empezada, todo esto está congelado: moverlo cambiaría una clasificación ya publicada."
-      : "Apagar un objetivo o mover sus puntos cambia quién cobra qué, así que al guardar se recalcula la clasificación.";
 
   const modeOptions = RANKED_MODES.map((mode) => ({
     value: mode,
@@ -109,30 +101,21 @@ export default async function AdminScoringPage() {
   }
 
   return (
-    <section>
-      <h2 className="text-lg font-medium">Puntuación</h2>
-      <p className="mt-1 max-w-[70ch] text-sm text-muted">
-        Las ladders que cuentan, los puntos por victoria y los objetivos activos. Las
-        fechas que delimitan qué partidas puntúan se editan en{" "}
-        <Link
-          href="/admin/administracion/fechas"
-          className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
-        >
-          Fechas
-        </Link>
-        .{" "}
-        {stateNote}
-      </p>
-      <div className="mt-4">
-        <RulesetForm
-          ruleset={ruleset}
-          modeOptions={modeOptions}
-          groups={objectiveGroups}
-          locked={locked}
-          editionEnded={ended}
-          windowStartLabel={windowStartLabel}
-        />
-      </div>
-    </section>
+    <div className="flex flex-col gap-6">
+      <AdminPageHeader
+        level={2}
+        title="Puntuación"
+        description="Las ladders que puntúan, los puntos por victoria y los objetivos activos."
+      />
+
+      <RulesetForm
+        ruleset={ruleset}
+        modeOptions={modeOptions}
+        groups={objectiveGroups}
+        locked={locked}
+        editionEnded={ended}
+        windowStartLabel={windowStartLabel}
+      />
+    </div>
   );
 }

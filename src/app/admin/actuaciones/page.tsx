@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { PageSizeSelect } from "@/components/page-size-select";
 import { Pagination } from "@/components/pagination";
@@ -226,24 +227,18 @@ export default async function AdminActsPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <section className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold">Actuaciones</h1>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            El expediente de la organización: expulsiones, anulaciones de partidas
-            y reversiones, con su razón pública, la información privada y quién las
-            creó. Una actuación se aplica al guardarla y se anuncia en el canal de
-            avisos y por privado al participante.
-          </p>
-        </div>
-
-        <Link
-          href="/admin/actuaciones/nueva"
-          className="inline-flex h-10 shrink-0 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong"
-        >
-          Nueva actuación
-        </Link>
-      </section>
+      <AdminPageHeader
+        title="Actuaciones"
+        description="Expediente de la organización: expulsiones, anulaciones de partidas y reversiones."
+        actions={
+          <Link
+            href="/admin/actuaciones/nueva"
+            className="inline-flex h-10 shrink-0 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong"
+          >
+            Nueva actuación
+          </Link>
+        }
+      />
 
       {page === null ? (
         <EmptyState

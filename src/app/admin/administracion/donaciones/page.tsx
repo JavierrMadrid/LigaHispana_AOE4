@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { DonationsForm } from "@/app/admin/administracion/donations-form";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { DEFAULT_MATCHERINO_DONATIONS } from "@/lib/donations";
 import { readMatcherinoDonations } from "@/lib/settings";
 
@@ -20,16 +21,14 @@ export default async function AdminDonationsPage() {
   );
 
   return (
-    <section>
-      <h2 className="text-lg font-medium">Donaciones</h2>
-      <p className="mt-1 max-w-[70ch] text-sm text-muted">
-        El banner de donaciones de la web pública. Mientras esté publicado y tenga la
-        dirección de la campaña de Matcherino, aparece en lo alto de todas las páginas
-        del sitio.
-      </p>
-      <div className="mt-4">
-        <DonationsForm donations={donations} />
-      </div>
-    </section>
+    <div className="flex flex-col gap-6">
+      <AdminPageHeader
+        level={2}
+        title="Donaciones"
+        description="La campaña de Matcherino que se publica en la web."
+      />
+
+      <DonationsForm donations={donations} />
+    </div>
   );
 }

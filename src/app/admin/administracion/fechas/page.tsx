@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { WindowForm } from "@/app/admin/administracion/fechas/window-form";
 import { RegistrationDeadlineForm } from "@/app/admin/administracion/registration-deadline-form";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { formatMadridDateTime } from "@/lib/format";
 import { editionEnded, editionStarted, formatMadridLocalInstant } from "@/lib/ranked-match";
@@ -11,32 +11,6 @@ import { readRegistrationState } from "@/lib/settings";
 export const metadata: Metadata = {
   title: { absolute: "Fechas · Admin" },
 };
-
-type RegistrationDates = Awaited<ReturnType<typeof readRegistrationState>>;
-
-/**
- * El estado efectivo del plazo, en una frase: si admite solicitudes y **qué mando** lo
- * ha cerrado. Es el mismo dato que pinta la píldora del interruptor en `Inscripciones`,
- * contado aquí sin repetir su control: con el plazo cerrado por la fecha, lo que hay que
- * saber es que mover la fecha es lo que lo reabre.
- */
-function registrationStateText(registration: RegistrationDates | null): string {
-  if (registration === null) {
-    return "No se ha podido leer el estado del plazo.";
-  }
-
-  if (registration.reason === "deadline") {
-    return "Ahora mismo el plazo está cerrado por la fecha de cierre, que ya ha pasado: aunque el interruptor siga encendido, no se admiten solicitudes nuevas. Vacía o mueve la fecha para reabrirlo.";
-  }
-
-  if (registration.reason === "switch") {
-    return "Ahora mismo el plazo está cerrado por el interruptor manual: no se admiten solicitudes nuevas aunque la fecha no haya llegado. El interruptor se cambia en Inscripciones.";
-  }
-
-  return registration.closesAt === null
-    ? "Ahora mismo el plazo está abierto y sin fecha de cierre: solo lo cerrará el interruptor manual."
-    : "Ahora mismo el plazo está abierto; la fecha de cierre lo cerrará sola cuando llegue.";
-}
 
 /**
  * Subpestaña de fechas: la configuración temporal de la edición, en orden
@@ -76,19 +50,17 @@ export default async function AdminDatesPage() {
 
   if (ruleset === null) {
     return (
-      <section className="flex flex-col gap-6">
-        <div>
-          <h2 className="text-lg font-medium">Fechas</h2>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            Hasta cuándo se admiten inscripciones y qué partidas cuentan para la
-            clasificación.
-          </p>
-        </div>
+      <div className="flex flex-col gap-6">
+        <AdminPageHeader
+          level={2}
+          title="Fechas"
+          description="Las dos fechas que enmarcan la edición: cierre de inscripciones y ventana del torneo."
+        />
         <EmptyState
           title="No se han podido leer las fechas de la edición"
-          body="La base de datos no ha respondido. Sin las fechas de la ventana guardadas no se puede saber si la edición ya ha empezado, así que no se ofrece el formulario: un inicio editable sobre una edición en marcha movería el corte de partidas ya publicadas. Vuelve a intentarlo en unos minutos."
+          body="La base de datos no ha respondido. Sin la ventana guardada no se puede saber si la edición ha empezado, así que no se ofrece el formulario. Vuelve a intentarlo en unos minutos."
         />
-      </section>
+      </div>
     );
   }
 
@@ -115,94 +87,26 @@ export default async function AdminDatesPage() {
     savedClosesAt === null ? "" : (formatMadridLocalInstant(savedClosesAt) ?? "");
 
   return (
-    <section className="flex flex-col gap-8">
-      <div>
-        <h2 className="text-lg font-medium">Fechas</h2>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Las fechas que enmarcan la edición: hasta cuándo se admiten inscripciones y
-          desde cuándo hasta cuándo cuentan las partidas para la clasificación. Se
-          escriben en hora local de Madrid y se guardan en UTC.
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <AdminPageHeader
+        level={2}
+        title="Fechas"
+        description="Las dos fechas que enmarcan la edición: cierre de inscripciones y ventana del torneo."
+      />
 
-      <div>
-        <h3 className="text-base font-medium text-foreground">Inscripción</h3>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Hasta cuándo se admiten solicitudes nuevas. La fecha de cierre las cierra sola
-          cuando llega; el interruptor manual, que cierra el plazo al instante, y los
-          países admitidos siguen en{" "}
-          <Link
-            href="/admin/administracion/inscripciones"
-            className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
-          >
-            Inscripciones
-          </Link>
-          .
-        </p>
-        <p className="mt-2 max-w-[70ch] text-sm text-foreground">
-          {registrationStateText(registration)}
-        </p>
+      <RegistrationDeadlineForm
+        closesAt={closesAt}
+        reason={registration?.reason ?? null}
+      />
 
-        <div className="mt-3">
-          {registration === null ? (
-            <p className="max-w-[70ch] rounded-md border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-muted">
-              Sin leer la fecha guardada no se ofrece el campo: guardarlo vacío borraría
-              una fecha de cierre que sigue vigente. Vuelve a intentarlo en unos minutos.
-            </p>
-          ) : (
-            <RegistrationDeadlineForm closesAt={closesAt} />
-          )}
-        </div>
-      </div>
-
-      <div>
-        <h3 className="text-base font-medium text-foreground">Torneo</h3>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          La ventana que decide qué partidas cuentan: las que empezaron a partir del
-          inicio y antes del fin. El inicio es obligatorio; el fin es opcional y se puede
-          fijar más tarde. Al guardar se recalcula la clasificación, porque mover la
-          ventana cambia qué partidas puntúan.
-        </p>
-
-        {active ? (
-          <p className="mt-3 max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
-            <strong className="font-semibold text-foreground">
-              El inicio de la ventana está congelado
-            </strong>
-            .{" "}
-            {windowStartLabel !== null
-              ? `La edición empezó el ${windowStartLabel}`
-              : "La edición ya ha empezado"}{" "}
-            y moverlo cambiaría el corte de todas las partidas publicadas. Solo se puede
-            fijar, mover o vaciar el fin de la ventana.
-          </p>
-        ) : null}
-
-        {ended ? (
-          <p className="mt-3 max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
-            <strong className="font-semibold text-foreground">
-              La edición anterior ha terminado
-            </strong>
-            .{" "}
-            {windowEndLabel !== null
-              ? `Terminó el ${windowEndLabel}`
-              : "La ventana ya tiene un fin pasado"}{" "}
-            y desde entonces no reparte puntos. Puedes mover el inicio para preparar la
-            siguiente edición: al guardar, la clasificación se recalcula contra la ventana
-            nueva y la edición anterior deja de mostrarse en la web, aunque sus partidas y
-            sus historiales siguen guardados.
-          </p>
-        ) : null}
-
-        <div className="mt-3">
-          <WindowForm
-            windowFrom={windowFrom}
-            windowTo={windowTo}
-            locked={active}
-            previousEnded={ended}
-          />
-        </div>
-      </div>
-    </section>
+      <WindowForm
+        windowFrom={windowFrom}
+        windowTo={windowTo}
+        locked={active}
+        previousEnded={ended}
+        windowStartLabel={windowStartLabel}
+        windowEndLabel={windowEndLabel}
+      />
+    </div>
   );
 }

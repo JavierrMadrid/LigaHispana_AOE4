@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
+import { SectionCard } from "@/components/admin/section";
 import { saveCountries } from "./actions";
 import { StatusLine } from "./fields";
 
@@ -24,7 +25,7 @@ type CountriesFormProps = {
  *
  * El catálogo no se puede ampliar desde esta pantalla: cada país necesita su
  * código ISO de AoE4World para poder resolver el de un perfil, y eso vive en el
- * código. La pista lo dice para que nadie busque un "añadir país" que no existe.
+ * código. La tarjeta lo dice para que nadie busque un "añadir país" que no existe.
  *
  * Las casillas son **controladas**: lo que se marca vive en el estado, no en el DOM. Y
  * por eso hace falta el efecto de abajo, que vuelve a adoptar la lista del servidor
@@ -53,16 +54,24 @@ export function CountriesForm({ catalog, selected }: CountriesFormProps) {
   }
 
   return (
-    <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
-      <div>
-        <p className="max-w-[70ch] text-xs leading-relaxed text-muted">
-          Quien se inscribe solo puede elegir un país de esta lista, y el país de un
-          participante se valida contra ella. Deja al menos uno marcado. El catálogo
-          no se amplía desde aquí: un país nuevo necesita su código de AoE4World en
-          el código del sitio.
-        </p>
-
-        <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+    <form action={formAction}>
+      <SectionCard
+        title="Países admitidos"
+        description="Solo se puede elegir un país de esta lista; deja al menos uno marcado."
+        footer={
+          <div className="flex flex-wrap items-center gap-4">
+            <button
+              type="submit"
+              disabled={pending}
+              className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {pending ? "Guardando…" : "Guardar los países"}
+            </button>
+            <StatusLine state={state} pending={pending} />
+          </div>
+        }
+      >
+        <div className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
           {catalog.map((country) => (
             <label key={country} className="flex items-center gap-2 text-sm">
               <input
@@ -77,18 +86,7 @@ export function CountriesForm({ catalog, selected }: CountriesFormProps) {
             </label>
           ))}
         </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center gap-4">
-        <button
-          type="submit"
-          disabled={pending}
-          className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {pending ? "Guardando…" : "Guardar los países"}
-        </button>
-        <StatusLine state={state} pending={pending} />
-      </div>
+      </SectionCard>
     </form>
   );
 }

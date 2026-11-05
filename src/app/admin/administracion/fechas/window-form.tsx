@@ -2,6 +2,10 @@
 
 import { useActionState, useEffect, useState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
+import { Callout } from "@/components/admin/callout";
+import { FieldGrid } from "@/components/admin/field-grid";
+import { SectionCard } from "@/components/admin/section";
+import { StatusPill } from "@/components/admin/status-pill";
 import { saveTournamentWindow } from "../actions";
 import { StatusLine, TextField } from "../fields";
 
@@ -36,6 +40,10 @@ type WindowFormProps = {
    * así que se pide confirmación explícita (`confirmNewEdition`).
    */
   previousEnded: boolean;
+  /** Inicio de la ventana en hora de Madrid, ya formateado, o `null` si no se puede leer. */
+  windowStartLabel: string | null;
+  /** Fin de la ventana en hora de Madrid, ya formateado, o `null` si no se puede leer. */
+  windowEndLabel: string | null;
 };
 
 /**
@@ -52,9 +60,9 @@ type WindowFormProps = {
  * activa (`locked`: solo el fin) y terminada (`previousEnded`: todo editable, con
  * confirmación si se mueve el inicio para arrancar la siguiente edición).
  *
- * La fecha congelada no se enseña aquí sino en la página, que es quien tiene el instante
- * de Madrid ya formateado (`formatMadridDateTime`); este formulario solo recibe lo que
- * se escribe en un `datetime-local`.
+ * La tarjeta es del formulario y no de la página porque el guardado vive en su pie:
+ * así no hay dos maneras de pintar el mismo botón. La fecha congelada no se enseña
+ * aquí sino en el aviso, que la recibe ya formateada de la página.
  */
 export function WindowForm({ locked, ...props }: WindowFormProps) {
   return locked ? <LockedWindowForm {...props} /> : <EditableWindowForm {...props} />;
@@ -79,6 +87,7 @@ function EditableWindowForm({
   windowFrom: serverWindowFrom,
   windowTo: serverWindowTo,
   previousEnded,
+  windowEndLabel,
 }: WindowFormStateProps) {
   const [state, formAction, pending] = useActionState(saveTournamentWindow, initialState);
   const [windowFrom, setWindowFrom] = useState(serverWindowFrom);
@@ -113,76 +122,86 @@ function EditableWindowForm({
   const canSave = !startsNewEdition || confirmNewEdition;
 
   return (
-    <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <TextField
-          name="windowFrom"
-          label="Inicio de la ventana"
-          type="datetime-local"
-          value={windowFrom}
-          onChange={handleWindowFromChange}
-          hint="Fecha y hora local de Madrid; se guarda en UTC. Cuenta la partida que empezó a partir de aquí."
-          required
-        />
+    <form action={formAction}>
+      <SectionCard
+        title="Ventana del torneo"
+        description="Cuentan las partidas que empezaron dentro de estas fechas."
+        actions={
+          <StatusPill active={false}>{previousEnded ? "Terminada" : "Sin empezar"}</StatusPill>
+        }
+        footer={
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-4">
+              <button
+                type="submit"
+                disabled={pending || !canSave}
+                className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pending ? "Guardando…" : "Guardar las fechas"}
+              </button>
+              <StatusLine state={state} pending={pending} />
+            </div>
 
-        <TextField
-          name="windowTo"
-          label="Fin de la ventana (opcional)"
-          type="datetime-local"
-          value={windowTo}
-          onChange={setWindowTo}
-          hint="Fecha y hora local de Madrid, exclusiva; se guarda en UTC. Déjalo vacío para una ventana abierta: el fin se fija más tarde sin tocar nada más."
-        />
-      </div>
+            {canSave ? null : (
+              <p className="text-xs leading-relaxed text-muted">
+                Marca la confirmación de edición nueva para poder guardar, o deja el
+                inicio como está si solo querías mover el fin.
+              </p>
+            )}
+          </div>
+        }
+      >
+        {previousEnded ? (
+          <Callout tone="locked" title="La edición anterior ha terminado">
+            <p>
+              {windowEndLabel !== null
+                ? `Terminó el ${windowEndLabel}`
+                : "La ventana ya tiene un fin pasado"}{" "}
+              y desde entonces no reparte puntos. Mover el inicio empieza una edición
+              nueva: la clasificación se recalcula y la anterior deja de mostrarse en la
+              web.
+            </p>
 
-      {previousEnded ? (
-        <div className="mt-4 rounded-md border border-accent/30 bg-accent/5 px-4 py-3">
-          <p className="max-w-[70ch] text-sm leading-relaxed text-muted">
-            <strong className="font-semibold text-foreground">
-              Esta ventana ya ha terminado
-            </strong>
-            .{" "}
-            {startsNewEdition
-              ? "Al mover el inicio empiezas una edición nueva: la clasificación se recalcula y la anterior deja de mostrarse en la web. Confírmalo para poder guardar."
-              : "Guardar solo el fin no empieza ninguna edición nueva. Si mueves el inicio, la anterior deja de mostrarse en la web y tendrás que confirmarlo."}
-          </p>
+            {startsNewEdition ? (
+              <label className="mt-3 flex items-start gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  name="confirmNewEdition"
+                  value="true"
+                  checked={confirmNewEdition}
+                  onChange={(event) => setConfirmNewEdition(event.target.checked)}
+                  className="mt-0.5 size-4 shrink-0 rounded border-line bg-background accent-accent"
+                />
+                <span>
+                  Entiendo que al mover el inicio empiezo una edición nueva y que la
+                  clasificación se recalculará.
+                </span>
+              </label>
+            ) : null}
+          </Callout>
+        ) : null}
 
-          {startsNewEdition ? (
-            <label className="mt-3 flex max-w-[70ch] items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="confirmNewEdition"
-                value="true"
-                checked={confirmNewEdition}
-                onChange={(event) => setConfirmNewEdition(event.target.checked)}
-                className="mt-0.5 size-4 shrink-0 rounded border-line bg-background accent-accent"
-              />
-              <span className="text-foreground">
-                Entiendo que al mover el inicio empiezo una edición nueva y que la
-                clasificación se recalculará.
-              </span>
-            </label>
-          ) : null}
-        </div>
-      ) : null}
+        <FieldGrid className={previousEnded ? "mt-4" : undefined}>
+          <TextField
+            name="windowFrom"
+            label="Inicio"
+            type="datetime-local"
+            value={windowFrom}
+            onChange={handleWindowFromChange}
+            hint="Hora de Madrid. Cuenta la partida que empezó a partir de aquí."
+            required
+          />
 
-      <div className="mt-4 flex flex-wrap items-center gap-4">
-        <button
-          type="submit"
-          disabled={pending || !canSave}
-          className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {pending ? "Guardando…" : "Guardar las fechas"}
-        </button>
-        <StatusLine state={state} pending={pending} />
-      </div>
-
-      {canSave ? null : (
-        <p className="mt-2 max-w-[70ch] text-xs leading-relaxed text-muted">
-          Marca la confirmación de edición nueva para poder guardar, o deja el inicio
-          como está si solo querías mover el fin.
-        </p>
-      )}
+          <TextField
+            name="windowTo"
+            label="Fin (opcional)"
+            type="datetime-local"
+            value={windowTo}
+            onChange={setWindowTo}
+            hint="Hora de Madrid; el fin no entra. Vacío deja la ventana abierta."
+          />
+        </FieldGrid>
+      </SectionCard>
     </form>
   );
 }
@@ -197,13 +216,13 @@ type LockedWindowFormProps = WindowFormStateProps;
  * acción rechaza el envío entero en cuanto ve un `windowFrom` (ver
  * `touchesLockedRulesetFields()` en `actions.ts`). Tampoco manda `confirmNewEdition`:
  * con el torneo en marcha no se empieza ninguna edición, solo se cierra. La fecha
- * congelada se enseña en la página, como dato de lectura.
+ * congelada se enseña en el aviso, como dato de lectura.
  *
  * Vaciar el campo deja la ventana **abierta** por la derecha, que es lo que permite
  * reabrir una edición cerrada antes de tiempo: el mismo gesto que en el formulario
  * editable, con el mismo significado.
  */
-function LockedWindowForm({ windowTo: serverWindowTo }: LockedWindowFormProps) {
+function LockedWindowForm({ windowTo: serverWindowTo, windowStartLabel }: LockedWindowFormProps) {
   const [state, formAction, pending] = useActionState(saveTournamentWindow, initialState);
   const [windowTo, setWindowTo] = useState(serverWindowTo);
 
@@ -215,28 +234,43 @@ function LockedWindowForm({ windowTo: serverWindowTo }: LockedWindowFormProps) {
   }, [serverWindowTo]);
 
   return (
-    <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
-      <div className="max-w-md">
-        <TextField
-          name="windowTo"
-          label="Fin de la ventana (opcional)"
-          type="datetime-local"
-          value={windowTo}
-          onChange={setWindowTo}
-          hint="Fecha y hora local de Madrid, exclusiva; se guarda en UTC. Déjalo vacío para dejar la ventana sin fin: las partidas posteriores vuelven a contar."
-        />
-      </div>
+    <form action={formAction}>
+      <SectionCard
+        title="Ventana del torneo"
+        description="Cuentan las partidas que empezaron dentro de estas fechas."
+        actions={<StatusPill active>En marcha</StatusPill>}
+        footer={
+          <div className="flex flex-wrap items-center gap-4">
+            <button
+              type="submit"
+              disabled={pending}
+              className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {pending ? "Guardando…" : "Guardar el fin"}
+            </button>
+            <StatusLine state={state} pending={pending} />
+          </div>
+        }
+      >
+        <Callout tone="locked" title="El inicio está congelado">
+          {windowStartLabel !== null
+            ? `La edición empezó el ${windowStartLabel}`
+            : "La edición ya ha empezado"}{" "}
+          y moverlo cambiaría el corte de las partidas publicadas. Solo se puede fijar,
+          mover o vaciar el fin.
+        </Callout>
 
-      <div className="mt-4 flex flex-wrap items-center gap-4">
-        <button
-          type="submit"
-          disabled={pending}
-          className="h-10 rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {pending ? "Guardando…" : "Guardar el fin de la ventana"}
-        </button>
-        <StatusLine state={state} pending={pending} />
-      </div>
+        <div className="mt-4 max-w-md">
+          <TextField
+            name="windowTo"
+            label="Fin (opcional)"
+            type="datetime-local"
+            value={windowTo}
+            onChange={setWindowTo}
+            hint="Hora de Madrid; el fin no entra. Vacío deja la ventana sin fin."
+          />
+        </div>
+      </SectionCard>
     </form>
   );
 }

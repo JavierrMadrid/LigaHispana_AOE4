@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { PageSizeSelect } from "@/components/page-size-select";
@@ -206,24 +206,10 @@ export default async function MatchHistoryPage({ searchParams }: PageProps<"/adm
 
   return (
     <div className="flex flex-col gap-6">
-      <section>
-        <h1 className="text-2xl font-semibold">Historial de puntos</h1>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Las mismas ganancias que el historial público —victorias que suman, logros
-          cumplidos y cambios de poseedor de las competiciones—, de todos los
-          participantes y de lo más reciente a lo más antiguo. Los logros se apuntan
-          cuando termina el torneo; los cambios de poseedor salen en cuanto la
-          sincronización los detecta. Anular partidas con una actuación no las borra:
-          las marca como no puntuables y se restauran desde{" "}
-          <Link
-            href="/admin/actuaciones"
-            className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
-          >
-            Actuaciones
-          </Link>
-          .
-        </p>
-      </section>
+      <AdminPageHeader
+        title="Historial de puntos"
+        description="Las ganancias de puntos de todos los participantes, de lo más reciente a lo más antiguo. Las partidas anuladas siguen aquí, marcadas."
+      />
 
       {history.status === "degraded" ? (
         <EmptyState
