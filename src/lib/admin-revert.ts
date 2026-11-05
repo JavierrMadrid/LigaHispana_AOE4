@@ -157,7 +157,7 @@ export type MatchForScoring = {
  * es lo que vuelve.
  *
  * Se pregunta siempre con `revertedAt: null`, que es lo que deja la decisión en las
- * otras cinco condiciones de la regla. Sin esta guarda, un `FormData` hecho a mano —o
+ * otras seis condiciones de la regla. Sin esta guarda, un `FormData` hecho a mano —o
  * una acción de hace un mes, con la ventana ya movida— podría dejar marcada para
  * siempre una partida que nunca llegó a puntuar, y el panel enseñaría "revertida" en
  * algo que en realidad nunca contó.

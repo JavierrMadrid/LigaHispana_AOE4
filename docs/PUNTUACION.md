@@ -17,6 +17,8 @@ Una partida puntúa si cumple **todo** esto:
 - **Posterior al corte de inscripción** del jugador (ver abajo).
 - **No anulada por una actuación de la organización**: la marca es reversible y la partida sigue en el
   histórico.
+- **No excluida por una desventaja de objeto**: mientras un participante porta un objeto pendiente,
+  sus partidas no puntúan (ver [`OBJETOS.md`](./OBJETOS.md#exclusión-de-partidas)).
 - **Equipo equilibrado** (solo partidas por equipos): ningún compañero está a **dos escalones o
   más** de división del jugador (ver abajo).
 - El jugador está `APPROVED`.

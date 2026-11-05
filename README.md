@@ -174,6 +174,12 @@ marca partidas ganadas que dejan de sumar; la reversión deshace una o varias ac
 es **final**. Todo se anuncia en el canal de avisos y por privado al participante, sin la
 información privada.
 
+La pestaña **Objetos** (`/admin/objetos`) es la operación de los objetos utilizables del POC: cada
+objeto pendiente se lanza a otro participante y su desventaja se da por cumplida sobre una partida
+del portador. El modo se enciende por edición en Administración → Edición (solo el superadministrador);
+con él apagado la pestaña enseña solo el historial. La mecánica y el catálogo están en
+[`docs/OBJETOS.md`](docs/OBJETOS.md).
+
 Lo del superadministrador vive en la pestaña **Administración**, que solo él ve y que se organiza en
 subpestañas: **Administradores** (invitar, dar de baja y reactivar), **Edición**, **Fechas** (el cierre
 de inscripciones, la ventana del torneo y el arranque de la siguiente edición), **Puntuación**,

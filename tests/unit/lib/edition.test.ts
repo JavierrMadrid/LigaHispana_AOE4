@@ -77,12 +77,14 @@ describe("la clave y los valores por defecto", () => {
     expect(DEFAULT_EDITION_CONFIG.version).toBe(EDITION_CONFIG_VERSION);
   });
 
-  it("arranca sin premio, sin retransmisión obligatoria y sin marca propia", () => {
-    // Publicar un premio o exigir retransmisión es una decisión explícita de la
-    // organización, no el estado en que queda el sistema si nadie dice nada.
+  it("arranca sin premio, sin retransmisión obligatoria, sin objetos y sin marca propia", () => {
+    // Publicar un premio, exigir retransmisión o encender los objetos es una decisión
+    // explícita de la organización, no el estado en que queda el sistema si nadie dice
+    // nada.
     expect(DEFAULT_EDITION_CONFIG.name).not.toBe("");
     expect(DEFAULT_EDITION_CONFIG.prize).toEqual({ amount: null, note: null });
     expect(DEFAULT_EDITION_CONFIG.streamingRequired).toBe(false);
+    expect(DEFAULT_EDITION_CONFIG.objectsEnabled).toBe(false);
     expect(DEFAULT_EDITION_CONFIG.branding).toEqual({ emblemUrl: null, accentColor: null });
   });
 });
@@ -136,6 +138,25 @@ describe("mergeEditionConfig: lo que se puede configurar", () => {
 
     expect(warnings).toEqual([]);
     expect(config.streamingRequired).toBe(true);
+  });
+
+  it("aplica el interruptor de objetos utilizables, encendido y apagado", () => {
+    const encendido = mergeEditionConfig({ ...VALIDO, objectsEnabled: true });
+    const apagado = mergeEditionConfig({ ...VALIDO, objectsEnabled: false });
+
+    expect(encendido.warnings).toEqual([]);
+    expect(encendido.config.objectsEnabled).toBe(true);
+    expect(apagado.warnings).toEqual([]);
+    expect(apagado.config.objectsEnabled).toBe(false);
+  });
+
+  it("un documento guardado sin `objectsEnabled` sigue valiendo, con el modo apagado", () => {
+    // Los documentos de la versión 1 se guardaron antes de que existiera el campo: no
+    // pueden quedar inválidos ni encender el modo por accidente.
+    const { config, warnings } = mergeEditionConfig(VALIDO);
+
+    expect(warnings).toEqual([]);
+    expect(config.objectsEnabled).toBe(false);
   });
 
   it("aplica el emblema y el color de acento, en minúsculas", () => {
@@ -239,6 +260,15 @@ describe("mergeEditionConfig: lo que se rechaza, siempre con aviso", () => {
     expect(warnings).toContain("streamingRequired no es un booleano");
   });
 
+  it("`objectsEnabled` que no es booleano se descarta con aviso y se queda apagado", () => {
+    for (const objectsEnabled of ["true", 1, null, [], {}]) {
+      const { config, warnings } = mergeEditionConfig({ ...VALIDO, objectsEnabled });
+
+      expect(config.objectsEnabled, JSON.stringify(objectsEnabled)).toBe(false);
+      expect(warnings).toContain("objectsEnabled no es un booleano");
+    }
+  });
+
   it("un emblema que no es dirección ni ruta del sitio se descarta", () => {
     for (const emblemUrl of ["javascript:alert(1)", "emblema.png", "//otro-sitio.com/x.png", 42]) {
       const { config, warnings } = mergeEditionConfig({
@@ -292,6 +322,7 @@ describe("mergeEditionConfig: lo que se rechaza, siempre con aviso", () => {
       name: "Otra",
       prize: { amount: 10, note: "x" },
       streamingRequired: true,
+      objectsEnabled: true,
       branding: { emblemUrl: "/x.png", accentColor: "#000000" },
     });
 
@@ -358,6 +389,7 @@ describe("writeEditionConfig", () => {
     name: "Liga Hispana 2027",
     prize: { amount: 500, note: "Reparto 60/25/15" },
     streamingRequired: true,
+    objectsEnabled: true,
     branding: { emblemUrl: "/ediciones/2027/emblema.png", accentColor: "#e2b714" },
   };
 

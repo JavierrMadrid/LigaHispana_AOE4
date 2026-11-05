@@ -48,6 +48,11 @@ async function main(): Promise<void> {
     console.log(`Clasificación: ERROR — ${summary.scoringError}`);
   }
   console.log(
+    `Objetos: ${summary.objects?.created ?? 0} premio(s) nuevo(s), ` +
+      `${summary.objectsBlocked} partida(s) excluida(s)` +
+      (summary.objectsError === null ? "" : ` — ERROR: ${summary.objectsError}`),
+  );
+  console.log(
     `Ladder: ${summary.ladder.batches} llamada(s), ${summary.ladder.playersUpdated} jugador(es) actualizados, ` +
       `${summary.ladder.playersMissing} ausentes de la respuesta` +
       (summary.ladder.error === null ? "" : ` — ERROR: ${summary.ladder.error}`),

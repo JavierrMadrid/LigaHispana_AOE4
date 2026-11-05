@@ -10,10 +10,11 @@ import { isRecord } from "@/lib/json";
  * ## Qué es y por qué vive en `Setting`
  *
  * Es lo que distingue una edición de la siguiente —el nombre que se enseña, el
- * premio base, si la retransmisión es obligatoria y el emblema y color de acento—
- * y **no** lo decide el código: vive en `Setting["edition.config"]`, un documento
- * JSON que la organización cambia desde el panel sin desplegar. Es el mismo patrón
- * que el ruleset de puntos (`scoring.ruleset`), el de alertas y la lista de países.
+ * premio base, si la retransmisión es obligatoria, si el modo de objetos utilizables
+ * está encendido y el emblema y color de acento— y **no** lo decide el código: vive
+ * en `Setting["edition.config"]`, un documento JSON que la organización cambia desde
+ * el panel sin desplegar. Es el mismo patrón que el ruleset de puntos
+ * (`scoring.ruleset`), el de alertas y la lista de países.
  *
  * No puede ser un enum del schema por la razón de siempre: añadir un campo
  * obligaría a un `db push` sobre la base de producción, y esto se cambia entre
@@ -112,6 +113,18 @@ export type EditionConfig = {
    * alertas ya escritas: `Alert` es *append-only*.
    */
   streamingRequired: boolean;
+  /**
+   * ¿Está encendido el **modo de objetos utilizables** en esta edición?
+   *
+   * Cuando está activo, el worker crea los premios del día y marca las partidas del
+   * portador mientras la desventaja sigue pendiente (ver `docs/OBJETOS.md`).
+   * Apagarlo **no congela** el modo: cierra los premios pendientes y desbloquea de
+   * inmediato todas las partidas marcadas (`disableObjectsMode()`), así que la
+   * clasificación deja de tener exclusiones. Volver a encenderlo **no** tiene
+   * efectos retroactivos: empieza limpio, sin premios ni bloqueos anteriores, y el
+   * histórico se conserva.
+   */
+  objectsEnabled: boolean;
   branding: EditionBranding;
 };
 
@@ -119,15 +132,17 @@ export type EditionConfig = {
  * La configuración con la que arranca una edición mientras nadie publique nada.
  *
  * El nombre es el que ya enseña la web, y todo lo demás viene **vacío o apagado**:
- * sin premio anunciado, sin retransmisión obligatoria y sin emblema ni color
- * propios. Publicar un premio o exigir retransmisión es una decisión explícita de
- * la organización, no el estado en que queda el sistema si nadie dice nada.
+ * sin premio anunciado, sin retransmisión obligatoria, sin objetos utilizables y sin
+ * emblema ni color propios. Publicar un premio, exigir retransmisión o encender los
+ * objetos es una decisión explícita de la organización, no el estado en que queda el
+ * sistema si nadie dice nada.
  */
 export const DEFAULT_EDITION_CONFIG: EditionConfig = {
   version: EDITION_CONFIG_VERSION,
   name: "Liga Hispana AoE IV",
   prize: { amount: null, note: null },
   streamingRequired: false,
+  objectsEnabled: false,
   branding: { emblemUrl: null, accentColor: null },
 };
 
@@ -360,6 +375,16 @@ export function mergeEditionConfig(stored: unknown): EditionConfigMergeResult {
       config.streamingRequired = stored.streamingRequired;
     } else {
       warnings.push("streamingRequired no es un booleano");
+    }
+  }
+
+  // Un documento guardado con la versión 1 no trae este campo: se queda apagado, que
+  // es el valor por defecto y no invalida el documento.
+  if (stored.objectsEnabled !== undefined) {
+    if (typeof stored.objectsEnabled === "boolean") {
+      config.objectsEnabled = stored.objectsEnabled;
+    } else {
+      warnings.push("objectsEnabled no es un booleano");
     }
   }
 

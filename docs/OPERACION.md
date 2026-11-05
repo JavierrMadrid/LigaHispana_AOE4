@@ -118,8 +118,10 @@ El incremental ya no pide el histórico jugador a jugador. El cursor es **global
    `windowComplete=false` y **detrás** las ventanas completas cuyo último recorrido venció (F2b),
    desde `max(window.from, registeredAt)`, `BULK` páginas cada uno.
 4. **Perfil**: solo los que no estén frescos por la ladder o por la caché de 1 h.
-5. **Cursor y resto**: scoring (solo si hay algo que recalcular, ver **Salto del recálculo**),
-   alertas, historial, Discord y streams.
+5. **Cursor y resto**: objetos (crear el premio del día y marcar las partidas del
+   portador, ver [`OBJETOS.md`](./OBJETOS.md#persistencia-y-worker)), scoring (solo si
+   hay algo que recalcular, ver **Salto del recálculo**), alertas, historial, Discord
+   y streams.
 
 | Variable | Defecto | Qué limita |
 |---|---:|---|
@@ -225,6 +227,8 @@ cualquiera se cumple:
 | La pasada anterior falló al recalcular | `scoringError` del rastro anterior |
 | Partidas tocadas | `inserted + updated + resolvedByRefetch + abandoned > 0` |
 | Summaries rellenados | `summaries.fetched > 0` (cambian APM, edad y aldeanos) |
+| Premios de objeto creados | `syncDailyObjectAwards().created > 0` |
+| Partidas excluidas por un objeto | `applyObjectBlocks() > 0` (dejan de puntuar) |
 | Pool de mapas nuevo | `mapPool.status === "updated"` (`por-tierra-y-agua`) |
 | Metadatos de jugador cambiados | `ladder.playersChanged + perfiles cambiados` |
 | Cambio en el número de aprobados | `playersRanked` de `scoring.lastRun` frente al roster |
@@ -243,6 +247,11 @@ cualquiera se cumple:
   `npm run db:window`), los cortes de división (`npm run alerts:cutoffs`), los eventos puntuales y las
   actuaciones que anulan o revierten partidas. El pool de mapas es la excepción y se detecta por
   `mapPool.status === "updated"`.
+- **Los objetos van justo antes de esta decisión**: `syncDailyObjectAwards()` y
+  `applyObjectBlocks()`, cada uno con su `try`/`catch`. Un fallo se apunta en `objectsError` y no
+  mueve `lastSuccessAt`; si crean un premio o marcan partidas, fuerzan el recálculo en esta misma
+  pasada. Con el modo de objetos apagado (`edition.config.objectsEnabled`, ver
+  [`OBJETOS.md`](./OBJETOS.md#modo-configurable)) los dos pasos no hacen nada.
 - **Saltárselo no es un fallo**: `scoring = null`, `scoringError = null` y `scoring.lastRun` no se
   toca. La clasificación publicada sigue siendo la última que se calculó.
 
@@ -671,7 +680,7 @@ puntuales no están ahí porque son contenido de cada evento (ver
 
 | Clave | Qué toca | Acción |
 |---|---|---|
-| `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento) | `saveEditionConfig` |
+| `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria, interruptor de objetos utilizables y marca (emblema y color de acento) | `saveEditionConfig` |
 | `scoring.ruleset.window` | La ventana del torneo: inicio obligatorio y fin opcional (ISO-8601 UTC) | `saveTournamentWindow` |
 | `scoring.ruleset` | Familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
 | `registration.countries` | Países admitidos en la inscripción, en el orden del catálogo | `saveCountries` |
@@ -733,7 +742,8 @@ puntuales no están ahí porque son contenido de cada evento (ver
   pinta la interfaz, y el color de acento se aplica como variable CSS del layout, que no se reescribe
   desde aquí.
 - **Todo tiene documento por defecto**: sin `edition.config` la edición usa el nombre del sitio, sin
-  premio y sin retransmisión obligatoria, así que la web funciona sin que nadie configure nada.
+  premio, sin retransmisión obligatoria y sin objetos utilizables, así que la web funciona sin que
+  nadie configure nada.
 
 ## Discord
 
@@ -1124,7 +1134,7 @@ se perdieron. Eso solo lo publica el **resumen** de cada partida, una ruta del *
 | Orden | De la partida **más nueva a la más vieja**, con el histórico rellenándose por detrás |
 | Reintento | Un fallo se reintenta pasada **1 h** (`AOE4WORLD_SUMMARY_RETRY_DELAY_MS`) |
 | Ventana de revisión | **24 h** (`AOE4WORLD_SUMMARY_REVIEW_WINDOW_HOURS`): pasada esa edad sin respuesta concluyente, la partida deja de pedirse y se avisa de que quedó **sin revisar** |
-| Columnas | Las ocho métricas del resumen (`apm` … `mountedVillagersLost`), `summaryAnomalies` y las dos marcas de control (ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
+| Columnas | Las siete métricas del resumen (`apm` … `mountedVillagersLost`), `winReason`, `summaryAnomalies` y las dos marcas de control (ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
 
 - **Qué partidas**: exactamente las que puntúan (el mismo `rankedMatchSql()` que la clasificación) y de
   un jugador que no tenga el historial cerrado. El filtro `historyPublic is distinct from false` deja
@@ -1144,9 +1154,10 @@ se perdieron. Eso solo lo publica el **resumen** de cada partida, una ruta del *
   `SUMMARY_NOT_REVIEWED`, una alerta de estado con las partidas y el último intento en `details`. El
   caso de **perfil privado confirmado** sigue siendo `HISTORY_NOT_PUBLIC`; este es el respaldo de lo que
   no se pudo confirmar.
-- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las ocho métricas significa "no hay
+- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las siete métricas significa "no hay
   resumen", nunca "cero". Una partida sin resumen no cumple ninguna hazaña y **corta** la racha de
-  `ansioso` (ver [`OBJETIVOS.md`](./OBJETIVOS.md#logros-cobra-quien-cumple)).
+  `ansioso` (ver [`OBJETIVOS.md`](./OBJETIVOS.md#logros-cobra-quien-cumple)). `winReason`, que se guarda
+  literal y sin enum, sigue ese mismo criterio: `null` = no hay resumen o el payload no lo traía.
 - **`summaryAnomalies`** guarda la evidencia compacta para las alertas (si el `buildOrder` se pudo leer,
   el primer aldeano y los dos tramos sin progreso). No sustituye a las métricas ni se escribe nunca sin
   un 200: es un resumen de cuatro datos, no el payload.
