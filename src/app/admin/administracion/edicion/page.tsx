@@ -24,8 +24,9 @@ export default async function AdminEditionPage() {
       <h2 className="text-lg font-medium">Edición</h2>
       <p className="mt-1 max-w-[70ch] text-sm text-muted">
         El nombre y el premio salen en la web pública; el emblema y el color de acento
-        cambian la marca del sitio, y la retransmisión obligatoria enciende el aviso de
-        los participantes sin canal de directo. Se guarda sin desplegar.
+        cambian la marca del sitio, la retransmisión obligatoria enciende el aviso de
+        los participantes sin canal de directo y los objetos utilizables reparten
+        desventajas sobre las partidas. Se guarda sin desplegar.
       </p>
 
       <div className="mt-4">

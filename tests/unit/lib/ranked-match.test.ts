@@ -433,27 +433,59 @@ describe("el corte de inscripción", () => {
   });
 });
 
+describe("la exclusión por desventaja de objeto", () => {
+  const partida = (overrides: Partial<Parameters<typeof countsAsRanked>[0]> = {}) => ({
+    mode: "rm_solo",
+    result: "WIN" as const,
+    startedAt: new Date("2026-09-21T10:00:00.000Z"),
+    finishedAt: new Date("2026-09-21T10:30:00.000Z"),
+    revertedAt: null,
+    excludedByAwardId: null,
+    ...overrides,
+  });
+
+  it("una partida marcada por un objeto pendiente no cuenta", () => {
+    expect(
+      countsAsRanked(partida({ excludedByAwardId: "award-1" }), VENTANA, null, SIN_CORTES),
+    ).toBe(false);
+  });
+
+  it("sin marca, o con el campo ausente, la partida cuenta igual", () => {
+    // Los dos caminos existen en el código: la fila de la base trae el campo a
+    // `null`, y los llamantes que fabrican la partida a mano (revertir, verify) no
+    // lo rellenan. Ausente significa "no hay marca", no "no lo sé".
+    const { excludedByAwardId, ...sinCampo } = partida();
+
+    expect(excludedByAwardId).toBeNull();
+    expect(countsAsRanked(partida(), VENTANA, null, SIN_CORTES)).toBe(true);
+    expect(countsAsRanked(sinCampo, VENTANA, null, SIN_CORTES)).toBe(true);
+  });
+});
+
 describe("las tres traducciones dicen lo mismo", () => {
-  it("`classificatoryWhere` es `rankedMatchWhere` menos la marca de revertida", () => {
-    // La única diferencia entre las dos es deliberada: el historial del panel tiene
-    // que *enseñar* las revertidas y el motor no puede contarlas. Y es la única,
-    // también con el corte puesto: los dos filtros llevan el mismo `registeredAt`.
+  it("`classificatoryWhere` es `rankedMatchWhere` menos las dos marcas de exclusión", () => {
+    // La diferencia entre las dos es deliberada: el historial del panel tiene que
+    // *enseñar* las revertidas y las excluidas por objeto, y el motor no puede
+    // contarlas. Y es la única, también con el corte puesto: los dos filtros llevan
+    // el mismo `registeredAt`.
     for (const registeredAt of [null, new Date("2026-09-20T12:00:00.000Z")]) {
       const completa = rankedMatchWhere(["rm_solo"], VENTANA, registeredAt);
-      const { revertedAt, ...clasificatoria } = completa;
+      const { revertedAt, excludedByAwardId, ...clasificatoria } = completa;
 
       expect(revertedAt).toBeNull();
+      expect(excludedByAwardId).toBeNull();
       expect(clasificatoria).toEqual(classificatoryWhere(["rm_solo"], VENTANA, registeredAt));
     }
   });
 
-  it("el filtro trae familia, partida resuelta, corte y `revertedAt` a null", () => {
+  it("el filtro trae familia, partida resuelta, corte y las dos marcas a null", () => {
     expect(rankedMatchWhere(["rm_solo", "rm_team"], VENTANA, null)).toEqual({
       mode: { in: ["rm_solo", "rm_team"] },
       result: { not: null },
       finishedAt: { not: null },
       startedAt: { gte: new Date("2026-09-15T00:00:00.000Z"), lt: new Date("2026-10-15T00:00:00.000Z") },
       revertedAt: null,
+      excludedByAwardId: null,
     });
   });
 
@@ -484,7 +516,7 @@ describe("las tres traducciones dicen lo mismo", () => {
     });
   });
 
-  it("el predicado SQL lleva las mismas cinco condiciones (y ninguna de equipos sin cortes)", () => {
+  it("el predicado SQL lleva las mismas seis condiciones (y ninguna de equipos sin cortes)", () => {
     const sql = rankedMatchSql(
       Prisma.sql`m`,
       Prisma.sql`p`,
@@ -498,7 +530,7 @@ describe("las tres traducciones dicen lo mismo", () => {
 
     expect(sql.sql).toBe(
       'm."mode" in (?,?) and m."result" is not null and m."finishedAt" is not null and ' +
-        'm."revertedAt" is null and m."startedAt" >= ?::timestamp and m."startedAt" < ?::timestamp ' +
+        'm."revertedAt" is null and m."excludedByAwardId" is null and m."startedAt" >= ?::timestamp and m."startedAt" < ?::timestamp ' +
         'and (p."registeredAt" is null or m."startedAt" >= p."registeredAt")',
     );
     // El corte va **como columna de `Player`**, no como parámetro: por eso esta

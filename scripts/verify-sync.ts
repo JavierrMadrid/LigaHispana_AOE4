@@ -92,7 +92,7 @@ const TEST_PROFILE_IDS = [
 /**
  * Contexto de equipos **sin cortes** con el que corren las comprobaciones puras de
  * este script: sin cortes cacheados la condición de compañeros no se puede
- * comprobar, así que esas comprobaciones miden las otras cinco condiciones. La
+ * comprobar, así que esas comprobaciones miden las otras seis condiciones. La
  * condición de equipos tiene la suya, más abajo y contra la base de datos, con unos
  * cortes sintéticos publicados en `Setting` a propósito.
  */
@@ -590,6 +590,7 @@ async function checkNormalization(): Promise<void> {
       streamsError: null,
       mapPoolError: null,
       summariesError: null,
+      objectsError: null,
       announceError: null,
       gamesPagesRead: 0,
       gamesBatchesIncomplete: 0,
@@ -724,6 +725,7 @@ async function checkNormalization(): Promise<void> {
       streamsError: null,
       mapPoolError: null,
       summariesError: null,
+      objectsError: null,
       announceError: null,
       gamesPagesRead: 0,
       gamesBatchesIncomplete: 0,
@@ -1793,7 +1795,7 @@ async function runWindowChecks(
     /**
      * La condición de equipos, contra la base de datos.
      *
-     * Es la única de las seis que el `where` de Prisma no puede escribir, así que su
+     * Es la única de las siete que el `where` de Prisma no puede escribir, así que su
      * contraste es el que más importa: se publican unos cortes **sintéticos** de
      * `rm_team` (100 de elo por subdivisión, 3 por división), se cuelgan del jugador
      * de la ventana dos partidas de equipo —una con un compañero al mismo escalón y
@@ -3505,7 +3507,7 @@ async function runDatabaseChecks(): Promise<void> {
       // desincronizan: se recorren todas las partidas del jugador de muestra y se
       // comparan las dos cuentas. El `registeredAt` del jugador va en la llamada
       // porque es la condición que depende de él, y los cortes cacheados van en el
-      // contexto porque son la condición de equipos: es la única de las seis que el
+      // contexto porque son la condición de equipos: es la única de las siete que el
       // `where` de Prisma no puede escribir, así que este contraste es el único que
       // puede pillar una discrepancia entre el SQL y la memoria.
       const ventana = (await readRuleset()).window;
@@ -3523,6 +3525,7 @@ async function runDatabaseChecks(): Promise<void> {
           startedAt: true,
           finishedAt: true,
           revertedAt: true,
+          excludedByAwardId: true,
           rawJson: true,
           points: true,
         },

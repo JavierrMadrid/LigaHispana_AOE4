@@ -933,9 +933,19 @@ export type ParticipantObjective = {
    *
    * Un logro repetible no cobra el precio de la tarjeta: `imparable` reparte 1 punto
    * por día con tope y `victorias` paga por victoria. Aquí va lo que se llevó de
-   * verdad, con `count` diciendo cuántas veces.
+   * verdad, con `count` diciendo cuántas veces. En un objetivo con `pointsPerUnit` y
+   * sin cobrar todavía, es el precio de **cada unidad**, no el premio máximo de la
+   * tarjeta.
    */
   points: number;
+  /**
+   * Precio de cada unidad de la métrica en los objetivos que cobran por unidad
+   * (`maestro-<civ>`: 1 punto por victoria), o ausente en el resto.
+   *
+   * La ficha lo necesita para decir "1 punto por victoria" cuando el participante
+   * todavía no ha cobrado nada: `points` solo trae lo cobrado.
+   */
+  pointsPerUnit?: number;
   /** Repeticiones que ha conseguido: días, victorias o 1 (ver el tipo). */
   count: number;
   /** Cabeza de familia del objetivo (`ObjectiveOption.parent`). */
@@ -967,6 +977,10 @@ export type ParticipantObjective = {
   /**
    * Ya lo cobra el participante: posee la competición, o ha completado el logro.
    * Es el check que pinta la ficha.
+   *
+   * En los objetivos que cobran por unidad (`pointsPerUnit`) un beneficiario puede
+   * llevar solo parte del umbral, así que aquí manda `value >= target`: empezar a
+   * cobrar no es haberlo completado.
    */
   achieved: boolean;
   /**
@@ -1081,7 +1095,10 @@ async function loadParticipantObjectives(
  * `points` y `count` dicen lo que **este** jugador cobra, no el precio de la tarjeta:
  * en un logro repetible son los del beneficiario (`imparable` por días, `victorias`
  * por victorias) y en lo demás, el precio del objetivo con una repetición. Así la
- * ficha no puede enseñar el tope de `imparable` como si fuera lo cobrado.
+ * ficha no puede enseñar el tope de `imparable` como si fuera lo cobrado. En un
+ * objetivo con `pointsPerUnit`, quien todavía no ha cobrado nada recibe el precio de
+ * **cada unidad** (`pointsPerUnit`), no el premio máximo: lo cobrado va en el
+ * beneficiario y el precio unitario viaja aparte para que la placa sepa decirlo.
  *
  * `holder`, `beneficiaries` y `ranking` se copian tal cual del `ObjectiveOption`
  * —`ranking` y `beneficiaries` por referencia, sin clonar— para que el diálogo de
@@ -1102,7 +1119,14 @@ export function participantObjective(
     option.kind === "achievement"
       ? (option.beneficiaries.find((value) => value.profileId === profileId) ?? null)
       : null;
-  const achieved = option.kind === "competition" ? holder !== null : beneficiary !== null;
+  const achieved =
+    option.kind === "competition"
+      ? holder !== null
+      : option.pointsPerUnit !== undefined
+        ? // Los objetivos que cobran por unidad son beneficiarios desde la primera
+          // victoria: "conseguido" es llegar al umbral, no empezar a cobrar.
+          option.target !== null && (entry?.value ?? 0) >= option.target.value
+        : beneficiary !== null;
 
   return {
     id: option.id,
@@ -1111,7 +1135,12 @@ export function participantObjective(
     label: option.label,
     description: option.description,
     metric: option.metric,
-    points: beneficiary?.points ?? option.points,
+    // Sin cobrar, un objetivo por unidad publica el precio de **cada unidad** (1),
+    // no el premio máximo de la tarjeta (5): la placa del jugador enseña lo que vale
+    // su próxima victoria, no lo que aún no ha ganado.
+    points:
+      beneficiary?.points ??
+      (option.pointsPerUnit !== undefined ? option.pointsPerUnit : option.points),
     count: beneficiary?.count ?? 1,
     parent: option.parent,
     value: entry?.value ?? 0,
@@ -1125,6 +1154,9 @@ export function participantObjective(
     beneficiaries: option.beneficiaries,
     target: option.target,
     ranking: option.ranking,
+    ...(option.pointsPerUnit === undefined
+      ? {}
+      : { pointsPerUnit: option.pointsPerUnit }),
   };
 }
 
@@ -2094,7 +2126,7 @@ function compareTextDesc(a: string, b: string): number {
  *   dentro de `classificatoryWhere()` (familia del ruleset y ventana). El corte de
  *   inscripción y la condición de equipo **no** se pueden añadir a un `where` que abarca a
  *   todos los jugadores, y no hace falta: ya están codificados en `Match.points`, porque el
- *   motor solo puntúa lo que pasa las cinco condiciones (`rankedMatchSql()`). Una victoria
+ *   motor solo puntúa lo que pasa la regla (`rankedMatchSql()`). Una victoria
  *   que nunca puntuó —fuera de la ventana, antes del alta, con el equipo desequilibrado— se
  *   queda con `points = 0`: no es una ganancia y no sale.
  * - **Una ganancia rechazada**: una victoria con `revertedAt` informado. Entra aunque sus

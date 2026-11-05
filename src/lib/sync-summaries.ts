@@ -24,14 +24,15 @@ import { readRuleset, type ScoringRuleset } from "@/lib/scoring";
  * Los objetivos `ansioso`, `avance-relampago-feudal`, `avance-relampago-castillos`,
  * `avance-relampago-imperial` y `defensor-del-pueblo` (`docs/OBJETIVOS.md`) se
  * cobran con datos que solo están en el summary de la partida (plan `aoe4world`):
- * los APM, cuándo se pasó de edad y cuántos aldeanos se perdieron. Este módulo se
- * los pide a `src/lib/aoe4world/summary.ts` y los guarda en `Match`, siguiendo el
- * patrón de `history-checks.ts`: presupuesto por pasada, tolerante a fallos y con
- * una línea para el rastro.
+ * los APM, cuándo se pasó de edad y cuántos aldeanos se perdieron, más el motivo de
+ * la victoria (`winReason`), que hoy no cobra ningún objetivo pero se conserva.
+ * Este módulo los pide a `src/lib/aoe4world/summary.ts` y los guarda en `Match`,
+ * siguiendo el patrón de `history-checks.ts`: presupuesto por pasada, tolerante a
+ * fallos y con una línea para el rastro.
  *
  * | Respuesta | Qué se escribe |
  * |---|---|
- * | métricas leídas | las siete columnas de métricas + `summaryAnomalies` + `summaryCheckedAt` + `summaryLastAttemptAt` |
+ * | métricas leídas | las siete columnas de métricas + `winReason` + `summaryAnomalies` + `summaryCheckedAt` + `summaryLastAttemptAt` |
  * | 404 (la partida no tiene summary) | `summaryCheckedAt` + `summaryLastAttemptAt` |
  * | fallo de red, 5xx, timeout, 200 ilegible | solo `summaryLastAttemptAt` |
  * | 429 | `summaryLastAttemptAt`, y **se corta la pasada** |
@@ -277,6 +278,9 @@ function metricsData(
     villagersLost: metrics.villagersLost,
     gildedVillagersLost: metrics.gildedVillagersLost,
     mountedVillagersLost: metrics.mountedVillagersLost,
+    // El motivo se guarda literal, sin normalizar: lo publica el summary y hoy no lo
+    // lee ningún objetivo, pero es el dato que hacía falta conservar.
+    winReason: metrics.winReason,
     // `DbNull` y no `null`: en una columna `Json?` de Prisma, `null` es "déjalo
     // como está" y `DbNull` es "escríbelo nulo en la base".
     summaryAnomalies:
