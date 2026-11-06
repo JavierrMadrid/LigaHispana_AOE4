@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useActionState, useEffect, useState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
+import { Callout } from "@/components/admin/callout";
+import { SectionCard } from "@/components/admin/section";
 import type { ScoringRuleset } from "@/lib/scoring";
 import { saveScoringRuleset } from "./actions";
 import { StatusLine, TextField } from "./fields";
@@ -120,8 +122,8 @@ type RulesetFormStateProps = Omit<RulesetFormProps, "locked">;
  * Las reglas de puntuación: familias, puntos, civ aleatoria y objetivos.
  *
  * Es el documento del que sale **toda** la clasificación, así que la pantalla
- * enseña los cuatro ajustes que mueven puntos y, debajo, el catálogo de
- * objetivos agrupado por grupos. Cada grupo es un bloque plegable —cerrado por
+ * enseña los cuatro ajustes que mueven puntos en una tarjeta y, debajo, el catálogo de
+ * objetivos agrupado por grupos en otra. Cada grupo es un bloque plegable —cerrado por
  * defecto, con su recuento— porque el catálogo tiene 120 entradas y desplegarlo
  * entero convertiría el formulario en una lista interminable; los controles
  * siguen viajando con el formulario aunque el bloque esté cerrado.
@@ -189,142 +191,142 @@ function EditableRulesetForm({
   }
 
   return (
-    <form action={formAction} className="rounded-lg border border-line bg-surface p-4">
-      <div className="max-w-md">
-        <TextField
-          name="pointsPerWin"
-          label="Puntos por victoria"
-          type="number"
-          min={1}
-          step={1}
-          value={pointsPerWin}
-          onChange={setPointsPerWin}
-          hint="Lo que paga el objetivo Victorias: cada victoria clasificatoria suma esta cifra, sin tope. Los demás objetivos reparten aparte."
-          required
-        />
-      </div>
-
-      <fieldset className="mt-4">
-        <legend className="text-sm font-medium text-foreground">
-          Familias de ladder que puntúan
-        </legend>
-        <p className="mt-1 max-w-[70ch] text-xs leading-relaxed text-muted">
-          Solo cuentan las partidas de estas ladders. Deja al menos una marcada: sin
-          ninguna, no puntuaría nada.
-        </p>
-        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
-          {modeOptions.map((mode) => (
-            <label key={mode.value} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="modes"
-                value={mode.value}
-                checked={modes.includes(mode.value)}
-                onChange={() => toggleMode(mode.value)}
-                className="size-4 rounded border-line bg-background accent-accent"
-              />
-              <span className="text-foreground">{mode.label}</span>
-            </label>
-          ))}
+    <form action={formAction} className="flex flex-col gap-6">
+      <SectionCard title="Puntos y ladders">
+        <div className="max-w-md">
+          <TextField
+            name="pointsPerWin"
+            label="Puntos por victoria"
+            type="number"
+            min={1}
+            step={1}
+            value={pointsPerWin}
+            onChange={setPointsPerWin}
+            hint="Cada victoria clasificatoria suma esta cifra, sin tope."
+            required
+          />
         </div>
-      </fieldset>
 
-      <div className="mt-4">
-        <SwitchField
-          name="countRandomizedCivs"
-          label="Las partidas con civilización aleatoria cuentan para los objetivos de civilización"
-          hint="Apagado, esas partidas no suman para los objetivos que dependen de la civilización."
-          checked={countRandomizedCivs}
-          onChange={setCountRandomizedCivs}
-        />
-      </div>
+        <div className="mt-5 border-t border-line pt-5">
+          <fieldset>
+            <legend className="text-sm font-medium text-foreground">
+              Familias de ladder que puntúan
+            </legend>
+            <p className="mt-1 max-w-[70ch] text-xs leading-relaxed text-muted">
+              Solo cuentan las partidas de estas ladders. Deja al menos una marcada.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+              {modeOptions.map((mode) => (
+                <label key={mode.value} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name="modes"
+                    value={mode.value}
+                    checked={modes.includes(mode.value)}
+                    onChange={() => toggleMode(mode.value)}
+                    className="size-4 rounded border-line bg-background accent-accent"
+                  />
+                  <span className="text-foreground">{mode.label}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        </div>
 
-      <fieldset className="mt-4">
-        <legend className="text-sm font-medium text-foreground">Objetivos</legend>
-        <p className="mt-1 max-w-[70ch] text-xs leading-relaxed text-muted">
-          Un objetivo apagado deja de repartir puntos y desaparece de la web. Los
-          puntos de cada objetivo se pueden ajustar; deja el valor que trae para no
-          tocarlo. El de Victorias no tiene precio propio: lo paga «Puntos por
-          victoria». Los que pagan por unidad —los de la familia Maestro— enseñan su
-          reparto y no se editan aquí.
-        </p>
+        <div className="mt-5 border-t border-line pt-5">
+          <SwitchField
+            name="countRandomizedCivs"
+            label="Las partidas con civilización aleatoria cuentan para los objetivos de civilización"
+            checked={countRandomizedCivs}
+            onChange={setCountRandomizedCivs}
+          />
+        </div>
+      </SectionCard>
 
-        <div className="mt-3 flex flex-col gap-2">
-          {groups.map((group) => {
-            const activos = group.objectives.filter(
-              (objective) => !disabled.includes(objective.id),
-            ).length;
+      <SectionCard
+        title="Objetivos"
+        description="Apagar un objetivo deja de repartir sus puntos; una cifra vacía mantiene la que ya tenía. Los que pagan por unidad enseñan su reparto y no se editan aquí."
+      >
+        <fieldset>
+          <legend className="sr-only">Objetivos y sus puntos</legend>
 
-            return (
-              <details key={group.group} className="rounded-md border border-line bg-background">
-                <summary className="cursor-pointer px-3 py-2.5 text-sm text-foreground">
-                  <span className="font-medium">{group.label}</span>
-                  <span className="ml-2 text-xs text-muted">
-                    {activos} de {group.objectives.length} activos
-                  </span>
-                </summary>
+          <div className="flex flex-col gap-2">
+            {groups.map((group) => {
+              const activos = group.objectives.filter(
+                (objective) => !disabled.includes(objective.id),
+              ).length;
 
-                <ul className="divide-y divide-line border-t border-line">
-                  {group.objectives.map((objective) => {
-                    const apagado = disabled.includes(objective.id);
+              return (
+                <details key={group.group} className="rounded-md border border-line bg-background">
+                  <summary className="cursor-pointer px-3 py-2.5 text-sm text-foreground">
+                    <span className="font-medium">{group.label}</span>
+                    <span className="ml-2 text-xs text-muted">
+                      {activos} de {group.objectives.length} activos
+                    </span>
+                  </summary>
 
-                    return (
-                      <li
-                        key={objective.id}
-                        className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-2"
-                      >
-                        <label className="flex min-w-0 items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={!apagado}
-                            onChange={() => toggleObjective(objective.id)}
-                            className="size-4 shrink-0 rounded border-line bg-surface accent-accent"
-                          />
-                          <span className={apagado ? "text-muted line-through" : "text-foreground"}>
-                            {objective.label}
-                          </span>
-                        </label>
+                  <ul className="divide-y divide-line border-t border-line">
+                    {group.objectives.map((objective) => {
+                      const apagado = disabled.includes(objective.id);
 
-                        {objective.id === VICTORIAS_ID ? (
-                          <span className="text-xs text-muted">
-                            Lo paga «Puntos por victoria»
-                          </span>
-                        ) : objective.pointsPerUnit !== null ? (
-                          <span className="text-xs text-muted">
-                            {objective.pointsPerUnit}{" "}
-                            {objective.pointsPerUnit === 1 ? "punto" : "puntos"} por victoria ·
-                            máximo {objective.target ?? objective.points}
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-2 text-xs text-muted">
-                            Puntos
+                      return (
+                        <li
+                          key={objective.id}
+                          className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-2"
+                        >
+                          <label className="flex min-w-0 items-center gap-2 text-sm">
                             <input
-                              type="number"
-                              name={`${OBJECTIVE_POINTS_FIELD_PREFIX}${objective.id}`}
-                              min={1}
-                              step={1}
-                              value={points[objective.id] ?? ""}
-                              onChange={(event) => setPoint(objective.id, event.target.value)}
-                              aria-label={`Puntos de ${objective.label}`}
-                              className="h-9 w-20 rounded-md border border-line bg-surface px-2 text-right text-sm tabular-nums text-foreground"
+                              type="checkbox"
+                              checked={!apagado}
+                              onChange={() => toggleObjective(objective.id)}
+                              className="size-4 shrink-0 rounded border-line bg-surface accent-accent"
                             />
-                          </span>
-                        )}
+                            <span className={apagado ? "text-muted line-through" : "text-foreground"}>
+                              {objective.label}
+                            </span>
+                          </label>
 
-                        {apagado ? (
-                          <input type="hidden" name="disabledObjectives" value={objective.id} />
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </details>
-            );
-          })}
-        </div>
-      </fieldset>
+                          {objective.id === VICTORIAS_ID ? (
+                            <span className="text-xs text-muted">
+                              Lo paga «Puntos por victoria»
+                            </span>
+                          ) : objective.pointsPerUnit !== null ? (
+                            <span className="text-xs text-muted">
+                              {objective.pointsPerUnit}{" "}
+                              {objective.pointsPerUnit === 1 ? "punto" : "puntos"} por victoria ·
+                              máximo {objective.target ?? objective.points}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-2 text-xs text-muted">
+                              Puntos
+                              <input
+                                type="number"
+                                name={`${OBJECTIVE_POINTS_FIELD_PREFIX}${objective.id}`}
+                                min={1}
+                                step={1}
+                                value={points[objective.id] ?? ""}
+                                onChange={(event) => setPoint(objective.id, event.target.value)}
+                                aria-label={`Puntos de ${objective.label}`}
+                                className="h-9 w-20 rounded-md border border-line bg-surface px-2 text-right text-sm tabular-nums text-foreground"
+                              />
+                            </span>
+                          )}
 
-      <div className="mt-4 flex flex-wrap items-center gap-4">
+                          {apagado ? (
+                            <input type="hidden" name="disabledObjectives" value={objective.id} />
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </details>
+              );
+            })}
+          </div>
+        </fieldset>
+      </SectionCard>
+
+      <div className="flex flex-wrap items-center gap-4 border-t border-line pt-4">
         <button
           type="submit"
           disabled={pending}
@@ -386,37 +388,34 @@ function LockedRulesetForm({
   );
 
   return (
-    <div className="flex flex-col gap-4">
-      <p className="max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
+    <div className="flex flex-col gap-6">
+      <Callout
+        tone="locked"
+        title={
+          editionEnded
+            ? "La edición anterior ya ha terminado"
+            : "Las reglas de puntuación están cerradas"
+        }
+      >
         {editionEnded ? (
           <>
-            <strong className="font-semibold text-foreground">
-              La edición anterior ya ha terminado
-            </strong>
-            . Sus reglas quedaron congeladas al empezar y no se pueden cambiar. Para
-            configurar las reglas de la siguiente edición hay que mover el inicio en{" "}
-            {datesLink}: cuando el nuevo inicio sea futuro, esta pantalla volverá a estar
-            editable.
+            Sus reglas quedaron congeladas al empezar y no se pueden cambiar. Para
+            configurar las de la siguiente edición, mueve el inicio en {datesLink}: cuando
+            sea futuro, esta pantalla volverá a estar editable.
           </>
         ) : (
           <>
-            <strong className="font-semibold text-foreground">
-              Las reglas de puntuación están cerradas
-            </strong>
-            .{" "}
             {windowStartLabel !== null
               ? `La edición empezó el ${windowStartLabel}`
               : "La edición ya ha empezado"}{" "}
-            y, desde ese momento, cambiar los puntos o los objetivos movería una
-            clasificación ya publicada. El fin de la ventana se fija o se mueve en{" "}
-            {datesLink}.
+            y cambiar los puntos o los objetivos movería una clasificación ya publicada.
+            El fin de la ventana se fija o se mueve en {datesLink}.
           </>
         )}
-      </p>
+      </Callout>
 
-      <div className="rounded-lg border border-line bg-surface p-4">
-        <h3 className="text-base font-medium">Reglas congeladas</h3>
-        <dl className="mt-3 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+      <SectionCard title="Reglas congeladas">
+        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-xs text-muted">Puntos por victoria</dt>
             <dd className="mt-0.5 tabular-nums text-foreground">{ruleset.pointsPerWin}</dd>
@@ -445,7 +444,7 @@ function LockedRulesetForm({
             </dd>
           </div>
         </dl>
-      </div>
+      </SectionCard>
     </div>
   );
 }

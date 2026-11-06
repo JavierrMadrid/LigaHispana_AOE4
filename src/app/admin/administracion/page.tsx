@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AdminsPanel } from "@/app/admin/administracion/admins-panel";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { listAdmins } from "@/lib/admin-users";
 
 export const metadata: Metadata = {
@@ -17,16 +18,14 @@ export default async function AdminAdministrationPage() {
   const admins = await listAdmins().catch(() => null);
 
   return (
-    <section>
-      <h2 className="text-lg font-medium">Administradores</h2>
-      <p className="mt-1 max-w-[70ch] text-sm text-muted">
-        Las cuentas que pueden entrar al panel. El alta es por invitación: se escribe
-        el correo y la persona recibe un enlace para fijar su contraseña. Dar de baja
-        desactiva la cuenta —no la borra—, así que se puede reactivar.
-      </p>
-      <div className="mt-4">
-        <AdminsPanel admins={admins} />
-      </div>
-    </section>
+    <div className="flex flex-col gap-6">
+      <AdminPageHeader
+        level={2}
+        title="Administradores"
+        description="Las cuentas que pueden entrar al panel."
+      />
+
+      <AdminsPanel admins={admins} />
+    </div>
   );
 }

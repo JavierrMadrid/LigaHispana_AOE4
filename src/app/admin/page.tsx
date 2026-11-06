@@ -4,6 +4,9 @@ import { PlayerForm } from "@/app/admin/player-form";
 import { PlayerStatusActions } from "@/app/admin/player-status-actions";
 import { VerificationBadge } from "@/app/admin/participant-verification";
 import { SyncNowButton } from "@/app/admin/sync-now-button";
+import { AdminPageHeader } from "@/components/admin/page-header";
+import { Callout } from "@/components/admin/callout";
+import { SectionCard } from "@/components/admin/section";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { EmptyState } from "@/components/empty-state";
 import { getAdminParticipants, getSyncHealth } from "@/lib/admin";
@@ -133,74 +136,41 @@ export default async function AdminPage() {
   // AoE4World pare de limitar.
   return (
     <div className="flex flex-col gap-8">
-      <section>
-        <h1 className="text-2xl font-semibold">Participantes</h1>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Alta y aprobación de los jugadores del torneo. Solo los aprobados entran
-          en la clasificación pública.
-        </p>
-      </section>
+      <AdminPageHeader
+        title="Participantes"
+        description="Altas y aprobaciones del torneo: solo los aprobados entran en la clasificación."
+      />
 
       {/* El aviso va aquí, entre el titular y el resumen, porque es lo primero que
           hay que leer antes de dar un alta y así entra en la primera pantalla sin
           desplazarse. Es un estado persistente, no un suceso: no lleva `role` ni se
-          anuncia solo, y el icono acompaña al texto en vez de sustituirlo, porque
-          quien no distinga el rojo tiene que enterarse igual. Se dice la
-          consecuencia concreta —aprobar aprueba— porque el fallo real no es que
-          falte una variable, es que el alta se da por buena sin que nadie lo sepa. */}
+          anuncia solo. Se dice la consecuencia concreta —aprobar aprueba— porque el
+          fallo real no es que falte una variable, es que el alta se da por buena sin
+          que nadie lo sepa. */}
       {discordVerificationEnabled ? null : (
-        <section className="rounded-lg border border-danger/40 bg-danger/5 px-5 py-4">
-          <div className="flex gap-3">
-            <svg
-              viewBox="0 0 16 16"
-              aria-hidden="true"
-              className="mt-0.5 size-4 shrink-0 text-danger"
-            >
-              <path
-                d="M8 2.25 1.5 13.5h13L8 2.25Z"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M8 6.25v3"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-              />
-              <circle cx="8" cy="11.25" r="0.8" fill="currentColor" />
-            </svg>
-
-            <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-danger-soft">
-                Verificación del alta por privado desactivada
-              </h2>
-              <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-muted">
-                Mientras falte, dar de alta como «Aprobado» aprueba directamente: no
-                se pide confirmación a la persona ni se envía el privado de Discord.
-              </p>
-              <p className="mt-2 text-xs leading-relaxed text-muted">
-                {missingVerificationEnv.length === 1
-                  ? "Falta esta variable:"
-                  : "Faltan estas variables:"}{" "}
-                {missingVerificationEnv.map((name) => (
-                  <code
-                    key={name}
-                    className="mr-1.5 inline-block rounded-sm border border-line bg-background px-1.5 py-0.5 font-mono text-xs text-foreground"
-                  >
-                    {name}
-                  </code>
-                ))}
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-muted">
-                Se configuran en las variables del Worker de producción:
-                DISCORD_PUBLIC_KEY es la Public Key de la aplicación de Discord. En
-                cuanto estén puestas, este aviso desaparece.
-              </p>
-            </div>
-          </div>
-        </section>
+        <Callout tone="warning" title="Verificación del alta por privado desactivada">
+          <p className="max-w-[70ch]">
+            Mientras falte, dar de alta como «Aprobado» aprueba directamente: no se pide
+            confirmación a la persona ni se envía el privado de Discord.
+          </p>
+          <p className="mt-2 text-xs">
+            {missingVerificationEnv.length === 1
+              ? "Falta esta variable:"
+              : "Faltan estas variables:"}{" "}
+            {missingVerificationEnv.map((name) => (
+              <code
+                key={name}
+                className="mr-1.5 inline-block rounded-sm border border-line bg-background px-1.5 py-0.5 font-mono text-xs text-foreground"
+              >
+                {name}
+              </code>
+            ))}
+          </p>
+          <p className="mt-1 text-xs">
+            Se configuran en las variables del despliegue; al ponerlas, este aviso
+            desaparece.
+          </p>
+        </Callout>
       )}
 
       {/* Resumen y sincronización, en dos tarjetas de la mitad de ancho cada una
@@ -321,27 +291,27 @@ export default async function AdminPage() {
       </div>
 
       {pendingPlayers > 0 ? (
-        <section
+        <SectionCard
           id="solicitudes-pendientes"
-          className="rounded-lg border border-accent/40 bg-accent/5 p-4"
+          level={2}
+          title="Solicitudes pendientes"
+          description="Aprueba o rechaza para que la clasificación refleje el estado real."
+          actions={
+            <span className="text-sm tabular-nums text-muted">
+              {pendingPlayers === 1 ? "1 pendiente" : `${pendingPlayers} pendientes`}
+            </span>
+          }
         >
-          <h2 className="font-display text-lg font-semibold text-accent">
-            {pendingPlayers === 1 ? "1 solicitud pendiente" : `${pendingPlayers} solicitudes pendientes`}
-          </h2>
-          <p className="mt-1 text-sm text-muted">
-            Aprueba o rechaza para que la clasificación refleje el estado real.
-          </p>
           {/* La primera frase es la corrección de la issue 119: aprobar un alta
               sujeta a verificación **no** la aprueba, manda el privado y la deja
               pendiente. El resto sigue siendo verdad para las dos clases de alta:
               aprobar no trae partidas ni recalcula en el momento. */}
-          <p className="mt-2 border-t border-line pt-2 text-xs text-muted">
-            Aprobar no siempre aprueba: si el alta está sujeta a verificación por Discord,
-            el bot manda un privado a la persona y el alta sigue pendiente hasta que
-            confirme. Solo entonces entra en la clasificación, en la próxima pasada del
-            sincronizador (hasta 10 minutos) o al pulsar «Sincronizar ahora», con 0 puntos
-            y 0 partidas hasta que tenga partidas clasificatorias.
-          </p>
+          <Callout tone="info">
+            Aprobar un alta sujeta a verificación por Discord no la aprueba: el bot manda
+            un privado y sigue pendiente hasta que la persona confirme. Entra en la
+            clasificación en la siguiente sincronización, con 0 puntos y 0 partidas hasta
+            que tenga partidas clasificatorias.
+          </Callout>
 
           {/* La banda de avisos va una sola vez por cola y por encima de las filas:
               aquí viven los botones de estado (`PlayerStatusActions`), que ya solo
@@ -349,11 +319,11 @@ export default async function AdminPage() {
               de estar pendiente y desaparece de esta lista. */}
           <div className="mt-4">
             <ActionFeedbackProvider>
-              <ul className="flex flex-col gap-2">
+              <ul className="divide-y divide-line">
                 {pending.map((player) => (
                   <li
                     key={player.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-surface px-3 py-2"
+                    className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
                   >
                     <div className="min-w-0">
                       <p className="break-words font-medium text-foreground">{player.name}</p>
@@ -375,7 +345,7 @@ export default async function AdminPage() {
               </ul>
             </ActionFeedbackProvider>
           </div>
-        </section>
+        </SectionCard>
       ) : null}
 
       <section>
