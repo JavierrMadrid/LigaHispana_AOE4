@@ -120,6 +120,8 @@ aparte: hacerlo contaría dos veces las victorias.
 
 ## Permanentes y temporales
 
+En la portada se presentan como **Acumulados** y **Por liderato**, respectivamente; el reparto y las reglas son los mismos.
+
 La clasificación publica el total partido en dos columnas, y las dos suman **siempre** el total
 (`PlayerScore.total`):
 

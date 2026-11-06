@@ -8,6 +8,13 @@ const absoluteDay = new Intl.DateTimeFormat("es-ES", {
   month: "long",
 });
 
+export function normalizeSearchText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
 /**
  * Cuánto pasó desde `date`, en castellano y en corto: "ahora mismo",
  * "hace 12 min", "hace 3 h", "hace 2 días y 5 horas".

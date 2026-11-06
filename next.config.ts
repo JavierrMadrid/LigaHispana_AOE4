@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   // `pg-cloudflare` publica su socket de Cloudflare solo bajo la condicion de
   // exports "workerd", y la rama que ve Node (la que usa el trazador de ficheros
   // de Next) es un modulo vacio. Al trazar, nft solo se lleva `package.json` y
