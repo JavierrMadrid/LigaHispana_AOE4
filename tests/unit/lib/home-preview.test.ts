@@ -23,6 +23,11 @@ describe("clasificación de desarrollo para carga completa", () => {
       expect(row.points).toBe(row.pointsByWins + row.pointsByObjectives);
       expect(row.pointsByWins).toBe(row.wins * 2);
       expect(row.pointsByObjectives).toBe(row.objectives.reduce((total, objective) => total + objective.points, 0));
+      expect(row.points).toBe(row.pointsAccumulated! + row.pointsByLeadership!);
+      expect(row.pointsByLeadership).toBe(row.objectives.reduce((total, objective) => (
+        objectives.get(objective.id)?.kind === "competition" ? total + objective.points : total
+      ), 0));
+      expect(row.pointsAccumulated).toBe(row.points - row.pointsByLeadership!);
       expect(row.wins).toBeGreaterThanOrEqual(0);
       expect(row.losses).toBeGreaterThanOrEqual(0);
       if (row.streak === null) expect(row.wins + row.losses).toBe(0);

@@ -23,6 +23,7 @@ import {
   type ObjectiveTarget,
 } from "@/lib/objectives";
 import { rankedModesWhere } from "@/lib/ranked-match";
+import { standingPointsBreakdown } from "@/lib/standing-points";
 import { readMatcherinoDonations, readSyncRunTrace } from "@/lib/settings";
 import {
   RULESET_VERSION,
@@ -194,6 +195,10 @@ export type StandingRow = {
   pointsByWins: number;
   /** Parte de `points` que aportan los objetivos poseídos (`objectives.points`). */
   pointsByObjectives: number;
+  /** Victorias y logros; `null` si el desglose guardado no permite separarlos. */
+  pointsAccumulated: number | null;
+  /** Competiciones que lidera, con el mismo estado de disponibilidad que acumulados. */
+  pointsByLeadership: number | null;
   wins: number;
   /** Derrotas (`PlayerScore.matches - wins`). */
   losses: number;
@@ -454,6 +459,7 @@ async function loadStandings(): Promise<StandingRow[]> {
       points: row.total,
       pointsByWins: row.total - pointsByObjectives,
       pointsByObjectives,
+      ...standingPointsBreakdown(row.total, row.breakdown, ruleset.objectives),
       wins: row.wins,
       losses: row.matches - row.wins,
       elo: row.player.elo,

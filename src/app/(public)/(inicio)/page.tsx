@@ -5,9 +5,9 @@ import { ArrowUpRight } from "@phosphor-icons/react/dist/ssr/ArrowUpRight";
 import { Users } from "@phosphor-icons/react/dist/ssr/Users";
 import { LiveDot } from "@/components/live-dot";
 import {
-  HomeLeaders,
   HomeStandings,
   HomeReload,
+  HomePlayerChannels,
 } from "@/components/home-standings";
 import { LiveRefresh } from "@/components/live-refresh";
 import { TournamentCountdown } from "@/components/tournament-countdown";
@@ -31,14 +31,19 @@ export const dynamic = "force-dynamic";
 export default async function StandingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ concept?: string; preview?: string }>;
+  searchParams: Promise<{ preview?: string }>;
 }) {
   const params = await searchParams;
   const preview =
     process.env.NODE_ENV === "development" ? params.preview : undefined;
   if (preview === "loading") return <Loading />;
   const stress = preview === "stress";
-  const [standings, liveMatches, tournamentWindow, lastSync] = stress
+  const mocked =
+    stress ||
+    preview === "empty" ||
+    preview === "live" ||
+    preview === "unavailable";
+  const [standings, liveMatches, tournamentWindow, lastSync] = mocked
     ? ([
         { status: "ok", data: [] },
         { status: "ok", data: [] },
@@ -53,74 +58,83 @@ export default async function StandingsPage({
       ]);
   const now = new Date().toISOString();
   const nowMs = new Date(now).getTime();
-  const statusWindow = stress
-    ? {
-        from: new Date(nowMs - 24 * 60 * 60_000).toISOString(),
-        to: new Date(nowMs + (9 * 24 * 60 + 7 * 60 + 22) * 60_000).toISOString(),
-      }
-    : tournamentWindow.status === "ok"
-      ? tournamentWindow.data
-      : null;
-  const statusUpdatedAt = stress
-    ? new Date(nowMs - 2 * 60_000).toISOString()
-    : lastSync.status === "ok"
-      ? lastSync.data
-      : null;
+  const statusWindow =
+    mocked && preview !== "unavailable"
+      ? {
+          from: new Date(nowMs - 24 * 60 * 60_000).toISOString(),
+          to: new Date(
+            nowMs + (9 * 24 * 60 + 7 * 60 + 22) * 60_000,
+          ).toISOString(),
+        }
+      : tournamentWindow.status === "ok"
+        ? tournamentWindow.data
+        : null;
+  const statusUpdatedAt =
+    mocked && preview !== "unavailable"
+      ? new Date(nowMs - 2 * 60_000).toISOString()
+      : lastSync.status === "ok"
+        ? lastSync.data
+        : null;
   const degraded =
-    !stress &&
-    (standings.status === "degraded" ||
-      liveMatches.status === "degraded" ||
-      preview === "unavailable");
+    (!mocked &&
+      (standings.status === "degraded" || liveMatches.status === "degraded")) ||
+    preview === "unavailable";
   const rows = stress
     ? createHomeStressRows()
-    : preview === "empty"
-    ? []
-    : (standings.data ?? []).map((row, index) =>
-        preview === "live" && index === 0
-          ? {
-              ...row,
-              isPlaying: true,
-              twitchIsLive: row.twitchChannel !== null,
-            }
-          : row
-      );
-  const liveGames = stress
-    ? 3
     : preview === "live"
-      ? 1
-      : liveMatches.data?.length ?? 0;
-  const hub =
-    process.env.NODE_ENV === "development" && params.concept === "hub";
+      ? createHomeStressRows().slice(0, 12)
+      : preview === "empty" || preview === "unavailable"
+        ? []
+        : [...(standings.data ?? [])];
+  const liveGames =
+    stress || preview === "live" ? 3 : (liveMatches.data?.length ?? 0);
+  const streaming = rows
+    .filter(
+      (row) =>
+        (row.twitchChannel && row.twitchIsLive) ||
+        (row.youtubeChannel && row.youtubeIsLive) ||
+        (row.kickChannel && row.kickIsLive),
+    )
+    .slice(0, 3);
+  const phase = !statusWindow
+    ? null
+    : nowMs < new Date(statusWindow.from).getTime()
+      ? "Próximamente"
+      : statusWindow.to && nowMs >= new Date(statusWindow.to).getTime()
+        ? "Liga finalizada"
+        : "Liga en marcha";
 
   return (
-    <div>
-      <section className="home-intro home-heraldic-frame" aria-labelledby="home-title">
-        <Image
-          src="/imagenes/portada/aoe4-delhi-banner.webp"
-          alt=""
-          fill
-          sizes="(max-width: 640px) calc(100vw - 32px), (max-width: 1440px) calc(100vw - 80px), 1360px"
-          className="home-banner-art"
-        />
-        <div className="home-hero-identity">
+    <div className="home-layout">
+      <section className="home-overview" aria-labelledby="home-title">
+        <div className="home-identity-art">
           <Image
             src="/imagenes/portada/escudo-liga-hispana.webp"
             alt=""
             width={960}
             height={804}
             preload
-            sizes="(max-width: 640px) 172px, 234px"
+            sizes="(min-width: 1440px) 176px, 64px"
             className="home-hero-emblem"
           />
           <div className="home-hero-copy">
-            <h1 id="home-title">{hub ? "La liga se juega aquí." : "Liga Hispana"}</h1>
-            <p className="home-hero-game">Age of Empires IV</p>
-            <p className="home-hero-description">Clasificación y partidas en directo</p>
+            <h1 id="home-title">Liga Hispana</h1>
+            <p>Age of Empires IV</p>
           </div>
+        </div>
+        <div className="home-tournament-status">
+          {phase ? <p className="home-tournament-phase">{phase}</p> : null}
+          {!degraded ? (
+            <span className="home-participants">
+              <Users size={15} aria-hidden="true" />
+              <strong>{rows.length.toLocaleString("es-ES")}</strong>{" "}
+              {rows.length === 1 ? "participante" : "participantes"}
+            </span>
+          ) : null}
         </div>
       </section>
       {degraded ? (
-        <section className="home-error">
+        <section className="home-error" role="status">
           <h2>La clasificación no está disponible</h2>
           <p>
             No se ha podido leer la clasificación ni las partidas en juego.
@@ -130,58 +144,94 @@ export default async function StandingsPage({
           <HomeReload />
         </section>
       ) : (
-        <>
-          <div className="home-status">
-            <div className="home-status-main">
-              {liveGames > 0 ? <LiveDot /> : null}
-              <div>
-                {liveGames > 0 ? (
-                  <Link
+        <HomeStandings
+          rows={rows}
+          objectiveDescriptions={HOME_OBJECTIVE_DESCRIPTIONS}
+        />
+      )}
+      <aside className="home-activity" aria-label="Actividad del torneo">
+        {!degraded && streaming.length ? (
+          <section
+            className="home-streams"
+            aria-labelledby="home-streams-heading"
+          >
+            <h2 id="home-streams-heading">
+              <LiveDot />
+              En directo ahora
+            </h2>
+            <ul>
+              {streaming.map((row) => (
+                <li key={row.profileId}>
+                  <a
+                    href={row.profileUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    href="/partidas"
+                    title={row.name}
                   >
-                    <strong>
-                      {liveGames === 1
-                        ? "1 Partida en juego ahora"
-                        : `${liveGames} Partidas en juego ahora`}
-                      <ArrowUpRight
-                        size={14}
-                        className="inline ml-2"
-                        aria-hidden="true"
-                      />
-                    </strong>
-                  </Link>
-                ) : (
-                  <>
-                    <strong>Sin partidas en juego ahora mismo</strong>
-                  </>
-                )}
-              </div>
-            </div>
-            <div className="home-status-meta">
-              <span className="home-participants">
-                <Users size={16} aria-hidden="true" />
-                <strong>{rows.length}</strong>{" "}
-                {rows.length === 1 ? "participante" : "participantes"}
-              </span>
-              {statusWindow ? (
-                <TournamentCountdown
-                  from={statusWindow.from}
-                  to={statusWindow.to}
-                  serverNow={now}
-                />
-              ) : null}
-              <LiveRefresh showStatus dataUpdatedAt={statusUpdatedAt} />
-            </div>
-          </div>
-          {hub ? <HomeLeaders rows={rows} /> : null}
-          <HomeStandings
-            rows={rows}
-            objectiveDescriptions={HOME_OBJECTIVE_DESCRIPTIONS}
+                    {row.name}
+                  </a>
+                  <HomePlayerChannels row={row} liveOnly />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <section
+          className="home-live-games"
+          aria-labelledby="home-games-heading"
+        >
+          <h2 id="home-games-heading">Partidas en juego</h2>
+          {degraded ? (
+            <p>Actividad no disponible</p>
+          ) : liveGames > 0 ? (
+            <p className="home-game-count">
+              <LiveDot />
+              <strong>
+                {liveGames}{" "}
+                {liveGames === 1 ? "partida en juego" : "partidas en juego"}{" "}
+                ahora
+              </strong>
+            </p>
+          ) : (
+            <p>No hay partidas en juego ahora.</p>
+          )}
+          <Link href="/partidas" target="_blank" rel="noopener noreferrer">
+            Ver partidas
+            <ArrowUpRight size={14} aria-hidden="true" />
+          </Link>
+        </section>
+      </aside>
+      <div className="home-tournament-timing">
+        {statusWindow ? (
+          <TournamentCountdown
+            from={statusWindow.from}
+            to={statusWindow.to}
+            serverNow={now}
           />
-        </>
-      )}
+        ) : null}
+        <LiveRefresh showStatus dataUpdatedAt={statusUpdatedAt} />
+      </div>
+      <aside className="home-scoring" aria-labelledby="home-scoring-heading">
+        <h2 id="home-scoring-heading">Cómo sumar puntos</h2>
+        <dl>
+          <div>
+            <dt>Por victorias</dt>
+            <dd>2 puntos por cada victoria clasificatoria.</dd>
+          </div>
+          <div>
+            <dt>Por objetivos</dt>
+            <dd>Completa objetivos o lidera retos para sumar puntos extra.</dd>
+          </div>
+        </dl>
+        <Link href="/puntuacion" target="_blank" rel="noopener noreferrer">
+          Ver puntuación
+          <ArrowUpRight size={14} aria-hidden="true" />
+        </Link>
+        <Link href="/objetivos" target="_blank" rel="noopener noreferrer">
+          Explorar objetivos
+          <ArrowUpRight size={14} aria-hidden="true" />
+        </Link>
+      </aside>
     </div>
   );
 }

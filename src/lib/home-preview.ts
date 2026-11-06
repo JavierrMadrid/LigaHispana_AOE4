@@ -5,6 +5,7 @@ import { DIVISIONS } from "@/lib/divisions";
 import { aoe4WorldProfileUrl } from "@/lib/format";
 import { OBJECTIVE_DEFINITIONS } from "@/lib/objectives";
 import type { StandingObjective, StandingRow } from "@/lib/public";
+import { standingPointsBreakdown } from "@/lib/standing-points";
 
 export const HOME_STRESS_PLAYER_COUNT = 1500;
 const PROFILE_ID_BASE = 90_100_000;
@@ -92,6 +93,9 @@ export function createHomeStressRows(): StandingRow[] {
       points: pointsByWins + pointsByObjectives,
       pointsByWins,
       pointsByObjectives,
+      ...standingPointsBreakdown(pointsByWins + pointsByObjectives, {
+        objectives: { points: pointsByObjectives, earned: objectives.map(({ id }) => id) },
+      }),
       wins,
       losses,
       elo: unranked ? null : ELO_BASE[divisionIndex] + (tier - 1) * 65 + index % 45,

@@ -106,6 +106,20 @@ aplican.
 
 ## Ejemplo
 
+### Desglose de la clasificación
+
+| Etiqueta | Qué incluye |
+|---|---|
+| **Acumulados** | Victorias y objetivos de tipo logro; otro jugador no los quita al superar una marca. |
+| **Por liderato** | Objetivos de tipo competición que el jugador posee actualmente; cambian de poseedor al perder el liderato. |
+
+- **Total = Acumulados + Por liderato**. El reparto anterior por victorias y objetivos sigue disponible para las otras vistas.
+- Se usa el total cobrado de objetivos, no la suma nominal de tarjetas: **Imparable** puede aportar menos que su máximo.
+- Un desglose antiguo, incompleto o incompatible con las reglas vigentes se muestra como **no disponible**; el total se conserva.
+- «Acumulados» no impide los recálculos por correcciones de partidas o reglas del torneo.
+
+### Suma total
+
 Jugador con 140 clasificatorias y 84 victorias (60 %):
 
 - Partidas: 84 × 2 = **168 puntos**.

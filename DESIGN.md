@@ -1,70 +1,67 @@
 # Portada · Liga Hispana AoE IV
 
-Referencia inicial: Capital Overview Dashboard, de Sourasith Phomhome. Se conserva su jerarquía compacta; la identidad medieval de Age of Empires IV define ahora el material, la tipografía y el acento.
+La clasificación es la tarea principal: ver quién lidera y con cuántos puntos al entrar. La información secundaria se consulta en los laterales o al desplegar un jugador.
 
-| Elemento | Regla |
-|---|---|
-| Ámbito | Solo `/`, incluida cabecera y pie; otras rutas conservan su diseño |
-| Fondo / panel / borde | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D` |
-| Texto principal / secundario | `#EDF1F8` / `#B6C3D6` |
-| Acento | Oro `#D6B568` solo para inscripción, controles seleccionados, foco y primer puesto; rojo `#EF8D7D` para emisión |
-| Tipografía | Cinzel para marca, titular y títulos de sección; Inter para filas, controles y cifras; JetBrains Mono para metadatos |
-| Espaciado | Base 8px; separación 16–32px; ancho máximo 1440px |
-| Radios | Paneles 6px, controles 4px; emblemas de objetivos circulares y placas de puesto con base de escudo |
-| Iconos | Phosphor Icons (`@phosphor-icons/react`), peso regular; importación `/ssr` en servidor |
-| Identidad | Emblema de la liga, banderas, escudos y marcas de plataformas existentes |
-| Movimiento | Filas que aparecen al entrar en pantalla (340ms), objetivos (250ms) y transiciones de color/borde en controles; movimiento reducido estático |
+| Elemento                     | Regla                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------- |
+| Ámbito                       | Solo `/`, incluida cabecera y pie; otras rutas conservan su diseño                          |
+| Fondo / panel / borde        | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D`                        |
+| Texto principal / secundario | `#EDF1F8` / `#B6C3D6`                                                                       |
+| Acento                       | Oro `#D6B568` para inscripción, selección, foco y primer puesto; rojo para emisión          |
+| Tipografía                   | Cinzel para identidad; Inter para tablas, controles y títulos funcionales; cifras tabulares |
+| Espaciado                    | Base 4–8px; laterales separados 24px; conjunto de ancho máximo 1360px                       |
+| Radios                       | Tabla y paneles 6px; controles 4px                                                          |
+| Iconos                       | Phosphor Icons, peso regular; `/ssr` en servidor; assets oficiales de marcas y divisiones   |
+| Modo                         | Operate: resultados visibles desde el primer render, sin entradas animadas de filas         |
 
-## Composición
+## Composición y densidad
 
-- Marcador: identidad alineada a la izquierda en la franja de portada, banda de estado y clasificación en un panel único.
-- Banda de estado compacta en una línea en escritorio: punto rojo con la animación de `LiveDot`, «N Partidas en juego ahora», participantes, cuenta atrás y actualización. Sin subtítulo ni recuadro de icono; adapta los datos a varias líneas en pantallas estrechas. Con movimiento reducido, punto estático.
-- La tabla empieza directamente en filtros; su título «Clasificación general» solo se conserva para lectores de pantalla. El enlace de puntuación permanece en el pie.
-- Orden: selector nativo con flecha Phosphor superpuesta sin eventos y 36px de espacio reservado; dirección independiente.
-- Inscripción de cabecera (`home-signup-gold`): oro metálico con arista iluminada y halo discreto; un reflejo al pasar/enfocar, estático con movimiento reducido. Los demás botones primarios conservan su acabado habitual.
-- Franja heráldica de 236px en escritorio: escudo transparente de 196px de alto junto al título «Liga Hispana» en Cinzel, «Age of Empires IV» y una línea descriptiva en HTML. Identidad a la izquierda; paisaje del Sultanato de Delhi y elefante a la derecha, con fundido azul gradual, profundidad estática y marco metálico fino. En móvil se apila, con escudo de 144px de alto, texto centrado y paisaje más tenue. Cabecera y pie conservan sus emblemas actuales; la marca de la cabecera dice «La Liga Hispana».
-- Fondo con grano mate fino y luz azul grisácea estática de baja intensidad. Paneles neutros: sin baños dorados ni texturas amarillas.
-- Podio: oro, plata y bronce; primera fila con superficie neutra más clara y filete dorado estrecho. Emblemas de división grandes y objetivos con medallón de metal neutro.
-- Variante de revisión: `/?concept=hub` añade líderes y mayor presencia de identidad; solo en desarrollo.
-- Filtros con etiquetas visibles e iconos de partida/emisión; leyenda «Filtros de estado». Controles de 44px y texto de 14px; recuento y orden separados.
-- Escritorio: filas uniformes de 80px y separación de 5px; nombre a 17px (truncado con nombre completo accesible), puntos a 28px y desglose textual. Fichas móviles/tablet de 232px, sin cambios de altura por emisión o podio.
-- Móvil y tableta: fichas de competición de 232px de alto, con puesto, identidad, puntos y métricas legibles, sin desplazamiento horizontal de página.
-- Filtros combinables: nombre/canal, división, en partida y en directo; limpiar filtros explícitamente.
-- División: lista accesible con iconos oficiales en opciones y selección; flechas, Inicio/Fin, Escape y tabulador.
-- Foco: una sola señal en el contenedor de búsqueda y en los controles; nunca un segundo contorno interior.
-- Bandera: junto al nombre y en un único lienzo decorativo por fila. SVG con proporción natural pegado a la derecha; una franja de 1px de su borde izquierdo se prolonga mediante transformación para igualar sus colores. Velo y máscara suavizan el conjunto. En móvil, motivo centrado de 140px de alto. Nunca estirar el SVG ni pintarlo por celda.
-- Elo: emblema junto a la cifra en una fila centrada bajo su cabecera, sin nombre de división visible; el nombre se conserva en la ayuda al pasar el ratón. Espacio fijo para el emblema incluso cuando no hay clasificación. Derrotas y rachas negativas en rojo.
-- Objetivos e indicador «En partida»: comparten `HomeObjectiveHelp` por hover, foco o toque; Escape cierra la ayuda. Un provider de portada permite una sola ayuda activa: al entrar, enfocar o pulsar otra, cierra la anterior y cancela su espera. Conserva 160ms de salida para alcanzar el tooltip con el puntero. El estado conserva su punto de 10px, con botón accesible de 24px y tooltip de ancho natural, sin ayuda nativa de `title`.
-- Tarjetas de objetivos desplegados: el botón y el área de ayuda ocupan toda la tarjeta, incluidos borde y espaciado. Fondo con transición de 200ms al pasar el ratón o enfocar con teclado; sin transición con movimiento reducido.
-- Enlaces de portada en pestaña nueva, salvo el salto al contenido de la misma página.
-- Fuera de `?preview=stress`, nunca inventar resultados, gráficos u horas de sincronización. Una lectura fallida muestra un aviso sin recuentos falsos.
-- Previsualizaciones de desarrollo: `?preview=loading`, `empty`, `unavailable` y `live`; no escriben en la base.
-- Paginación de 25 jugadores: buscar, filtrar y ordenar en la colección completa antes de dividirla; esas acciones vuelven a página 1. Controles de primera/anterior/siguiente/última y rango anunciado.
-- `?preview=stress`: 1.500 jugadores ficticios deterministas, con 25 filas en el HTML inicial y por página; la página omite lecturas de clasificación. Incluye una franja de estado ficticia según [la simulación documentada](docs/OPERACION.md#carga-de-1500-participantes-en-la-portada). Un único `IntersectionObserver` por página revela las filas en ambos modos. HTML inicial y ausencia de JavaScript siguen siendo legibles; el foco revela inmediatamente.
-- Sin importes de premios inventados, etiquetas de muestra ni indicadores de desarrollo visibles; la portada no muestra un bloque de premios hasta disponer de información publicada.
-- Navegación de portada: texto sin iconos ni fondos; subrayado dorado al pasar y en la ruta activa. Alineada hacia inscripción; el acceso de organización vive solo en el pie.
-- `stress` conserva sus datos ficticios y páginas de 25, pero usa la presentación habitual sin avisos, rótulos de prueba ni etiquetas de muestra visibles.
+- Desde 1440px: orientación a la izquierda (192px), clasificación central y actividad a la derecha (208px). Identidad con escudo transparente; panorama adaptado del Sacro Imperio Romano debajo de la navegación y detrás del comienzo del contenido, sin duplicarlo dentro de la identidad.
+- De 1100 a 1439px: identidad y estado compactos sobre la tabla; actividad a la derecha; ayuda de puntuación debajo.
+- Por debajo de 1100px: una columna; identidad breve, clasificación, actividad y ayuda. El orden del DOM mantiene primero la tabla y después los enlaces de apoyo.
+- Móvil: escudo pequeño y participantes sobre la tabla; cuenta atrás y actualización pasan debajo de la clasificación y la actividad. El refresco de datos se monta una sola vez.
+- Tabla continua de fondo neutro y separadores finos. Filas de 44px en escritorio y 52px en móvil; altura uniforme con independencia de emisión o podio.
+- Columnas: puesto, jugador, puntos totales, V / D, Elo y expansión. Victorias y derrotas permanecen visibles en móvil, con etiqueta accesible completa. Reutilizan los colores del detalle: victorias verdes y derrotas rojas si son mayores que cero; separador y cero neutros. En móvil Elo pasa al detalle. Nombre de 15px en escritorio; puntos de 19px. Puestos planos con color discreto para los tres primeros.
+- Sin avatares, banderas de fondo, placas de puesto, halo del puntero ni observadores que oculten filas. La bandera pequeña junto al nombre se conserva.
+- Identidad de una línea: nombre truncable con nombre completo accesible, bandera, punto de partida y canales que emiten. Alias y canales registrados completos en el detalle.
+- Elo: emblema de 22×26px junto a la cifra; sin nombre de división visible. Una clasificación ausente se muestra con `—`.
+- Actividad: hasta tres jugadores emitiendo, con sus enlaces de Twitch, YouTube o Kick; no depende de los filtros de tabla. Se omite la sección de streams si está vacía. Partidas distingue cero de información no disponible.
+- Objetivo de revisión, con zoom 100%, filtros cerrados y filas plegadas: al menos ocho filas a 1440×900, seis a 1366×768 y cuatro a 390×844.
 
-## Detalles independientes
+## Filtros y navegación de resultados
 
-- `home-row-glow` / `home-pointer-row`: luz interior de 100px y tramo de borde de 120px próximos al puntero, con coordenadas de la fila, variables CSS y `requestAnimationFrame`; nunca en cabecera, filtros ni paginación. Sin estado React por movimiento, desactivada para tacto/movimiento reducido.
-- Canales de portada: `ChannelLinks.animateLive` pinta gris sin emisión y en el color de plataforma con un pulso luminoso de 3s cuando está en directo; el estado se anuncia en el nombre accesible y el título. Movimiento reducido conserva una luz estática. Las demás rutas mantienen su comportamiento.
-- `home-heraldic-frame`: esquinas finas del marco ilustrado.
-- `home-row-outline`: contorno permanente por encima de las banderas, independiente del halo de puntero.
-- `home-focus-command`: borde de fila y placa de puesto que acompañan el foco de teclado.
+- Una barra compacta: «Clasificación», búsqueda de jugador/alias/canal y botón «Filtros» con número de filtros activos. Sin barra de orden permanente.
+- Escritorio: panel anclado de 320px en la capa superior nativa (`popover`), sin desplazar la tabla. Móvil: `dialog` modal inferior con foco protegido, fondo inerte y bloqueo de scroll; botón «Ver resultados» para cerrar.
+- Un solo contenido y estado para ambas presentaciones: división con emblemas, «En partida», «En directo», orden y dirección. Cambios inmediatos; combinar actividad aplica AND.
+- Escape, cierre y clic exterior cierran y devuelven foco al disparador. Escape de la lista de divisiones cierra solo esa lista. Flechas, Inicio/Fin y tabulador conservan su navegación.
+- Chips extraíbles solo con filtros activos, además de «Limpiar». «Restablecer vista» borra búsqueda y filtros, vuelve a puesto ascendente y página 1; se activa ante cualquier cambio de la vista inicial. «Limpiar» en los chips conserva búsqueda y orden. El vacío filtrado permite limpiar búsqueda y filtros juntos.
+- Cabeceras ordenables: puesto, jugador, puntos y Elo. Nuevos criterios numéricos comienzan descendentes; puesto y nombre, ascendentes. Valores nulos al final. Panel y cabeceras comparten estado.
+- Filtrar, buscar y ordenar opera sobre toda la colección antes de paginar y vuelve a página 1. Páginas de 25, rango anunciado y navegación al pie. Las primeras 25 filas son legibles en HTML sin JavaScript.
 
-## Criterio de las skills
+## Detalles y puntuación
 
-- `gpt-taste`: contraste, encabezados legibles, interacción y revisión visual.
-- `frontend-design`: jerarquía y lenguaje propios de una competición.
-- El encargo explícito prevalece sobre patrones cinematográficos, GSAP y fuentes predeterminadas de las skills.
-- La referencia visual pegada por el usuario guía la jerarquía heráldica y el azul real; no se copia ni se sirve como imagen del sitio.
+- El botón de expansión anuncia jugador y estado con `aria-expanded` y `aria-controls`.
+- Ayuda lateral «Cómo sumar puntos»: «Por victorias» (2 puntos por cada victoria clasificatoria) y «Por objetivos» (completa objetivos o lidera retos para sumar puntos extra). Conserva enlaces a puntuación y objetivos.
+- Detalle: Acumulados, Por liderato, partidas, victorias/derrotas, racha, Elo en móvil, alias, canales y tarjetas existentes de objetivos.
+- Acumulados = victorias + logros; Por liderato = objetivos competitivos actuales. La fila cerrada muestra solo el total. Nunca renombrar el antiguo reparto victorias/objetivos como si fuera esta división.
+- Desglose desconocido: `—` y «Desglose no disponible», conservando el total real.
+- Tarjetas de objetivos: toda la superficie activa la ayuda y cambia fondo en 200ms al pasar o enfocar. `HomeObjectiveHelpProvider` admite una sola ayuda activa, con 160ms de margen para mover el puntero al tooltip. Foco, toque y Escape disponibles.
+- Movimiento reducido: sin animación decorativa ni transición de hover; expansión inmediata. Canales en directo conservan el color de su plataforma y ayuda accesible.
 
-## Ilustración
+## Estados y continuidad
 
-- Escudo de portada: `public/imagenes/portada/escudo-liga-hispana.webp`, WebP transparente de 960×804px (~295KB). Extraído del banner facilitado por el usuario con ImageGen; conserva los caballeros, globo, corona y cinta «Liga Hispana». Los textos de presentación se componen en HTML.
-- Fondo de portada: `public/imagenes/portada/aoe4-delhi-banner.webp`, WebP de 1920×823px (~145KB), decorativo y sin precarga; el escudo conserva su precarga.
-- Grano mate: `public/imagenes/portada/matte-grain.png`, textura procedural neutra de 96px (~10KB), sin movimiento.
-- Fuente oficial del paisaje: [Age of Empires IV](https://www.ageofempires.com/games/age-of-empires-iv/), ilustración del Sultanato de Delhi.
-- [Original de la ilustración](https://www.ageofempires.com/wp-content/themes/ageOfEmpires/public/images/bgs/del-splash-4k.23350b.webp).
-- Arte del paisaje propiedad de Microsoft / World's Edge. La liga es una competición comunitaria no oficial y no afirma afiliación.
+- Esqueleto compacto, vacío, fallo y clasificación usan la misma composición responsive.
+- Previews solo en desarrollo: `loading`, `empty`, `unavailable`, `live` y `stress`; no leen ni escriben clasificación en base de datos. `stress` contiene 1500 jugadores deterministas y primeras filas con actividad variada.
+- Fuera de previews no se inventan participantes, partidas, objetivos ni horas de sincronización. Una lectura fallida muestra recuperación y actividad no disponible.
+- Sin nuevos premios, campañas ni anuncios inventados. Se conserva el banner de donaciones existente y su configuración.
+- Navegación y pie mantienen identidad, paleta y enlaces en pestaña nueva, salvo salto al contenido. Marca de cabecera: «La Liga Hispana».
+- Inscripción mantiene su acabado dorado; navegación textual con subrayado de estado. La navegación sticky recupera su fondo azul opaco, sin imagen. El panorama aparece en una franja de 220px inmediatamente debajo de la navegación, a todo el ancho y detrás de la parte superior del contenido (160px en móvil). Un único velo azul tinta se oscurece hacia abajo y funde a sólido al final de la franja. El contenido empieza a 64px bajo la navegación en escritorio (+40px frente a la vista compacta) y 36px en móvil (+24px), dejando una banda ilustrada visible. La imagen no intercepta eventos ni se fija al scroll; el resto de la página es tinta sólida y la tabla permanece opaca.
+
+## Assets y criterio
+
+- Escudo: `public/imagenes/portada/escudo-liga-hispana.webp`, WebP transparente 960×804px, extraído con ImageGen del material facilitado. Los textos son HTML.
+- Panorama superior del contenido: `public/imagenes/portada/aoe4-hre-panorama.webp`, WebP 1920×320px (~211KB), sin transparencias, texto ni degradados integrados. Adaptación con ImageGen del [arte oficial del Sacro Imperio Romano](https://cdn.ageofempires.com/aoe/wp-content/uploads/2021/08/bg-age4-civ-hre-splash-right-desk.webp), referencia propiedad de Microsoft / World's Edge; no es el original oficial. Composición: paisaje completo, caballero y estandarte rojo a la derecha, en formato panorámico bajo. Exportado desde el generado 2172×724 con recorte vertical 90–452 y reducción a 1920×320.
+- Se conserva `public/imagenes/portada/aoe4-hre-banner.webp` como referencia oficial original; no se utiliza en la franja actual.
+- Se conserva `public/imagenes/portada/aoe4-delhi-banner.webp` como asset existente, sin uso en el fondo actual.
+- Grano: `public/imagenes/portada/matte-grain.png`, textura mate neutra estática.
+- `frontend-design`: jerarquía y tipografía de competición. `impeccable` en modo Operate: reducir ruido, conservar funciones mediante detalle y verificar estados/responsive. El encargo explícito prevalece sobre patrones cinematográficos de las skills.
