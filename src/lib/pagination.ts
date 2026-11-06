@@ -1,7 +1,6 @@
-export type PaginatedRows<T> = {
+type PaginatedRows<T> = {
   rows: T[];
   page: number;
-  pageSize: number;
   pageCount: number;
   total: number;
   start: number;
@@ -26,7 +25,6 @@ export function paginateRows<T>(
   return {
     rows: rows.slice(offset, offset + pageSize),
     page,
-    pageSize,
     pageCount,
     total,
     start: total === 0 ? 0 : offset + 1,

@@ -7,32 +7,6 @@ const PLAYER_FIELDS = [
   "kickIsLive", "isPlaying", "avatarUrl", "profileUrl", "objectives",
 ];
 
-export function localDatabaseConfig(connectionString, nodeEnv) {
-  if (nodeEnv === "production") throw new Error("La captura pública solo se importa en desarrollo local.");
-  let url;
-  try {
-    url = new URL(connectionString);
-  } catch {
-    throw new Error("DATABASE_URL debe apuntar a PostgreSQL local.");
-  }
-  if (!['postgres:', 'postgresql:'].includes(url.protocol)
-    || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-    || url.searchParams.has("host") || url.searchParams.has("hostaddr")) {
-    throw new Error("Se rechaza DATABASE_URL: solo se admite PostgreSQL en loopback.");
-  }
-  // Campos explícitos impiden que parámetros de la URL o PGHOST redirijan la conexión.
-  return {
-    host: url.hostname === "[::1]" ? "::1" : "127.0.0.1",
-    port: Number(url.port || 5432),
-    database: decodeURIComponent(url.pathname.slice(1)),
-    user: decodeURIComponent(url.username),
-    password: decodeURIComponent(url.password),
-    ssl: false,
-    connectionTimeoutMillis: 5000,
-    statement_timeout: 10000,
-  };
-}
-
 function publicRecords(html) {
   const records = new Map();
   const chunks = [...html.matchAll(/self\.__next_f\.push\((\[1,"(?:[^"\\]|\\.)*"\])\)/g)]
@@ -96,7 +70,7 @@ export function parsePublicHomepage(html) {
   const period = findValue(records, (value) => typeof value.from === "string"
     && "to" in value && "serverNow" in value);
   const sync = findValue(records, (value) => "dataUpdatedAt" in value);
-  if (!standings || !period) throw new Error("La portada no publica clasificación o fechas; no se importará nada.");
+  if (!standings || !period) throw new Error("La portada no publica clasificación o fechas; no se guardará la captura.");
   const rows = resolveValue(standings.rows, records);
   const legacy = "pointsByWins" in rows[0];
   const fields = legacy ? PLAYER_FIELDS.filter((key) => !["pointsByAchievements", "pointsByCompetitions"].includes(key))
@@ -123,7 +97,7 @@ export function snapshotFormat(snapshot) {
 }
 
 export function validateSnapshot(snapshot) {
-  const fail = () => { throw new Error("Captura pública inválida o incoherente; no se importará nada."); };
+  const fail = () => { throw new Error("Captura pública inválida o incoherente; no se guardará."); };
   const integer = (value) => Number.isSafeInteger(value) && value >= 0;
   const date = (value) => typeof value === "string" && Number.isFinite(Date.parse(value));
   if (snapshot.source !== PUBLIC_SNAPSHOT_SOURCE || !date(snapshot.capturedAt)

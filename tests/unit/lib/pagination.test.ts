@@ -21,7 +21,7 @@ describe("paginación de filas", () => {
   });
 
   it("representa el conjunto vacío con un rango 0–0", () => {
-    expect(paginateRows([], 7)).toEqual({ rows: [], page: 1, pageSize: 25, pageCount: 1, total: 0, start: 0, end: 0 });
+    expect(paginateRows([], 7)).toEqual({ rows: [], page: 1, pageCount: 1, total: 0, start: 0, end: 0 });
   });
 
   it("normaliza páginas fuera de rango sin modificar el orden de entrada", () => {

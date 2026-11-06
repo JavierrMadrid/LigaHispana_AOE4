@@ -14,7 +14,7 @@ async function download(url) {
 async function main() {
   const args = new Set(process.argv.slice(2));
   if ([...args].some((arg) => !["--fetch", "--dry-run"].includes(arg))) {
-    throw new Error("Uso: node scripts/refresh-public-snapshot.mjs [--fetch] [--dry-run]. Solo captura y valida; la importación a la base ya no está disponible.");
+    throw new Error("Uso: node scripts/refresh-public-snapshot.mjs [--fetch] [--dry-run]. Solo captura, valida y guarda archivos de referencia.");
   }
   let snapshot;
   if (args.has("--fetch")) {

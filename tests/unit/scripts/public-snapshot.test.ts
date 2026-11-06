@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { localDatabaseConfig, parsePublicHomepage, parsePublicMatches, validateSnapshot, snapshotFormat } from "../../../scripts/public-snapshot.mjs";
+import { parsePublicHomepage, parsePublicMatches, validateSnapshot, snapshotFormat } from "../../../scripts/public-snapshot.mjs";
 
 const objective = { id: "imparable", label: "Imparable", group: "actividad", metric: "dias", points: 14 };
 const row = {
@@ -26,32 +26,6 @@ function flight(records: Record<string, unknown>) {
   return [payload.slice(0, cut), payload.slice(cut)].map((chunk) =>
     `<script>self.__next_f.push(${JSON.stringify([1, chunk])})</script>`).join("");
 }
-
-describe("destino de la captura pública", () => {
-  it("admite loopback y fija el host de conexión sin credenciales en errores", () => {
-    expect(localDatabaseConfig("postgres://tester:example@localhost:51214/template1", "development"))
-      .toMatchObject({ host: "127.0.0.1", port: 51214, database: "template1", ssl: false });
-    expect(localDatabaseConfig("postgres://tester:example@[::1]:5432/local", "test").host).toBe("::1");
-  });
-
-  it.each([
-    "postgres://tester:example@db.example.com/local",
-    "postgres://tester:example@localhost.evil.test/local",
-    "postgres://tester:example@localhost/local?host=db.example.com",
-    "postgres://tester:example@127.0.0.1/local?hostaddr=192.0.2.5",
-    "https://localhost/local",
-    "no-es-una-url",
-  ])("rechaza una conexión fuera del destino local: %s", (url) => {
-    expect(() => localDatabaseConfig(url, "development")).toThrow(/local|loopback/);
-    try { localDatabaseConfig(url, "development"); } catch (error) {
-      expect(String(error)).not.toContain("example@");
-    }
-  });
-
-  it("rechaza producción incluso con loopback", () => {
-    expect(() => localDatabaseConfig("postgres://localhost/local", "production")).toThrow(/desarrollo local/);
-  });
-});
 
 describe("lectura del HTML público", () => {
   it("resuelve objetivos compartidos entre trozos Flight y conserva el total real", () => {
@@ -92,7 +66,6 @@ describe("coherencia de la captura", () => {
     expect(() => validateSnapshot({ ...snapshot, rows: [{ ...row, isPlaying: true }] })).toThrow();
   });
 });
-
 
 describe("capturas compatibles con v1.0", () => {
   const currentRow = (() => {

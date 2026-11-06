@@ -80,15 +80,6 @@
   width: 48px;
   height: 48px;
 }
-.home-brand-game {
-  display: block;
-  color: var(--muted);
-  font:
-    400 11px var(--font-home-inter),
-    sans-serif;
-  margin-top: 5px;
-  letter-spacing: 0.4px;
-}
 .home-nav {
   display: flex;
   gap: 4px;
@@ -360,9 +351,6 @@
   }
 }
 
-.league-home {
-  overflow-x: clip;
-}
 .league-home ::selection {
   background: #466183;
   color: #fff;
@@ -441,12 +429,6 @@
   font-size: 12px;
   line-height: 1.6;
   padding: 16px 0 0;
-}
-.home-tournament-status > span[aria-hidden] {
-  display: none;
-}
-.home-tournament-status .font-display {
-  font-family: inherit;
 }
 .home-tournament-timing {
   grid-area: timing;
@@ -1665,9 +1647,6 @@
     border-bottom: 0;
   }
   .home-filters-panel .home-division-list {
-    position: relative;
-    top: 0;
-    margin-top: 6px;
     box-shadow: none;
   }
   .home-filter-heading button {

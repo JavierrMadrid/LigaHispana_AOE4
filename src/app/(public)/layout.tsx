@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
 import { HomeShell } from "@/components/home-shell";
 import Link from "next/link";
 import { AdminAccess } from "@/components/admin-access";
@@ -20,11 +20,6 @@ import {
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-home-inter",
-  display: "swap",
-});
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-home-mono",
   display: "swap",
 });
 
@@ -238,7 +233,7 @@ export default async function PublicLayout({
     <HomeShell
       legacy={legacy}
       modal={modal}
-      fonts={`${inter.variable} ${mono.variable}`}
+      fonts={inter.variable}
       accentStyle={accentStyle}
       editionName={editionName}
       editionEmblem={editionEmblem}

@@ -62,7 +62,4 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 - Escudo: `public/imagenes/portada/escudo-liga-hispana.webp`, WebP transparente 960×804px, extraído con ImageGen del material facilitado. Los textos son HTML.
 - Panorama superior del contenido: `public/imagenes/portada/aoe4-hre-panorama.webp`, WebP 1920×320px (~211KB), sin transparencias, texto ni degradados integrados. Adaptación con ImageGen del [arte oficial del Sacro Imperio Romano](https://cdn.ageofempires.com/aoe/wp-content/uploads/2021/08/bg-age4-civ-hre-splash-right-desk.webp), referencia propiedad de Microsoft / World's Edge; no es el original oficial. Composición: paisaje completo, caballero y estandarte rojo a la derecha, en formato panorámico bajo. Exportado desde el generado 2172×724 con recorte vertical 90–452 y reducción a 1920×320.
-- Se conserva `public/imagenes/portada/aoe4-hre-banner.webp` como referencia oficial original; no se utiliza en la franja actual.
-- Se conserva `public/imagenes/portada/aoe4-delhi-banner.webp` como asset existente, sin uso en el fondo actual.
-- Grano: `public/imagenes/portada/matte-grain.png`, textura mate neutra estática.
 - `frontend-design`: jerarquía y tipografía de competición. `impeccable` en modo Operate: reducir ruido, conservar funciones mediante detalle y verificar estados/responsive. El encargo explícito prevalece sobre patrones cinematográficos de las skills.
