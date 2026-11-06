@@ -36,6 +36,7 @@ import {
 const FAMILIES: readonly { headId: string; id: string; title: string }[] = [
   { headId: "polifacetico", id: "lider", title: "Líder" },
   { headId: "jugon", id: "acolito", title: "Acólito" },
+  { headId: "maestro", id: "maestro", title: "Maestro" },
 ];
 
 /**
@@ -74,15 +75,15 @@ const SECTION_INDEX_LABEL = "Secciones de los objetivos del participante";
  * últimos van en fichas compactas: en conjunto aplastarían la página si se
  * pintaran con tarjetas completas.
  *
- * Los subobjetivos de civilización (`lider-*`, `acolito-*`) no van sueltos por
- * las secciones: se agrupan, uno por familia, en los carruseles de `Líder` y
- * `Acólito`, **dentro de "Al alcance"** y justo después de sus tarjetas
- * individuales, porque su avance se sigue igual que el de ellas. Las tarjetas de
- * cada carrusel van de mayor a menor porcentaje de consecución. La cabeza de cada
- * familia (`polifacetico`, `jugon`) sí es un objetivo individual y sigue en su
- * sección. La clasificación completa de un objetivo se abre en la misma ventana
- * volteable que usa `/objetivos` (`ObjectiveRankingDialog`): al pulsar se ve la
- * clasificación y el giro descubre el resumen del avance del jugador.
+ * Los subobjetivos de civilización (`lider-*`, `acolito-*`, `maestro-*`) no van
+ * sueltos por las secciones: se agrupan, uno por familia, en los carruseles de
+ * `Líder`, `Acólito` y `Maestro`, **dentro de "Al alcance"** y justo después de sus
+ * tarjetas individuales, porque su avance se sigue igual que el de ellas. Las
+ * tarjetas de cada carrusel van de mayor a menor porcentaje de consecución. La
+ * cabeza de cada familia (`polifacetico`, `jugon`, `maestro`) sí es un objetivo
+ * individual y sigue en su sección. La clasificación completa de un objetivo se abre
+ * en la misma ventana volteable que usa `/objetivos` (`ObjectiveRankingDialog`): al
+ * pulsar se ve la clasificación y el giro descubre el resumen del avance del jugador.
  */
 export function ParticipantObjectivesView({
   data,
@@ -549,11 +550,7 @@ export function ParticipantObjectiveSummary({
             {objective.detail !== null ? (
               <span className="text-xs text-muted">({objective.detail.label})</span>
             ) : null}
-            {objective.achieved ? (
-              <AchievedBadge objective={objective} />
-            ) : objective.kind === "competition" ? (
-              <PositionBadge position={objective.position} />
-            ) : null}
+            <ProgressBadge objective={objective} />
           </div>
           <p className="mt-0.5 text-xs text-muted">{groupLabels[objective.group]}</p>
         </div>
@@ -645,15 +642,12 @@ export function ParticipantObjectiveFeatureSummary({
           ? groupLabels[objective.group]
           : `${groupLabels[objective.group]} · ${objective.detail.label}`
       }
-      badges={
-        objective.achieved ? (
-          <AchievedBadge objective={objective} />
-        ) : objective.kind === "competition" ? (
-          <PositionBadge position={objective.position} />
-        ) : null
-      }
+      badges={<ProgressBadge objective={objective} />}
       points={objective.points}
       pointsTone={objective.achieved ? "accent" : "neutral"}
+      // Con cero unidades cobradas, `points` es el precio de la próxima (1) y el pie
+      // lo dice; en cuanto cobra, es un total suyo (`2 victorias → 2 puntos`).
+      unitPrice={objective.pointsPerUnit !== undefined && objective.value === 0}
       description={objective.description}
       breakdown={breakdown}
       progress={
@@ -833,8 +827,12 @@ function ObjectiveChip({
         : "En camino"
     : groupLabels[objective.group];
   // Un logro sin tope todavía sin cobrar enseña el precio de cada unidad, no un
-  // premio: el chip lo dice al lado para no parecer que reparte eso de golpe.
-  const unitPrice = noCap && !achieved;
+  // premio: el chip lo dice al lado para no parecer que reparte eso de golpe. Un
+  // objetivo que cobra por unidad hace lo mismo mientras no haya cobrado ninguna
+  // (`value === 0`); en cuanto cobra, la cifra es lo que lleva.
+  const unitPrice =
+    (noCap && !achieved) ||
+    (objective.pointsPerUnit !== undefined && objective.value === 0);
   // El prefijo de repeticiones se pinta atenuado: quien manda es la etiqueta y, al
   // lado, los puntos. El `text-muted` propio evita que herede el hover del botón.
   const { repetitions, label } = objectiveTitleParts(objective);
@@ -963,10 +961,17 @@ function Fact({
  * cobrar todavía, el valor de cada unidad). Por eso el pie cambia: `puntos` cuando la
  * cifra es un total suyo, y `puntos por victoria` cuando lo que enseña es lo que paga
  * cada unidad, o parecería que el objetivo reparte eso de golpe.
+ *
+ * Los objetivos que cobran por unidad (`pointsPerUnit`, los `maestro-<civ>`) siguen
+ * esa regla por su valor: sin ninguna unidad cobrada (`value === 0`) la placa enseña
+ * el precio de la próxima (`1 · puntos por victoria`) y, en cuanto cobra, lo que
+ * lleva —2 victorias son 2 puntos—, que ya es un total suyo.
  */
 function PointsPlate({ objective }: { objective: ParticipantObjective }) {
   const achieved = objective.achieved;
-  const unitPrice = hasNoCap(objective) && !achieved;
+  const unitPrice =
+    (hasNoCap(objective) && !achieved) ||
+    (objective.pointsPerUnit !== undefined && objective.value === 0);
 
   return (
     <span
@@ -988,6 +993,36 @@ function PointsPlate({ objective }: { objective: ParticipantObjective }) {
       </span>
     </span>
   );
+}
+
+/**
+ * El distintivo de estado que lleva la cabecera de la tarjeta, según lo que el
+ * objetivo tenga que contar.
+ *
+ * Una **competición** se lee por el puesto: el poseedor es el líder y el podio lleva
+ * su insignia. Antes, una competición ya cobrada caía en `AchievedBadge` y decía «En
+ * camino», que es justo lo contrario de tenerla.
+ *
+ * Un **logro** ya cobrado se cuenta en `AchievedBadge` —sin tope, en camino o
+ * conseguido—. Uno que **cobra por unidad** y lleva alguna victoria sin llegar al
+ * umbral se anuncia «En camino»: su check está reservado al umbral, así que con 2
+ * victorias de 5 no llevaba ninguna marca y la tarjeta parecía parada. El resto de
+ * logros con avance sigue como estaba, sin distintivo, porque su estado ya se lee en
+ * «Estado» y en la barra: la marca es el eco de cabecera que la casa ya usa en
+ * `imparable` —cobrando y aún en camino—, no un segundo criterio.
+ */
+function ProgressBadge({ objective }: { objective: ParticipantObjective }) {
+  if (objective.kind === "competition") {
+    return <PositionBadge position={objective.position} />;
+  }
+
+  if (objective.achieved) {
+    return <AchievedBadge objective={objective} />;
+  }
+
+  return objective.pointsPerUnit !== undefined && objective.value > 0 ? (
+    <Badge>En camino</Badge>
+  ) : null;
 }
 
 /**

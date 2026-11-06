@@ -130,6 +130,11 @@ describe("objectiveMaxProgress: el tope de cada objetivo del catálogo", () => {
     expect(objectiveMaxProgress(definition(LIDER_JAPANESE), 9)).toBe(3);
   });
 
+  it("la familia Maestro usa su umbral: 5 por civilización y 25 el global", () => {
+    expect(objectiveMaxProgress(definition("maestro-french"), 9)).toBe(5);
+    expect(objectiveMaxProgress(definition("maestro"), 9)).toBe(25);
+  });
+
   it("un objetivo binario tiene tope 1", () => {
     expect(objectiveMaxProgress(definition("avance-relampago-feudal"), 9)).toBe(1);
   });
@@ -273,6 +278,49 @@ describe("currentObjectiveProgress: el estado de cada jugador y objetivo", () =>
       value: 14,
       completed: true,
       repetition: 14,
+    });
+  });
+
+  it("en un objetivo que cobra por unidad, cobrar no es completar", () => {
+    const option = baseOption({
+      id: "maestro-french",
+      group: "civilizacion",
+      kind: "achievement",
+      metric: "victorias",
+      points: 5,
+      pointsPerUnit: 1,
+      target: { unit: "victorias", value: 5 },
+      ranking: [contender(1, 2)],
+      beneficiaries: [beneficiario(1, 2)],
+    });
+
+    const estados = currentObjectiveProgress([option], jugadores);
+    const filaParcial = estados.get(objectiveProgressKey("a", "maestro-french"));
+
+    expect(filaParcial).toEqual({
+      objectiveId: "maestro-french",
+      playerId: "a",
+      value: 2,
+      completed: false,
+      // La repetición sale de las victorias cobradas, aunque todavía no complete.
+      repetition: 2,
+    });
+
+    const completo = currentObjectiveProgress(
+      [
+        baseOption({
+          ...option,
+          ranking: [contender(1, 5)],
+          beneficiaries: [beneficiario(1, 5)],
+        }),
+      ],
+      jugadores,
+    );
+
+    expect(completo.get(objectiveProgressKey("a", "maestro-french"))).toMatchObject({
+      value: 5,
+      completed: true,
+      repetition: 5,
     });
   });
 

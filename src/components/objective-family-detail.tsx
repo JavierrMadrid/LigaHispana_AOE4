@@ -11,7 +11,7 @@ type FamilyCivEntry = {
 };
 
 /**
- * El avance de una familia de civilización (`Polifacético`, `Jugón`),
+ * El avance de una familia de civilización (`Polifacético`, `Jugón`, `Maestro`),
  * civilización por civilización.
  *
  * Enseña **la lista más corta de las dos**: si quedan más civilizaciones por
@@ -20,7 +20,8 @@ type FamilyCivEntry = {
  * cifra y la bandera de su civilización —el nombre va para lectores de pantalla
  * y de paso como título al pasar el ratón—, y la cabecera dice **cuál es esa
  * cifra**: partidas en `Jugón` (los `acolito-*`) y victorias en `Polifacético`
- * (los `lider-*`), para que el número no se lea sin su unidad.
+ * (los `lider-*`) y en `Maestro` (los `maestro-*`), para que el número no se lea
+ * sin su unidad.
  *
  * Es el análogo del detalle de mapas de `por-tierra-y-agua` (`MapGaps`), con una
  * diferencia: aquí el avance por civilización vive en los **hijos** de la
@@ -118,7 +119,7 @@ export function FamilyCivDetail({
 /**
  * La unidad de la cifra de cada civilización, o `null` si la métrica de la
  * familia no tiene una unidad de estas. Es la de los hijos: `partidas` en los
- * `acolito-*` y `victorias` en los `lider-*`.
+ * `acolito-*` y `victorias` en los `lider-*` y los `maestro-*`.
  */
 function familyUnit(items: readonly ParticipantObjective[]): string | null {
   switch (items[0]?.metric) {

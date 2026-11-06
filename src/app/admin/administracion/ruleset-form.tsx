@@ -37,7 +37,22 @@ const VICTORIAS_ID = "victorias";
 export type ModeOption = { value: string; label: string };
 
 /** Un objetivo del catálogo, con los puntos que tiene ahora mismo. */
-export type ObjectiveOption = { id: string; label: string; points: number };
+export type ObjectiveOption = {
+  id: string;
+  label: string;
+  /** Premio de la tarjeta (en un objetivo por unidad, el máximo). */
+  points: number;
+  /**
+   * Puntos que paga cada unidad, o `null` si el objetivo cobra su premio de una vez.
+   *
+   * Los que cobran por unidad no tienen campo de puntos editable: su importe sale del
+   * catálogo (`pointsPerUnit` por unidad, con tope en `target`) y un override del
+   * ruleset no lo cambiaría.
+   */
+  pointsPerUnit: number | null;
+  /** Umbral del logro, para el texto del tope; `null` en las competiciones. */
+  target: number | null;
+};
 
 /** Los objetivos de un grupo del catálogo, en el orden en que se presentan. */
 export type ObjectiveGroupBlock = {
@@ -109,7 +124,7 @@ type RulesetFormStateProps = Omit<RulesetFormProps, "locked">;
  * Es el documento del que sale **toda** la clasificación, así que la pantalla
  * enseña los cuatro ajustes que mueven puntos en una tarjeta y, debajo, el catálogo de
  * objetivos agrupado por grupos en otra. Cada grupo es un bloque plegable —cerrado por
- * defecto, con su recuento— porque el catálogo tiene 94 entradas y desplegarlo
+ * defecto, con su recuento— porque el catálogo tiene 120 entradas y desplegarlo
  * entero convertiría el formulario en una lista interminable; los controles
  * siguen viajando con el formulario aunque el bloque esté cerrado.
  *
@@ -230,7 +245,7 @@ function EditableRulesetForm({
 
       <SectionCard
         title="Objetivos"
-        description="Apagar un objetivo deja de repartir sus puntos; una cifra vacía mantiene la que ya tenía."
+        description="Apagar un objetivo deja de repartir sus puntos; una cifra vacía mantiene la que ya tenía. Los que pagan por unidad enseñan su reparto y no se editan aquí."
       >
         <fieldset>
           <legend className="sr-only">Objetivos y sus puntos</legend>
@@ -274,6 +289,12 @@ function EditableRulesetForm({
                           {objective.id === VICTORIAS_ID ? (
                             <span className="text-xs text-muted">
                               Lo paga «Puntos por victoria»
+                            </span>
+                          ) : objective.pointsPerUnit !== null ? (
+                            <span className="text-xs text-muted">
+                              {objective.pointsPerUnit}{" "}
+                              {objective.pointsPerUnit === 1 ? "punto" : "puntos"} por victoria ·
+                              máximo {objective.target ?? objective.points}
                             </span>
                           ) : (
                             <span className="flex items-center gap-2 text-xs text-muted">

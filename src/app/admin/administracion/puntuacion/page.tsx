@@ -97,6 +97,8 @@ export default async function AdminScoringPage() {
       id: definition.id,
       label: definition.label,
       points: ruleset.objectives[definition.id] ?? definition.points,
+      pointsPerUnit: definition.pointsPerUnit ?? null,
+      target: definition.target,
     });
   }
 

@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { ObjectiveOption } from "@/lib/public";
 import { civilizationName } from "@/lib/civs";
+import { unitPrizeLabel } from "@/lib/objective-format";
 import { ObjectiveDialogCard } from "@/components/objective-dialog-card";
 import { familyCivId, ObjectiveFamilyRail } from "@/components/objective-family-rail";
 import type { ObjectiveStandingPlayer } from "@/components/objective-standings";
@@ -28,6 +29,12 @@ function subjectStem(child: ObjectiveOption): string {
  * todos con el logro global. Los números salen del contrato (`head.points` y los
  * `points` de los hijos); con hijos de puntos distintos no se pinta, antes que
  * inventar una cifra que el motor no aplica.
+ *
+ * Un hijo con `pointsPerUnit` (los `maestro-<civ>`) no reparte un premio cerrado:
+ * cobra por unidad hasta su tope, y su `points` es ese **máximo**. La nota lo dice
+ * con la cifra por victoria delante (`1 punto por victoria, hasta 5`), porque
+ * anunciar los 5 como si se cobraran de una vez sería mentira. Si los hijos no
+ * comparten el pago por unidad, tampoco se pinta.
  */
 function familyScoringNote(
   head: ObjectiveOption,
@@ -35,13 +42,26 @@ function familyScoringNote(
 ): ReactNode {
   const [first] = subobjectives;
 
-  if (first === undefined || subobjectives.some((child) => child.points !== first.points)) {
+  if (
+    first === undefined ||
+    subobjectives.some(
+      (child) =>
+        child.points !== first.points || child.pointsPerUnit !== first.pointsPerUnit,
+    )
+  ) {
     return null;
   }
 
+  const perUnit = first.pointsPerUnit;
+
   return (
     <>
-      Cada civilización: <span className="font-medium tabular-nums text-foreground">{first.points} puntos</span>{" "}
+      Cada civilización:{" "}
+      <span className="font-medium tabular-nums text-foreground">
+        {perUnit === undefined
+          ? `${first.points} puntos`
+          : `${unitPrizeLabel(perUnit, first.metric)}, hasta ${first.points}`}
+      </span>{" "}
       ({subjectStem(first)}). Completar las{" "}
       <span className="tabular-nums">{subobjectives.length}</span>:{" "}
       <span className="font-medium tabular-nums text-accent">+{head.points} extra</span> (
