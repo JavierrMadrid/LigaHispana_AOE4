@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   // `pg-cloudflare` publica su socket de Cloudflare solo bajo la condicion de
   // exports "workerd", y la rama que ve Node (la que usa el trazador de ficheros
   // de Next) es un modulo vacio. Al trazar, nft solo se lleva `package.json` y
@@ -11,6 +12,17 @@ const nextConfig: NextConfig = {
   // empaqueta y la que hace falta en runtime para abrir el socket TCP.
   outputFileTracingIncludes: {
     "/*": ["node_modules/pg-cloudflare/dist/**/*", "node_modules/pg-cloudflare/esm/**/*"],
+  },
+  // El cargador WASM de Turbopack traza binarios ajenos al cliente generado.
+  // OpenNext importa los WASM del trace: excluimos los de la CLI de Prisma y
+  // PostgreSQL local sin tocar el compilador que genera Prisma para workerd.
+  outputFileTracingExcludes: {
+    "/*": [
+      "node_modules/prisma/build/*.wasm",
+      "node_modules/@prisma/dev/dist/runtime-assets/*.wasm",
+      "node_modules/@electric-sql/pglite/dist/*.wasm",
+      "node_modules/@electric-sql/pglite-tools/dist/*.wasm",
+    ],
   },
 
   /**
