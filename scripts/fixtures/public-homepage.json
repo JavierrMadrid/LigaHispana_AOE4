@@ -1,0 +1,662 @@
+{
+  "source": "https://laligahispana.es/",
+  "matchesSource": "https://laligahispana.es/partidas",
+  "capturedAt": "2026-10-14T01:38:03.287Z",
+  "rows": [
+    {
+      "rank": 1,
+      "profileId": 5364911,
+      "name": "Vortix",
+      "aoe4WorldName": "El Sensei",
+      "country": "España",
+      "points": 845,
+      "pointsByWins": 12,
+      "pointsByObjectives": 833,
+      "wins": 6,
+      "losses": 0,
+      "elo": 2437,
+      "division": "conquistador",
+      "rankLevel": "conqueror_3",
+      "streak": 6,
+      "twitchChannel": "vortix93",
+      "twitchIsLive": false,
+      "youtubeChannel": "vortix93",
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "https://avatars.akamai.steamstatic.com/0e6cc5b9137ee6ce22d7ad5d88ea81a908c7a95d_full.jpg",
+      "profileUrl": "https://aoe4world.com/players/5364911",
+      "objectives": [
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        },
+        {
+          "id": "bienhadado",
+          "label": "Bienhadado",
+          "group": "racha",
+          "metric": "racha",
+          "points": 200
+        },
+        {
+          "id": "imbatible",
+          "label": "Imbatible",
+          "group": "racha",
+          "metric": "racha",
+          "points": 32
+        },
+        {
+          "id": "masterizando-ayyubids",
+          "label": "Masterizando Ayyubíes",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "masterizando-chinese",
+          "label": "Masterizando Chinos",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "masterizando-delhi_sultanate",
+          "label": "Masterizando Sultanato de Delhi",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "masterizando-japanese",
+          "label": "Masterizando Japoneses",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "masterizando-malians",
+          "label": "Masterizando Malienses",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "profileId": 387963,
+      "name": "Swaggy Professor",
+      "aoe4WorldName": "Swaggy Professor",
+      "country": "Colombia",
+      "points": 470,
+      "pointsByWins": 16,
+      "pointsByObjectives": 454,
+      "wins": 8,
+      "losses": 8,
+      "elo": 1695,
+      "division": "conquistador",
+      "rankLevel": "conqueror_3",
+      "streak": 1,
+      "twitchChannel": "swaggy_professor",
+      "twitchIsLive": false,
+      "youtubeChannel": "swaggyprofessor",
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "https://avatars.akamai.steamstatic.com/cf702d58cc4db2faab59bedf37182e2259ea7392_full.jpg",
+      "profileUrl": "https://aoe4world.com/players/387963",
+      "objectives": [
+        {
+          "id": "loco-por-ganar",
+          "label": "Loco por ganar",
+          "group": "actividad",
+          "metric": "partidas",
+          "points": 50
+        },
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        },
+        {
+          "id": "estratega",
+          "label": "Estratega",
+          "group": "hazanas",
+          "metric": "victorias",
+          "points": 24
+        },
+        {
+          "id": "rey-1v1",
+          "label": "Rey del 1v1",
+          "group": "formato",
+          "metric": "victorias",
+          "points": 240
+        },
+        {
+          "id": "masterizando-tughlaq_dynasty",
+          "label": "Masterizando Dinastía Tughlaq",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "lider-tughlaq_dynasty",
+          "label": "Líder Dinastía Tughlaq",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 12
+        },
+        {
+          "id": "acolito-tughlaq_dynasty",
+          "label": "Acólito Dinastía Tughlaq",
+          "group": "civilizacion",
+          "metric": "partidas",
+          "points": 6
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "profileId": 7099800,
+      "name": "Miguel Narvaez",
+      "aoe4WorldName": "]NsR[ Rasta Jedi",
+      "country": "México",
+      "points": 435,
+      "pointsByWins": 14,
+      "pointsByObjectives": 421,
+      "wins": 7,
+      "losses": 6,
+      "elo": 1065,
+      "division": "platino",
+      "rankLevel": "platinum_1",
+      "streak": -2,
+      "twitchChannel": "rasta_jedi619",
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "//static.aoe4world.com/assets/steam/missing_avatar-e242b35d00203aa906f62c1c86d27eefce0320fc9d02de64338abfa732303652.jpg",
+      "profileUrl": "https://aoe4world.com/players/7099800",
+      "objectives": [
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        },
+        {
+          "id": "estratega",
+          "label": "Estratega",
+          "group": "hazanas",
+          "metric": "victorias",
+          "points": 24
+        },
+        {
+          "id": "masterizando-knights_templar",
+          "label": "Masterizando Caballeros Templarios",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "masterizando-ottomans",
+          "label": "Masterizando Otomanos",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "masterizando-rus",
+          "label": "Masterizando Rus",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "lider-knights_templar",
+          "label": "Líder Caballeros Templarios",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 12
+        },
+        {
+          "id": "lider-rus",
+          "label": "Líder Rus",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 12
+        },
+        {
+          "id": "acolito-knights_templar",
+          "label": "Acólito Caballeros Templarios",
+          "group": "civilizacion",
+          "metric": "partidas",
+          "points": 6
+        },
+        {
+          "id": "acolito-rus",
+          "label": "Acólito Rus",
+          "group": "civilizacion",
+          "metric": "partidas",
+          "points": 6
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "profileId": 6946414,
+      "name": "Mecroid",
+      "aoe4WorldName": "[Real] Mecro",
+      "country": "España",
+      "points": 404,
+      "pointsByWins": 10,
+      "pointsByObjectives": 394,
+      "wins": 5,
+      "losses": 0,
+      "elo": 1793,
+      "division": "conquistador",
+      "rankLevel": "conqueror_3",
+      "streak": 5,
+      "twitchChannel": "mecroid",
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "https://avatars.akamai.steamstatic.com/7c33fbd4db5ba2fae52f58a4944ef78b6de559d0_full.jpg",
+      "profileUrl": "https://aoe4world.com/players/6946414",
+      "objectives": [
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        },
+        {
+          "id": "imbatible",
+          "label": "Imbatible",
+          "group": "racha",
+          "metric": "racha",
+          "points": 32
+        },
+        {
+          "id": "masterizando-french",
+          "label": "Masterizando Franceses",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "masterizando-holy_roman_empire",
+          "label": "Masterizando Sacro Imperio Romano",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        },
+        {
+          "id": "masterizando-jin_dynasty",
+          "label": "Masterizando Dinastía Jin",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "profileId": 5545572,
+      "name": "Abadacus",
+      "aoe4WorldName": "Abadacus",
+      "country": "España",
+      "points": 365,
+      "pointsByWins": 4,
+      "pointsByObjectives": 361,
+      "wins": 2,
+      "losses": 3,
+      "elo": 1068,
+      "division": "platino",
+      "rankLevel": "platinum_1",
+      "streak": -1,
+      "twitchChannel": "abadacuss",
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "https://avatars.akamai.steamstatic.com/b96f4a4c9cef084a3947bcf50d43102d5e48b798_full.jpg",
+      "profileUrl": "https://aoe4world.com/players/5545572",
+      "objectives": [
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        },
+        {
+          "id": "rey-2v2",
+          "label": "Rey del 2v2",
+          "group": "formato",
+          "metric": "victorias",
+          "points": 240
+        },
+        {
+          "id": "masterizando-macedonian_dynasty",
+          "label": "Masterizando Dinastía Macedonia",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        }
+      ]
+    },
+    {
+      "rank": 6,
+      "profileId": 22006233,
+      "name": "SciDev",
+      "aoe4WorldName": "SciDev",
+      "country": "México",
+      "points": 126,
+      "pointsByWins": 4,
+      "pointsByObjectives": 122,
+      "wins": 2,
+      "losses": 0,
+      "elo": 1031,
+      "division": "platino",
+      "rankLevel": "platinum_1",
+      "streak": 2,
+      "twitchChannel": "scidev_",
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": true,
+      "avatarUrl": "//static.aoe4world.com/assets/steam/missing_avatar-e242b35d00203aa906f62c1c86d27eefce0320fc9d02de64338abfa732303652.jpg",
+      "profileUrl": "https://aoe4world.com/players/22006233",
+      "objectives": [
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        },
+        {
+          "id": "masterizando-english",
+          "label": "Masterizando Ingleses",
+          "group": "civilizacion",
+          "metric": "victorias",
+          "points": 120
+        }
+      ]
+    },
+    {
+      "rank": 7,
+      "profileId": 261875,
+      "name": "zidos_jm",
+      "aoe4WorldName": "JavierMA",
+      "country": "España",
+      "points": 9,
+      "pointsByWins": 2,
+      "pointsByObjectives": 7,
+      "wins": 1,
+      "losses": 2,
+      "elo": null,
+      "division": null,
+      "rankLevel": null,
+      "streak": 1,
+      "twitchChannel": null,
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "https://avatars.akamai.steamstatic.com/6f2baa6dcfdcc30169a4a9e115ec27ca295e92db_full.jpg",
+      "profileUrl": "https://aoe4world.com/players/261875",
+      "objectives": [
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        },
+        {
+          "id": "acolito-tughlaq_dynasty",
+          "label": "Acólito Dinastía Tughlaq",
+          "group": "civilizacion",
+          "metric": "partidas",
+          "points": 6
+        }
+      ]
+    },
+    {
+      "rank": 8,
+      "profileId": 3237575,
+      "name": "DemeX",
+      "aoe4WorldName": "DemeX",
+      "country": "España",
+      "points": 3,
+      "pointsByWins": 2,
+      "pointsByObjectives": 1,
+      "wins": 1,
+      "losses": 0,
+      "elo": 1350,
+      "division": "diamante",
+      "rankLevel": "diamond_3",
+      "streak": 1,
+      "twitchChannel": null,
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "//static.aoe4world.com/assets/steam/missing_avatar-e242b35d00203aa906f62c1c86d27eefce0320fc9d02de64338abfa732303652.jpg",
+      "profileUrl": "https://aoe4world.com/players/3237575",
+      "objectives": [
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        }
+      ]
+    },
+    {
+      "rank": 9,
+      "profileId": 2194511,
+      "name": "Gorik",
+      "aoe4WorldName": "Gorik",
+      "country": "España",
+      "points": 3,
+      "pointsByWins": 2,
+      "pointsByObjectives": 1,
+      "wins": 1,
+      "losses": 1,
+      "elo": 1017,
+      "division": "platino",
+      "rankLevel": "platinum_1",
+      "streak": 1,
+      "twitchChannel": "gorik11",
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "https://avatars.akamai.steamstatic.com/b11c0453b084e0a2ae53f2ed901d85a0fa1b6ad8_full.jpg",
+      "profileUrl": "https://aoe4world.com/players/2194511",
+      "objectives": [
+        {
+          "id": "imparable",
+          "label": "Imparable",
+          "group": "actividad",
+          "metric": "dias",
+          "points": 14
+        }
+      ]
+    },
+    {
+      "rank": 10,
+      "profileId": 743782,
+      "name": "PeneThor",
+      "aoe4WorldName": "PeneThor",
+      "country": "España",
+      "points": 0,
+      "pointsByWins": 0,
+      "pointsByObjectives": 0,
+      "wins": 0,
+      "losses": 0,
+      "elo": null,
+      "division": null,
+      "rankLevel": null,
+      "streak": null,
+      "twitchChannel": "peneth0r",
+      "twitchIsLive": false,
+      "youtubeChannel": "juanmolina7",
+      "youtubeIsLive": false,
+      "kickChannel": "penethor",
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "//static.aoe4world.com/assets/steam/missing_avatar-e242b35d00203aa906f62c1c86d27eefce0320fc9d02de64338abfa732303652.jpg",
+      "profileUrl": "https://aoe4world.com/players/743782",
+      "objectives": []
+    },
+    {
+      "rank": 11,
+      "profileId": 7230684,
+      "name": "Sanful",
+      "aoe4WorldName": "Sanful",
+      "country": "España",
+      "points": 0,
+      "pointsByWins": 0,
+      "pointsByObjectives": 0,
+      "wins": 0,
+      "losses": 0,
+      "elo": null,
+      "division": null,
+      "rankLevel": null,
+      "streak": null,
+      "twitchChannel": "sanful17",
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "https://avatars.akamai.steamstatic.com/5adec0661bb59d881158d70f9c2ab5b2de44376e_full.jpg",
+      "profileUrl": "https://aoe4world.com/players/7230684",
+      "objectives": []
+    },
+    {
+      "rank": 12,
+      "profileId": 17139710,
+      "name": "Rapon",
+      "aoe4WorldName": "Rapon",
+      "country": "Colombia",
+      "points": 0,
+      "pointsByWins": 0,
+      "pointsByObjectives": 0,
+      "wins": 0,
+      "losses": 0,
+      "elo": 1401,
+      "division": "conquistador",
+      "rankLevel": "conqueror_1",
+      "streak": null,
+      "twitchChannel": null,
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "https://avatars.akamai.steamstatic.com/c8c6754316647350f780921a944a0fdcd1ca101d_full.jpg",
+      "profileUrl": "https://aoe4world.com/players/17139710",
+      "objectives": []
+    },
+    {
+      "rank": 13,
+      "profileId": 19375011,
+      "name": "luskaner",
+      "aoe4WorldName": "luskaner",
+      "country": "España",
+      "points": 0,
+      "pointsByWins": 0,
+      "pointsByObjectives": 0,
+      "wins": 0,
+      "losses": 0,
+      "elo": null,
+      "division": null,
+      "rankLevel": null,
+      "streak": null,
+      "twitchChannel": "luskaner",
+      "twitchIsLive": false,
+      "youtubeChannel": null,
+      "youtubeIsLive": false,
+      "kickChannel": null,
+      "kickIsLive": false,
+      "isPlaying": false,
+      "avatarUrl": "//static.aoe4world.com/assets/steam/missing_avatar-e242b35d00203aa906f62c1c86d27eefce0320fc9d02de64338abfa732303652.jpg",
+      "profileUrl": "https://aoe4world.com/players/19375011",
+      "objectives": []
+    }
+  ],
+  "window": {
+    "from": "2026-10-12T22:00:00.000Z",
+    "to": "2026-10-29T22:59:59.000Z"
+  },
+  "publicSyncFinishedAt": "2026-10-14T01:30:12.293Z",
+  "matches": [
+    {
+      "gameId": "255773459",
+      "map": "Atacama",
+      "mode": "rm_solo",
+      "leaderboard": "rm_solo",
+      "format": "1vs1",
+      "startedAt": "2026-10-14T01:21:10.000Z",
+      "durationSeconds": null,
+      "elapsedSeconds": 1013,
+      "participants": [
+        {
+          "profileId": 22006233,
+          "name": "SciDev",
+          "civ": "english",
+          "country": "mx",
+          "isLeaguePlayer": true,
+          "division": "platino",
+          "profileUrl": "https://aoe4world.com/players/22006233",
+          "avatarUrl": "//static.aoe4world.com/assets/steam/missing_avatar-e242b35d00203aa906f62c1c86d27eefce0320fc9d02de64338abfa732303652.jpg",
+          "team": 1
+        },
+        {
+          "profileId": 25132859,
+          "name": "annie.c.bear",
+          "civ": "knights_templar",
+          "country": "us",
+          "isLeaguePlayer": false,
+          "division": null,
+          "profileUrl": "https://aoe4world.com/players/25132859",
+          "avatarUrl": null,
+          "team": 2
+        }
+      ],
+      "leaguePlayerCount": 1
+    }
+  ]
+}

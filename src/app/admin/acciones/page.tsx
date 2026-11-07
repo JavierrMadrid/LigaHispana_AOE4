@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { AdminActionType } from "@/generated/prisma/enums";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { EmptyState } from "@/components/empty-state";
 import { PageSizeSelect } from "@/components/page-size-select";
@@ -242,23 +243,22 @@ export default async function AdminActionsPage({ searchParams }: PageProps<"/adm
 
   return (
     <div className="flex flex-col gap-6">
-      <section>
-        <h1 className="text-2xl font-semibold">Historial de acciones</h1>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Lo que la organización decide y hace en el panel, de lo más reciente a lo
-          más antiguo. El texto de cada línea lo redacta la propia acción.
-        </p>
-        <p className="mt-2 max-w-[70ch] text-sm text-muted">
-          Las expulsiones, anulaciones y reversiones se registran en{" "}
-          <Link
-            href="/admin/actuaciones"
-            className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
-          >
-            Actuaciones
-          </Link>
-          , con su razón pública y su información privada.
-        </p>
-      </section>
+      <AdminPageHeader
+        title="Historial de acciones"
+        description={
+          <>
+            Lo que se decide y se hace en el panel, de lo más reciente a lo más antiguo.
+            Las sanciones se registran en{" "}
+            <Link
+              href="/admin/actuaciones"
+              className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
+            >
+              Actuaciones
+            </Link>
+            .
+          </>
+        }
+      />
 
       {page === null ? (
         <EmptyState

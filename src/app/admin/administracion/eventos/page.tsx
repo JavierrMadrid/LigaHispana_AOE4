@@ -5,6 +5,10 @@ import {
   EventForm,
   type EventFormValues,
 } from "@/app/admin/administracion/eventos/event-form";
+import { AdminPageHeader } from "@/components/admin/page-header";
+import { Callout } from "@/components/admin/callout";
+import { SectionCard } from "@/components/admin/section";
+import { StatusPill } from "@/components/admin/status-pill";
 import { ActionFeedbackProvider } from "@/components/action-feedback";
 import { ConfirmAction } from "@/components/confirm-action";
 import { EmptyState } from "@/components/empty-state";
@@ -48,6 +52,10 @@ function byStart(a: EditionEvent, b: EditionEvent): number {
  * Las dos lecturas van en paralelo: los eventos y el ruleset, del que sale la
  * ventana del torneo. Si alguna falla no se pinta un panel a medias: no se sabe qué
  * hay publicado ni si se puede tocar, así que se dice que no se ha podido leer.
+ *
+ * El calendario es una tarjeta con una fila por evento, no una tarjeta por evento:
+ * un evento dentro de otra caja sería una caja dentro de una caja, y aquí lo que
+ * separa es el filete.
  */
 export default async function AdminEventsPage({
   searchParams,
@@ -66,18 +74,17 @@ export default async function AdminEventsPage({
     windowTo = ruleset.window.to;
   } catch {
     return (
-      <section className="flex flex-col gap-6">
-        <div>
-          <h2 className="text-lg font-medium">Eventos</h2>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            Las ventanas con multiplicador de puntos de esta edición.
-          </p>
-        </div>
+      <div className="flex flex-col gap-6">
+        <AdminPageHeader
+          level={2}
+          title="Eventos"
+          description="Ventanas con multiplicador para las victorias clasificatorias."
+        />
         <EmptyState
           title="No se han podido leer los eventos"
-          body="La base de datos no ha respondido. El calendario y su estado de bloqueo no se pueden comprobar, así que no se ofrece el formulario: vuelve a intentarlo en unos minutos."
+          body="La base de datos no ha respondido. El calendario y su estado de bloqueo no se pueden comprobar, así que no se ofrece el formulario. Vuelve a intentarlo en unos minutos."
         />
-      </section>
+      </div>
     );
   }
 
@@ -100,60 +107,43 @@ export default async function AdminEventsPage({
         };
 
   return (
-    <section className="flex flex-col gap-8">
-      <div>
-        <h2 className="text-lg font-medium">Eventos</h2>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Ventanas dentro del torneo en las que cada victoria clasificatoria paga un
-          multiplicador. El extra se aplica solo a los puntos por victoria: las
-          derrotas siguen sin sumar y los objetivos conservan su valor. Se definen
-          antes de que empiece el torneo; el calendario se publica en Reglas y, cuando
-          su ventana está en curso, el evento se anuncia en el banner de la web.
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <AdminPageHeader
+        level={2}
+        title="Eventos"
+        description="Ventanas con multiplicador para las victorias clasificatorias."
+      />
 
       {locked ? (
-        <p className="max-w-[70ch] rounded-md border border-accent/30 bg-accent/5 px-4 py-3 text-sm leading-relaxed text-muted">
-          <strong className="font-semibold text-foreground">
-            Los eventos están cerrados
-          </strong>
-          . El torneo{" "}
-          {windowStart !== null ? `empezó el ${windowStart}` : "ya ha empezado"} y,
-          desde ese momento, cambiar una ventana movería puntos ya publicados. El
-          calendario se ve aquí abajo en modo lectura.
-        </p>
+        <Callout tone="locked" title="Los eventos están cerrados">
+          El torneo{" "}
+          {windowStart !== null ? `empezó el ${windowStart}` : "ya ha empezado"} y
+          cambiar una ventana movería puntos ya publicados. El calendario se ve aquí
+          abajo en modo lectura.
+        </Callout>
       ) : null}
 
-      <div className="flex flex-col gap-4">
-        <div>
-          <h3 className="text-base font-medium">Calendario</h3>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            De más antiguo a más reciente. Dos eventos no pueden compartir fechas y
-            ninguno puede salirse de la ventana del torneo; si pasa, el guardado lo
-            dice y no escribe nada.
-          </p>
-        </div>
-
-        {events.length === 0 ? (
-          <EmptyState
-            title="Todavía no hay eventos"
-            body={
-              locked
-                ? "Esta edición se ha quedado sin eventos puntuales. Una vez empezado el torneo, el calendario ya no se puede cambiar."
-                : "Programa el primero con el formulario de abajo. Se publica en Reglas al guardarlo y se anuncia en el banner de la web cuando llega su ventana."
-            }
-          />
-        ) : (
+      {events.length === 0 ? (
+        <EmptyState
+          title="Todavía no hay eventos"
+          body={
+            locked
+              ? "Esta edición se ha quedado sin eventos puntuales. Una vez empezado el torneo, el calendario ya no se puede cambiar."
+              : "Programa el primero con el formulario de abajo; se publica en Reglas al guardarlo."
+          }
+        />
+      ) : (
+        <SectionCard
+          title="Calendario"
+          description="Dos eventos no pueden solaparse ni salirse de la ventana; van de más antiguo a más reciente."
+        >
           <ActionFeedbackProvider>
-            <ul className="flex flex-col gap-3">
+            <ul className="divide-y divide-line">
               {events.map((event) => {
                 const windowText = formatEventWindow(event);
 
                 return (
-                  <li
-                    key={event.id}
-                    className="rounded-lg border border-line bg-surface p-4"
-                  >
+                  <li key={event.id} className="py-4 first:pt-0 last:pb-0">
                     <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
                       <div className="min-w-0">
                         <h4 className="text-base font-medium text-foreground">
@@ -177,14 +167,12 @@ export default async function AdminEventsPage({
 
                     {event.discordRequired ? (
                       <p className="mt-3">
-                        <span className="inline-block rounded-full border border-accent/40 px-2 py-0.5 text-xs text-accent">
-                          Requiere Discord
-                        </span>
+                        <StatusPill active>Requiere Discord</StatusPill>
                       </p>
                     ) : null}
 
                     {locked ? null : (
-                      <div className="mt-3 flex flex-wrap justify-end gap-2 border-t border-line pt-3">
+                      <div className="mt-3 flex flex-wrap justify-end gap-2">
                         <Link
                           href={`/admin/administracion/eventos?editar=${encodeURIComponent(event.id)}#formulario`}
                           className="inline-flex h-10 items-center rounded-md border border-line-strong px-3 text-xs text-foreground transition-colors hover:border-accent/60 hover:text-accent"
@@ -215,38 +203,27 @@ export default async function AdminEventsPage({
               })}
             </ul>
           </ActionFeedbackProvider>
-        )}
-      </div>
+        </SectionCard>
+      )}
 
       {locked ? null : (
-        <div id="formulario" className="scroll-mt-24">
-          <h3 className="text-base font-medium">
-            {editing !== null ? "Editar el evento" : "Nuevo evento"}
-          </h3>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            {editing !== null
-              ? "Los cambios se publican al guardar y la clasificación se recalcula con ellos."
-              : "Las fechas se escriben en hora de Madrid. El multiplicador se aplica a las partidas que empiezan dentro de la ventana."}
-          </p>
-
+        <div id="formulario" className="flex scroll-mt-24 flex-col gap-4">
           {editNotFound ? (
-            <p className="mt-3 max-w-[70ch] rounded-md border border-line bg-surface px-3 py-2 text-sm leading-relaxed text-muted">
+            <Callout tone="info">
               El evento que se quería editar ya no está en el calendario. El formulario
               de abajo crea uno nuevo.
-            </p>
+            </Callout>
           ) : null}
 
-          <div className="mt-3">
-            <EventForm
-              key={editing?.id ?? "nuevo"}
-              event={formValues}
-              nameMaxLength={EDITION_EVENT_NAME_MAX_LENGTH}
-              descriptionMaxLength={EDITION_EVENT_DESCRIPTION_MAX_LENGTH}
-              minMultiplier={MIN_EVENT_MULTIPLIER}
-            />
-          </div>
+          <EventForm
+            key={editing?.id ?? "nuevo"}
+            event={formValues}
+            nameMaxLength={EDITION_EVENT_NAME_MAX_LENGTH}
+            descriptionMaxLength={EDITION_EVENT_DESCRIPTION_MAX_LENGTH}
+            minMultiplier={MIN_EVENT_MULTIPLIER}
+          />
         </div>
       )}
-    </section>
+    </div>
   );
 }

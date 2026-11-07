@@ -1,4 +1,5 @@
 import { AdministrationTabs } from "@/app/admin/administracion/administration-tabs";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { requireSuperadmin } from "@/lib/auth";
 
 /**
@@ -6,8 +7,12 @@ import { requireSuperadmin } from "@/lib/auth";
  *
  * `requireSuperadmin()` cierra la sección entera de una vez —un admin regular que
  * llegue aquí vuelve a `/admin`, y sin sesión se va a `/login`—, así que ninguna
- * subpágina repite la comprobación. La cabecera larga vive también aquí, una sola
- * vez: cada subpágina solo añade su titular y una frase.
+ * subpágina repite la comprobación. La cabecera y la navegación viven también aquí,
+ * una sola vez: cada subpágina solo añade su titular y una frase.
+ *
+ * A partir de `lg` la navegación es una columna fija y el contenido ocupa el
+ * resto. En móvil se pliega en un desplegable: a 320 px las ocho opciones no caben
+ * en una fila y empujarían el formulario fuera de la primera pantalla.
  */
 export default async function AdministrationLayout({
   children,
@@ -16,23 +21,16 @@ export default async function AdministrationLayout({
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Administración</h1>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            Los ajustes que solo puede tocar la cuenta de superadministración: quién
-            entra al panel, la configuración de la edición, las fechas del plazo de
-            inscripción y de la ventana del torneo, las reglas de puntuación, el
-            calendario de eventos, quién puede inscribirse, el banner de donaciones y
-            las pruebas del canal de avisos. Cada cambio queda anotado en el historial de
-            acciones.
-          </p>
-        </div>
+      <AdminPageHeader
+        level={1}
+        title="Administración"
+        description="Los ajustes del torneo que solo puede tocar el superadministrador."
+      />
 
+      <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-10">
         <AdministrationTabs />
+        <div className="min-w-0">{children}</div>
       </div>
-
-      {children}
     </div>
   );
 }

@@ -124,6 +124,11 @@ next build  →  .next/  →  OpenNext  →  .open-next/  →  wrangler deploy |
 - Prisma: `runtime = "workerd"` importa el `.wasm` como módulo, sin generación de código en runtime.
   `@opennextjs/cloudflare` 1.20.7 parchea los ayudantes de carga de Turbopack. Tras tocar el schema:
   `npx prisma generate` (lo hace el `postinstall`).
+- Turbopack puede incluir los WASM de la CLI de Prisma y de PGlite en el trace, y OpenNext los añade
+  al Worker. `outputFileTracingExcludes` los retira sin excluir el compilador del cliente generado.
+- Si Cloudflare devuelve `10027`, mide `Total Upload` (tamaño sin comprimir) con `npx opennextjs-cloudflare build`
+  seguido de `OPEN_NEXT_DEPLOY=true npx wrangler deploy --dry-run --outdir .open-next/dry-run`.
+  El límite del Worker es de 64 MiB; la simulación no publica ninguna versión.
 - Los scripts de `scripts/` corren en Node con `tsx` y cargan el WASM con
   `--import ./scripts/prisma-wasm-node.mjs`. El Worker no se ve afectado.
 

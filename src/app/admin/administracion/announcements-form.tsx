@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import type { AdminActionResult } from "@/app/admin/actions";
+import { SectionCard } from "@/components/admin/section";
 import { sendTestAnnouncement } from "./actions";
 import { StatusLine } from "./fields";
 
@@ -27,14 +28,11 @@ export function AnnouncementsForm() {
   const [state, formAction, pending] = useActionState(sendTestAnnouncement, initialState);
 
   return (
-    <div className="rounded-lg border border-line bg-surface p-4">
-      <p className="max-w-[70ch] text-xs leading-relaxed text-muted">
-        La prueba no se anota como enviada, así que no impide que el aviso de verdad
-        salga cuando le toque. Si el bot no está configurado en el despliegue, la
-        prueba lo dirá en lugar de enviar nada.
-      </p>
-
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+    <SectionCard
+      title="Prueba de envío"
+      description="La prueba no cuenta como enviada; el aviso real saldrá igual al cruzar su fecha."
+    >
+      <div className="flex flex-wrap items-center gap-3">
         <form action={formAction}>
           <input type="hidden" name="kind" value="start" />
           <button type="submit" disabled={pending} className={BUTTON_CLASS}>
@@ -53,6 +51,6 @@ export function AnnouncementsForm() {
       <div className="mt-4">
         <StatusLine state={state} pending={pending} pendingLabel="Enviando la prueba…" />
       </div>
-    </div>
+    </SectionCard>
   );
 }

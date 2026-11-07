@@ -18,6 +18,7 @@ import type {
   StandingRow,
 } from "@/lib/public";
 import { countryFlagSvgUrl, countryFlagUrl } from "@/lib/flag";
+import { normalizeSearchText as normalize } from "@/lib/format";
 import { objectiveTitle, objectiveTitleParts } from "@/lib/objective-format";
 import { ChannelLinks } from "@/components/channel-links";
 import { divisionColor } from "@/components/division-icon";
@@ -143,13 +144,6 @@ type ObjectiveDialogState =
   | { status: "loading"; id: string; label: string }
   | { status: "ready"; option: ObjectiveOption }
   | { status: "error"; label: string };
-
-function normalize(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
 
 type SortKey =
   | "rank"

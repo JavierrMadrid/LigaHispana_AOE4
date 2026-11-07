@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CountriesForm } from "@/app/admin/administracion/countries-form";
 import { RegistrationSwitch } from "@/app/admin/administracion/registration-switch";
+import { AdminPageHeader } from "@/components/admin/page-header";
+import { SectionCard } from "@/components/admin/section";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { DEFAULT_REGISTRATION_OPEN } from "@/lib/registration-open";
 import { readRegistrationState } from "@/lib/settings";
@@ -40,50 +42,36 @@ export default async function AdminRegistrationsPage() {
   ]);
 
   return (
-    <section className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-lg font-medium">Inscripciones</h2>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          Quién puede entrar al torneo. El plazo que admite solicitudes nuevas y los
-          países que se aceptan en el alta son la misma decisión vista por dos lados.
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <AdminPageHeader
+        level={2}
+        title="Inscripciones"
+        description="Quién puede inscribirse y si el plazo admite solicitudes nuevas."
+      />
 
-      <div>
-        <h3 className="text-base font-medium text-foreground">Plazo</h3>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          El plazo se cierra de dos maneras: el interruptor manual lo cierra al
-          instante y la fecha de cierre lo cierra sola cuando llega. Está cerrado si
-          el interruptor está apagado o si la fecha ya ha pasado. Mientras está
-          cerrado no se admiten solicitudes nuevas ni altas desde este panel; las
-          solicitudes ya recibidas se siguen pudiendo aprobar o rechazar. La fecha de
-          cierre se edita en{" "}
-          <Link
-            href="/admin/administracion/fechas"
-            className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
-          >
-            Fechas
-          </Link>
-          .
-        </p>
-        <div className="mt-3">
-          <RegistrationSwitch
-            switchOpen={registration.switchOpen}
-            reason={registration.reason}
-          />
-        </div>
-      </div>
+      <SectionCard
+        title="Plazo"
+        description={
+          <>
+            El interruptor lo cierra al instante; la fecha de cierre lo cierra sola y se
+            edita en{" "}
+            <Link
+              href="/admin/administracion/fechas"
+              className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
+            >
+              Fechas
+            </Link>
+            .
+          </>
+        }
+      >
+        <RegistrationSwitch
+          switchOpen={registration.switchOpen}
+          reason={registration.reason}
+        />
+      </SectionCard>
 
-      <div>
-        <h3 className="text-base font-medium text-foreground">Países admitidos</h3>
-        <p className="mt-1 max-w-[70ch] text-sm text-muted">
-          La lista de países que se ofrece en la inscripción y contra la que se valida
-          el país de un participante.
-        </p>
-        <div className="mt-3">
-          <CountriesForm catalog={[...DEFAULT_COUNTRIES]} selected={countries} />
-        </div>
-      </div>
-    </section>
+      <CountriesForm catalog={[...DEFAULT_COUNTRIES]} selected={countries} />
+    </div>
   );
 }
