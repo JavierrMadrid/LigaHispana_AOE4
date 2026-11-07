@@ -13,6 +13,17 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/*": ["node_modules/pg-cloudflare/dist/**/*", "node_modules/pg-cloudflare/esm/**/*"],
   },
+  // El cargador WASM de Turbopack traza binarios ajenos al cliente generado.
+  // OpenNext importa los WASM del trace: excluimos los de la CLI de Prisma y
+  // PostgreSQL local sin tocar el compilador que genera Prisma para workerd.
+  outputFileTracingExcludes: {
+    "/*": [
+      "node_modules/prisma/build/*.wasm",
+      "node_modules/@prisma/dev/dist/runtime-assets/*.wasm",
+      "node_modules/@electric-sql/pglite/dist/*.wasm",
+      "node_modules/@electric-sql/pglite-tools/dist/*.wasm",
+    ],
+  },
 
   /**
    * La ficha de un participante paso de `/objetivos/<profileId>` a
