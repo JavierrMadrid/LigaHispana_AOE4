@@ -1,4 +1,5 @@
 import { PendingButton } from "@/components/pending-button";
+import { StatusPill } from "@/components/admin/status-pill";
 import { setRegistrationOpen } from "@/app/admin/actions";
 import type { RegistrationClosureReason } from "@/lib/registration-open";
 
@@ -11,9 +12,9 @@ import type { RegistrationClosureReason } from "@/lib/registration-open";
 const REASON_TEXT: Record<RegistrationClosureReason, string> = {
   open: "Se admiten solicitudes nuevas desde la web y altas desde este panel.",
   switch:
-    "Cerradas por el interruptor manual: no se admiten solicitudes nuevas ni altas desde la web ni desde este panel.",
+    "Cerrado por el interruptor manual: no se admiten solicitudes nuevas ni altas.",
   deadline:
-    "Cerradas por la fecha de cierre, que ya ha pasado: aunque el interruptor siga encendido, no se admiten solicitudes nuevas ni altas. Para reabrirlas hay que quitar o mover la fecha.",
+    "Cerrado por la fecha de cierre, que ya ha pasado. Se reabre quitando o moviendo la fecha en Fechas.",
 };
 
 /**
@@ -23,8 +24,9 @@ const REASON_TEXT: Record<RegistrationClosureReason, string> = {
  * booleano que aplica el servidor en el envío público (`registerPlayer`) y en el
  * alta de este panel (`createPlayer`). Aquí no decide nada por su cuenta; solo
  * publica el estado y ofrece el cambio. Vive en la subpestaña **Inscripciones** de
- * Administración, junto a la fecha de cierre automático
- * (`RegistrationDeadlineForm`), que es el otro mando del mismo plazo.
+ * Administración; la fecha de cierre automático (`RegistrationDeadlineForm`), que es
+ * el otro mando del mismo plazo, vive en **Fechas** junto a la ventana del torneo, y
+ * el motivo del cierre nombra esa subpestaña cuando es la fecha la que ha cerrado.
  *
  * ## La píldora enseña el estado **efectivo**, no el interruptor
  *
@@ -44,11 +46,11 @@ const REASON_TEXT: Record<RegistrationClosureReason, string> = {
  * lleva el valor contrario al actual. Un botón que dijera el estado ("Abiertas") se
  * leería como una etiqueta y no como la acción disponible.
  *
- * El estado se marca con la píldora del dialecto del panel —oro para el plazo
- * abierto, filete neutro para el cerrado—, la misma forma que las etiquetas de
- * modo del resto de la casa y que el banner de donaciones. En cada estado hay un
- * solo elemento dorado: la píldora cuando está abierto, y el botón cuando está
- * cerrado, que es cuando abrir es la acción constructiva que hay que destacar.
+ * El estado se marca con la píldora del panel —oro para el plazo abierto, filete
+ * neutro para el cerrado—, la misma que el banner de donaciones y las cuentas de
+ * administración. En cada estado hay un solo elemento dorado: la píldora cuando está
+ * abierto, y el botón cuando está cerrado, que es cuando abrir es la acción
+ * constructiva que hay que destacar.
  *
  * Es un componente de servidor: el `<form>` apunta a la Server Action y el
  * estado pendiente lo aporta `PendingButton` (`useFormStatus`), sin necesidad de
@@ -68,15 +70,11 @@ export function RegistrationSwitch({
   const effectiveOpen = reason === "open";
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-line bg-surface px-5 py-4">
+    <div className="flex flex-wrap items-center justify-between gap-4">
       <div className="flex min-w-0 items-center gap-3">
-        <span
-          className={`inline-block shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${
-            effectiveOpen ? "border-accent/40 text-accent" : "border-line-strong text-muted"
-          }`}
-        >
+        <StatusPill active={effectiveOpen}>
           {effectiveOpen ? "Abiertas" : "Cerradas"}
-        </span>
+        </StatusPill>
         <p className="min-w-0 text-sm leading-relaxed text-muted">{REASON_TEXT[reason]}</p>
       </div>
 

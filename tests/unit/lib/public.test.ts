@@ -514,6 +514,122 @@ describe("participantObjective", () => {
     expect(proyectado.value).toBe(12);
   });
 
+  it("en un objetivo que cobra por unidad, cobrar no es haberlo conseguido", () => {
+    const base = {
+      id: "maestro-french",
+      group: "civilizacion" as const,
+      metric: "victorias" as const,
+      points: 5,
+      pointsPerUnit: 1,
+      parent: "maestro",
+      target: { unit: "victorias" as const, value: 5 },
+    };
+
+    const sinCobrar = participantObjective(opcion({ ...base }), 7);
+
+    // Sin victorias publica el precio de **cada** unidad, no el máximo de la tarjeta.
+    expect(sinCobrar.points).toBe(1);
+    expect(sinCobrar.pointsPerUnit).toBe(1);
+    expect(sinCobrar.achieved).toBe(false);
+    expect(sinCobrar.count).toBe(1);
+
+    const parcial = participantObjective(
+      opcion({
+        ...base,
+        ranking: [
+          {
+            profileId: 7,
+            name: "Siete",
+            avatarUrl: null,
+            profileUrl: null,
+            value: 2,
+            matches: 4,
+            eligible: true,
+          },
+        ],
+        beneficiaries: [
+          {
+            profileId: 7,
+            name: "Siete",
+            avatarUrl: null,
+            profileUrl: null,
+            points: 2,
+            count: 2,
+          },
+        ],
+      }),
+      7,
+    );
+
+    expect(parcial.achieved).toBe(false);
+    expect(parcial.points).toBe(2);
+    expect(parcial.pointsPerUnit).toBe(1);
+    expect(parcial.count).toBe(2);
+
+    const completo = participantObjective(
+      opcion({
+        ...base,
+        ranking: [
+          {
+            profileId: 7,
+            name: "Siete",
+            avatarUrl: null,
+            profileUrl: null,
+            value: 5,
+            matches: 7,
+            eligible: true,
+          },
+        ],
+        beneficiaries: [
+          {
+            profileId: 7,
+            name: "Siete",
+            avatarUrl: null,
+            profileUrl: null,
+            points: 5,
+            count: 5,
+          },
+        ],
+      }),
+      7,
+    );
+
+    expect(completo.achieved).toBe(true);
+    expect(completo.points).toBe(5);
+    expect(completo.pointsPerUnit).toBe(1);
+  });
+
+  it("un objetivo normal no publica `pointsPerUnit`", () => {
+    const proyectado = participantObjective(
+      opcion({
+        ranking: [
+          {
+            profileId: 7,
+            name: "Siete",
+            avatarUrl: null,
+            profileUrl: null,
+            value: 2,
+            matches: 4,
+            eligible: true,
+          },
+        ],
+        beneficiaries: [
+          {
+            profileId: 7,
+            name: "Siete",
+            avatarUrl: null,
+            profileUrl: null,
+            points: 4,
+            count: 2,
+          },
+        ],
+      }),
+      7,
+    );
+
+    expect(proyectado).not.toHaveProperty("pointsPerUnit");
+  });
+
   it("sin cobrarlo publica el precio del objetivo y una repetición", () => {
     const proyectado = participantObjective(opcion(), 7);
 

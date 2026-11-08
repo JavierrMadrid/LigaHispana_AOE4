@@ -18,7 +18,8 @@ import type { ScoringRuleset } from "@/lib/scoring";
  *   poseedor, el que va primero en su métrica. Es el modelo de siempre.
  * - **Logro** (`kind: "achievement"`): lo cobra **todo el que cumple la
  *   condición**. Puede ser binario (se cumple o no), con tope (p. ej. `imparable`,
- *   con puntos por día hasta 14) o **sin tope** (`victorias`, que paga los puntos
+ *   con puntos por día hasta 14), **por unidad** (`maestro-<civ>`: 1 punto por
+ *   victoria con tope 5) o **sin tope** (`victorias`, que paga los puntos
  *   por victoria de la regla activa por cada victoria). No tiene poseedor único.
  *
  * Ojo con la suma nominal: **no todos los `points` del catálogo son un premio
@@ -69,8 +70,19 @@ export type ObjectiveDefinition = {
    *
    * La excepción es `victorias`: no tiene premio propio, paga `ruleset.pointsPerWin`
    * por victoria (ver su definición en el catálogo).
+   *
+   * En un objetivo con `pointsPerUnit` este campo es el **premio máximo** (lo que se
+   * cobra al llegar a `target`), no lo que paga cada unidad.
    */
   points: number;
+  /**
+   * Puntos que paga **cada unidad** de la métrica, con tope en `target`.
+   *
+   * Es la forma de cobro de los `maestro-<civ>`: 1 punto por victoria hasta 5. Sin
+   * este campo, un logro cobra su `points` una sola vez al completarse. `points`
+   * sigue siendo el premio máximo y es lo que cuenta la suma nominal del catálogo.
+   */
+  pointsPerUnit?: number;
   /**
    * Id del objetivo **cabeza de familia** (el logro global que agrupa a sus
    * hijos), o `null` si es independiente. `polifacetico` es cabeza de los
@@ -140,10 +152,12 @@ export type ObjectiveMapGap = {
  * Un beneficiario de un logro: quien lo ha completado, cuántos puntos cobra y
  * cuántas veces lo ha conseguido.
  *
- * `points` es variable en `imparable` (1 por día, con tope) y en `victorias`
- * (`pointsPerWin` por victoria, sin tope); en el resto de logros coincide con los
- * puntos de la tarjeta. `count` es lo que permite pintar "2 x Imparable": los días en
- * `imparable`, las victorias en `victorias` y `1` en los objetivos que no se repiten.
+ * `points` es variable en `imparable` (1 por día, con tope), en `victorias`
+ * (`pointsPerWin` por victoria, sin tope) y en los objetivos con `pointsPerUnit`
+ * (puntos por victoria con tope); en el resto de logros coincide con los puntos de la
+ * tarjeta. `count` es lo que permite pintar "2 x Imparable": los días en
+ * `imparable`, las victorias en `victorias` y en los objetivos con `pointsPerUnit`, y
+ * `1` en los objetivos que no se repiten.
  */
 export type ObjectiveBeneficiary = {
   profileId: number;
@@ -174,8 +188,18 @@ export type ObjectiveOption = {
    *
    * En `victorias` es el precio **por victoria** (`ruleset.pointsPerWin`), porque el
    * objetivo se repite: los puntos de un beneficiario son `points × count`.
+   *
+   * En los objetivos con `pointsPerUnit` es el **premio máximo**, el mismo que publica
+   * la tarjeta; lo cobrado va en `beneficiaries` (ver `ObjectiveDefinition.points`).
    */
   points: number;
+  /**
+   * Puntos por unidad de los objetivos que cobran así (`ObjectiveDefinition.pointsPerUnit`).
+   *
+   * Opcional y ausente en el resto: así el snapshot guardado no engorda con un `null`
+   * por cada objetivo que no cobra por unidad.
+   */
+  pointsPerUnit?: number;
   /** Cabeza de familia del objetivo (`ObjectiveDefinition.parent`). */
   parent: string | null;
   /**
@@ -248,9 +272,13 @@ export type ObjectiveView = {
  *
  * La v3 es el segundo caso: la forma de `ObjectiveView` no cambia, pero el catálogo
  * pasa de 83 a 88 objetivos (los cinco del *summary*), así que un snapshot v2 —que
- * no los tiene— se rechaza en vez de publicarse sin ellos.
+ * no los tiene— se rechaza en vez de publicarse sin ellos. La v4 vuelve a ser el
+ * mismo caso: el catálogo pasa de 88 a 94 con Vikingos y Escoceses, y un snapshot v3
+ * no lleva sus objetivos. La v5 es la del catálogo de la prueba de concepto de
+ * objetivos con subobjetivos (120) y la del campo `pointsPerUnit`, que un snapshot v4
+ * no lleva.
  */
-export const OBJECTIVES_SNAPSHOT_VERSION = 3;
+export const OBJECTIVES_SNAPSHOT_VERSION = 5;
 
 /**
  * La vista de objetivos tal y como se guarda: `ObjectiveView` más la marca de forma
@@ -398,9 +426,24 @@ const LIDER_POINTS = 9;
  */
 const ACOLITO_POINTS = 5;
 
+/**
+ * Familia `maestro`: un subobjetivo por civilización que paga **por unidad** —
+ * `MAESTRO_POINTS_PER_WIN` por victoria hasta `MAESTRO_WINS_PER_CIV`— y un bonus
+ * global (`MAESTRO_BONUS`) cuando las 25 civilizaciones están completas.
+ *
+ * Es la prueba de concepto de objetivos con subobjetivos que cobran por unidad: el
+ * `points` del hijo es el premio máximo (5), no lo que paga de una vez.
+ */
+const MAESTRO_WINS_PER_CIV = 5;
+const MAESTRO_POINTS_PER_WIN = 1;
+const MAESTRO_BONUS = 50;
+/** Prefijo de los hijos. La cabeza se llama `maestro` a secas: no lleva guion. */
+const MAESTRO_CHILD_PREFIX = "maestro-";
+
 /** Ids de familia y de los logros globales. */
 export const POLIFACETICO_ID = "polifacetico";
 export const JUGON_ID = "jugon";
+export const MAESTRO_ID = "maestro";
 export const IMPARABLE_ID = "imparable";
 export const POR_TIERRA_ID = "por-tierra-y-agua";
 export const VICTORIAS_ID = "victorias";
@@ -465,9 +508,11 @@ const DEFENDER_MOUNTED_LOST = 1;
  * (`scoring.ruleset.objectives`) y del desglose de `PlayerScore`: renombrarlo deja
  * huérfanos los puntos ya publicados.
  *
- * Dentro del grupo `civilizacion` el orden respeta la jerarquía: primero las 23
+ * Dentro del grupo `civilizacion` el orden respeta la jerarquía: primero las 25
  * `masterizando-<civ>` (competiciones), después la cabeza `polifacetico` seguida
- * de sus 23 `lider-<civ>`, y por último `jugon` seguida de sus 23 `acolito-<civ>`.
+ * de sus 25 `lider-<civ>`, luego `jugon` seguida de sus 25 `acolito-<civ>` y, al
+ * final, la familia de la prueba de concepto: la cabeza `maestro` seguida de sus 25
+ * `maestro-<civ>`.
  */
 export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
   {
@@ -700,6 +745,37 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     parent: JUGON_ID,
     target: MATCHES_PER_CIV,
   })),
+  /**
+   * Prueba de concepto de objetivos con subobjetivos que cobran por unidad.
+   *
+   * El padre no paga hasta que **todas** las civilizaciones llegan a
+   * `MAESTRO_WINS_PER_CIV`; los hijos pagan `MAESTRO_POINTS_PER_WIN` por victoria
+   * desde la primera, con tope de `MAESTRO_WINS_PER_CIV`. El total nominal de la
+   * familia es 25 × 5 + 50 = 175.
+   */
+  {
+    id: MAESTRO_ID,
+    group: "civilizacion",
+    kind: "achievement",
+    label: "Maestro de todas las civilizaciones",
+    description: `Gana al menos ${MAESTRO_WINS_PER_CIV} partidas con cada una de las ${CIVILIZATIONS.length} civilizaciones: cada victoria con una civilización paga ${MAESTRO_POINTS_PER_WIN} punto hasta ${MAESTRO_WINS_PER_CIV}, y completar las ${CIVILIZATIONS.length} suma ${MAESTRO_BONUS}.`,
+    metric: "civilizaciones",
+    points: MAESTRO_BONUS,
+    parent: null,
+    target: CIVILIZATION_IDS.length,
+  },
+  ...CIVILIZATIONS.map((civ) => ({
+    id: `${MAESTRO_CHILD_PREFIX}${civ.id}`,
+    group: "civilizacion" as const,
+    kind: "achievement" as const,
+    label: `Maestro ${civ.name}`,
+    description: `Cada victoria con ${civ.name} paga ${MAESTRO_POINTS_PER_WIN} punto, hasta ${MAESTRO_WINS_PER_CIV}.`,
+    metric: "victorias" as const,
+    points: MAESTRO_WINS_PER_CIV * MAESTRO_POINTS_PER_WIN,
+    pointsPerUnit: MAESTRO_POINTS_PER_WIN,
+    parent: MAESTRO_ID,
+    target: MAESTRO_WINS_PER_CIV,
+  })),
 ];
 
 /** Total de objetivos del catálogo. */
@@ -743,6 +819,18 @@ export const OBJECTIVE_POINTS: Record<string, number> = Object.fromEntries(
 );
 
 /**
+ * Las definiciones del catálogo indexadas por id.
+ *
+ * Es un `Map` a nivel de módulo (el catálogo es una constante del código) y tiene
+ * que ir **después** de `OBJECTIVE_DEFINITIONS`: se construye al cargar el módulo.
+ * Lo usan las preguntas que llegan con un id y no con la definición delante
+ * (`objectiveRepeatable`).
+ */
+const DEFINITIONS_BY_ID: ReadonlyMap<string, ObjectiveDefinition> = new Map(
+  OBJECTIVE_DEFINITIONS.map((definition) => [definition.id, definition]),
+);
+
+/**
  * La forma de cobrar de cada id del catálogo, indexada por id.
  *
  * Es un `Map` a nivel de módulo (el catálogo es una constante del código) y tiene
@@ -773,11 +861,16 @@ export function objectiveKind(id: string): ObjectiveKind | null {
 /**
  * ¿El objetivo se puede cobrar más de una vez por el mismo jugador?
  *
- * Hoy solo `victorias` (una por victoria) e `imparable` (una por día). El resto
- * de logros se cobran una vez y las competiciones las posee un único jugador.
+ * Hoy `victorias` (una por victoria), `imparable` (una por día) y los que cobran
+ * **por unidad** (`pointsPerUnit`, como los `maestro-<civ>`). El resto de logros se
+ * cobran una vez y las competiciones las posee un único jugador.
  */
 export function objectiveRepeatable(id: string): boolean {
-  return id === VICTORIAS_ID || id === IMPARABLE_ID;
+  if (id === VICTORIAS_ID || id === IMPARABLE_ID) {
+    return true;
+  }
+
+  return DEFINITIONS_BY_ID.get(id)?.pointsPerUnit !== undefined;
 }
 
 /**
@@ -1834,15 +1927,42 @@ function candidatesFor(
     });
   }
 
-  // Civilizaciones: `masterizando-<civ>` (competición), `lider-<civ>` y
-  // `acolito-<civ>` (logros). Los tres comparten el registro por civ.
+  if (definition.id === MAESTRO_ID) {
+    // El padre solo cuenta civilizaciones **completas** y no es `eligible` hasta que
+    // están las 25: el bonus se cobra al cerrar la familia, no al empezarla.
+    return players.flatMap((player) => {
+      const value = countCivs(player.byCiv, (record) => record.wins >= MAESTRO_WINS_PER_CIV);
+
+      if (value < 1) {
+        return [];
+      }
+
+      return [
+        candidate(
+          player,
+          "civilizaciones",
+          value,
+          player.matches,
+          value === CIVILIZATION_IDS.length,
+          player.lastWinAt,
+        ),
+      ];
+    });
+  }
+
+  // Civilizaciones: `masterizando-<civ>` (competición), `lider-<civ>`,
+  // `acolito-<civ>` y `maestro-<civ>` (logros). Los cuatro comparten el registro
+  // por civ.
   const isMasterizando = definition.id.startsWith("masterizando-");
   const isLider = definition.id.startsWith("lider-");
+  const isMaestro = definition.id.startsWith(MAESTRO_CHILD_PREFIX);
   const civ = isMasterizando
     ? definition.id.slice("masterizando-".length)
     : isLider
       ? definition.id.slice("lider-".length)
-      : definition.id.slice("acolito-".length);
+      : isMaestro
+        ? definition.id.slice(MAESTRO_CHILD_PREFIX.length)
+        : definition.id.slice("acolito-".length);
 
   return players.flatMap((player) => {
     const record = player.byCiv.get(civ);
@@ -1851,11 +1971,13 @@ function candidatesFor(
       return [];
     }
 
-    if (isMasterizando) {
+    if (isMasterizando || isMaestro) {
       if (record.wins < 1) {
         return [];
       }
 
+      // El logro cobra desde la primera victoria (por unidad); el `target` marca
+      // cuándo está completo, no cuándo empieza a pagar.
       return [
         candidate(player, "victorias", record.wins, record.matches, true, record.lastWinAt),
       ];
@@ -1915,6 +2037,39 @@ function targetFor(
     unit: definition.metric,
     value: definition.id === POR_TIERRA_ID ? mapPool.length : (definition.target ?? 0),
   };
+}
+
+/**
+ * Lo que cobra un beneficiario por un logro.
+ *
+ * Los cuatro repartos en un solo sitio: un objetivo con `pointsPerUnit` paga por
+ * unidad con tope en su `target`; `victorias` paga `ruleset.pointsPerWin` por victoria
+ * sin tope; `imparable` paga 1 por día con el tope que marque el ruleset; y el resto
+ * cobra el premio de la tarjeta una sola vez.
+ *
+ * Se usa en los dos sitios que publican el mismo dato —el desglose del jugador
+ * (`addAward`) y la lista de `beneficiaries` de la opción— para que no puedan decir
+ * cifras distintas.
+ */
+function achievementPrize(
+  definition: ObjectiveDefinition,
+  value: number,
+  points: number,
+  pointsPerWin: number,
+): number {
+  if (definition.pointsPerUnit !== undefined) {
+    return Math.min(value, definition.target ?? 0) * definition.pointsPerUnit;
+  }
+
+  if (definition.id === VICTORIAS_ID) {
+    return value * pointsPerWin;
+  }
+
+  if (definition.id === IMPARABLE_ID) {
+    return Math.min(value, points);
+  }
+
+  return points;
 }
 
 /**
@@ -1999,15 +2154,12 @@ export function computeObjectives(
     const beneficiaries = sorted.filter((value) => value.eligible);
 
     for (const beneficiary of beneficiaries) {
-      // Los tres repartos de un logro, en un solo sitio: `imparable` paga 1 por día
-      // con el tope que marque el ruleset, `victorias` paga por victoria sin tope y
-      // el resto cobra los puntos de la tarjeta una sola vez.
-      const earned =
-        definition.id === VICTORIAS_ID
-          ? beneficiary.value * ruleset.pointsPerWin
-          : definition.id === IMPARABLE_ID
-            ? Math.min(beneficiary.value, points)
-            : points;
+      const earned = achievementPrize(
+        definition,
+        beneficiary.value,
+        points,
+        ruleset.pointsPerWin,
+      );
       const count = objectiveRepeatable(definition.id) ? beneficiary.value : 1;
 
       addAward(beneficiary.player.playerId, definition.id, earned, count);
@@ -2034,14 +2186,12 @@ export function computeObjectives(
         name: value.player.name,
         avatarUrl: value.player.avatarUrl,
         profileUrl: aoe4WorldProfileUrl(value.player.profileId),
-        points:
-          definition.id === VICTORIAS_ID
-            ? value.value * ruleset.pointsPerWin
-            : definition.id === IMPARABLE_ID
-              ? Math.min(value.value, points)
-              : points,
+        points: achievementPrize(definition, value.value, points, ruleset.pointsPerWin),
         count: objectiveRepeatable(definition.id) ? value.value : 1,
       })),
+      ...(definition.pointsPerUnit === undefined
+        ? {}
+        : { pointsPerUnit: definition.pointsPerUnit }),
       target: targetFor(definition, mapPool),
     });
   }

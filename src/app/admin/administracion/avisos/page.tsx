@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AnnouncementsForm } from "@/app/admin/administracion/announcements-form";
+import { AdminPageHeader } from "@/components/admin/page-header";
 
 export const metadata: Metadata = {
   title: { absolute: "Avisos · Admin" },
@@ -13,16 +14,14 @@ export const metadata: Metadata = {
  */
 export default function AdminAnnouncementsPage() {
   return (
-    <section>
-      <h2 className="text-lg font-medium">Avisos</h2>
-      <p className="mt-1 max-w-[70ch] text-sm text-muted">
-        El bot avisa del comienzo y del final del torneo en el canal de avisos de
-        Discord. Cada aviso se manda solo, una vez, al cruzar su fecha: no hay que
-        pulsar nada. El canal y el token del bot se configuran en el despliegue.
-      </p>
-      <div className="mt-4">
-        <AnnouncementsForm />
-      </div>
-    </section>
+    <div className="flex flex-col gap-6">
+      <AdminPageHeader
+        level={2}
+        title="Avisos"
+        description="El canal de Discord donde el bot avisa del comienzo y del final."
+      />
+
+      <AnnouncementsForm />
+    </div>
   );
 }

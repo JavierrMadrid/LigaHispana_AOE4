@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { PUBLIC_NAVIGATION } from "@/lib/public-navigation";
 
 /**
  * Los cinco destinos del sitio público, en el orden en que se leen.
@@ -14,13 +15,13 @@ import type { ReactNode } from "react";
  * mismo, así que el `href` y el orden son la única fuente de verdad para las dos
  * formas.
  */
-const items = [
-  { href: "/", label: "Clasificación", tabLabel: "Clasificación", icon: PodiumIcon },
-  { href: "/partidas", label: "Partidas en juego", tabLabel: "Partidas", icon: SwordsIcon },
-  { href: "/objetivos", label: "Objetivos", tabLabel: "Objetivos", icon: TargetIcon },
-  { href: "/puntuacion", label: "Puntuación", tabLabel: "Puntos", icon: MedalIcon },
-  { href: "/reglas", label: "Reglas", tabLabel: "Reglas", icon: BookIcon },
-] as const;
+const icons = {
+  standings: PodiumIcon,
+  matches: SwordsIcon,
+  objectives: TargetIcon,
+  scoring: MedalIcon,
+  rules: BookIcon,
+};
 
 function isActive(href: string, pathname: string): boolean {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -62,7 +63,7 @@ export function SiteNav() {
       className="-mx-1.5 overflow-x-auto overscroll-x-contain py-1"
     >
       <ul className="mx-auto flex w-fit items-center gap-1.5 px-1.5">
-        {items.map((item) => {
+        {PUBLIC_NAVIGATION.map((item) => {
           const active = isActive(item.href, pathname);
 
           return (
@@ -121,9 +122,9 @@ export function SiteTabBar() {
       className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-background/95 backdrop-blur sm:hidden"
     >
       <ul className="flex items-stretch justify-around gap-1 px-1 pb-[env(safe-area-inset-bottom)]">
-        {items.map((item) => {
+        {PUBLIC_NAVIGATION.map((item) => {
           const active = isActive(item.href, pathname);
-          const Icon = item.icon;
+          const Icon = icons[item.id];
 
           return (
             <li key={item.href} className="min-w-0">

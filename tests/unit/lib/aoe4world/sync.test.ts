@@ -827,6 +827,8 @@ describe("shouldRecomputeScores", () => {
     approvedPlayers: 13,
     matchesChanged: 0,
     summariesFetched: 0,
+    objectAwardsCreated: 0,
+    objectMatchesBlocked: 0,
     mapPoolUpdated: false,
     playersChanged: 0,
   };
@@ -859,6 +861,16 @@ describe("shouldRecomputeScores", () => {
 
   it("un summary rellenado fuerza el recálculo", () => {
     expect(shouldRecomputeScores({ ...LIMPIO, summariesFetched: 1 })).toBe(true);
+  });
+
+  it("un premio de objeto nuevo fuerza el recálculo", () => {
+    expect(shouldRecomputeScores({ ...LIMPIO, objectAwardsCreated: 1 })).toBe(true);
+  });
+
+  it("una partida excluida por una desventaja pendiente fuerza el recálculo", () => {
+    // La marca cambia lo que puntúa: sin recalcular, la partida seguiría sumando
+    // en la clasificación publicada y en los objetivos.
+    expect(shouldRecomputeScores({ ...LIMPIO, objectMatchesBlocked: 1 })).toBe(true);
   });
 
   it("un pool de mapas reescrito fuerza el recálculo", () => {

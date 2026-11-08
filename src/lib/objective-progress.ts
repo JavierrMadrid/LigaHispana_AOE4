@@ -28,13 +28,13 @@ import {
  * ## Por qué el valor se recorta al máximo
  *
  * En los logros con tope (`imparable`, 14 días; `lider-<civ>`, 3 victorias;
- * `por-tierra-y-agua`, un mapa por cada uno del pool) el progreso no sigue subiendo
- * aunque se cumpla más veces: el premio ya está cobrado y una barra que pasara del
- * 100 % mentiría. En las **competiciones** no hay tope porque el valor es la
- * métrica del ranking (partidas, racha, victorias), que se compara entre jugadores y
- * recortarla haría que el segundo pareciera el primero. Y `victorias` tampoco lo
- * tiene: paga por unidad y no se completa nunca, así que su valor es la cifra real
- * de victorias.
+ * `maestro-<civ>`, 5 victorias; `por-tierra-y-agua`, un mapa por cada uno del pool) el
+ * progreso no sigue subiendo aunque se cumpla más veces: el premio ya está cobrado y
+ * una barra que pasara del 100 % mentiría. En las **competiciones** no hay tope porque
+ * el valor es la métrica del ranking (partidas, racha, victorias), que se compara
+ * entre jugadores y recortarla haría que el segundo pareciera el primero. Y
+ * `victorias` tampoco lo tiene: paga por unidad y no se completa nunca, así que su
+ * valor es la cifra real de victorias.
  *
  * ## Por qué `PERDIDO` solo se emite en competiciones
  *
@@ -196,6 +196,11 @@ export function currentObjectiveProgress(
   for (const option of options) {
     const max = optionMaxProgress(option);
     const repetible = objectiveRepeatable(option.id);
+    // Los objetivos que cobran por unidad (`maestro-<civ>`) son beneficiarios desde
+    // la primera victoria, así que "estar en `beneficiaries`" no significa completo:
+    // se completa al llegar al umbral, como la barra de avance.
+    const porUnidad = option.pointsPerUnit !== undefined;
+    const umbral = option.target?.value ?? null;
 
     const countByProfileId = new Map<number, number>();
 
@@ -214,7 +219,9 @@ export function currentObjectiveProgress(
       const completed =
         option.kind === "competition"
           ? option.holder?.profileId === contender.profileId
-          : countByProfileId.has(contender.profileId);
+          : porUnidad
+            ? umbral !== null && value >= umbral
+            : countByProfileId.has(contender.profileId);
 
       if (!completed && value <= 0) {
         continue;

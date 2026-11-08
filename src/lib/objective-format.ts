@@ -91,25 +91,53 @@ export function completedContenders(option: ObjectiveOption): number {
 
 /**
  * El pie de la placa de premio de un objetivo: `puntos`, o `puntos por victoria`
- * en uno sin tope.
+ * en uno sin tope o que cobra por unidad.
  *
  * La placa de un objetivo normal enseña un premio cerrado —lo que reparte, se cobre
  * entero o no— y con decir `puntos` se entiende. En `victorias` no hay premio: cada
  * victoria paga, así que la cifra de la placa es **por unidad** y el pie tiene que
- * decirlo, o la placa estaría afirmando que el objetivo reparte eso en total.
+ * decirlo, o la placa estaría afirmando que el objetivo reparte eso en total. Los
+ * objetivos con `pointsPerUnit` (los `maestro-<civ>`) cobran igual de repartido
+ * aunque tengan umbral: su `points` es el **máximo**, así que el pie también dice
+ * que la cifra es por unidad.
  */
 export function prizeLabel(objective: {
   kind: ObjectiveKind;
   target: ObjectiveTarget | null;
   metric: ObjectiveMetric;
+  pointsPerUnit?: number;
 }): string {
-  return hasNoCap(objective) ? `puntos por ${metricUnit(objective.metric, 1)}` : "puntos";
+  return hasNoCap(objective) || objective.pointsPerUnit !== undefined
+    ? `puntos por ${metricUnit(objective.metric, 1)}`
+    : "puntos";
+}
+
+/**
+ * Lo que paga **cada unidad** de un objetivo con `pointsPerUnit`, con la cifra
+ * dentro: `1 punto por victoria`, `2 puntos por victoria`.
+ *
+ * Es la frase que necesitan los textos que explican el reparto de una familia (ver
+ * `familyScoringNote`), donde el número de puntos por unidad y la unidad de la
+ * métrica se leen juntos y no en dos piezas.
+ */
+export function unitPrizeLabel(pointsPerUnit: number, metric: ObjectiveMetric): string {
+  return `${pointsPerUnit} ${pointsPerUnit === 1 ? "punto" : "puntos"} por ${metricUnit(metric, 1)}`;
+}
+
+/**
+ * La unidad del pago, sin la palabra `puntos`: `por victoria`, `por día`.
+ *
+ * Es el pie corto de la placa cuando la cifra (`+1`) ya dice cuántos puntos paga
+ * cada unidad y la placa tiene que caber en una tarjeta estrecha.
+ */
+export function prizeUnitLabel(metric: ObjectiveMetric): string {
+  return `por ${metricUnit(metric, 1)}`;
 }
 
 /**
  * El valor de un contendiente, listo para pintar.
  *
- * En un **logro** es el avance sobre el umbral (`value/target`, p. ej. `12/23
+ * En un **logro** es el avance sobre el umbral (`value/target`, p. ej. `12/25
  * civilizaciones`, `2/3 victorias`), con la unidad del objetivo. En una
  * **competición** no hay umbral que enseñar: lo que da la posición es el valor
  * de la métrica a secas (`50 partidas`, `5 victorias seguidas`). Los números son
@@ -441,8 +469,8 @@ export type ObjectiveClosenessInput = {
  * es la que se toma: las dos familias se leen como **la fracción del camino
  * recorrida**, para que puedan compararse sin que una aplaste a la otra.
  *
- * - **Logro**: `value/target`, el avance sobre el umbral. Recorrer 12 de 23
- *   civilizaciones es 0,52. Se satura en `1` (pasarse del umbral no acerca más).
+ * - **Logro**: `value/target`, el avance sobre el umbral. Recorrer 12 de 25
+ *   civilizaciones es 0,48. Se satura en `1` (pasarse del umbral no acerca más).
  * - **Competición**: lo que mide es ir primero, así que la cercanía es la
  *   inversa del puesto (`1/position`): líder 1, 2.º 0,5, 3.º 0,33. Cuanto mejor
  *   puesto, más cerca de cobrarlo. El empate a fracción se rompe por distancia

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AlertKind, AlertRule } from "@/generated/prisma/enums";
+import { AdminPageHeader } from "@/components/admin/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { PageSizeSelect } from "@/components/page-size-select";
 import { Pagination } from "@/components/pagination";
@@ -121,28 +122,22 @@ export default async function AlertsPage({ searchParams }: PageProps<"/admin/ale
 
   return (
     <div className="flex flex-col gap-6">
-      <section className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold">Alertas</h1>
-          <p className="mt-1 max-w-[70ch] text-sm text-muted">
-            Comportamientos anómalos detectados en las partidas clasificatorias y avisos
-            sobre el estado del historial de los participantes de la edición activa, de
-            lo más reciente a lo más antiguo. El informe descargable incluye además las
-            rachas que siguen abiertas en esta edición.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <AlertRulesDialog thresholds={thresholds} fallback={rulesRead.status !== "ok"} />
-          <a
-            href="/admin/alertas/reporte"
-            download
-            className="inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong"
-          >
-            Descargar informe
-          </a>
-        </div>
-      </section>
+      <AdminPageHeader
+        title="Alertas"
+        description="Anomalías de las partidas y del historial de los participantes de la edición activa."
+        actions={
+          <>
+            <AlertRulesDialog thresholds={thresholds} fallback={rulesRead.status !== "ok"} />
+            <a
+              href="/admin/alertas/reporte"
+              download
+              className="inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong"
+            >
+              Descargar informe
+            </a>
+          </>
+        }
+      />
 
       {alerts.status === "degraded" ? (
         <EmptyState

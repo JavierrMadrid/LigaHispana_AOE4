@@ -641,8 +641,8 @@ function ActFormFields({
               ) : null}
             </div>
             <p className="mt-1 text-xs leading-relaxed text-muted">
-              Solo se ofrecen victorias que hoy puntúan con el ruleset y la ventana
-              activos. Las fechas se leen en hora de Madrid.
+              Solo se ofrecen victorias que hoy cuentan con las reglas activas. Las
+              fechas se leen en hora de Madrid.
             </p>
 
             {playerId === "" ? (

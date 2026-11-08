@@ -25,7 +25,7 @@ import type { ScoringRuleset } from "@/lib/scoring";
  *   objetivo contra el catálogo y el ruleset activo, que es lo que el historial del
  *   panel publica para que la interfaz no tenga que mirar el catálogo.
  *
- * `resolveObjective()` vale para los 88 objetivos del catálogo (competiciones
+ * `resolveObjective()` vale para los 120 objetivos del catálogo (competiciones
  * incluidas), porque resolver una etiqueta y un precio no depende de cómo se
  * registre el objetivo. Lo que sí depende es el **espejo** de abajo.
  *

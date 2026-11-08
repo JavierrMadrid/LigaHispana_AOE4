@@ -16,6 +16,11 @@ describe("civilizationFile", () => {
     expect(civilizationFile("japanese")).toBe("Japanese_AoE4.webp");
   });
 
+  it("también resuelve las civilizaciones del DLC", () => {
+    expect(civilizationFile("scots")).toBe("Scots_AoE4.webp");
+    expect(civilizationFile("vikings")).toBe("Vikings_AoE4.webp");
+  });
+
   it("devuelve null para una civilización sin asset", () => {
     expect(civilizationFile("atlantis")).toBeNull();
     expect(civilizationFile("")).toBeNull();
@@ -32,6 +37,11 @@ describe("objectiveCivilization", () => {
     expect(objectiveCivilization("lider-japanese")).toBe("japanese");
     expect(objectiveCivilization("acolito-holy_roman_empire")).toBe("holy_roman_empire");
     expect(objectiveCivilization("masterizando-japanese")).toBe("japanese");
+  });
+
+  it("resuelve las civilizaciones del DLC", () => {
+    expect(objectiveCivilization("lider-scots")).toBe("scots");
+    expect(objectiveCivilization("acolito-vikings")).toBe("vikings");
   });
 
   it("devuelve null en los objetivos que no son de civilización", () => {

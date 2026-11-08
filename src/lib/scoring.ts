@@ -165,9 +165,13 @@ export const LEGACY_RULESET_VERSION = 3;
  * La **v2** es por la reconciliación del progreso del overlay (issue 154): las tablas
  * `ObjectiveProgressState` y `ObjectiveProgressEvent` nacen vacías, y sin este salto
  * el primer pase tras el despliegue podría saltarse el recálculo y el feed no se
- * sembraría hasta la siguiente partida.
+ * sembraría hasta la siguiente partida. La **v3** es por el catálogo de 94 objetivos
+ * (Vikingos y Escoceses): sin el salto, el primer pase podría saltarse el recálculo y
+ * los objetivos nuevos no repartirían hasta la siguiente partida. La **v4** es por el
+ * catálogo de la prueba de concepto de subobjetivos (120 objetivos, familia
+ * `maestro`), mismo motivo.
  */
-export const SCORING_CACHE_VERSION = 2;
+export const SCORING_CACHE_VERSION = 4;
 
 /**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
@@ -660,12 +664,13 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 /**
  * Los campos bloqueados del ruleset que cambian entre dos versiones del documento.
  *
- * Es la **guarda del servidor** de "una vez que empieza la edición no se pueden
- * cambiar los puntos": `saveScoringRuleset()` la usa para negarse a escribir aunque
- * el formulario (o una llamada directa a la Server Action) traiga otro documento. Es
- * pura y no toca la base de datos, así que se prueba entera sin ella.
+ * Es la **guarda del servidor** de "mientras la edición está en marcha no se pueden
+ * cambiar los puntos": la usa la escritura del fin de la ventana (`saveWindowEnd()` en
+ * el panel) para negarse a escribir aunque el formulario (o una llamada directa a la
+ * Server Action) traiga otro documento. Es pura y no toca la base de datos, así que se
+ * prueba entera sin ella.
  *
- * Con la edición empezada quedan congelados:
+ * Con la edición en marcha quedan congelados:
  *
  * | Campo | Por qué |
  * |---|---|
@@ -678,7 +683,9 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
  *
  * **`window.to` se ignora a propósito**: fijar o mover el fin de la ventana es la
  * forma de cerrar la edición, y la documentación ya dice que una ventana abierta se
- * cierra más tarde. Es el único campo editable después del inicio.
+ * cierra más tarde. Es el único campo editable mientras la edición está en marcha; una
+ * vez terminada, la ventana entera se edita por otro camino (`saveTournamentWindow()`),
+ * que no pasa por esta guarda.
  *
  * Se compara el texto de `window.from` y no el instante: las dos versiones llegan
  * pasadas por `mergeRuleset()` → `parseWindow()`, que normaliza a `toISOString()`, así
@@ -752,7 +759,7 @@ export type ScoreBreakdownMode = {
  * ```json
  * {
  *   "ruleSetVersion": 4,
- *   "rule": "2 puntos por victoria clasificatoria más 88 objetivos: 29 competiciones y 59 logros",
+ *   "rule": "2 puntos por victoria clasificatoria más 120 objetivos: 31 competiciones y 89 logros",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
@@ -989,7 +996,7 @@ async function readObjectivesSnapshot(client: RulesetClient = db): Promise<Objec
  *
  * La comparación es contra la huella y no contra el JSON guardado: `jsonb` normaliza
  * el orden de las claves, así que el documento leído nunca es textualmente igual al
- * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (88
+ * que se escribió. Sin esta comprobación, cada pasada reescribiría cientos de KB (94
  * objetivos con sus rankings completos) para dejarlos idénticos.
  */
 async function writeObjectivesSnapshot(view: ObjectiveView, client: RulesetClient): Promise<void> {

@@ -235,6 +235,19 @@ enum ObjectiveProgressKind {
   PROGRESADO
 }
 
+/// Qué **objeto utilizable** reparte el POC de la issue 134 (`ObjectAward`).
+///
+/// Los tres valores son los del catálogo de `src/lib/objects.ts`: el schema y el
+/// catálogo tienen que decir lo mismo. El objeto se gana con una victoria del día
+/// y su tipo sale del motivo de la victoria (`winReason`), que el mapeo tolerante
+/// de ese módulo traduce a estos valores. Los nuevos van al final, como en todos
+/// los enums de Postgres.
+enum ObjectKind {
+  RELIQUIA
+  MONEDA
+  MONUMENTO
+}
+
 model Player {
   id               String       @id @default(cuid())
   profileId        Int          @unique
@@ -597,6 +610,11 @@ model Match {
   villagersLost          Int?
   gildedVillagersLost    Int?
   mountedVillagersLost   Int?
+  // Motivo de la victoria tal cual lo publica el summary (`winReason`: "Surrender",
+  // "Conquest", "Elimination"…). Se guarda el literal y no un enum porque AoE4World
+  // puede añadir valores sin avisar. `null` = no hay summary o el payload no traía el
+  // campo; **no** significa "sin motivo".
+  winReason              String?
   // Cuándo se pidió el summary por última vez. `null` = nunca. Se escribe también
   // cuando la respuesta es un 404 ("esta partida no lo tiene"), que es una respuesta
   // concluyente: así no se vuelve a preguntar por ella. Un fallo de red, un 5xx o un
@@ -635,6 +653,17 @@ model Match {
   // todo lo que tenga `revertedAt`, así que una partida revertida no da ni
   // victorias ni objetivos.
   revertedAt        DateTime?
+  // Partida excluida del torneo por una desventaja de objeto (`ObjectAward`),
+  // mientras el objeto estaba pendiente y la partida empezó después de que le
+  // llegara. `null` = cuenta (si cumple el resto de condiciones).
+  //
+  // **Por qué es una columna y no un cálculo en vivo.** El motor ya tiene un
+  // predicado central de "qué cuenta" (`rankedMatchSql()`), y la ventana del objeto
+  // (`heldSince`/`exitedAt`) y su portador cambian con el tiempo: calcularlo en cada
+  // consulta obligaría a un `join` contra `ObjectAward` en las tres traducciones de
+  // la regla y a reescribir su forma. Con la marca, la regla sigue siendo una
+  // columna nula más y el bloqueo se materializa en la pasada del worker.
+  excludedByAwardId String?
   rawJson           Json
   createdAt         DateTime     @default(now())
 
@@ -652,6 +681,9 @@ model Match {
   // Sostiene el filtro de partidas clasificatorias: `mode` es igualdad y
   // `startedAt` es rango, que es el orden que aprovecha un índice en Postgres.
   @@index([mode, startedAt])
+  // La exclusión por objeto: el motor pregunta `is null` en cada barrido y el
+  // desbloqueo de una ventana busca por esta marca.
+  @@index([excludedByAwardId])
 }
 
 /// Puntuación de un jugador con una versión concreta de las reglas.
@@ -1354,4 +1386,119 @@ model AdminActMatch {
   @@id([actId, matchId])
   // La consulta "qué actuaciones anularon esta partida" y el `Cascade` desde `Match`.
   @@index([matchId])
+}
+
+/// Un **objeto utilizable** del POC de la issue 134: quién lo ganó, quién lo tiene y
+/// cuándo dejó de estar pendiente. Las reglas que lo rodean viven en
+/// `src/lib/objects.ts` y la mecánica completa en `docs/OBJETOS.md`.
+///
+/// ## Por qué no hay relación con `Player`
+///
+/// `winnerId`, `holderId` y `penaltyId` son `String` sueltos, como
+/// `AdminAction.targetId`: el histórico del objeto tiene que sobrevivir al borrado
+/// de un participante, y una baja no puede arrastrar lo que ya pasó. Además, el
+/// portador puede ser cualquiera y el objeto sigue existiendo aunque su dueño
+/// desaparezca.
+///
+/// ## El día UTC
+///
+/// `day` es la **medianoche UTC** del día de la partida que otorga el objeto, no el
+/// instante de la partida ni el de la creación de la fila. Guardarlo normalizado es
+/// lo que hace que `@@unique([kind, day])` impida dos objetos del mismo tipo el
+/// mismo día: la regla es "uno de cada tipo y día", y así no depende de la hora a la
+/// que corra el worker que los crea.
+///
+/// ## La exclusión de partidas
+///
+/// Mientras el objeto está pendiente (`exitedAt` a `null`), las partidas del
+/// portador **no puntúan**: las que empezaron después de `heldSince` quedan
+/// excluidas. La marca de que la desventaja se cumplió es `satisfiedByMatchId`, y
+/// `exitedAt` se cierra en el `startedAt` de esa partida: la partida que la cumple
+/// cuenta, las anteriores no, y la siguiente vuelve a puntuar. Si el jugador estaba
+/// en partida cuando el objeto le llegó, `startedAt > heldSince` la deja fuera hasta
+/// la siguiente.
+model ObjectAward {
+  id String @id @default(cuid())
+
+  // Qué objeto es: `RELIQUIA`, `MONEDA` o `MONUMENTO`. Decide el catálogo de
+  // desventajas y, con `day`, la unicidad "uno de cada tipo y día".
+  kind ObjectKind
+
+  // Medianoche UTC del día de la partida que lo otorga. Normalizado para que el
+  // índice único `(kind, day)` diga "un objeto de este tipo por día" y no dependa
+  // de la hora de la partida ni de la del pase que crea la fila.
+  day DateTime
+
+  // Id de la desventaja dentro del catálogo de `src/lib/objects.ts`
+  // (`sin-2tc`, `sin-fuertes`…). Se guarda el id y no el texto, como en los
+  // objetivos: el texto se resuelve al leer y no se queda viejo.
+  penaltyId String
+
+  // `Player.id` del vencedor de la partida que lo otorga (la primera del día UTC
+  // con un motivo que mapee a este tipo).
+  winnerId String
+  // `Match.id` de esa partida. Se guarda la fila concreta del ganador porque el
+  // mismo `gameId` tiene una fila por jugador y aquí importa la del vencedor.
+  winnerMatchId String
+
+  // `Player.id` del portador actual. `null` = el objeto todavía no tiene portador
+  // (la fila se ha creado pero no se ha entregado).
+  holderId String?
+  // Cuándo le llegó al portador actual. `null` = sin portador. La regla de
+  // exclusión compara con `>`: una partida empezada en el mismo instante no se
+  // excluye, porque el jugador ya estaba dentro cuando le llegó el objeto.
+  heldSince DateTime?
+  // Cuándo dejó de estar pendiente. `null` = sigue pendiente y las partidas del
+  // portador posteriores a `heldSince` no puntúan. Se cierra cuando el admin da la
+  // desventaja por cumplida (en el `startedAt` de esa partida) o cuando el objeto
+  // se retira, y desde entonces no afecta a nada.
+  exitedAt DateTime?
+
+  // `Match.id` de la partida con la que se dio la desventaja por cumplida. `null`
+  // mientras siga pendiente o si se cerró sin una partida concreta. Es la marca que
+  // distingue "cumplida" de "retirada".
+  satisfiedByMatchId String?
+
+  // Cuándo se escribió la fila. Es rastro de proceso, no fecha del torneo: la fecha
+  // que manda es `day`.
+  createdAt DateTime @default(now())
+
+  // Lanzamientos del objeto, del más antiguo al más reciente. El `Cascade` de
+  // `ObjectThrow` los borra con él.
+  throws ObjectThrow[]
+
+  // Un objeto de cada tipo por día UTC. Es la regla, no solo un dedupe: el segundo
+  // ganador del día de un tipo ya otorgado no crea fila.
+  @@unique([kind, day])
+  // Objetos de un portador: la consulta de la regla de exclusión y la del panel.
+  @@index([holderId])
+}
+
+/// Un **lanzamiento** de un objeto utilizable: quién se lo tiró a quién, con qué
+/// tirada y si se devolvió. Es **append-only**: el lanzamiento ocurrió, aunque
+/// después el objeto cambie de manos; lo que se anota es el siguiente, no se corrige
+/// el anterior.
+model ObjectThrow {
+  id String @id @default(cuid())
+
+  // Objeto lanzado.
+  awardId String
+  award   ObjectAward @relation(fields: [awardId], references: [id], onDelete: Cascade)
+
+  // `Player.id` del lanzador (el portador en el momento del lanzamiento).
+  fromId String
+  // `Player.id` del objetivo del lanzamiento.
+  toId String
+  // Instante del lanzamiento. Con su día UTC decide si un mismo objetivo ya recibió
+  // este objeto ese día (`sameTargetBlocked` en `src/lib/objects.ts`).
+  at DateTime @default(now())
+  // Tirada de la devolución (0-1), tal cual la consumió `returnProbability()`. Se
+  // guarda para poder auditar por qué un lanzamiento se devolvió o no.
+  roll Float
+  // `true` = se devolvió: el objeto sigue en el lanzador y ese día ya no puede
+  // relanzarlo. `false` = el portador pasó a ser el objetivo.
+  returned Boolean
+
+  // Los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`.
+  @@index([awardId])
 }

@@ -1,6 +1,6 @@
 # Objetivos
 
-Los **88 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
+Los **120 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
 funcional: qué mide cada uno, cuántos puntos da y **quién lo cobra**. La puntuación base está en
 [`docs/PUNTUACION.md`](./PUNTUACION.md); aquí solo están los objetivos. El catálogo es el del código,
 pero el ruleset puede **desactivar** objetivos de una edición a otra (ver
@@ -13,8 +13,9 @@ Hay **dos formas de cobrar**, y es la diferencia de fondo de este catálogo:
 - **Competición** (`competition`): *winner-takes-all*. Lo cobra **una sola persona**, la que va
   primera. Un único poseedor.
 - **Logro** (`achievement`): lo cobra **todo el que cumple la condición**. Puede ser binario (se
-  cumple o no), con tope (`imparable`: 1 punto por día, hasta 14) o **sin tope** (`victorias`: paga los
-  puntos por victoria de la regla activa por cada victoria). **No hay poseedor único.**
+  cumple o no), con tope (`imparable`: 1 punto por día, hasta 14), **por unidad**
+  (`maestro-<civ>`: 1 punto por victoria, hasta 5) o **sin tope** (`victorias`: paga los puntos por
+  victoria de la regla activa por cada victoria). **No hay poseedor único.**
 
 Se resuelven sobre las mismas partidas que puntúan, así que el corte de inscripción de cada jugador
 también les aplica: un alta a mitad de torneo no puede ganar un objetivo con partidas anteriores. El
@@ -31,8 +32,8 @@ como **temporales** (puede cambiar de dueño hasta el cierre): ver [`PUNTUACION.
 | Racha | 1 | 2 | 3 |
 | Hazañas | 0 | 7 | 7 |
 | Formatos | 4 | 0 | 4 |
-| Civilizaciones | 23 | 48 | 71 |
-| **Total** | **29** | **59** | **88** |
+| Civilizaciones | 25 | 78 | 103 |
+| **Total** | **31** | **89** | **120** |
 
 El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 
@@ -42,7 +43,7 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 |---|---|---|---|
 | Bienhadado | 100 | racha | La racha de victorias seguidas más larga. |
 | Loco por ganar | 25 | partidas | Quien más partidas clasificatorias ha jugado. Sin mínimo. |
-| Masterizando `<civ>` (×23) | 75 | victorias | Quien más victorias tiene con esa civilización. Sin mínimo. |
+| Masterizando `<civ>` (×25) | 75 | victorias | Quien más victorias tiene con esa civilización. Sin mínimo. |
 | Rey del 1v1 / 2v2 / 3v3 / 4v4 | 90 | victorias | Quien más victorias tiene en ese formato. |
 
 - El `id` de `masterizando-*` es el de AoE4World de la civilización (`masterizando-japanese`), que es
@@ -69,10 +70,12 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 | Avance relámpago: Imperial | 9 | Llegar a la Edad Imperial antes de 16 minutos en una partida clasificatoria. |
 | Defensor del pueblo | 12 | Terminar una partida de 15 minutos o más perdiendo menos de 3 aldeanos, menos de 2 aldeanos dorados y ningún aldeano montado. |
 | Por tierra y agua | 41 | Jugar al menos 3 partidas en **cada** mapa del pool activo. |
-| Polifacético | 41 | Ganar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
-| Líder `<civ>` (×23) | 9 | Ganar al menos 3 partidas con esa civilización. |
-| Jugón | 10 | Jugar al menos 3 partidas con **cada una** de las 23 civilizaciones. |
-| Acólito `<civ>` (×23) | 5 | Jugar al menos 3 partidas con esa civilización. |
+| Polifacético | 41 | Ganar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
+| Líder `<civ>` (×25) | 9 | Ganar al menos 3 partidas con esa civilización. |
+| Jugón | 10 | Jugar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
+| Acólito `<civ>` (×25) | 5 | Jugar al menos 3 partidas con esa civilización. |
+| Maestro de todas las civilizaciones | 50 | Ganar al menos 5 partidas con **cada una** de las 25 civilizaciones. |
+| Maestro `<civ>` (×25) | 1 por victoria, tope 5 | Cada victoria con esa civilización; el `points` de la tarjeta (5) es el máximo. |
 
 - `victorias` **no tiene premio propio**: cada victoria vale lo que diga `pointsPerWin` del ruleset (hoy
   2). Es la única fuente de lo que vale una victoria, así que un `objectives["victorias"]` retocado en
@@ -92,25 +95,35 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 - En `imparable` el valor del ranking es el número real de días; los puntos van con tope (14). Las
   **repeticiones** que publica la web también son los días reales ("20 x Imparable +14").
 - Las partidas con civilización aleatoria no cuentan para los objetivos de civilización.
+- En la familia **Maestro** el subobjetivo cobra **por unidad**: 1 punto por victoria con esa
+  civilización, hasta 5. El padre es un **bonus extra**, no el total de la familia: paga 50 solo cuando
+  las 25 civilizaciones tienen al menos 5 victorias. La familia reparte 25 × 5 + 50 = 175 puntos
+  nominales. Es la prueba de concepto de objetivos con subobjetivos (`pointsPerUnit` en el catálogo).
 
 ### Familias
 
-`polifacético` es la cabeza de los 23 `lider-<civ>`, y `jugón` lo es de los 23 `acolito-<civ>`: son
-los logros globales de cada familia. Se modelan con un campo `parent` en la definición (la cabeza
-tiene `parent: null`; cada hijo apunta a su cabeza) y la interfaz los agrupa en un bloque. En
-`/objetivos` el bloque es la tarjeta de la cabeza más un riel de subobjetivos, y la tarjeta explica
-el reparto del conjunto —lo que da cada subobjetivo y lo que suma completarlos todos con el global—
-a partir de sus `points` y del número de hijos. En la ficha de un participante la cabeza sigue en las
-secciones (es un objetivo que se consigue) y sus hijos van en un carrusel por familia, **dentro de "Al
-alcance"** y tras sus tarjetas individuales, con el avance del jugador y las tarjetas ordenadas de
-mayor a menor porcentaje de consecución.
+`polifacético` es la cabeza de los 25 `lider-<civ>`, `jugón` lo es de los 25 `acolito-<civ>` y
+`maestro` de los 25 `maestro-<civ>`: son los logros globales de cada familia. Se modelan con un
+campo `parent` en la definición (la cabeza tiene `parent: null`; cada hijo apunta a su cabeza) y la
+interfaz los agrupa en un bloque. En `/objetivos` el bloque es la tarjeta de la cabeza más un riel de
+subobjetivos, y la tarjeta explica el reparto del conjunto —lo que da cada subobjetivo y lo que suma
+completarlos todos con el global— a partir de sus `points` y del número de hijos. En los hijos con
+`pointsPerUnit` el `points` es el **premio máximo**, así que la tarjeta no lo anuncia como premio
+cerrado: la placa de cada subobjetivo enseña el pago por unidad (`+1 · puntos por victoria`) y la nota
+de la cabeza dice cuánto paga cada victoria y hasta cuánto, además del extra por completar la familia
+(«Cada civilización: 1 punto por victoria, hasta 5 (Maestro). Completar las 25: +50 extra»). En la
+ficha de un participante la cabeza sigue en las secciones (es un objetivo que se consigue) y sus hijos
+van en un carrusel por familia, **dentro de "Al alcance"** y tras sus tarjetas individuales, con el
+avance del jugador y las tarjetas ordenadas de mayor a menor porcentaje de consecución. La placa de
+puntos de esa ficha enseña lo **cobrado** y, mientras el jugador no haya ganado ninguna, el precio de
+la próxima victoria (1 · puntos por victoria): el máximo nunca se lee como si estuviera en su haber.
 
 La tarjeta de la cabeza añade además el detalle por civilización: la **lista más corta de las dos**
 —las hechas o las que quedan— con la bandera de cada una y la cifra en partidas (Jugón) o victorias
-(Polifacético). La ventana volteable la lista entera, en el resumen frontal y en la cara de
+(Polifacético y Maestro). La ventana volteable la lista entera, en el resumen frontal y en la cara de
 clasificación.
 
-Los 23 `masterizando-<civ>` no forman familia —no tienen cabeza que los agrupe—, pero en `/objetivos`
+Los 25 `masterizando-<civ>` no forman familia —no tienen cabeza que los agrupe—, pero en `/objetivos`
 se leen igual: bajo el titular «Masterizando», un riel con el mismo filtro de banderas y la misma
 navegación, con cada tarjeta abriendo la clasificación de esa civilización.
 
@@ -137,9 +150,11 @@ ya no existen. Lo cambia el superadministrador desde el panel; el detalle, en
 [`OPERACION.md`](./OPERACION.md#configurar-la-edición).
 
 Apagar un objetivo **solo se puede antes de que empiece la edición**: desde `window.from`, el ruleset
-está congelado (`saveScoringRuleset` rechaza el cambio) porque un objetivo apagado retiraría puntos que
-la clasificación ya está publicando. Después del inicio, lo único editable del ruleset es el fin de la
-ventana.
+está congelado (`saveScoringRuleset` rechaza cualquier cambio de reglas) porque un objetivo apagado
+retiraría puntos que la clasificación ya está publicando. Mientras la edición está en marcha, lo único
+editable de las fechas es el fin de la ventana, y se hace en la subpestaña `Fechas`. Cuando la edición
+termina (`window.to` ya pasó), mover el inicio desde `Fechas` permite preparar la siguiente y, con el
+inicio nuevo en el futuro, el ruleset vuelve a estar editable.
 
 ## Pool de mapas
 
@@ -188,7 +203,8 @@ logro (que no decide puntos: todos los que cumplen cobran):
 A diferencia del catálogo anterior, el total en juego **no es un número cerrado**: un logro lo cobra
 cada participante que lo cumple, así que su reparto se multiplica por el número de beneficiarios.
 `imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo de
-premio fijo contado una vez, `imparable` a su tope de 14— es **2.754 puntos**: es la cifra que resume la
+premio fijo contado una vez, `imparable` a su tope de 14 y cada `maestro-<civ>` a su premio máximo de
+5— es **3.107 puntos**: es la cifra que resume la
 banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no reparte un premio fijo sino
 `pointsPerWin` por victoria y sin tope: contarlo una vez diría que el catálogo reparte una cifra que no
 reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en

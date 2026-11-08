@@ -9,8 +9,8 @@ import type { ScoringRuleset } from "@/lib/scoring";
 /**
  * El registro de **quién posee cada competición**, en vivo y *append-only*.
  *
- * Las 29 competiciones del catálogo (`loco-por-ganar`, `bienhadado`, los cuatro
- * `rey-*` y los 23 `masterizando-<civ>`) no se "cumplen": se poseen. Hoy cambian de
+ * Las 31 competiciones del catálogo (`loco-por-ganar`, `bienhadado`, los cuatro
+ * `rey-*` y los 25 `masterizando-<civ>`) no se "cumplen": se poseen. Hoy cambian de
  * dueño tantas veces como cambie el ranking, y hasta ahora eso no dejaba rastro
  * hasta el cierre del torneo, donde el espejo de objetivos (`ObjectiveEvent`,
  * `src/lib/objective-events.ts`) escribía un único "cumplió" con fecha de fin de

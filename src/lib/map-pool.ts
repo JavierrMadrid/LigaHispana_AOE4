@@ -31,20 +31,20 @@ export const MAP_POOL_KEY = "scoring.mapPool";
 export const MAP_POOL_SYNC_KEY = "scoring.mapPoolSync";
 
 /**
- * Los 9 mapas del pool de la Season 14, tal cual los publica AoE4World. Es el
- * respaldo: se usa cuando la clave `scoring.mapPool` no existe o no es legible, y
- * el worker lo reemplaza por el pool que lea del homepage de AoE4World.
+ * Los 9 mapas de la rotación de noviembre de 2026, tal cual los publica AoE4World.
+ * Es el respaldo: se usa cuando la clave `scoring.mapPool` no existe o no es legible,
+ * y el worker lo reemplaza por el pool que lea del homepage de AoE4World.
  */
 export const DEFAULT_MAP_POOL: readonly string[] = [
-  "Atacama",
-  "Baltic",
+  "Archipelago",
+  "Cliffside",
   "Dry Arabia",
-  "Flankwoods",
-  "Golden Heights",
-  "Himeyama",
+  "Fangs",
+  "Golden Pit",
+  "Highwoods",
   "King of the Hill",
-  "Lipany",
-  "The Pit",
+  "Marshland",
+  "Waterholes",
 ];
 
 /**

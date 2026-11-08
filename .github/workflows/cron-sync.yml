@@ -6,6 +6,9 @@ name: Sincronización AoE4World
 #   - variable `SITE_URL` (Settings > Secrets and variables > Actions > Variables)
 #   - secreto `CRON_SECRET` (mismo sitio, pestaña Secrets)
 # `workflow_dispatch` permite lanzarlo a mano desde la pestaña Actions.
+#
+# Un 200 no basta: si el JSON de respuesta trae `scoringError`, la pasada no ha
+# podido publicar la clasificación y el workflow falla para que se vea en rojo.
 
 on:
   schedule:
@@ -37,8 +40,28 @@ jobs:
           SITE_URL: ${{ vars.SITE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl --fail-with-body --silent --show-error \
+          set -euo pipefail
+
+          if ! respuesta="$(curl --fail-with-body --silent --show-error \
             --max-time 300 \
             --request POST \
             --header "Authorization: Bearer $CRON_SECRET" \
-            "$SITE_URL/api/cron/sync"
+            "$SITE_URL/api/cron/sync")"; then
+            echo "$respuesta"
+            echo "::error::La llamada a /api/cron/sync ha fallado."
+            exit 1
+          fi
+
+          echo "$respuesta"
+
+          if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$respuesta"; then
+            echo "::error::La respuesta de /api/cron/sync no es un JSON válido."
+            exit 1
+          fi
+
+          scoring_error="$(jq -r '.scoringError // empty' <<<"$respuesta")"
+
+          if [ -n "$scoring_error" ]; then
+            echo "::error::La sincronización no ha podido recalcular la clasificación: $scoring_error"
+            exit 1
+          fi

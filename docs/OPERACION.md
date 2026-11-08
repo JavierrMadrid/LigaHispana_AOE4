@@ -118,8 +118,10 @@ El incremental ya no pide el histórico jugador a jugador. El cursor es **global
    `windowComplete=false` y **detrás** las ventanas completas cuyo último recorrido venció (F2b),
    desde `max(window.from, registeredAt)`, `BULK` páginas cada uno.
 4. **Perfil**: solo los que no estén frescos por la ladder o por la caché de 1 h.
-5. **Cursor y resto**: scoring (solo si hay algo que recalcular, ver **Salto del recálculo**),
-   alertas, historial, Discord y streams.
+5. **Cursor y resto**: objetos (crear el premio del día y marcar las partidas del
+   portador, ver [`OBJETOS.md`](./OBJETOS.md#persistencia-y-worker)), scoring (solo si
+   hay algo que recalcular, ver **Salto del recálculo**), alertas, historial, Discord
+   y streams.
 
 | Variable | Defecto | Qué limita |
 |---|---:|---|
@@ -225,6 +227,8 @@ cualquiera se cumple:
 | La pasada anterior falló al recalcular | `scoringError` del rastro anterior |
 | Partidas tocadas | `inserted + updated + resolvedByRefetch + abandoned > 0` |
 | Summaries rellenados | `summaries.fetched > 0` (cambian APM, edad y aldeanos) |
+| Premios de objeto creados | `syncDailyObjectAwards().created > 0` |
+| Partidas excluidas por un objeto | `applyObjectBlocks() > 0` (dejan de puntuar) |
 | Pool de mapas nuevo | `mapPool.status === "updated"` (`por-tierra-y-agua`) |
 | Metadatos de jugador cambiados | `ladder.playersChanged + perfiles cambiados` |
 | Cambio en el número de aprobados | `playersRanked` de `scoring.lastRun` frente al roster |
@@ -243,6 +247,11 @@ cualquiera se cumple:
   `npm run db:window`), los cortes de división (`npm run alerts:cutoffs`), los eventos puntuales y las
   actuaciones que anulan o revierten partidas. El pool de mapas es la excepción y se detecta por
   `mapPool.status === "updated"`.
+- **Los objetos van justo antes de esta decisión**: `syncDailyObjectAwards()` y
+  `applyObjectBlocks()`, cada uno con su `try`/`catch`. Un fallo se apunta en `objectsError` y no
+  mueve `lastSuccessAt`; si crean un premio o marcan partidas, fuerzan el recálculo en esta misma
+  pasada. Con el modo de objetos apagado (`edition.config.objectsEnabled`, ver
+  [`OBJETOS.md`](./OBJETOS.md#modo-configurable)) los dos pasos no hacen nada.
 - **Saltárselo no es un fallo**: `scoring = null`, `scoringError = null` y `scoring.lastRun` no se
   toca. La clasificación publicada sigue siendo la última que se calculó.
 
@@ -267,8 +276,11 @@ clasificación y después de calcular los objetivos, con el mismo cerrojo:
   `window.to` (es cuando el torneo lo dio por cumplido).
 - **Solo se escribe lo que difiere**: una pasada sin cambios no toca ninguna de las dos tablas.
 - **`PERDIDO` solo se emite en competiciones**: un logro revertido no genera evento.
-- **`SCORING_CACHE_VERSION` sube a 2** para forzar ese primer pase tras el despliegue: sin el salto,
-  el worker podría saltarse el recálculo y el feed no se sembraría hasta la siguiente partida.
+- **`SCORING_CACHE_VERSION` sube a 4** para forzar ese primer pase tras el despliegue: el salto es
+  por el catálogo de 120 objetivos (la prueba de concepto de subobjetivos, familia `maestro`), y sin
+  él el worker podría saltarse el recálculo y los objetivos nuevos no repartirían hasta la siguiente
+  partida. La v2 fue por el feed del overlay, que no se sembraría sin el salto; la v3, por el catálogo
+  de 94 objetivos (Vikingos y Escoceses).
 - **La API del overlay lee `ObjectiveProgressEvent`**: polling recomendado de 30 s. El dato cambia al
   ritmo del recálculo (10 min), así que pedir más a menudo no adelanta nada.
 - **El feed se escribe en cada recálculo**: los logros y las competiciones aparecen **en vivo**, con
@@ -285,6 +297,10 @@ Hay **dos relojes**, y el primario no es GitHub:
 |---|---|---|
 | **Supabase Cron** (primario) | Job de `pg_cron` que llama por HTTP a `POST /api/sync` con `pg_net` | Cada minuto; el candado deja una pasada cada 1-3 minutos |
 | [Workflow de GitHub](../.github/workflows/cron-sync.yml) (red de seguridad) | `POST /api/cron/sync` con `Bearer $CRON_SECRET` | GitHub lo retrasa a una cada 4-6 h |
+
+- El workflow **no se conforma con un 200**: si el JSON de respuesta trae `scoringError`, el step falla y
+  la ejecución queda en rojo. Así una pasada que no ha podido recalcular la clasificación no se confunde
+  con una pasada correcta.
 
 ## El reloj: Supabase Cron
 
@@ -653,15 +669,20 @@ Cada actuación se anuncia **siempre** que se aplica, con la razón pública y s
 
 La configuración de una edición vive en `Setting` y la cambia **solo el superadministrador** desde el
 panel (`/admin/administracion`): los documentos que describen la edición, sus reglas y a quién admite.
-La sección se organiza en subpestañas —Administradores, Edición, Puntuación, Inscripciones,
-Donaciones y Avisos—, y la **inscripción** y las **donaciones** son opciones solo del
-superadministrador que viven en sus subpestañas (`/admin/administracion/inscripciones` y
-`/admin/administracion/donaciones`), no en ninguna pantalla que vean los admins regulares.
+La sección se organiza en subpestañas —Administradores, Edición, Fechas, Puntuación, Eventos,
+Inscripciones, Donaciones y Avisos—, y la **inscripción**, las **fechas** y las **donaciones** son
+opciones solo del superadministrador que viven en sus subpestañas
+(`/admin/administracion/inscripciones`, `/admin/administracion/fechas` y
+`/admin/administracion/donaciones`), no en ninguna pantalla que vean los admins regulares. `Fechas`
+reúne la **fecha de cierre de inscripciones** y la **ventana del torneo**; las fechas de los eventos
+puntuales no están ahí porque son contenido de cada evento (ver
+[Eventos puntuales](#eventos-puntuales)).
 
 | Clave | Qué toca | Acción |
 |---|---|---|
-| `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria y marca (emblema y color de acento) | `saveEditionConfig` |
-| `scoring.ruleset` | Ventana, familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
+| `edition.config` | Nombre de la edición, premio base (importe y nota), retransmisión obligatoria, interruptor de objetos utilizables y marca (emblema y color de acento) | `saveEditionConfig` |
+| `scoring.ruleset.window` | La ventana del torneo: inicio obligatorio y fin opcional (ISO-8601 UTC) | `saveTournamentWindow` |
+| `scoring.ruleset` | Familias de ladder, puntos por victoria, civ aleatoria, puntos de objetivos y objetivos desactivados | `saveScoringRuleset` |
 | `registration.countries` | Países admitidos en la inscripción, en el orden del catálogo | `saveCountries` |
 | `registration.open` | El interruptor: si la inscripción está abierta | `setRegistrationOpen` |
 | `registration.closesAt` | La fecha de cierre: pasada, cierra sola la inscripción (ISO-8601 UTC, o quitada) | `setRegistrationClosesAt` |
@@ -672,18 +693,23 @@ superadministrador que viven en sus subpestañas (`/admin/administracion/inscrip
   una ventana mal formada se rechazan con su mensaje y no se escribe nada. Las dos funciones de
   escritura vuelven a validar por su cuenta: un documento que el sistema descartaría al leerlo no se
   publica.
-- **La ventana del torneo se escribe en hora local de Madrid.** El campo del panel es un
-  `datetime-local`; el servidor lo interpreta en `Europe/Madrid` y guarda el instante ISO-8601 UTC que
-  lee el motor (`parseMadridLocalInstant()` en `src/lib/ranked-match.ts`). Un instante ISO con zona
-  escrito a mano también vale. Ver [`PUNTUACION.md`](./PUNTUACION.md#la-ventana).
+- **La ventana del torneo se escribe en la subpestaña `Fechas`, en hora local de Madrid.** El campo
+  del panel es un `datetime-local`; el servidor lo interpreta en `Europe/Madrid` y guarda el instante
+  ISO-8601 UTC que lee el motor (`parseMadridLocalInstant()` en `src/lib/ranked-match.ts`). Un instante
+  ISO con zona escrito a mano también vale. La acción es `saveTournamentWindow`, que **exige** la
+  fecha de inicio y trata el fin vacío como ventana abierta; con la edición **en marcha** (empezada y
+  sin terminar) solo admite el fin, y con la edición **terminada** vuelve a admitir las dos para
+  preparar la siguiente. `saveScoringRuleset` (Puntuación) rechaza `windowFrom` y `windowTo`: las
+  fechas no se editan ahí. Ver [`PUNTUACION.md`](./PUNTUACION.md#la-ventana).
 - **La fecha de cierre de inscripciones se escribe como la ventana, y la interpreta el servidor.** El
   campo `closesAt` de `setRegistrationClosesAt` acepta las dos formas de un formulario: un
   `datetime-local` (**sin zona**), que el servidor interpreta en `Europe/Madrid` con
   `parseMadridLocalInstant()` —la misma función que la ventana—, o un instante ISO-8601 **con zona**.
   En los dos casos se guarda en ISO-8601 UTC. Vacío **quita** la fecha, que es como se reabre después
-  del cierre. La subpestaña la prefila en hora de Madrid y enseña el **estado efectivo** del plazo
-  —abierto, cerrado por el interruptor o cerrado por la fecha— con el motivo al lado, para que con la
-  fecha ya pasada no se lea "abiertas" porque el interruptor siga encendido.
+  del cierre. La subpestaña `Fechas` la prefila en hora de Madrid, la edita junto a la ventana y
+  enseña el **estado efectivo** del plazo —abierto, cerrado por el interruptor o cerrado por la
+  fecha— con el motivo al lado, para que con la fecha ya pasada no se lea "abiertas" porque el
+  interruptor siga encendido.
 - **Todo queda en `/admin/acciones`** como `CONFIG_CHANGED`, con qué campos cambiaron y sus dos valores,
   en la misma transacción que el cambio.
 - **Los países admitidos** solo pueden ser los del catálogo del código (`DEFAULT_COUNTRIES`): la lista no
@@ -692,12 +718,20 @@ superadministrador que viven en sus subpestañas (`/admin/administracion/inscrip
 - **Un cambio de reglas que mueva puntos recalcula la clasificación al guardar.** Si el recálculo falla,
   las reglas **sí** están guardadas y el mensaje lo dice: la clasificación se pone al día en la
   siguiente pasada del sincronizador.
-- **Con la edición empezada, los puntos quedan congelados.** Desde `window.from` (`editionStarted()`),
-  `saveScoringRuleset` rechaza la fecha de inicio, las familias de ladder, los puntos por victoria, el
-  recuento de civs aleatorias, los puntos de objetivos y los objetivos desactivados: moverlos
-  reescribiría una clasificación ya publicada. Lo único que se puede fijar o cambiar es el **fin de la
-  ventana** (`window.to`), que es cómo se cierra la edición. El bloqueo está en el servidor; la
-  pantalla esconde los campos congelados y solo deja fijar el fin.
+- **Mientras la edición está en marcha, la puntuación y el inicio quedan congelados.** Desde
+  `window.from` (`editionStarted()`) y hasta `window.to` (`editionEnded()`), `saveScoringRuleset`
+  rechaza cualquier cambio de reglas y `saveTournamentWindow` rechaza la fecha de inicio: moverlos
+  reescribiría una clasificación ya publicada. En ese tramo lo único que se puede fijar o cambiar es
+  el **fin de la ventana** (`window.to`), que es cómo se cierra la edición, desde la subpestaña
+  `Fechas`. El bloqueo está en el servidor; la pantalla esconde los campos congelados y solo deja
+  fijar el fin.
+- **Una edición terminada se puede reemplazar desde `Fechas`.** Pasado `window.to`, el torneo ya no
+  reparte puntos y `Fechas` vuelve a admitir el inicio y el fin. Mover el inicio empieza una edición
+  nueva y **exige confirmación** (`confirmNewEdition` con `"true"`): recalcula la clasificación y la
+  edición anterior deja de mostrarse en la web, aunque sus partidas y sus historiales siguen guardados.
+  Mover solo el fin no pide confirmación. Con el inicio nuevo en el futuro la edición vuelve a estar
+  sin empezar, así que `Puntuación` vuelve a dejar editar las reglas. La confirmación existe para que
+  un envío con la fecha de inicio cambiada sin querer no reemplace el torneo.
 - **La retransmisión obligatoria** enciende la alerta `NO_STREAM_CHANNEL` (ver
   [Alertas de comportamiento](#alertas-de-comportamiento)). Apagarla **no** borra las alertas ya
   escritas: `Alert` es *append-only*.
@@ -708,7 +742,8 @@ superadministrador que viven en sus subpestañas (`/admin/administracion/inscrip
   pinta la interfaz, y el color de acento se aplica como variable CSS del layout, que no se reescribe
   desde aquí.
 - **Todo tiene documento por defecto**: sin `edition.config` la edición usa el nombre del sitio, sin
-  premio y sin retransmisión obligatoria, así que la web funciona sin que nadie configure nada.
+  premio, sin retransmisión obligatoria y sin objetos utilizables, así que la web funciona sin que
+  nadie configure nada.
 
 ## Discord
 
@@ -1099,7 +1134,7 @@ se perdieron. Eso solo lo publica el **resumen** de cada partida, una ruta del *
 | Orden | De la partida **más nueva a la más vieja**, con el histórico rellenándose por detrás |
 | Reintento | Un fallo se reintenta pasada **1 h** (`AOE4WORLD_SUMMARY_RETRY_DELAY_MS`) |
 | Ventana de revisión | **24 h** (`AOE4WORLD_SUMMARY_REVIEW_WINDOW_HOURS`): pasada esa edad sin respuesta concluyente, la partida deja de pedirse y se avisa de que quedó **sin revisar** |
-| Columnas | Las ocho métricas del resumen (`apm` … `mountedVillagersLost`), `summaryAnomalies` y las dos marcas de control (ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
+| Columnas | Las siete métricas del resumen (`apm` … `mountedVillagersLost`), `winReason`, `summaryAnomalies` y las dos marcas de control (ver [`MODELO-DATOS.md`](./MODELO-DATOS.md)) |
 
 - **Qué partidas**: exactamente las que puntúan (el mismo `rankedMatchSql()` que la clasificación) y de
   un jugador que no tenga el historial cerrado. El filtro `historyPublic is distinct from false` deja
@@ -1119,9 +1154,10 @@ se perdieron. Eso solo lo publica el **resumen** de cada partida, una ruta del *
   `SUMMARY_NOT_REVIEWED`, una alerta de estado con las partidas y el último intento en `details`. El
   caso de **perfil privado confirmado** sigue siendo `HISTORY_NOT_PUBLIC`; este es el respaldo de lo que
   no se pudo confirmar.
-- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las ocho métricas significa "no hay
+- `apm` es la **marca de "hubo resumen"**, y `null` en cualquiera de las siete métricas significa "no hay
   resumen", nunca "cero". Una partida sin resumen no cumple ninguna hazaña y **corta** la racha de
-  `ansioso` (ver [`OBJETIVOS.md`](./OBJETIVOS.md#logros-cobra-quien-cumple)).
+  `ansioso` (ver [`OBJETIVOS.md`](./OBJETIVOS.md#logros-cobra-quien-cumple)). `winReason`, que se guarda
+  literal y sin enum, sigue ese mismo criterio: `null` = no hay resumen o el payload no lo traía.
 - **`summaryAnomalies`** guarda la evidencia compacta para las alertas (si el `buildOrder` se pudo leer,
   el primer aldeano y los dos tramos sin progreso). No sustituye a las métricas ni se escribe nunca sin
   un 200: es un resumen de cuatro datos, no el payload.

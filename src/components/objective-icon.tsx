@@ -11,7 +11,7 @@ import { CivilizationIcon, CivilizationPlaceholderIcon } from "@/components/civi
  *    de esa civilización, que resuelve `CivilizationIcon`.
  *  - Formato (`rey-1v1` a `rey-4v4`): `FormatIcon` dibuja tantos jugadores por
  *    bando como indique el tamaño.
- *  - Los quince objetivos sin asset oficial: un glifo propio cada uno, elegido
+ *  - Los dieciséis objetivos sin asset oficial: un glifo propio cada uno, elegido
  *    por id en `OBJECTIVE_ICONS`. El reparto es **explícito** —ni por grupo ni
  *    por métrica— para que dos objetivos distintos no vuelvan a compartir glifo
  *    por descuido: cada id lleva el suyo, con la forma de lo que mide. Un id que
@@ -98,6 +98,7 @@ const OBJECTIVE_ICONS: Record<string, ComponentType<{ className?: string }>> = {
   "defensor-del-pueblo": TownShieldIcon,
   polifacetico: AllCivsIcon,
   jugon: WorldIcon,
+  maestro: LaurelIcon,
 };
 
 function Glyph({ className, children }: { className?: string; children: ReactNode }) {
@@ -358,6 +359,59 @@ function WorldIcon({ className }: { className?: string }) {
       <path d="M3.8 12h16.4" />
     </Glyph>
   );
+}
+
+/**
+ * Maestro: la corona de laurel de quien domina todas las civilizaciones. Dos ramas
+ * de hojas macizas se abren en rueda y se cierran por abajo, con el hueco arriba
+ * —donde se anuda la corona—, y las hojas menguan hacia la punta para que la rueda
+ * se lea entera a 16 px. No comparte trazo con `polifacetico` (blasón y estrella),
+ * con `jugon` (globo de meridianos) ni con la corona baja de
+ * `avance-relampago-imperial`: aquí lo que se ve es la ronda de hojas.
+ */
+function LaurelIcon({ className }: { className?: string }) {
+  return (
+    <Glyph className={className}>
+      <path d="M12 21.1C8.2 20.4 5.2 17.3 4.9 13c-.1-2.3.5-4.6 3.3-7.1" />
+      <path d="M12 21.1c3.8-.7 6.8-3.8 7.1-8.1.1-2.3-.5-4.6-3.3-7.1" />
+      <g fill="currentColor" stroke="none">
+        {LAUREL_LEAVES.map((leaf) => (
+          <g key={leaf.y}>
+            <path d={LAUREL_LEAF} transform={laurelLeafTransform(leaf, false)} />
+            <path d={LAUREL_LEAF} transform={laurelLeafTransform(leaf, true)} />
+          </g>
+        ))}
+      </g>
+    </Glyph>
+  );
+}
+
+/** Hoja de laurel en coordenadas locales: de punta a punta del eje X. */
+const LAUREL_LEAF = "M-1 0Q0-.8 1 0Q0 .8-1 0Z";
+
+/**
+ * Las hojas de una rama, de abajo arriba: centro, largo y la inclinación que sigue
+ * la curva del tallo. Casi tumbadas en el fondo de la rueda y cada vez más
+ * verticales al subir, y más cortas al acercarse a la punta. La rama de la derecha
+ * es la misma espejada.
+ */
+const LAUREL_LEAVES = [
+  { x: 10.23, y: 21.93, size: 3.2, angle: 20.9 },
+  { x: 7.16, y: 20.07, size: 3, angle: 41.9 },
+  { x: 4.98, y: 17.15, size: 2.7, angle: 63.3 },
+  { x: 4.08, y: 14.13, size: 2.4, angle: 80.8 },
+  { x: 4.64, y: 9.21, size: 2.2, angle: -67.5 },
+];
+
+/** Coloca una hoja en su punto de la rama; `mirror` la lleva a la rama derecha. */
+function laurelLeafTransform(
+  leaf: (typeof LAUREL_LEAVES)[number],
+  mirror: boolean,
+): string {
+  const x = mirror ? 24 - leaf.x : leaf.x;
+  const angle = mirror ? -leaf.angle : leaf.angle;
+
+  return `translate(${x} ${leaf.y}) rotate(${angle}) scale(${leaf.size / 2})`;
 }
 
 /**

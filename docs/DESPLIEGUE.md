@@ -83,7 +83,8 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
   `npm ci` y Node 22: `verificar` (`npm run lint`, `npm run build`) y `test` (`npm test`). **No despliega.**
 - [`cron-sync.yml`](../.github/workflows/cron-sync.yml): cada 10 minutos (`workflow_dispatch` para lanzarlo
   a mano). Llama a `POST $SITE_URL/api/cron/sync` con `Authorization: Bearer $CRON_SECRET`. Necesita, en el
-  repositorio, la variable `SITE_URL` y el secreto `CRON_SECRET`.
+  repositorio, la variable `SITE_URL` y el secreto `CRON_SECRET`. El step falla si el JSON de respuesta
+  trae `scoringError`: un 200 con la clasificación sin recalcular es una pasada a medias, no un éxito.
 - `cron-sync` es el **respaldo** del reloj. El reloj principal es Supabase Cron.
 
 ## Configuración versionada
@@ -123,6 +124,11 @@ next build  →  .next/  →  OpenNext  →  .open-next/  →  wrangler deploy |
 - Prisma: `runtime = "workerd"` importa el `.wasm` como módulo, sin generación de código en runtime.
   `@opennextjs/cloudflare` 1.20.7 parchea los ayudantes de carga de Turbopack. Tras tocar el schema:
   `npx prisma generate` (lo hace el `postinstall`).
+- Turbopack puede incluir los WASM de la CLI de Prisma y de PGlite en el trace, y OpenNext los añade
+  al Worker. `outputFileTracingExcludes` los retira sin excluir el compilador del cliente generado.
+- Si Cloudflare devuelve `10027`, mide `Total Upload` (tamaño sin comprimir) con `npx opennextjs-cloudflare build`
+  seguido de `OPEN_NEXT_DEPLOY=true npx wrangler deploy --dry-run --outdir .open-next/dry-run`.
+  El límite del Worker es de 64 MiB; la simulación no publica ninguna versión.
 - Los scripts de `scripts/` corren en Node con `tsx` y cargan el WASM con
   `--import ./scripts/prisma-wasm-node.mjs`. El Worker no se ve afectado.
 
@@ -321,6 +327,7 @@ se heredan del entorno de desarrollo. `db:cron` es **solo de producción**.
 | `npm run db:cron` contra desarrollo programa un reloj que llama a producción | Sin `SITE_URL`, el script usa `https://laligahispana.es`. Es un comando solo de producción. |
 | `npm run db:window` en una base vacía deja un `scoring.ruleset` sin versión y se ignoran las reglas guardadas | Pasa al crear la clave desde cero: el script solo añade `window`. Publicar primero el ruleset con `npm run score` y después fijar la ventana; o sembrar el documento completo. |
 | Panel con «No se ha podido leer la lista de jugadores» (Participantes, alertas, actuaciones) y sincronización que falla con `The column Player.X does not exist in the current database` | El esquema se desplegó sin aplicar `db:push` a esa base. Prisma pide todas las columnas del modelo aunque la web pública use `select`, así que la columna que falta tumba esa tabla; el motivo real solo está en el log, con el prefijo `[db]`. `npm run db:check` con el `DATABASE_URL` del entorno lo confirma (sale con 2) y después `npm run db:push`. |
+| La sincronización guarda partidas pero la clasificación no se actualiza y `scoringError` dice `The table public.ObjectiveProgressState does not exist in the current database` | El despliegue del overlay del issue 154 se publicó sin el `db:push` de producción. `npm run db:check` con el `DATABASE_URL` de producción sale con 2; después `npm run db:push` y `npm run db:security -- --check`. El workflow de GitHub ya falla si el JSON trae `scoringError`, así que la próxima vez se ve en rojo. |
 | El dominio nuevo no carga para algunos visitantes | Caché DNS antigua; se resuelve sola. |
 | Una variable del panel desaparece tras un despliegue | Era una variable de **texto** y el despliegue no llevaba `keep_vars`: el archivo es la fuente de verdad y las borra. Ya está activo en `wrangler.jsonc` (y los secretos nunca se borran). |
 | El panel de admin no refleja una aprobación o edición reciente (y el historial de acciones repite la misma acción) | La caché de consultas de Hyperdrive servía `SELECT` anteriores a la escritura. La configuración va **sin caché** (`caching.disabled`) a propósito. |

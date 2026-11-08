@@ -27,7 +27,7 @@ import { PlayerAvatar } from "@/components/player-avatar";
  * conserva su fila —sin valor y sin puesto, no se le inventa un cero— para la ficha
  * de un jugador. El número de cada fila es su posición dentro del objetivo (`1` es
  * el líder); el avance sale del ranking cruzado por `profileId`: en un logro es
- * `value/target` (12/23 civilizaciones, 2/3 victorias; los binarios enseñan el
+ * `value/target` (12/25 civilizaciones, 2/3 victorias; los binarios enseñan el
  * recuento a secas, ver `contenderValue`) y en una competición el valor de su
  * métrica (victorias, partidas, racha), que es lo que le da su posición.
  *

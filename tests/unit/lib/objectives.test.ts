@@ -29,6 +29,7 @@ import {
   type ObjectiveView,
   type PlayerAggregate,
 } from "@/lib/objectives";
+import { CIVILIZATION_IDS } from "@/lib/civs";
 import { DEFAULT_RULESET, RULESET_VERSION } from "@/lib/scoring";
 
 /**
@@ -365,17 +366,79 @@ describe("victorias: puntos por victoria, sin tope", () => {
   });
 });
 
-describe("hasFixedPrize: qué cuenta la suma nominal", () => {
-  function definition(id: string) {
-    const found = OBJECTIVE_DEFINITIONS.find((item) => item.id === id);
+/** Una definición del catálogo por id; falla si el catálogo cambia de ids. */
+function definition(id: string) {
+  const found = OBJECTIVE_DEFINITIONS.find((item) => item.id === id);
 
-    if (found === undefined) {
-      throw new Error(`No existe el objetivo ${id}`);
-    }
-
-    return found;
+  if (found === undefined) {
+    throw new Error(`No existe el objetivo ${id}`);
   }
 
+  return found;
+}
+
+describe("familia Maestro: el subobjetivo cobra por unidad y el padre es un bonus", () => {
+  const HIJO = "maestro-french";
+  const PADRE = "maestro";
+
+  it("con 2 victorias paga 2 puntos (1 por victoria)", () => {
+    const players = [aggregate(1, { byCiv: new Map([["french", civ(4, 2, 100)]]) })];
+    const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+
+    expect(pointsByPlayer.get("p1")?.awards[HIJO]).toEqual({ points: 2, count: 2 });
+    expect(optionById(options, HIJO).beneficiaries[0]).toMatchObject({ points: 2, count: 2 });
+  });
+
+  it("con 5 victorias cobra el tope y con 7 no pasa de 5", () => {
+    for (const wins of [5, 7]) {
+      const players = [aggregate(1, { byCiv: new Map([["french", civ(9, wins, 100)]]) })];
+      const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+
+      expect(pointsByPlayer.get("p1")?.awards[HIJO]?.points, `con ${wins} victorias`).toBe(5);
+      // La repetición sigue siendo el número real de victorias; lo cobrado, el tope.
+      expect(pointsByPlayer.get("p1")?.awards[HIJO]?.count, `con ${wins} victorias`).toBe(wins);
+      expect(optionById(options, HIJO).beneficiaries[0]?.points).toBe(5);
+      // El premio de la tarjeta es el máximo, y la suma nominal lo cuenta una vez.
+      expect(optionById(options, HIJO).points).toBe(5);
+    }
+  });
+
+  it("el padre solo paga cuando las 25 civilizaciones llegan a 5 victorias", () => {
+    const veinticuatro = new Map(
+      CIVILIZATION_IDS.map((id) => [id, id === "french" ? civ(4, 4, 1) : civ(5, 5, 1)]),
+    );
+    const parcial = computeObjectives(
+      [aggregate(1, { byCiv: veinticuatro })],
+      DEFAULT_RULESET,
+      [],
+    );
+
+    expect(optionById(parcial.options, PADRE).beneficiaries).toEqual([]);
+    expect(optionById(parcial.options, PADRE).ranking[0]).toMatchObject({ value: 24, eligible: false });
+    expect(parcial.pointsByPlayer.get("p1")?.earned ?? []).not.toContain(PADRE);
+
+    const completo = new Map(CIVILIZATION_IDS.map((id) => [id, civ(5, 5, 1)]));
+    const cerrado = computeObjectives([aggregate(1, { byCiv: completo })], DEFAULT_RULESET, []);
+
+    expect(cerrado.pointsByPlayer.get("p1")?.awards[PADRE]).toEqual({ points: 50, count: 1 });
+    expect(optionById(cerrado.options, PADRE).ranking[0]).toMatchObject({ value: 25, eligible: true });
+  });
+
+  it("el hijo se repite y declara sus puntos por unidad; el padre no se repite", () => {
+    expect(objectiveRepeatable(HIJO)).toBe(true);
+    expect(objectiveRepeatable(PADRE)).toBe(false);
+    expect(definition(HIJO).pointsPerUnit).toBe(1);
+    expect(definition(HIJO).points).toBe(5);
+    expect(definition(PADRE).pointsPerUnit).toBeUndefined();
+  });
+
+  it("los dos tienen premio fijo, así que entran en la suma nominal", () => {
+    expect(hasFixedPrize(definition(HIJO))).toBe(true);
+    expect(hasFixedPrize(definition(PADRE))).toBe(true);
+  });
+});
+
+describe("hasFixedPrize: qué cuenta la suma nominal", () => {
   it("todo el catálogo reparte un premio fijo menos el objetivo de victorias", () => {
     const sinPremio = OBJECTIVE_DEFINITIONS.filter((item) => !hasFixedPrize(item));
 
@@ -391,7 +454,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
     expect(hasFixedPrize(definition(VICTORIAS_ID))).toBe(false);
   });
 
-  it("el catálogo nominal sigue sumando 2.754 puntos", () => {
+  it("el catálogo nominal sigue sumando 3.107 puntos", () => {
     // Es la cifra de `docs/OBJETIVOS.md`, que es la que resume la banda de
     // `/puntuacion`. `victorias` queda fuera porque reparte por victoria y sin tope.
     const total = OBJECTIVE_DEFINITIONS.filter(hasFixedPrize).reduce(
@@ -399,7 +462,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
       0,
     );
 
-    expect(total).toBe(2754);
+    expect(total).toBe(3107);
   });
 });
 
@@ -676,9 +739,21 @@ describe("catálogo de puntos", () => {
     }
   });
 
-  it("el catálogo tiene 88 objetivos", () => {
+  it("el catálogo tiene 120 objetivos", () => {
     expect(OBJECTIVE_COUNT).toBe(OBJECTIVE_DEFINITIONS.length);
-    expect(OBJECTIVE_COUNT).toBe(88);
+    expect(OBJECTIVE_COUNT).toBe(120);
+  });
+
+  it("incluye las civilizaciones del DLC y sus familias cuentan 25", () => {
+    const ids = new Set(OBJECTIVE_DEFINITIONS.map((item) => item.id));
+
+    for (const id of ["masterizando-scots", "lider-vikings", "acolito-scots"]) {
+      expect(ids.has(id), id).toBe(true);
+    }
+
+    for (const id of [POLIFACETICO_ID, JUGON_ID]) {
+      expect(OBJECTIVE_DEFINITIONS.find((item) => item.id === id)?.target, id).toBe(25);
+    }
   });
 
   it("las competiciones dicen en su descripción cómo se desempata", () => {
@@ -733,16 +808,24 @@ describe("snapshot de la vista de objetivos", () => {
 
   it("un snapshot de la forma anterior no vale: la vista cambió de forma", () => {
     // La v2 añadió `count` a los beneficiarios y `mapGaps` al contendiente de
-    // `por-tierra-y-agua`, y la v3 el catálogo de 88 objetivos (los cinco del
-    // summary): un documento con la forma o el catálogo viejo se rechaza y la vista
-    // se recalcula en vivo, que es lo que evita publicar un reparto a medias.
+    // `por-tierra-y-agua`, la v3 el catálogo de 88 objetivos (los cinco del
+    // summary), la v4 el de 94 (Vikingos y Escoceses) y la v5 el de 120 con el
+    // campo `pointsPerUnit`: un documento con la forma o el catálogo viejo se
+    // rechaza y la vista se recalcula en vivo, que es lo que evita publicar un
+    // reparto a medias.
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: 1 }), RULESET_VERSION),
     ).toBeNull();
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: 2 }), RULESET_VERSION),
     ).toBeNull();
-    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(3);
+    expect(
+      readObjectivesSnapshotValue(snapshot({ snapshotVersion: 3 }), RULESET_VERSION),
+    ).toBeNull();
+    expect(
+      readObjectivesSnapshotValue(snapshot({ snapshotVersion: 4 }), RULESET_VERSION),
+    ).toBeNull();
+    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(5);
   });
 
   it("un snapshot de otra versión de las reglas no vale", () => {

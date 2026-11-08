@@ -535,6 +535,16 @@ export type SyncRunTrace = {
    * presupuesto), igual que el aviso de `YOUTUBE_API_KEY` en `streamsError`.
    */
   summariesError: string | null;
+  /**
+   * Por qué no se pudieron actualizar los objetos utilizables (crear el premio del
+   * día o marcar las partidas del portador), o `null` si fue bien.
+   *
+   * Va en el rastro pero **no** cuenta para `lastSuccessAt`, por el mismo motivo que
+   * `summariesError`: un fallo de los objetos deja la clasificación sin la exclusión
+   * de ese día, pero las partidas se han sincronizado y la clasificación se ha
+   * recalculado con lo que había. El paso se reintenta en la pasada siguiente.
+   */
+  objectsError: string | null;
   /** Páginas leídas del endpoint masivo en la pasada. */
   gamesPagesRead: number;
   /** Lotes que agotaron su presupuesto de páginas con la ventana abierta. */
@@ -753,6 +763,7 @@ export function readSyncRunTraceValue(value: unknown): SyncRunTrace | null {
     streamsError: readText(value["streamsError"]),
     mapPoolError: readText(value["mapPoolError"]),
     summariesError: readText(value["summariesError"]),
+    objectsError: readText(value["objectsError"]),
     gamesPagesRead: readCount(value["gamesPagesRead"]),
     gamesBatchesIncomplete: readCount(value["gamesBatchesIncomplete"]),
     gamesBatchesFailed: readCount(value["gamesBatchesFailed"]),
@@ -876,6 +887,9 @@ export async function writeSyncRunTrace(
   // comienzo o el final del torneo en Discord tampoco ha parado nada, y la falta de
   // `DISCORD_ANNOUNCE_CHANNEL_ID` es tan permanente como la de `DISCORD_BOT_TOKEN`, así
   // que si contara, una edición entera sin canal se publicaría como sincronizador roto.
+  // Y con `objectsError`: no crear el premio del día o no marcar sus partidas deja
+  // la clasificación sin una desventaja, pero no ha parado ninguna partida; el paso
+  // se reintenta en la pasada siguiente.
 
   const value = {
     ...trace,

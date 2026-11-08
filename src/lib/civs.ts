@@ -49,8 +49,10 @@ export const CIVILIZATIONS = [
   { id: "order_of_the_dragon", name: "Orden del Dragón" },
   { id: "ottomans", name: "Otomanos" },
   { id: "rus", name: "Rus" },
+  { id: "scots", name: "Escoceses" },
   { id: "sengoku_daimyo", name: "Daimyō del Sengoku" },
   { id: "tughlaq_dynasty", name: "Dinastía Tughlaq" },
+  { id: "vikings", name: "Vikingos" },
   { id: "zhu_xis_legacy", name: "Legado de Zhu Xi" },
 ] as const satisfies readonly Civilization[];
 
@@ -114,8 +116,10 @@ export const CIVILIZATION_FILES = {
   order_of_the_dragon: "Order_of_the_Dragon_AoE4.webp",
   ottomans: "Ottomans_AoE4.webp",
   rus: "Rus_AoE4.webp",
+  scots: "Scots_AoE4.webp",
   sengoku_daimyo: "Sengoku_Daimyo_AoE4.webp",
   tughlaq_dynasty: "Tughlaq_Dynasty_AoE4.webp",
+  vikings: "Vikings_AoE4.webp",
   zhu_xis_legacy: "Zhu_Xis_Legacy_AoE4.webp",
 } as const satisfies Record<CivilizationId, string>;
 
@@ -138,8 +142,16 @@ export function civilizationFile(id: string): string | null {
 /**
  * Prefijos de id de objetivo que llevan la civilización pegada detrás
  * (`lider-japanese` → `japanese`).
+ *
+ * `maestro-` va con guion: la cabeza de esa familia se llama `maestro` a secas y no
+ * es de ninguna civilización.
  */
-export const CIV_OBJECTIVE_PREFIXES = ["masterizando-", "lider-", "acolito-"] as const;
+export const CIV_OBJECTIVE_PREFIXES = [
+  "masterizando-",
+  "lider-",
+  "acolito-",
+  "maestro-",
+] as const;
 
 /**
  * La civilización de un id de objetivo de civilización, o `null` si el id no es
