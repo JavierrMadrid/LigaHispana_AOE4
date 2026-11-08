@@ -75,7 +75,7 @@ const SAMPLE_PROFILE_IDS = [SAMPLE_PROFILE_ID, SAMPLE_BULK_SECOND_PROFILE_ID] as
  * `OBJECTIVE_COUNT` para que el número no pueda cambiar en los dos sitios a la vez
  * sin que se note.
  */
-const EXPECTED_OBJECTIVE_COUNT = 121;
+const EXPECTED_OBJECTIVE_COUNT = 122;
 /**
  * Tercer jugador, solo para la ventana: sus partidas se colocan justo en los bordes
  * de `[from, to)` y son las que deciden qué cuenta.

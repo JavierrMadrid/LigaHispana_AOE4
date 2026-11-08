@@ -15,6 +15,7 @@ import {
   OBJECTIVE_POINTS,
   POLIFACETICO_ID,
   POR_TIERRA_ID,
+  TIRA_Y_AFLOJA_ID,
   VICTORIAS_ID,
   apmRunStreak,
   computeObjectives,
@@ -480,6 +481,47 @@ describe("familia Avance relámpago: el padre paga el extra con los tres avances
   });
 });
 
+describe("familia Tira y afloja: el padre paga el extra con los dos retos", () => {
+  const PADRE = TIRA_Y_AFLOJA_ID;
+
+  it("el padre existe, no tiene cabeza y agrupa a Agresor y Estratega", () => {
+    const head = definition(PADRE);
+
+    expect(head.parent).toBeNull();
+    expect(head.group).toBe("hazanas");
+    expect(head.metric).toBe("subobjetivos");
+    expect(head.target).toBe(2);
+
+    for (const id of ["agresor", "estratega"]) {
+      expect(definition(id).parent, id).toBe(PADRE);
+    }
+  });
+
+  it("con solo uno de los dos hijos no cobra el padre", () => {
+    const players = [aggregate(1, { shortWins: 3, longWins: 1 })];
+    const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+    const padre = optionById(options, PADRE);
+
+    expect(padre.beneficiaries).toEqual([]);
+    expect(padre.ranking[0]).toMatchObject({ value: 1, eligible: false });
+    expect(pointsByPlayer.get("p1")?.earned ?? []).not.toContain(PADRE);
+  });
+
+  it("con los dos cobra 24 una sola vez y queda completado", () => {
+    const players = [aggregate(1, { shortWins: 3, longWins: 4 })];
+    const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+
+    expect(pointsByPlayer.get("p1")?.awards[PADRE]).toEqual({ points: 24, count: 1 });
+    expect(optionById(options, PADRE).beneficiaries).toHaveLength(1);
+    expect(optionById(options, PADRE).ranking[0]).toMatchObject({ value: 2, eligible: true });
+  });
+
+  it("el padre no se repite y reparte un premio fijo", () => {
+    expect(objectiveRepeatable(PADRE)).toBe(false);
+    expect(hasFixedPrize(definition(PADRE))).toBe(true);
+  });
+});
+
 describe("hasFixedPrize: qué cuenta la suma nominal", () => {
   it("todo el catálogo reparte un premio fijo menos el objetivo de victorias", () => {
     const sinPremio = OBJECTIVE_DEFINITIONS.filter((item) => !hasFixedPrize(item));
@@ -496,7 +538,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
     expect(hasFixedPrize(definition(VICTORIAS_ID))).toBe(false);
   });
 
-  it("el catálogo nominal sigue sumando 3.116 puntos", () => {
+  it("el catálogo nominal sigue sumando 3.140 puntos", () => {
     // Es la cifra de `docs/OBJETIVOS.md`, que es la que resume la banda de
     // `/puntuacion`. `victorias` queda fuera porque reparte por victoria y sin tope.
     const total = OBJECTIVE_DEFINITIONS.filter(hasFixedPrize).reduce(
@@ -504,7 +546,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
       0,
     );
 
-    expect(total).toBe(3116);
+    expect(total).toBe(3140);
   });
 });
 
@@ -781,9 +823,9 @@ describe("catálogo de puntos", () => {
     }
   });
 
-  it("el catálogo tiene 121 objetivos", () => {
+  it("el catálogo tiene 122 objetivos", () => {
     expect(OBJECTIVE_COUNT).toBe(OBJECTIVE_DEFINITIONS.length);
-    expect(OBJECTIVE_COUNT).toBe(121);
+    expect(OBJECTIVE_COUNT).toBe(122);
   });
 
   it("incluye las civilizaciones del DLC y sus familias cuentan 25", () => {
@@ -852,10 +894,10 @@ describe("snapshot de la vista de objetivos", () => {
     // La v2 añadió `count` a los beneficiarios y `mapGaps` al contendiente de
     // `por-tierra-y-agua`, la v3 el catálogo de 88 objetivos (los cinco del
     // summary), la v4 el de 94 (Vikingos y Escoceses), la v5 el de 120 con el
-    // campo `pointsPerUnit` (familia `maestro`) y la v6 el de 121 con la familia
-    // de hazañas `avance-relampago`: un documento con la forma o el catálogo viejo
-    // se rechaza y la vista se recalcula en vivo, que es lo que evita publicar un
-    // reparto a medias.
+    // campo `pointsPerUnit` (familia `maestro`) y la v6 el de 122 con las familias
+    // de hazañas `avance-relampago` y `tira-y-afloja`: un documento con la forma o
+    // el catálogo viejo se rechaza y la vista se recalcula en vivo, que es lo que
+    // evita publicar un reparto a medias.
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: 1 }), RULESET_VERSION),
     ).toBeNull();

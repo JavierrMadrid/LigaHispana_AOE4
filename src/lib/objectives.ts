@@ -88,8 +88,9 @@ export type ObjectiveDefinition = {
    * Id del objetivo **cabeza de familia** (el logro global que agrupa a sus
    * hijos), o `null` si es independiente. `polifacetico` es cabeza de los
    * `lider-<civ>`, `jugon` lo es de los `acolito-<civ>`, `maestro` de los
-   * `maestro-<civ>` y `avance-relampago` de los tres `avance-relampago-*`; la
-   * interfaz los agrupa en una tarjeta a partir de este campo.
+   * `maestro-<civ>`, `avance-relampago` de los tres `avance-relampago-*` y
+   * `tira-y-afloja` de `agresor` y `estratega`; la interfaz los agrupa en una
+   * tarjeta a partir de este campo.
    */
   parent: string | null;
   /**
@@ -278,9 +279,9 @@ export type ObjectiveView = {
  * mismo caso: el catálogo pasa de 88 a 94 con Vikingos y Escoceses, y un snapshot v3
  * no lleva sus objetivos. La v5 es la del catálogo de la prueba de concepto de
  * objetivos con subobjetivos (120 objetivos, familia `maestro`) y la del campo
- * `pointsPerUnit`, que un snapshot v4 no lleva. La v6 es la del catálogo de 121
- * objetivos con la familia de hazañas `avance-relampago`, que un snapshot v5 no
- * lleva.
+ * `pointsPerUnit`, que un snapshot v4 no lleva. La v6 es la del catálogo de 122
+ * objetivos con las familias de hazañas (`avance-relampago` y `tira-y-afloja`), que
+ * un snapshot v5 no lleva.
  */
 export const OBJECTIVES_SNAPSHOT_VERSION = 6;
 
@@ -452,6 +453,7 @@ export const IMPARABLE_ID = "imparable";
 export const POR_TIERRA_ID = "por-tierra-y-agua";
 export const VICTORIAS_ID = "victorias";
 export const ANSIOSO_ID = "ansioso";
+export const TIRA_Y_AFLOJA_ID = "tira-y-afloja";
 export const AVANCE_RELAMPAGO_ID = "avance-relampago";
 export const FAST_FEUDAL_ID = "avance-relampago-feudal";
 export const FAST_CASTLE_ID = "avance-relampago-castillos";
@@ -505,6 +507,11 @@ const HAZANA_MATCHES = 1;
  * Castillos e Imperial). El padre paga el extra cuando están los tres.
  */
 const AVANCE_RELAMPAGO_STEPS = 3;
+/**
+ * Subobjetivos de la familia `tira-y-afloja`: las partidas cortas (`agresor`) y
+ * largas (`estratega`). El padre paga el extra cuando están los dos.
+ */
+const TIRA_Y_AFLOJA_STEPS = 2;
 /** Umbrales de `defensor-del-pueblo`: partida larga y bajas de aldeanos. */
 const DEFENDER_MATCH_SECONDS = 900;
 const DEFENDER_VILLAGERS_LOST = 3;
@@ -522,9 +529,9 @@ const DEFENDER_MOUNTED_LOST = 1;
  * `masterizando-<civ>` (competiciones), después la cabeza `polifacetico` seguida
  * de sus 25 `lider-<civ>`, luego `jugon` seguida de sus 25 `acolito-<civ>` y, al
  * final, la familia de la prueba de concepto: la cabeza `maestro` seguida de sus 25
- * `maestro-<civ>`. La otra familia del catálogo es de hazañas: `avance-relampago`
+ * `maestro-<civ>`. Las otras familias del catálogo son de hazañas: `avance-relampago`
  * va antes de sus tres hijos (`avance-relampago-feudal`, `-castillos` e
- * `-imperial`).
+ * `-imperial`) y `tira-y-afloja` antes de `agresor` y `estratega`.
  */
 export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
   {
@@ -612,6 +619,17 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     target: ANSIOSO_STREAK,
   },
   {
+    id: TIRA_Y_AFLOJA_ID,
+    group: "hazanas",
+    kind: "achievement",
+    label: "Tira y afloja",
+    description: `Se completa al ganar ${WINS_PER_CIV} partidas de menos de ${SHORT_MATCH_SECONDS / 60} minutos (Agresor) y ${WINS_PER_CIV} partidas de más de ${LONG_MATCH_SECONDS / 60} minutos (Estratega).`,
+    metric: "subobjetivos",
+    points: 24,
+    parent: null,
+    target: TIRA_Y_AFLOJA_STEPS,
+  },
+  {
     id: "agresor",
     group: "hazanas",
     kind: "achievement",
@@ -619,7 +637,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     description: `Gana al menos ${WINS_PER_CIV} partidas de menos de 10 minutos.`,
     metric: "victorias",
     points: 24,
-    parent: null,
+    parent: TIRA_Y_AFLOJA_ID,
     target: WINS_PER_CIV,
   },
   {
@@ -630,7 +648,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     description: `Gana al menos ${WINS_PER_CIV} partidas de más de 20 minutos.`,
     metric: "victorias",
     points: 24,
-    parent: null,
+    parent: TIRA_Y_AFLOJA_ID,
     target: WINS_PER_CIV,
   },
   {
@@ -1996,6 +2014,31 @@ function candidatesFor(
           player.matches,
           value === AVANCE_RELAMPAGO_STEPS,
           player.lastMatchAt,
+        ),
+      ];
+    });
+  }
+
+  if (definition.id === TIRA_Y_AFLOJA_ID) {
+    // El valor es cuántos de los dos hijos están completos (`agresor` y
+    // `estratega`); el extra se cobra solo con los dos.
+    return players.flatMap((player) => {
+      const value =
+        (player.shortWins >= WINS_PER_CIV ? 1 : 0) +
+        (player.longWins >= WINS_PER_CIV ? 1 : 0);
+
+      if (value < 1) {
+        return [];
+      }
+
+      return [
+        candidate(
+          player,
+          "subobjetivos",
+          value,
+          player.matches,
+          value === TIRA_Y_AFLOJA_STEPS,
+          player.lastWinAt,
         ),
       ];
     });

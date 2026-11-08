@@ -209,7 +209,7 @@ de puntos están siempre presentes en una fila nueva, con ceros si no aplican.
 ```json
 {
   "ruleSetVersion": 4,
-  "rule": "2 puntos por victoria clasificatoria más 121 objetivos: 31 competiciones y 90 logros",
+  "rule": "2 puntos por victoria clasificatoria más 122 objetivos: 31 competiciones y 91 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }

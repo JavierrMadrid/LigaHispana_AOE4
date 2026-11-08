@@ -1,6 +1,6 @@
 # Objetivos
 
-Los **121 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
+Los **122 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
 funcional: qué mide cada uno, cuántos puntos da y **quién lo cobra**. La puntuación base está en
 [`docs/PUNTUACION.md`](./PUNTUACION.md); aquí solo están los objetivos. El catálogo es el del código,
 pero el ruleset puede **desactivar** objetivos de una edición a otra (ver
@@ -30,10 +30,10 @@ como **temporales** (puede cambiar de dueño hasta el cierre): ver [`PUNTUACION.
 |---|---|---|---|
 | Actividad | 1 | 2 | 3 |
 | Racha | 1 | 2 | 3 |
-| Hazañas | 0 | 8 | 8 |
+| Hazañas | 0 | 9 | 9 |
 | Formatos | 4 | 0 | 4 |
 | Civilizaciones | 25 | 78 | 103 |
-| **Total** | **31** | **90** | **121** |
+| **Total** | **31** | **91** | **122** |
 
 El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 
@@ -63,6 +63,7 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 | Victorias | `pointsPerWin` por victoria, sin tope | Cada victoria clasificatoria. Es el objetivo que paga las victorias del torneo. |
 | Imbatible | 32 | Conseguir una racha de 5 victorias seguidas. |
 | Ansioso | 6 | Encadenar 3 partidas clasificatorias seguidas con 120 APM o más. |
+| Tira y afloja | 24 | Completar los dos retos de abajo: Agresor (partidas cortas) y Estratega (partidas largas). Es la cabeza de sus dos subobjetivos. |
 | Agresor | 24 | Ganar al menos 3 partidas de menos de 10 minutos. |
 | Estratega | 24 | Ganar al menos 3 partidas de más de 20 minutos. |
 | Avance relámpago | 9 | Completar los tres avances relámpago (Feudal, Castillos e Imperial). Es la cabeza de los tres subobjetivos de abajo. |
@@ -117,16 +118,23 @@ victoria`) y la nota de la cabeza dice cuánto paga cada victoria y hasta cuánt
 completar la familia («Cada civilización: 1 punto por victoria, hasta 5 (Maestro). Completar las 25:
 +50 extra»).
 
-Una familia no tiene por qué ser de civilizaciones: **`avance-relampago`** agrupa las tres hazañas
-`avance-relampago-feudal`, `-castillos` e `-imperial`, que siguen cobrándose por separado (3, 6 y 9
-puntos) y suman **9 más** cuando un jugador completa las tres. La cabeza de una familia de hazañas
-cobra, por tanto, un extra por totalidad: paga una vez por jugador y solo con todos los hijos
-cumplidos, igual que el bonus de `maestro` con las 25 civilizaciones. Su métrica es `subobjetivos`
-(cuántos hijos lleva completados, de 0 a 3) y no es una competición: cada jugador que cierra la
-familia cobra el extra. En `/objetivos` el bloque es la tarjeta de la cabeza y, debajo, la rejilla de
-sus tres subobjetivos —sin riel ni filtro de banderas, que no hay civilización que filtrar—, con la
-nota de la cabeza diciendo lo que suma completarlos. En la ficha de un participante, la cabeza y sus
-hijos se leen como objetivos individuales, en las secciones de siempre: tampoco allí hay carrusel.
+Una familia no tiene por qué ser de civilizaciones: las **familias de hazañas** agrupan objetivos del
+grupo Hazañas. Hay dos hoy:
+
+- **`avance-relampago`** agrupa las tres hazañas `avance-relampago-feudal`, `-castillos` e
+  `-imperial`, que siguen cobrándose por separado (3, 6 y 9 puntos) y suman **9 más** cuando un
+  jugador completa las tres.
+- **`tira-y-afloja`** agrupa `agresor` (partidas cortas) y `estratega` (partidas largas), que siguen
+  cobrándose por separado (24 cada uno) y suman **24 más** cuando un jugador completa los dos.
+
+La cabeza de una familia de hazañas cobra, por tanto, un extra por totalidad: paga una vez por
+jugador y solo con todos los hijos cumplidos, igual que el bonus de `maestro` con las 25
+civilizaciones. Su métrica es `subobjetivos` (cuántos hijos lleva completados, de 0 al número de
+hijos) y no es una competición: cada jugador que cierra la familia cobra el extra. En `/objetivos` el
+bloque es la tarjeta de la cabeza y, debajo, la rejilla de sus subobjetivos —sin riel ni filtro de
+banderas, que no hay civilización que filtrar—, con la nota de la cabeza diciendo lo que suma
+completarlos. En la ficha de un participante, la cabeza y sus hijos se leen como objetivos
+individuales, en las secciones de siempre: tampoco allí hay carrusel.
 
 La tarjeta de la cabeza de una familia de **civilización** añade además el detalle por civilización:
 la **lista más corta de las dos**
@@ -156,9 +164,10 @@ uno y por su `id`. Un objetivo apagado:
   desaparece del cómputo y el registro de liderazgos (`ObjectiveLeadEvent`) anota una `LOST` para el
   que la tenía.
 
-Apagar la **cabeza** de una familia (`polifacetico`, `jugon`, `maestro`, `avance-relampago`) no apaga a
-sus hijos: la familia es una agrupación de la interfaz, no una dependencia, y cada objetivo se apaga por
-su id. Un id que no exista en el catálogo o repetido se avisa y se ignora.
+Apagar la **cabeza** de una familia (`polifacetico`, `jugon`, `maestro`, `avance-relampago`,
+`tira-y-afloja`) no apaga a sus hijos: la familia es una agrupación de la interfaz, no una
+dependencia, y cada objetivo se apaga por su id. Un id que no exista en el catálogo o repetido se
+avisa y se ignora.
 
 La etiqueta de la regla se recalcula con los objetivos activos, así que la web no anuncia objetivos que
 ya no existen. Lo cambia el superadministrador desde el panel; el detalle, en
@@ -219,7 +228,7 @@ A diferencia del catálogo anterior, el total en juego **no es un número cerrad
 cada participante que lo cumple, así que su reparto se multiplica por el número de beneficiarios.
 `imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo de
 premio fijo contado una vez, `imparable` a su tope de 14 y cada `maestro-<civ>` a su premio máximo de
-5— es **3.116 puntos**: es la cifra que resume la
+5— es **3.140 puntos**: es la cifra que resume la
 banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no reparte un premio fijo sino
 `pointsPerWin` por victoria y sin tope: contarlo una vez diría que el catálogo reparte una cifra que no
 reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en
