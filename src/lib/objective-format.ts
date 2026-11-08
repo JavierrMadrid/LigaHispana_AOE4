@@ -25,6 +25,7 @@ const METRIC_UNITS: Record<ObjectiveMetric, readonly [string, string]> = {
   dias: ["día", "días"],
   civilizaciones: ["civilización", "civilizaciones"],
   mapas: ["mapa", "mapas"],
+  subobjetivos: ["subobjetivo", "subobjetivos"],
 };
 
 function metricUnit(metric: ObjectiveMetric, count: number): string {

@@ -267,10 +267,11 @@ npm run score                    # siembra el feed (idempotente)
 npm run verify:overlay-api       # comprueba la API contra DATABASE_URL, solo lectura
 ```
 
-- `SCORING_CACHE_VERSION = 4` fuerza el recálculo en el primer pase tras el despliegue; el salto de
-  la v4 es por el catálogo de 120 objetivos (la prueba de concepto de subobjetivos, familia
-  `maestro`). Sin un salto, el worker podría saltarse la pasada y un cambio que dependa del motor no
-  llegaría hasta la siguiente partida.
+- `SCORING_CACHE_VERSION = 5` fuerza el recálculo en el primer pase tras el despliegue; el salto de
+  la v5 es por las familias de hazañas (`avance-relampago`, catálogo de 121 objetivos); el de la v4,
+  por el catálogo de 120 objetivos (la prueba de concepto de subobjetivos, familia `maestro`). Sin un
+  salto, el worker podría saltarse la pasada y un cambio que dependa del motor no llegaría hasta la
+  siguiente partida.
 - Las dos tablas se leen **solo** por el DAL: la Data API no las expone.
 - `verify:overlay-api` es de solo lectura y compara lo que devuelven los lectores de
   [`src/lib/overlay-api.ts`](../src/lib/overlay-api.ts) con lo que hay en la base.

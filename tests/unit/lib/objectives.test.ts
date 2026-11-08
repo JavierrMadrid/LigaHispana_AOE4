@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANSIOSO_ID,
+  AVANCE_RELAMPAGO_ID,
   DEFENDER_ID,
   FAST_CASTLE_ID,
   FAST_FEUDAL_ID,
@@ -438,6 +439,47 @@ describe("familia Maestro: el subobjetivo cobra por unidad y el padre es un bonu
   });
 });
 
+describe("familia Avance relámpago: el padre paga el extra con los tres avances", () => {
+  const PADRE = AVANCE_RELAMPAGO_ID;
+
+  it("el padre existe, no tiene cabeza y agrupa a los tres avances", () => {
+    const head = definition(PADRE);
+
+    expect(head.parent).toBeNull();
+    expect(head.group).toBe("hazanas");
+    expect(head.metric).toBe("subobjetivos");
+    expect(head.target).toBe(3);
+
+    for (const id of [FAST_FEUDAL_ID, FAST_CASTLE_ID, FAST_IMPERIAL_ID]) {
+      expect(definition(id).parent, id).toBe(PADRE);
+    }
+  });
+
+  it("con dos de los tres avances no cobra el padre", () => {
+    const players = [aggregate(1, { fastFeudal: 1, fastCastle: 1, fastImperial: 0 })];
+    const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+    const padre = optionById(options, PADRE);
+
+    expect(padre.beneficiaries).toEqual([]);
+    expect(padre.ranking[0]).toMatchObject({ value: 2, eligible: false });
+    expect(pointsByPlayer.get("p1")?.earned ?? []).not.toContain(PADRE);
+  });
+
+  it("con los tres cobra 9 una sola vez y queda completado", () => {
+    const players = [aggregate(1, { fastFeudal: 1, fastCastle: 2, fastImperial: 1 })];
+    const { options, pointsByPlayer } = computeObjectives(players, DEFAULT_RULESET, []);
+
+    expect(pointsByPlayer.get("p1")?.awards[PADRE]).toEqual({ points: 9, count: 1 });
+    expect(optionById(options, PADRE).beneficiaries).toHaveLength(1);
+    expect(optionById(options, PADRE).ranking[0]).toMatchObject({ value: 3, eligible: true });
+  });
+
+  it("el padre no se repite y reparte un premio fijo", () => {
+    expect(objectiveRepeatable(PADRE)).toBe(false);
+    expect(hasFixedPrize(definition(PADRE))).toBe(true);
+  });
+});
+
 describe("hasFixedPrize: qué cuenta la suma nominal", () => {
   it("todo el catálogo reparte un premio fijo menos el objetivo de victorias", () => {
     const sinPremio = OBJECTIVE_DEFINITIONS.filter((item) => !hasFixedPrize(item));
@@ -454,7 +496,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
     expect(hasFixedPrize(definition(VICTORIAS_ID))).toBe(false);
   });
 
-  it("el catálogo nominal sigue sumando 3.107 puntos", () => {
+  it("el catálogo nominal sigue sumando 3.116 puntos", () => {
     // Es la cifra de `docs/OBJETIVOS.md`, que es la que resume la banda de
     // `/puntuacion`. `victorias` queda fuera porque reparte por victoria y sin tope.
     const total = OBJECTIVE_DEFINITIONS.filter(hasFixedPrize).reduce(
@@ -462,7 +504,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
       0,
     );
 
-    expect(total).toBe(3107);
+    expect(total).toBe(3116);
   });
 });
 
@@ -739,9 +781,9 @@ describe("catálogo de puntos", () => {
     }
   });
 
-  it("el catálogo tiene 120 objetivos", () => {
+  it("el catálogo tiene 121 objetivos", () => {
     expect(OBJECTIVE_COUNT).toBe(OBJECTIVE_DEFINITIONS.length);
-    expect(OBJECTIVE_COUNT).toBe(120);
+    expect(OBJECTIVE_COUNT).toBe(121);
   });
 
   it("incluye las civilizaciones del DLC y sus familias cuentan 25", () => {
@@ -809,9 +851,10 @@ describe("snapshot de la vista de objetivos", () => {
   it("un snapshot de la forma anterior no vale: la vista cambió de forma", () => {
     // La v2 añadió `count` a los beneficiarios y `mapGaps` al contendiente de
     // `por-tierra-y-agua`, la v3 el catálogo de 88 objetivos (los cinco del
-    // summary), la v4 el de 94 (Vikingos y Escoceses) y la v5 el de 120 con el
-    // campo `pointsPerUnit`: un documento con la forma o el catálogo viejo se
-    // rechaza y la vista se recalcula en vivo, que es lo que evita publicar un
+    // summary), la v4 el de 94 (Vikingos y Escoceses), la v5 el de 120 con el
+    // campo `pointsPerUnit` (familia `maestro`) y la v6 el de 121 con la familia
+    // de hazañas `avance-relampago`: un documento con la forma o el catálogo viejo
+    // se rechaza y la vista se recalcula en vivo, que es lo que evita publicar un
     // reparto a medias.
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: 1 }), RULESET_VERSION),
@@ -825,7 +868,10 @@ describe("snapshot de la vista de objetivos", () => {
     expect(
       readObjectivesSnapshotValue(snapshot({ snapshotVersion: 4 }), RULESET_VERSION),
     ).toBeNull();
-    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(5);
+    expect(
+      readObjectivesSnapshotValue(snapshot({ snapshotVersion: 5 }), RULESET_VERSION),
+    ).toBeNull();
+    expect(OBJECTIVES_SNAPSHOT_VERSION).toBe(6);
   });
 
   it("un snapshot de otra versión de las reglas no vale", () => {

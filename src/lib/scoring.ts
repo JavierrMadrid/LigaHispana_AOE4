@@ -169,9 +169,12 @@ export const LEGACY_RULESET_VERSION = 3;
  * (Vikingos y Escoceses): sin el salto, el primer pase podría saltarse el recálculo y
  * los objetivos nuevos no repartirían hasta la siguiente partida. La **v4** es por el
  * catálogo de la prueba de concepto de subobjetivos (120 objetivos, familia
- * `maestro`), mismo motivo.
+ * `maestro`), mismo motivo. La **v5** es por las familias de hazañas
+ * (`avance-relampago`): el catálogo pasa a 121 objetivos y, sin el salto, el primer
+ * pase podría saltarse el recálculo y el extra de la familia no repartiría hasta la
+ * siguiente partida.
  */
-export const SCORING_CACHE_VERSION = 4;
+export const SCORING_CACHE_VERSION = 5;
 
 /**
  * Etiqueta de la regla activa; aparece en `breakdown` y en la vista pública.
@@ -759,7 +762,7 @@ export type ScoreBreakdownMode = {
  * ```json
  * {
  *   "ruleSetVersion": 4,
- *   "rule": "2 puntos por victoria clasificatoria más 120 objetivos: 31 competiciones y 89 logros",
+ *   "rule": "2 puntos por victoria clasificatoria más 121 objetivos: 31 competiciones y 90 logros",
  *   "byMode": {
  *     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
  *     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
