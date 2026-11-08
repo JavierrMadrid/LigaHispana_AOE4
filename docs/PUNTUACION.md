@@ -264,6 +264,13 @@ aunque sus partidas y sus historiales siguen guardados. Mover solo el fin no pid
 inicio nuevo en el futuro la ventana vuelve a estar sin empezar, así que las reglas de `Puntuación`
 vuelven a ser editables.
 
+**La edición nueva no hereda participantes.** En la misma transacción que escribe la ventana, todos los
+`APPROVED` y `PENDING` quedan `INACTIVE`: no puntúan en la edición nueva (el motor solo publica
+`APPROVED`) y conservan sus datos. Para entrar hay que **reinscribirse** por `/participar` y ser
+aprobado; la reinscripción desde `INACTIVE` reescribe `registeredAt`, así que el corte de partidas de
+la edición nueva es ese envío y no cuenta nada de lo jugado antes. Queda el rastro
+`PLAYERS_DEACTIVATED` con los recuentos en `/admin/acciones`.
+
 Forma del desglose (`PlayerScore.breakdown`): las dos familias y el bloque de eventos, con ceros si no
 aplican. Una fila escrita antes de que existieran los eventos no trae `events`.
 

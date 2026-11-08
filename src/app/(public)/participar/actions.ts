@@ -20,6 +20,11 @@ import {
   parseTwitchChannel,
   parseYoutubeChannel,
 } from "@/lib/player-input";
+import {
+  RESUBMITTABLE_PLAYER_STATUSES,
+  canResubmitRegistration,
+  resubmissionResetsRegisteredAt,
+} from "@/lib/player-status";
 import { consumePublicFormAttempt } from "@/lib/rate-limit";
 import { checkAoe4WorldProfile } from "@/lib/registration";
 import { registrationClosedMessage } from "@/lib/registration-open";
@@ -91,8 +96,9 @@ export type RegistrationFormState = {
 /**
  * Confirmación de la inscripción. La comparten el envío real y el que cae en el
  * campo trampa, a propósito: un bot no debe poder distinguir uno del otro. La
- * comparte también la reinscripción de un `REJECTED`, porque para quien la manda
- * el resultado es el mismo: su solicitud vuelve a estar en la cola de revisión.
+ * comparte también la reinscripción de un `REJECTED` o de un `INACTIVE`, porque para
+ * quien la manda el resultado es el mismo: su solicitud vuelve a estar en la cola de
+ * revisión.
  *
  * El camino del campo trampa la sigue devolviendo aunque el plazo esté cerrado
  * (ver `readRegistrationState()`): el cierre no se le revela a un bot.
@@ -306,22 +312,27 @@ type RegistrationInput = {
 };
 
 /**
- * Escribe la solicitud: fila nueva, o reinscripción de un `REJECTED`.
+ * Escribe la solicitud: fila nueva, o reinscripción de un `REJECTED` o un `INACTIVE`.
  *
  * Son dos caminos porque son dos intenciones distintas, y solo uno crea:
  *
  * - **No había fila**: `create` en `PENDING`. Si entre la comprobación y esta
  *   escritura se coló otra con el mismo `profileId`, la unicidad de la columna
  *   salta con `P2002` y eso se traduce a "duplicado", no a un error de servidor.
- * - **La fila estaba `REJECTED`**: se **actualiza** y vuelve a `PENDING`. No se
- *   crea una segunda fila porque `profileId` es único y porque la cola de
- *   revisión quiere una sola solicitud por persona, no un historial de ellas.
+ * - **La fila estaba `REJECTED` o `INACTIVE`**: se **actualiza** y vuelve a
+ *   `PENDING`. No se crea una segunda fila porque `profileId` es único y porque la
+ *   cola de revisión quiere una sola solicitud por persona, no un historial de ellas.
  *
  * El `updateMany` filtra por id **y** por estado, y no un `update` normal, por un
  * motivo de carrera: entre que se leyó la fila y esto, un admin puede haberla
  * aprobado. Con `update` la escritura pisaría esa aprobación sin avisar; así, si
- * el estado ya no es `REJECTED` el `UPDATE` no toca nada, `count` sale a 0 y se
- * trata como duplicado, que es lo que es.
+ * el estado ya no es uno de los admitidos el `UPDATE` no toca nada, `count` sale a 0
+ * y se trata como duplicado, que es lo que es.
+ *
+ * La diferencia entre los dos estados admitidos es **la fecha de inscripción**:
+ * desde `INACTIVE` se reescribe `registeredAt` (es una inscripción nueva y marca el
+ * corte de partidas), y desde `REJECTED` se conserva la del primer envío. La regla
+ * es `resubmissionResetsRegisteredAt()`; aquí solo se obedece.
  *
  * En la reinscripción se reescriben **los tres canales** junto al nombre y al
  * correo, por el mismo motivo que el país: quien se reinscribe dice cómo emite
@@ -366,7 +377,12 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
   try {
     if (input.existing) {
       const updated = await db.player.updateMany({
-        where: { id: input.existing.id, status: PlayerStatus.REJECTED },
+        where: {
+          id: input.existing.id,
+          // La misma lista con la que se decide si la inscripción pasa: el `where`
+          // no puede admitir un estado que la comprobación anterior haya descartado.
+          status: { in: [...RESUBMITTABLE_PLAYER_STATUSES] },
+        },
         data: {
           // Nombre de display y canal: lo que dice este envío. En una
           // reinscripción la fila anterior se considera superada, así que un
@@ -383,6 +399,13 @@ async function persistRegistration(input: RegistrationInput): Promise<WriteOutco
           ...discord,
           aoe4WorldName: input.aoe4WorldName,
           ...portrait,
+          // Desde `INACTIVE` es una inscripción nueva y el corte de partidas se mueve
+          // a este envío (`scoringCutoff()`). Un `REJECTED` conserva la fecha del
+          // primer envío: quien se apuntó a tiempo no pierde sus partidas porque la
+          // organización mirase su solicitud más tarde.
+          ...(resubmissionResetsRegisteredAt(input.existing.status)
+            ? { registeredAt: new Date() }
+            : {}),
           // `PENDING` fijo y no el que tuviera: reinscribirse es volver a pedir
           // la revisión, no recuperar la que se rechazó.
           status: PlayerStatus.PENDING,
@@ -563,12 +586,15 @@ async function borrarDiscordLink(): Promise<void> {
  *     contradicción que no se ha podido comprobar, que es el peor error que puede
  *     cometer un formulario de este tipo: deja fuera a alguien que sí cumple.
  *
- * Y una decisión de producto que va con la anterior: **un `REJECTED` se puede
- * reinscribir**. Si el perfil ya existe, solo se acepta el envío cuando su estado
- * es `REJECTED`, y entonces lo que hace es actualizar esa fila y devolverla a
- * `PENDING`. Un `APPROVED` o un `PENDING` bloquean: el primero porque ya está en
- * la liga y el segundo porque su solicitud está en la cola de revisión y una
- * segunda no aportaría nada.
+ * Y una decisión de producto que va con la anterior: **un `REJECTED` y un `INACTIVE`
+ * se pueden reinscribir**. Si el perfil ya existe, solo se acepta el envío cuando su
+ * estado es uno de esos dos, y entonces lo que hace es actualizar esa fila y
+ * devolverla a `PENDING`. Un `APPROVED` o un `PENDING` bloquean: el primero porque
+ * ya está en la liga y el segundo porque su solicitud está en la cola de revisión y
+ * una segunda no aportaría nada. Un `BANNED` también bloquea: una expulsión no se
+ * salta por el formulario público. La diferencia entre los dos admitidos está en la
+ * fecha: la reinscripción desde `INACTIVE` es una inscripción nueva y reescribe
+ * `registeredAt`; la de un `REJECTED` conserva la del primer envío.
  */
 export async function registerPlayer(
   _prevState: RegistrationFormState,
@@ -812,10 +838,12 @@ export async function registerPlayer(
     return { status: "error", message: DATABASE_UNAVAILABLE_MESSAGE, fieldErrors: {} };
   }
 
-  // Solo se reinscribe desde `REJECTED`. Los otros dos estados son un cierre: o la
-  // persona ya está en la liga, o su solicitud está esperando y mandarle otra
-  // vez no cambiaría nada.
-  if (existing !== null && existing.status !== PlayerStatus.REJECTED) {
+  // Solo se reinscribe desde los estados que admite `canResubmitRegistration()`:
+  // `REJECTED` (su solicitud se descartó y puede repetirla) e `INACTIVE` (la edición
+  // nueva lo dejó fuera y ahora consiente esta). `APPROVED` y `PENDING` son un
+  // cierre —ya está en la liga o su solicitud espera— y `BANNED` no se salta por el
+  // formulario público.
+  if (existing !== null && !canResubmitRegistration(existing.status)) {
     return {
       status: "error",
       message: DUPLICATE_FAILED_MESSAGE,

@@ -62,7 +62,9 @@ aplica a la web pública, si la retransmisión es obligatoria, las reglas de pun
 familias, puntos y objetivos desactivados) y los **eventos puntuales**, todo sin desplegar. Las
 reglas de puntos y los eventos solo se pueden cambiar antes de que empiece la edición; mientras el
 torneo está en marcha los puntos quedan congelados y solo se puede fijar el fin de la ventana, y una
-vez terminado se puede mover el inicio para preparar la siguiente. También puede
+vez terminado se puede mover el inicio para preparar la siguiente: al hacerlo, los participantes de la
+edición anterior quedan **inactivos** y tienen que volver a inscribirse por `/participar` para entrar en
+la nueva. También puede
 **deshacer** lo que hicieron los admins regulares.
 
 Un **bot de Discord** avisa del comienzo y el final del torneo en el canal de avisos, una sola vez por
@@ -139,7 +141,8 @@ Supabase Cron ──► Worker (Cloudflare) ──► API de AoE4World
   clasificación. Se recalcula solo.
 - Las **reglas y los puntos** son configurables sin desplegar antes de que empiece la edición (viven
   en la tabla `Setting`); mientras está en marcha, solo se puede fijar el fin de la ventana, y cuando
-  termina, mover el inicio empieza la siguiente edición.
+  termina, mover el inicio empieza la siguiente edición y desactiva a sus participantes, que tienen
+  que reinscribirse.
 
 ### API para el overlay
 
