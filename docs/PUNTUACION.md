@@ -66,11 +66,11 @@ de la base falla, cae al texto genérico y no inventa fechas.
 
 La página `/puntuacion` lee además el **ruleset activo** para las demás cifras: los puntos por victoria
 y los **objetivos activos**, de los que salen el recuento y el total que reparten (con el catálogo por
-defecto, 122 y 3.140 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de
+defecto, 122 y 3.292 puntos). No hay cifras escritas a mano en el copy. Con la base caída la banda de
 resumen no se pinta y los párrafos caen a su forma genérica, en vez de enseñar los números de la
 edición anterior.
 
-La suma de 3.140 es la de los objetivos de **premio fijo** del catálogo (cada uno contado una vez,
+La suma de 3.292 es la de los objetivos de **premio fijo** del catálogo (cada uno contado una vez,
 `imparable` a su tope): `victorias` queda fuera, porque no reparte un premio sino `pointsPerWin` por
 victoria y sin tope
 (ver [`OBJETIVOS.md`](./OBJETIVOS.md#total-de-puntos)). El criterio está en código (`hasFixedPrize()`);

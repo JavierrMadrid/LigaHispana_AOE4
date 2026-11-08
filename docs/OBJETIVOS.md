@@ -72,9 +72,9 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 | Avance relámpago: Imperial | 9 | Llegar a la Edad Imperial antes de 16 minutos en una partida clasificatoria. |
 | Defensor del pueblo | 12 | Terminar una partida de 15 minutos o más perdiendo menos de 3 aldeanos, menos de 2 aldeanos dorados y ningún aldeano montado. |
 | Por tierra y agua | 41 | Jugar al menos 3 partidas en **cada** mapa del pool activo. |
-| Polifacético | 41 | Ganar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
+| Polifacético | 134 | Ganar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
 | Líder `<civ>` (×25) | 9 | Ganar al menos 3 partidas con esa civilización. |
-| Jugón | 10 | Jugar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
+| Jugón | 69 | Jugar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
 | Acólito `<civ>` (×25) | 5 | Jugar al menos 3 partidas con esa civilización. |
 | Maestro de todas las civilizaciones | 50 | Ganar al menos 5 partidas con **cada una** de las 25 civilizaciones. |
 | Maestro `<civ>` (×25) | 1 por victoria, tope 5 | Cada victoria con esa civilización; el `points` de la tarjeta (5) es el máximo. |
@@ -82,9 +82,10 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 - `victorias` **no tiene premio propio**: cada victoria vale lo que diga `pointsPerWin` del ruleset (hoy
   2). Es la única fuente de lo que vale una victoria, así que un `objectives["victorias"]` retocado en
   `Setting` se ignora. Su `points` en el catálogo (2) es documental.
-- La hoja de la organización expresa algunos valores con decimales (40,5, 10,125 y 4,5). El catálogo los
-  redondea al entero normal —41, 10 y 5— porque `PlayerScore.total` es un entero y el panel solo admite
-  enteros.
+- La hoja de la organización expresa algunos valores con decimales (40,5 y 4,5). El catálogo los
+  redondea al entero normal —41 y 5— porque `PlayerScore.total` es un entero y el panel solo admite
+  enteros. **Polifacético y Jugón no son un redondeo**: llevan los importes de la propuesta de la
+  organización para el extra por totalidad de cada familia (134 y 69).
 - En `agresor`/`estratega` las partidas sin duración quedan fuera. Umbrales: `< 600 s` y `> 1200 s`.
 - **`ansioso`, los tres `avance-relampago-*` y `defensor-del-pueblo`** salen del **resumen de partida**
   (APM, tiempos de edad y pérdidas), que vive en el sitio de AoE4World —no en su API— y el worker pide
@@ -228,7 +229,7 @@ A diferencia del catálogo anterior, el total en juego **no es un número cerrad
 cada participante que lo cumple, así que su reparto se multiplica por el número de beneficiarios.
 `imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo de
 premio fijo contado una vez, `imparable` a su tope de 14 y cada `maestro-<civ>` a su premio máximo de
-5— es **3.140 puntos**: es la cifra que resume la
+5— es **3.292 puntos**: es la cifra que resume la
 banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no reparte un premio fijo sino
 `pointsPerWin` por victoria y sin tope: contarlo una vez diría que el catálogo reparte una cifra que no
 reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en

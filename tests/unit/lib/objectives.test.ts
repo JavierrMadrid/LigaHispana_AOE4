@@ -538,7 +538,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
     expect(hasFixedPrize(definition(VICTORIAS_ID))).toBe(false);
   });
 
-  it("el catálogo nominal sigue sumando 3.140 puntos", () => {
+  it("el catálogo nominal sigue sumando 3.292 puntos", () => {
     // Es la cifra de `docs/OBJETIVOS.md`, que es la que resume la banda de
     // `/puntuacion`. `victorias` queda fuera porque reparte por victoria y sin tope.
     const total = OBJECTIVE_DEFINITIONS.filter(hasFixedPrize).reduce(
@@ -546,7 +546,7 @@ describe("hasFixedPrize: qué cuenta la suma nominal", () => {
       0,
     );
 
-    expect(total).toBe(3140);
+    expect(total).toBe(3292);
   });
 });
 
@@ -817,6 +817,13 @@ describe("objectiveStanding", () => {
 });
 
 describe("catálogo de puntos", () => {
+  it("las cabezas de familia de civilización llevan el importe del extra por totalidad", () => {
+    // Importes explícitos de la propuesta de la organización (issue 211): no son
+    // redondeos de la hoja y no dependen del número de civilizaciones.
+    expect(OBJECTIVE_POINTS[POLIFACETICO_ID]).toBe(134);
+    expect(OBJECTIVE_POINTS[JUGON_ID]).toBe(69);
+  });
+
   it("cada objetivo tiene puntos positivos y una única definición", () => {
     for (const [id, points] of Object.entries(OBJECTIVE_POINTS)) {
       expect(points, `puntos de ${id}`).toBeGreaterThan(0);

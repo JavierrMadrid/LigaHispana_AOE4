@@ -749,8 +749,10 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Polifacético",
     description: `Gana al menos ${WINS_PER_CIV} partidas con cada una de las ${CIVILIZATIONS.length} civilizaciones.`,
     metric: "civilizaciones",
-    // 40,5 en la hoja de la organización: entero porque `PlayerScore.total` es `Int`.
-    points: 41,
+    // Importe de la propuesta de la organización para el extra por totalidad: no
+    // sale de redondear el decimal de la hoja, sino que es la cifra pactada para la
+    // familia.
+    points: 134,
     parent: null,
     target: CIVILIZATION_IDS.length,
   },
@@ -772,7 +774,10 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Jugón",
     description: `Juega al menos ${MATCHES_PER_CIV} partidas con cada una de las ${CIVILIZATIONS.length} civilizaciones.`,
     metric: "civilizaciones",
-    points: 10,
+    // Importe de la propuesta de la organización para el extra por totalidad: no
+    // sale de redondear el decimal de la hoja, sino que es la cifra pactada para la
+    // familia.
+    points: 69,
     parent: null,
     target: CIVILIZATION_IDS.length,
   },
