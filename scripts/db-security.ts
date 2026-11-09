@@ -87,7 +87,9 @@ type GrantRow = { granted: boolean };
  * Por eso `Admin`, que entra con la gestión de cuentas, se añade a la lista a mano:
  * sin ella nacería legible con la clave publicable antes del primer `db:security`.
  * Lo mismo vale para `ObjectiveProgressEvent` y `ObjectiveProgressState`, que entran
- * con la API del overlay y no tienen nada que ver con lo público.
+ * con la API del overlay y no tienen nada que ver con lo público, y para
+ * `ObjectAward`/`ObjectThrow`, el histórico del POC de objetos: son datos de panel y
+ * no pueden nacer legibles con la clave publicable.
  */
 const TABLES = [
   "Player",
@@ -104,6 +106,8 @@ const TABLES = [
   "Admin",
   "AdminAct",
   "AdminActMatch",
+  "ObjectAward",
+  "ObjectThrow",
 ] as const;
 
 const ROLES_CLIENTE = "anon, authenticated";

@@ -577,6 +577,11 @@ Qué se puede hacer con un participante y **dónde** se ofrece cada acción:
 | **Editar** los datos | Listado de participantes («Todos los jugadores») | Corrige nombre, país, correo, canales y `@usuario`; no toca el estado |
 | **Expulsar** a un aprobado | Actuaciones (`BAN`); el listado enlaza a la actuación ya prefijada | Deja `BANNED`, reversible y sin perder datos |
 | **Anular** partidas | Actuaciones (`MATCH_ANNULMENT`) | La victoria deja de puntuar sin borrarse |
+| **Volver a participar** tras una edición nueva | Solo desde `/participar`, con el plazo abierto | Deja `INACTIVE` → `PENDING` y reescribe `registeredAt`; después hay que aprobarlo. El alta manual de admin **no** reactiva a un inactivo |
+
+- **Al empezar una edición nueva se desactivan todos** los `APPROVED` y `PENDING` (ver el punto
+  anterior sobre reemplazar una edición terminada). El listado los enseña como inactivos y no se
+  reactivan desde el panel: el consentimiento es la reinscripción pública.
 
 - **El listado completo no cambia estados**: no ofrece rechazar (retirar) a un aprobado ni aprobar
   (restaurar) a un rechazado. Esas decisiones viven en la cola de pendientes y en Actuaciones.
@@ -603,8 +608,9 @@ marca dice que la acción ya no está vigente.
 - **Solo los tipos revertibles** (`isRevertibleActionType()`, `src/lib/admin-revert.ts`) y **una acción
   ya revertida no se revierte dos veces**. `PLAYER_REMOVED` es un tipo **histórico** —la baja
   destructiva ya no existe— y no está: el dato ya no existe. Tampoco
-  `ADMIN_*` (la baja de un admin se deshace reactivándolo), `ACTION_REVERTED` ni `CONFIG_CHANGED` (la
-  configuración se cambia publicando otra).
+  `ADMIN_*` (la baja de un admin se deshace reactivándolo), `ACTION_REVERTED`, `CONFIG_CHANGED` (la
+  configuración se cambia publicando otra) ni `PLAYERS_DEACTIVATED` (la desactivación de una edición
+  nueva se rehace por participante: reinscribirse y aprobarlo).
 - **Si algo ha cambiado después, se dice y no se escribe nada.** Deshacer una aprobación cuando el
   jugador ya está en otro estado —o una edición cuyos valores ya volvieron— pisaría ese cambio
   posterior: el panel lo explica en vez de deshacer "todo lo que vino detrás".
@@ -733,6 +739,17 @@ puntuales no están ahí porque son contenido de cada evento (ver
   Mover solo el fin no pide confirmación. Con el inicio nuevo en el futuro la edición vuelve a estar
   sin empezar, así que `Puntuación` vuelve a dejar editar las reglas. La confirmación existe para que
   un envío con la fecha de inicio cambiada sin querer no reemplace el torneo.
+- **Al empezar una edición nueva, los participantes quedan `INACTIVE`.** En la misma transacción que
+  escribe la ventana, `writeScoringRuleset()` desactiva a todos los `APPROVED` y `PENDING` y anota
+  `PLAYERS_DEACTIVATED` en `/admin/acciones` con los dos recuentos y la ventana nueva
+  (`details.editionFrom`). Nadie pasa a la siguiente edición sin consentirlo: para volver hay que
+  reinscribirse por `/participar` y ser aprobado, y eso reescribe `registeredAt` (el corte de
+  partidas). Por eso, después de empezar la edición, hay que **reabrir el plazo de inscripciones**
+  (`registration.open` y `registration.closesAt`) o los participantes desactivados no podrán hacerlo.
+  El mensaje de éxito del panel lo recuerda con la cifra. La desactivación **no se deshace** desde el
+  historial: cada participante vuelve por su cuenta y deja su propio `PLAYER_APPROVED`. El sync del
+  rol de participante en Discord solo mira `APPROVED`, así que en la siguiente pasada les retira el
+  rol a los inactivos; al reaprobarse, se lo vuelve a poner.
 - **La retransmisión obligatoria** enciende la alerta `NO_STREAM_CHANNEL` (ver
   [Alertas de comportamiento](#alertas-de-comportamiento)). Apagarla **no** borra las alertas ya
   escritas: `Alert` es *append-only*.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import Link from "next/link";
 import type { AdminActionResult } from "@/app/admin/actions";
 import { Callout } from "@/components/admin/callout";
 import { FieldGrid } from "@/components/admin/field-grid";
@@ -36,8 +37,10 @@ type WindowFormProps = {
   /**
    * ¿Terminó ya la edición guardada? Con la ventana cerrada el torneo no reparte puntos
    * y la acción vuelve a admitir las dos fechas, pero mover el inicio **empieza una
-   * edición nueva**: recalcula la clasificación y la anterior deja de mostrarse en la web,
-   * así que se pide confirmación explícita (`confirmNewEdition`).
+   * edición nueva**: recalcula la clasificación, la anterior deja de mostrarse en la web
+   * y todos los participantes quedan `INACTIVE` —tienen que reinscribirse por
+   * `/participar` para entrar—, así que se pide confirmación explícita
+   * (`confirmNewEdition`).
    */
   previousEnded: boolean;
   /** Inicio de la ventana en hora de Madrid, ya formateado, o `null` si no se puede leer. */
@@ -162,6 +165,26 @@ function EditableWindowForm({
               web.
             </p>
 
+            <p className="mt-2">
+              Los participantes de la edición anterior quedan{" "}
+              <strong className="font-medium text-foreground">inactivos</strong>: no
+              entran en la nueva y no se reactivan solos. Para volver a la liga tienen
+              que reinscribirse por el formulario público y pasar otra vez por la
+              aprobación; lo que jugaron en la edición anterior no les cuenta.
+            </p>
+
+            <p className="mt-2">
+              Antes de guardar, deja el plazo de inscripción abierto y con fecha de cierre
+              suficiente, o no podrán reinscribirse: el interruptor vive en{" "}
+              <Link
+                href="/admin/administracion/inscripciones"
+                className="text-accent underline underline-offset-4 transition-colors hover:text-accent-strong"
+              >
+                Inscripciones
+              </Link>{" "}
+              y la fecha, en la tarjeta de arriba.
+            </p>
+
             {startsNewEdition ? (
               <label className="mt-3 flex items-start gap-2 text-sm text-foreground">
                 <input
@@ -173,8 +196,10 @@ function EditableWindowForm({
                   className="mt-0.5 size-4 shrink-0 rounded border-line bg-background accent-accent"
                 />
                 <span>
-                  Entiendo que al mover el inicio empiezo una edición nueva y que la
-                  clasificación se recalculará.
+                  Entiendo que al mover el inicio empiezo una edición nueva: la
+                  clasificación se recalcula, todos los participantes de la anterior
+                  quedan inactivos y tienen que volver a inscribirse. No se reactivan
+                  solos.
                 </span>
               </label>
             ) : null}

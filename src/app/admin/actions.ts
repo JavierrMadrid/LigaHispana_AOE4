@@ -407,6 +407,17 @@ export async function createPlayer(
     const existing = await db.player.findUnique({ where: { profileId } });
 
     if (existing) {
+      // Un `INACTIVE` no se reactiva desde el alta manual: el consentimiento para la
+      // edición nueva es la reinscripción pública, que reescribe `registeredAt` (el
+      // corte de partidas) y vuelve a pasar por la aprobación. Aprovechar el alta de
+      // admin para devolverlo a la liga se saltaría las dos cosas.
+      if (existing.status === PlayerStatus.INACTIVE) {
+        return {
+          error: `Ese perfil está inactivo (${existing.name}); debe volver a inscribirse desde /participar.`,
+          message: null,
+        };
+      }
+
       return {
         error: `El perfil ${profileId} ya está registrado (${existing.name}).`,
         message: null,
@@ -1049,6 +1060,18 @@ async function setPlayerStatus(
     return {
       status: "error",
       message: `No se puede cambiar el estado de ${player.name}: está expulsado por una actuación. Revierte la actuación desde Actuaciones.`,
+    };
+  }
+
+  // A un inactivo no se le aprueba ni se le rechaza desde aquí: la edición nueva lo
+  // desactivó (issue 183) y el consentimiento para volver es la reinscripción pública,
+  // que reescribe `registeredAt` (el corte de partidas) y devuelve la solicitud a la
+  // cola de revisión. Es la misma guarda que la del alta manual (`createPlayer`), y
+  // cubre el POST hecho a mano aunque la interfaz esconda los botones.
+  if (player.status === PlayerStatus.INACTIVE) {
+    return {
+      status: "error",
+      message: `No se puede cambiar el estado de ${player.name}: está inactivo desde el cambio de edición. Para volver a participar tiene que reinscribirse desde /participar.`,
     };
   }
 

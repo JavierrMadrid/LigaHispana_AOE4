@@ -42,12 +42,12 @@ van como texto suelto, igual que `AdminAction.targetId`.
 
 | Enum | Valores |
 |---|---|
-| `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED`, `BANNED` |
+| `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED`, `BANNED`, `INACTIVE` |
 | `MatchResult` | `WIN`, `LOSS` |
 | `ObjectiveLeadKind` | `LOST`, `GAINED` (en ese orden, y no es decorativo: ver abajo) |
 | `ObjectiveProgressKind` | `CUMPLIDO`, `PERDIDO`, `PROGRESADO` (el orden no significa nada: el feed va por `at`) |
 | `ObjectKind` | `RELIQUIA`, `MONEDA`, `MONUMENTO` |
-| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED` (histórico), `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
+| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED` (histórico), `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED`, `PLAYERS_DEACTIVATED` |
 | `AdminActKind` | `BAN`, `MATCH_ANNULMENT`, `REVERSAL` |
 | `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión), `NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP`, `NO_RESOURCES_GAP`, `SUMMARY_NOT_REVIEWED` |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED`, `MATCH_DETECTED` |
@@ -65,6 +65,13 @@ que reordenarlo; el que se añada va al final.
 tipo `BAN`) y solo se sale de él revirtiéndola. Es la forma de retirar a un participante —el panel no
 tiene baja destructiva—: conserva todos los datos del participante y el motor lo trata como no aprobado
 (solo publica `APPROVED`).
+
+`PlayerStatus.INACTIVE` es la **desactivación al empezar una edición nueva** (issue 183): no participa
+en la edición actual, no puntúa —el motor solo publica `APPROVED`— y conserva todos sus datos. Lo
+escriben `APPROVED` y `PENDING` en la misma transacción que publica la ventana nueva
+(`writeScoringRuleset()` con `deactivatePlayersForNewEdition`), y queda el rastro `PLAYERS_DEACTIVATED`.
+Para volver a la liga hay que **reinscribirse** por `/participar` —consentimiento— y ser aprobado; el
+alta manual de admin no lo reactiva.
 
 Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con un compañero) y
 `LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
@@ -97,8 +104,8 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `discordVerificationUserId` | `String?` | Cuenta de Discord a la que se mandó el privado; la interacción comprueba que quien pulsa es esa cuenta. No es una FK ni tiene unicidad: es el destinatario del mensaje, no una identidad vinculada. |
 | `discordVerifiedAt` | `DateTime?` | La persona **confirmó** desde su cuenta. No confundir con `discordUserId`: ese es "lo que dice Discord" y puede estar resuelto sin consentimiento. Es lo que hace que la puerta deje aprobar. |
 | `discordDeclinedAt` | `DateTime?` | Cuándo pulsó "No". |
-| `status` | `PlayerStatus` | `PENDING` por defecto. `BANNED` lo pone una actuación de expulsión y solo se sale revirtiéndola. |
-| `registeredAt` | `DateTime?` | Cuándo se **inscribió** (no cuándo se aprobó). Define el corte `max(window.from, registeredAt)`. `null` = cuenta desde el inicio de la ventana; sin *backfill*. |
+| `status` | `PlayerStatus` | `PENDING` por defecto. `BANNED` lo pone una actuación de expulsión y solo se sale revirtiéndola; `INACTIVE` lo pone el cambio de edición y se sale reinscribiéndose por `/participar`. |
+| `registeredAt` | `DateTime?` | Cuándo se **inscribió** (no cuándo se aprobó). Define el corte `max(window.from, registeredAt)`. **La reinscripción desde `INACTIVE` lo reescribe** (es una inscripción nueva para la edición nueva); la de un `REJECTED` conserva la fecha del primer envío. `null` = cuenta desde el inicio de la ventana; sin *backfill*. |
 | `elo`, `rankLevel`, `streak`, `ladderGamesCount` | `Int`/`String`/`Int`/`Int?` | De la ladder (`GET /leaderboards/rm_solo`). `rankLevel` es el literal (`gold_2`), no la división resuelta. `streak` con signo. |
 | `ladderLastGameAt` | `DateTime?` | `last_game_at` de la ladder. Va por delante de lo que importamos: solo sirve para la alerta `MISSING_LADDER_MATCHES`. |
 | `ladderUpdatedAt` | `DateTime?` | Última lectura de la ladder. Distingue "sin ladder" de "sin sync". |
@@ -420,7 +427,9 @@ Una acción del panel, para poder pintar su historial. **Append-only**: quién h
 fila. `summary` va ya redactado en español. Registra lo que cambia datos que se ven desde fuera:
 altas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
 jugador en la clasificación y rechazar lo deja fuera), los revert/restore de puntos de una partida,
-la gestión de admins, los cambios de configuración de la edición y la **reversión** de una acción
+la gestión de admins, los cambios de configuración de la edición, la **desactivación masiva** de los
+participantes al empezar una edición nueva (`PLAYERS_DEACTIVATED`, con los recuentos de `APPROVED` y
+`PENDING` y la ventana nueva en `details`) y la **reversión** de una acción
 anterior (`ACTION_REVERTED`). `PLAYER_REMOVED` queda para las filas **históricas**: la baja destructiva
 dejó de ofrecerse en el panel (issue 167; retirar a un aprobado es una actuación de expulsión). La
 única escritura sobre una fila ya existente es la marca de revertida

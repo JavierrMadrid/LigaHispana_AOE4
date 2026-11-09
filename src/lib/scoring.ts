@@ -19,6 +19,7 @@ import { isRecord } from "@/lib/json";
 import { reconcileObjectiveEvents } from "@/lib/objective-events";
 import { reconcileObjectiveLeadEvents } from "@/lib/objective-leads";
 import { reconcileObjectiveProgress } from "@/lib/objective-progress-events";
+import { DEACTIVATABLE_PLAYER_STATUSES } from "@/lib/player-status";
 import {
   OBJECTIVES_SNAPSHOT_VERSION,
   OBJECTIVE_DEFINITIONS,
@@ -553,6 +554,25 @@ export type ScoringRulesetWriteResult = {
   recomputed: boolean;
   /** Aviso cuando el recálculo falló: las reglas **sí** están guardadas. */
   recomputeWarning: string | null;
+  /**
+   * Participantes que han quedado `INACTIVE` al empezar una edición nueva. Es 0
+   * cuando no se pidió la desactivación o cuando no había a quién desactivar.
+   */
+  playersDeactivated: number;
+};
+
+/** Lo que cambia la escritura del ruleset además del documento en sí. */
+export type WriteScoringRulesetOptions = {
+  /**
+   * Fecha del `window.from` de la edición que empieza. Si viene, la misma
+   * transacción desactiva a los `APPROVED` y a los `PENDING` y deja el rastro
+   * `PLAYERS_DEACTIVATED` con los dos recuentos.
+   *
+   * Va como fecha y no como booleano para poder sellar el rastro con la ventana, que
+   * es lo que permite leer después a qué edición corresponde la desactivación sin
+   * cruzarla con el `CONFIG_CHANGED` de al lado.
+   */
+  deactivatePlayersForNewEdition?: Date;
 };
 
 /**
@@ -582,10 +602,11 @@ const SCORING_FIELDS: ReadonlySet<string> = new Set([
  *    documento que el motor va a descartar con un aviso no se publica. Quien llama
  *    suele haber fusionado ya para poder enseñar el motivo en el formulario; esto es
  *    la garantía de que no se puede persistir un documento inválido.
- * 2. **El `upsert` y el rastro de `AdminAction` van en la misma transacción**: o se
- *    ve el cambio de reglas y su línea en el historial, o no se ve ninguno. Es el
- *    mismo criterio de `createPlayer`/`updatePlayer`, y el `AdminAction` es el único
- *    sitio donde queda quién movió las reglas del torneo.
+ * 2. **El `upsert`, el rastro de `AdminAction` y —si se pide— la desactivación de la
+ *    edición nueva van en la misma transacción**: o se ve el cambio de reglas y sus
+ *    líneas en el historial, o no se ve ninguna. Es el mismo criterio de
+ *    `createPlayer`/`updatePlayer`, y el `AdminAction` es el único sitio donde queda
+ *    quién movió las reglas del torneo.
  * 3. **El recálculo va después y fuera de la transacción**, como en revertir o
  *    restaurar una partida: `recomputeScores()` es el motor entero, con su cerrojo y
  *    su plazo, y meterlo dentro obligaría a mantener el cerrojo de la clasificación
@@ -593,11 +614,25 @@ const SCORING_FIELDS: ReadonlySet<string> = new Set([
  *    deshace el cambio de reglas —está confirmado—: se devuelve en
  *    `recomputeWarning` para que el mensaje del panel diga que la clasificación que
  *    se ve es la anterior y que el cron la pondrá al día.
+ *
+ * ## La edición nueva desactiva a los participantes
+ *
+ * Con `options.deactivatePlayersForNewEdition` (la fecha del `window.from` nuevo) la
+ * transacción deja `INACTIVE` a todos los `APPROVED` y `PENDING` y escribe
+ * `PLAYERS_DEACTIVATED` con los dos recuentos: nadie pasa a la edición siguiente sin
+ * volver a inscribirse. La desactivación **no depende de que el cambio mueva puntos**
+ * (ocurre dentro de la transacción, antes del retorno temprano por `SCORING_FIELDS`),
+ * así que el orden de las ramas no puede dejarla sin hacer; el recálculo posterior,
+ * si lo hay, ya barre una base sin aprobados y publica la edición nueva vacía.
+ *
+ * Sin esa opción no se toca a ningún jugador: es lo que hacen `saveScoringRuleset()`
+ * y `saveWindowEnd()`, que solo cambian reglas.
  */
 export async function writeScoringRuleset(
   candidate: unknown,
   cambios: readonly CampoEditado[],
   actorEmail: string,
+  options?: WriteScoringRulesetOptions,
 ): Promise<ScoringRulesetWriteResult> {
   const merged = mergeRuleset(candidate);
 
@@ -609,6 +644,8 @@ export async function writeScoringRuleset(
 
   const ruleset = merged.ruleset;
   const value = rulesetToInputJson(ruleset);
+  const editionFrom = options?.deactivatePlayersForNewEdition;
+  let playersDeactivated = 0;
 
   await db.$transaction(async (tx) => {
     await tx.setting.upsert({
@@ -622,16 +659,20 @@ export async function writeScoringRuleset(
       actorEmail,
       cambios: [...cambios],
     });
+
+    if (editionFrom !== undefined) {
+      playersDeactivated = await deactivatePlayersForNewEdition(tx, actorEmail, editionFrom);
+    }
   });
 
   if (!cambios.some((cambio) => SCORING_FIELDS.has(cambio.campo))) {
-    return { ruleset, recomputed: false, recomputeWarning: null };
+    return { ruleset, recomputed: false, recomputeWarning: null, playersDeactivated };
   }
 
   try {
     await recomputeScores();
 
-    return { ruleset, recomputed: true, recomputeWarning: null };
+    return { ruleset, recomputed: true, recomputeWarning: null, playersDeactivated };
   } catch (error) {
     logDatabaseFailure("scoring/writeScoringRuleset/recompute", error);
 
@@ -640,8 +681,53 @@ export async function writeScoringRuleset(
       recomputed: false,
       recomputeWarning:
         "La clasificación se recalculará sola en la próxima pasada del sincronizador.",
+      playersDeactivated,
     };
   }
+}
+
+/**
+ * Deja `INACTIVE` a los `APPROVED` y `PENDING` y anota cuántos eran.
+ *
+ * Corre **dentro** de la transacción del ruleset, después de su `CONFIG_CHANGED`, para
+ * que la edición nueva no pueda quedar con reglas escritas y participantes todavía
+ * activos. Los dos recuentos se leen antes del `updateMany` porque el rastro tiene que
+ * decir de dónde venían, no solo cuántos son; si no hay nadie no se escribe nada (el
+ * historial no gana una fila de "0 participantes").
+ *
+ * El `where` sale de `DEACTIVATABLE_PLAYER_STATUSES`, la misma lista con la que
+ * `isDeactivatablePlayerStatus()` responde a la interfaz: la regla no se escribe dos
+ * veces. El índice `(status, windowComplete, backfillPage)` de `Player` cubre el
+ * filtro por su primera columna.
+ */
+async function deactivatePlayersForNewEdition(
+  tx: Prisma.TransactionClient,
+  actorEmail: string,
+  editionFrom: Date,
+): Promise<number> {
+  const [approved, pending] = await Promise.all([
+    tx.player.count({ where: { status: PlayerStatus.APPROVED } }),
+    tx.player.count({ where: { status: PlayerStatus.PENDING } }),
+  ]);
+
+  if (approved + pending === 0) {
+    return 0;
+  }
+
+  await tx.player.updateMany({
+    where: { status: { in: [...DEACTIVATABLE_PLAYER_STATUSES] } },
+    data: { status: PlayerStatus.INACTIVE },
+  });
+
+  await recordAdminAction(tx, {
+    type: AdminActionType.PLAYERS_DEACTIVATED,
+    actorEmail,
+    approved,
+    pending,
+    editionFrom: editionFrom.toISOString(),
+  });
+
+  return approved + pending;
 }
 
 /* -------------------------------------------------------------------------- */
