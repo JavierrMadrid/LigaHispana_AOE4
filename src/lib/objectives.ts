@@ -48,7 +48,8 @@ export type ObjectiveMetric =
   | "racha-partidas"
   | "dias"
   | "civilizaciones"
-  | "mapas";
+  | "mapas"
+  | "subobjetivos";
 
 export type ObjectiveDefinition = {
   id: string;
@@ -86,8 +87,10 @@ export type ObjectiveDefinition = {
   /**
    * Id del objetivo **cabeza de familia** (el logro global que agrupa a sus
    * hijos), o `null` si es independiente. `polifacetico` es cabeza de los
-   * `lider-<civ>` y `jugon` lo es de los `acolito-<civ>`; la interfaz los agrupa
-   * en una tarjeta a partir de este campo.
+   * `lider-<civ>`, `jugon` lo es de los `acolito-<civ>`, `maestro` de los
+   * `maestro-<civ>`, `avance-relampago` de los tres `avance-relampago-*` y
+   * `tira-y-afloja` de `agresor` y `estratega`; la interfaz los agrupa en una
+   * tarjeta a partir de este campo.
    */
   parent: string | null;
   /**
@@ -275,10 +278,12 @@ export type ObjectiveView = {
  * no los tiene— se rechaza en vez de publicarse sin ellos. La v4 vuelve a ser el
  * mismo caso: el catálogo pasa de 88 a 94 con Vikingos y Escoceses, y un snapshot v3
  * no lleva sus objetivos. La v5 es la del catálogo de la prueba de concepto de
- * objetivos con subobjetivos (120) y la del campo `pointsPerUnit`, que un snapshot v4
- * no lleva.
+ * objetivos con subobjetivos (120 objetivos, familia `maestro`) y la del campo
+ * `pointsPerUnit`, que un snapshot v4 no lleva. La v6 es la del catálogo de 122
+ * objetivos con las familias de hazañas (`avance-relampago` y `tira-y-afloja`), que
+ * un snapshot v5 no lleva.
  */
-export const OBJECTIVES_SNAPSHOT_VERSION = 5;
+export const OBJECTIVES_SNAPSHOT_VERSION = 6;
 
 /**
  * La vista de objetivos tal y como se guarda: `ObjectiveView` más la marca de forma
@@ -448,6 +453,8 @@ export const IMPARABLE_ID = "imparable";
 export const POR_TIERRA_ID = "por-tierra-y-agua";
 export const VICTORIAS_ID = "victorias";
 export const ANSIOSO_ID = "ansioso";
+export const TIRA_Y_AFLOJA_ID = "tira-y-afloja";
+export const AVANCE_RELAMPAGO_ID = "avance-relampago";
 export const FAST_FEUDAL_ID = "avance-relampago-feudal";
 export const FAST_CASTLE_ID = "avance-relampago-castillos";
 export const FAST_IMPERIAL_ID = "avance-relampago-imperial";
@@ -495,6 +502,16 @@ const FAST_CASTLE_SECONDS = 540;
 const FAST_IMPERIAL_SECONDS = 960;
 /** Partidas que hay que cumplir para cobrar una hazaña: una basta. */
 const HAZANA_MATCHES = 1;
+/**
+ * Subobjetivos de la familia `avance-relampago`: los tres avances (Feudal,
+ * Castillos e Imperial). El padre paga el extra cuando están los tres.
+ */
+const AVANCE_RELAMPAGO_STEPS = 3;
+/**
+ * Subobjetivos de la familia `tira-y-afloja`: las partidas cortas (`agresor`) y
+ * largas (`estratega`). El padre paga el extra cuando están los dos.
+ */
+const TIRA_Y_AFLOJA_STEPS = 2;
 /** Umbrales de `defensor-del-pueblo`: partida larga y bajas de aldeanos. */
 const DEFENDER_MATCH_SECONDS = 900;
 const DEFENDER_VILLAGERS_LOST = 3;
@@ -512,7 +529,9 @@ const DEFENDER_MOUNTED_LOST = 1;
  * `masterizando-<civ>` (competiciones), después la cabeza `polifacetico` seguida
  * de sus 25 `lider-<civ>`, luego `jugon` seguida de sus 25 `acolito-<civ>` y, al
  * final, la familia de la prueba de concepto: la cabeza `maestro` seguida de sus 25
- * `maestro-<civ>`.
+ * `maestro-<civ>`. Las otras familias del catálogo son de hazañas: `avance-relampago`
+ * va antes de sus tres hijos (`avance-relampago-feudal`, `-castillos` e
+ * `-imperial`) y `tira-y-afloja` antes de `agresor` y `estratega`.
  */
 export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
   {
@@ -600,6 +619,17 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     target: ANSIOSO_STREAK,
   },
   {
+    id: TIRA_Y_AFLOJA_ID,
+    group: "hazanas",
+    kind: "achievement",
+    label: "Tira y afloja",
+    description: `Se completa al ganar ${WINS_PER_CIV} partidas de menos de ${SHORT_MATCH_SECONDS / 60} minutos (Agresor) y ${WINS_PER_CIV} partidas de más de ${LONG_MATCH_SECONDS / 60} minutos (Estratega).`,
+    metric: "subobjetivos",
+    points: 24,
+    parent: null,
+    target: TIRA_Y_AFLOJA_STEPS,
+  },
+  {
     id: "agresor",
     group: "hazanas",
     kind: "achievement",
@@ -607,7 +637,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     description: `Gana al menos ${WINS_PER_CIV} partidas de menos de 10 minutos.`,
     metric: "victorias",
     points: 24,
-    parent: null,
+    parent: TIRA_Y_AFLOJA_ID,
     target: WINS_PER_CIV,
   },
   {
@@ -618,8 +648,20 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     description: `Gana al menos ${WINS_PER_CIV} partidas de más de 20 minutos.`,
     metric: "victorias",
     points: 24,
-    parent: null,
+    parent: TIRA_Y_AFLOJA_ID,
     target: WINS_PER_CIV,
+  },
+  {
+    id: AVANCE_RELAMPAGO_ID,
+    group: "hazanas",
+    kind: "achievement",
+    label: "Avance relámpago",
+    description:
+      "Se completa al lograr los tres avances relámpago: Feudal, Castillos e Imperial.",
+    metric: "subobjetivos",
+    points: 9,
+    parent: null,
+    target: AVANCE_RELAMPAGO_STEPS,
   },
   {
     id: FAST_FEUDAL_ID,
@@ -629,7 +671,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     description: `Llega a la Edad Feudal antes de ${FAST_FEUDAL_SECONDS / 60} minutos en una partida clasificatoria.`,
     metric: "partidas",
     points: 3,
-    parent: null,
+    parent: AVANCE_RELAMPAGO_ID,
     target: HAZANA_MATCHES,
   },
   {
@@ -640,7 +682,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     description: `Llega a la Edad de los Castillos antes de ${FAST_CASTLE_SECONDS / 60} minutos en una partida clasificatoria.`,
     metric: "partidas",
     points: 6,
-    parent: null,
+    parent: AVANCE_RELAMPAGO_ID,
     target: HAZANA_MATCHES,
   },
   {
@@ -651,7 +693,7 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     description: `Llega a la Edad Imperial antes de ${FAST_IMPERIAL_SECONDS / 60} minutos en una partida clasificatoria.`,
     metric: "partidas",
     points: 9,
-    parent: null,
+    parent: AVANCE_RELAMPAGO_ID,
     target: HAZANA_MATCHES,
   },
   {
@@ -707,8 +749,10 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Polifacético",
     description: `Gana al menos ${WINS_PER_CIV} partidas con cada una de las ${CIVILIZATIONS.length} civilizaciones.`,
     metric: "civilizaciones",
-    // 40,5 en la hoja de la organización: entero porque `PlayerScore.total` es `Int`.
-    points: 41,
+    // Importe de la propuesta de la organización para el extra por totalidad: no
+    // sale de redondear el decimal de la hoja, sino que es la cifra pactada para la
+    // familia.
+    points: 134,
     parent: null,
     target: CIVILIZATION_IDS.length,
   },
@@ -730,7 +774,10 @@ export const OBJECTIVE_DEFINITIONS: readonly ObjectiveDefinition[] = [
     label: "Jugón",
     description: `Juega al menos ${MATCHES_PER_CIV} partidas con cada una de las ${CIVILIZATIONS.length} civilizaciones.`,
     metric: "civilizaciones",
-    points: 10,
+    // Importe de la propuesta de la organización para el extra por totalidad: no
+    // sale de redondear el decimal de la hoja, sino que es la cifra pactada para la
+    // familia.
+    points: 69,
     parent: null,
     target: CIVILIZATION_IDS.length,
   },
@@ -1944,6 +1991,58 @@ function candidatesFor(
           value,
           player.matches,
           value === CIVILIZATION_IDS.length,
+          player.lastWinAt,
+        ),
+      ];
+    });
+  }
+
+  if (definition.id === AVANCE_RELAMPAGO_ID) {
+    // El valor es cuántos de los tres avances están completos; el extra se cobra
+    // solo con los tres, igual que el bonus de `maestro`. No es una competición:
+    // cada jugador que cierra la familia cobra sus puntos una vez.
+    return players.flatMap((player) => {
+      const value =
+        (player.fastFeudal >= HAZANA_MATCHES ? 1 : 0) +
+        (player.fastCastle >= HAZANA_MATCHES ? 1 : 0) +
+        (player.fastImperial >= HAZANA_MATCHES ? 1 : 0);
+
+      if (value < 1) {
+        return [];
+      }
+
+      return [
+        candidate(
+          player,
+          "subobjetivos",
+          value,
+          player.matches,
+          value === AVANCE_RELAMPAGO_STEPS,
+          player.lastMatchAt,
+        ),
+      ];
+    });
+  }
+
+  if (definition.id === TIRA_Y_AFLOJA_ID) {
+    // El valor es cuántos de los dos hijos están completos (`agresor` y
+    // `estratega`); el extra se cobra solo con los dos.
+    return players.flatMap((player) => {
+      const value =
+        (player.shortWins >= WINS_PER_CIV ? 1 : 0) +
+        (player.longWins >= WINS_PER_CIV ? 1 : 0);
+
+      if (value < 1) {
+        return [];
+      }
+
+      return [
+        candidate(
+          player,
+          "subobjetivos",
+          value,
+          player.matches,
+          value === TIRA_Y_AFLOJA_STEPS,
           player.lastWinAt,
         ),
       ];
