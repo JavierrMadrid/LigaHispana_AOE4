@@ -322,8 +322,9 @@ decide quien pinta.
 
 Un **cambio de progreso** de un objetivo: cuándo un jugador lo cumplió (`CUMPLIDO`), lo perdió
 (`PERDIDO`) o avanzó hacia él (`PROGRESADO`), **con los valores** de progreso de ese instante. Es el
-feed que lee la API del overlay (`GET /api/v0/clasificacion`), que publica por objetivo el `tipo`, la
-`fechahora` y el `progreso { propio, ajeno? }` de cada evento. **No alimenta la clasificación.**
+feed que leen la API del overlay (`GET /api/v0/clasificacion` y `GET /api/v0/eventos`), que publica por
+objetivo el `tipo`, la `fechahora` y el `progreso { propio, ajeno? }` de cada evento. **No alimenta la
+clasificación.**
 
 El contrato que lo publica —endpoints, campos, tipos y errores— está en
 [`API-OVERLAY.md`](./API-OVERLAY.md).
@@ -694,6 +695,7 @@ aparece en una consulta, no se crea.**
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
 | Motor (recálculo) | `Match where mode = any(...) and startedAt en ventana and result/finishedAt no nulos` | `(mode, startedAt)` |
 | API del overlay (`GET /api/v0/clasificacion`) | `ObjectiveProgressEvent where playerId = X and editionFrom = edición and at >= desde order by at` | `(playerId, editionFrom, at)` |
+| API del overlay (`GET /api/v0/eventos`) | `ObjectiveProgressEvent where playerId = X and editionFrom = edición and kind in (CUMPLIDO, PROGRESADO) and objectiveId en los activos order by at desc, objectiveId asc limit N` | `(playerId, editionFrom, at)`; el `objectiveId` se filtra después de la búsqueda por jugador y edición |
 | Motor (reconciliación del progreso) | `ObjectiveProgressState where editionFrom = edición`, y una fila por `(playerId, objectiveId, editionFrom)` al comparar | `(editionFrom, objectiveId)`; pk `(playerId, objectiveId, editionFrom)` |
 
 El filtro de qué cuenta es **uno solo**: `src/lib/ranked-match.ts` (ventana, corte de inscripción,

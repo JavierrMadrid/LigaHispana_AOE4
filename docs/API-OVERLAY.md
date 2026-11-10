@@ -1,7 +1,7 @@
 # API para el overlay
 
 Contrato de lectura que consume el overlay del stream. El esquema formal, para generadores y
-validadores, está en [`openapi-overlay.yaml`](./openapi-overlay.yaml) (OpenAPI 3.2.1, versión 1.1.1).
+validadores, está en [`openapi-overlay.yaml`](./openapi-overlay.yaml) (OpenAPI 3.2.1, versión 1.2.0).
 Este documento es la versión humana: qué hay, qué significa cada campo y qué se puede esperar.
 
 ## Base
@@ -21,9 +21,10 @@ adelanta nada. Las rutas no pasan por sesión: no están en el `matcher` del Pro
 
 | Endpoint | Devuelve |
 |---|---|
-| [`GET /participantes`](#participantes) | Los participantes aprobados: `id` y `alias`. |
+| [`GET /participantes`](#participantes) | Los participantes aprobados: `id`, `alias`, país y avatar. |
 | [`GET /clasificacion`](#clasificacion) | La fila de un participante y hasta dos vecinos, con su feed de objetivos. |
-| [`GET /objetivos`](#objetivos) | El catálogo de objetivos activos con sus puntos y su icono. |
+| [`GET /eventos`](#eventos) | Los últimos objetivos cumplidos o progresados de un participante. |
+| [`GET /objetivos`](#objetivos) | El catálogo de objetivos activos con sus puntos, su métrica y su icono. |
 
 ## `/participantes`
 
@@ -39,11 +40,18 @@ adelanta nada. Las rutas no pasan por sesión: no están en el `matcher` del Pro
 |---|---|---|
 | `id` | `Player.profileId` | Cadena, no número. |
 | `alias` | `Player.name` | Nombre con el que compite. |
+| `pais` | `Player.country` | Rótulo canónico del país, o `null` si no consta. No es un código ISO. |
+| `avatar_url` | `Player.avatarUrl` | URL del avatar, o `null` si no hay; entonces se dibuja un monograma. |
 
 ```json
 [
-  { "id": "7099800", "alias": "Miguel Narvaez" },
-  { "id": "6946414", "alias": "Mecroid" }
+  {
+    "id": "7099800",
+    "alias": "Miguel Narvaez",
+    "pais": "España",
+    "avatar_url": "https://cdn.aoe4world.com/players/7099800/avatar.png"
+  },
+  { "id": "6946414", "alias": "Mecroid", "pais": null, "avatar_url": null }
 ]
 ```
 
@@ -190,6 +198,51 @@ competiciones, perder el liderazgo sí genera `perdido`.
 ]
 ```
 
+## `/eventos`
+
+| Aspecto | Comportamiento |
+|---|---|
+| `id` | **Obligatorio**. 400 si falta o no es válido. |
+| `limite` | Opcional, entero de **1 a 20**. Por defecto 3. 400 si no es válido. |
+| 200 | Lista de eventos positivos, de más reciente a más antiguo. Vacía si no hay. |
+| 404 | El participante no existe o no está aprobado. |
+| 503 | La base de datos no responde. |
+
+Solo aparecen `cumplido` y `progresado`: un `perdido` no se celebra y no entra en
+el feed. Se filtra por la **edición activa** y por los objetivos que la
+organización no ha apagado, igual que `eventos_objetivos` de `/clasificacion`.
+
+Un mismo objetivo puede repetirse si tiene varias anotaciones entre los eventos
+pedidos (por ejemplo, `victorias` con cada victoria): la lista es una secuencia,
+no un mapa. El overlay deduplica por objetivo cuando pinta «los últimos» y se
+queda con el más reciente de cada uno.
+
+| Campo | Origen | Nota |
+|---|---|---|
+| `objetivo_id` | `ObjectiveProgressEvent.objectiveId` | Id del catálogo. |
+| `tipo` | `kind` | `cumplido` o `progresado`; nunca `perdido`. |
+| `fechahora` | `at` | ISO 8601 con zona. |
+| `progreso` | `ownValue` | `{ "propio": n }`; en este endpoint no hay `ajeno`. |
+| `repeticion` | `repetition` | Solo en objetivos repetibles; se omite si no la hay. |
+
+```json
+[
+  {
+    "objetivo_id": "victorias",
+    "tipo": "progresado",
+    "fechahora": "2026-10-24T14:30:00.000Z",
+    "progreso": { "propio": 6 },
+    "repeticion": 6
+  },
+  {
+    "objetivo_id": "imparable",
+    "tipo": "cumplido",
+    "fechahora": "2026-10-24T14:20:00.000Z",
+    "progreso": { "propio": 14 }
+  }
+]
+```
+
 ## `/objetivos`
 
 Catálogo activo, en orden de presentación. Sin parámetros.
@@ -201,6 +254,7 @@ Catálogo activo, en orden de presentación. Sin parámetros.
 | `descripcion` | Frase de la regla. |
 | `icono_url` | URL **absoluta** en los objetivos de civilización; `""` en el resto. |
 | `puntos` | Puntos con la regla activa. En `victorias`, el precio **por victoria**; en los objetivos por unidad con tope (`maestro-<civ>`), el premio **máximo**. |
+| `metrica` | Qué mide el objetivo: `partidas`, `victorias`, `racha`, `racha-partidas`, `dias`, `civilizaciones`, `mapas` o `subobjetivos`. El overlay la usa para las unidades («6 victorias», «6/14 días»). |
 | `volatil` | `true` en competiciones (se poseen y se pierden); `false` en logros. |
 | `repetible` | `true` en `victorias`, `imparable` y los `maestro-<civ>`. |
 | `max_progreso` | `null` en competiciones y en `victorias`; umbral en los logros con tope; tamaño del pool en `por-tierra-y-agua`. |
@@ -215,6 +269,7 @@ Catálogo activo, en orden de presentación. Sin parámetros.
     "descripcion": "El jugador con más partidas clasificatorias jugadas en el torneo. En caso de empate, lo cobra quien alcanzó esta cifra antes.",
     "icono_url": "",
     "puntos": 50,
+    "metrica": "partidas",
     "volatil": true,
     "repetible": false,
     "max_progreso": null
@@ -225,6 +280,7 @@ Catálogo activo, en orden de presentación. Sin parámetros.
     "descripcion": "Gana al menos 3 partidas con Japoneses.",
     "icono_url": "https://laligahispana.es/imagenes/civilizaciones/Japanese_AoE4.webp",
     "puntos": 12,
+    "metrica": "victorias",
     "volatil": false,
     "repetible": false,
     "max_progreso": 3

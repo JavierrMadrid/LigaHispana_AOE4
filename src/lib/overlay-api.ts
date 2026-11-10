@@ -32,11 +32,11 @@ import { readMapPool } from "@/lib/settings";
  *
  * ## Qué se publica y qué no
  *
- * Solo lo que el overlay necesita para pintar: `id` y `alias` de cada
- * participante, y el catálogo de objetivos con sus puntos, su forma de cobro y su
- * icono. Ni avatares, ni correos, ni el desglose de puntos, ni la clasificación
- * (esa es otra ruta de esta API). Todo sale de `Player` con `status: APPROVED`,
- * que es la misma cohorte que publica la clasificación.
+ * Solo lo que el overlay necesita para pintar: `id`, `alias`, país y avatar de
+ * cada participante, y el catálogo de objetivos con sus puntos, su forma de cobro,
+ * su métrica y su icono. Ni correos, ni canales, ni el desglose de puntos, ni la
+ * clasificación (esa es otra ruta de esta API). Todo sale de `Player` con
+ * `status: APPROVED`, que es la misma cohorte que publica la clasificación.
  *
  * ## Por qué el módulo es `server-only`
  *
@@ -77,6 +77,23 @@ export type OverlayParticipante = {
   id: string;
   /** Nombre con el que compite (`Player.name`). */
   alias: string;
+  /**
+   * País con el rótulo canónico del torneo (`Player.country`), o `null` si no
+   * consta.
+   *
+   * No es un código ISO: es el mismo texto que siembra la organización en la
+   * lista de países, para que el overlay pueda enseñarlo tal cual.
+   */
+  pais: string | null;
+  /**
+   * URL del avatar (`Player.avatarUrl`), o `null` si no hay o no se ha
+   * sincronizado.
+   *
+   * Se publica porque la tarjeta del ranking del overlay lo pinta; quien no
+   * tenga avatar dibuja un monograma, y por eso `null` es la respuesta correcta
+   * y no una URL vacía.
+   */
+  avatar_url: string | null;
 };
 
 /** Un objetivo del catálogo, en lo que el overlay necesita para pintarlo. */
@@ -109,6 +126,16 @@ export type OverlayObjetivo = {
   volatil: boolean;
   /** ¿Se puede cobrar más de una vez? (`victorias`, `imparable`). */
   repetible: boolean;
+  /**
+   * Métrica que decide el progreso o el poseedor: `partidas`, `victorias`,
+   * `racha`, `racha-partidas`, `dias`, `civilizaciones`, `mapas` o
+   * `subobjetivos`.
+   *
+   * El overlay la usa para componer las unidades del progreso («6 victorias»,
+   * «6/14 días»). Se publica como cadena y no como enum para que el contrato no
+   * obligue a desplegar el overlay a la vez que el catálogo.
+   */
+  metrica: string;
   /**
    * Tope de progreso, o `null` si no lo tiene.
    *
@@ -148,6 +175,19 @@ export type OverlayEventoObjetivo = {
   progreso: { propio: number; ajeno?: number };
   /** Repetición del objetivo repetible (`victorias`, `imparable`), si la hay. */
   repeticion?: number;
+};
+
+/**
+ * Un evento del feed ordenado de `/eventos`.
+ *
+ * Es el mismo evento de `eventos_objetivos` más el id del objetivo que lo
+ * produjo: en el mapa la clave hace ese papel, pero una lista necesita llevar el
+ * id dentro. El overlay lo usa para los últimos objetivos y para saber qué
+ * claves ya ha visto.
+ */
+export type OverlayEventoObjetivoListado = OverlayEventoObjetivo & {
+  /** Id del objetivo al que pertenece el evento. */
+  objetivo_id: string;
 };
 
 /**
@@ -288,6 +328,38 @@ export function readOverlayProfileId(value: string | null): OverlayProfileIdPara
   return { status: "ok", value: id };
 }
 
+/**
+ * El `?limite=` de `/eventos`, ya interpretado.
+ *
+ * Mismos tres estados que el resto de parámetros: sin parámetro se publican 3
+ * eventos (el valor por defecto del contrato), un valor ilegible responde 400 y
+ * uno válido acota la respuesta. La forma canónica es un entero de 1 a 20 sin
+ * ceros a la izquierda: `01` no es "casi 1", es otra cadena.
+ */
+export type OverlayLimitParam =
+  | { status: "absent" }
+  | { status: "invalid" }
+  | { status: "ok"; value: number };
+
+/** Límite por defecto y máximo del feed de eventos. */
+export const OVERLAY_EVENTS_DEFAULT_LIMIT = 3;
+export const OVERLAY_EVENTS_MAX_LIMIT = 20;
+
+/** Forma canónica del límite: `1`–`9`, `10`–`20`, sin ceros a la izquierda. */
+const OVERLAY_LIMIT_PATTERN = /^(?:[1-9]|1\d|20)$/;
+
+export function readOverlayLimit(value: string | null): OverlayLimitParam {
+  if (value === null) {
+    return { status: "absent" };
+  }
+
+  if (!OVERLAY_LIMIT_PATTERN.test(value)) {
+    return { status: "invalid" };
+  }
+
+  return { status: "ok", value: Number(value) };
+}
+
 /** El `?desde=` de la API, ya interpretado (mismos tres estados que el `id`). */
 export type OverlayDesdeParam =
   | { status: "absent" }
@@ -363,13 +435,24 @@ function isLeapYear(year: number): boolean {
  * Filas de `Player` → participantes del overlay.
  *
  * Puro y aparte del lector para poder probarlo sin base de datos: lo único que
- * hace es elegir los nombres del contrato (`profileId` → `id`, `name` → `alias`)
- * y convertir el identificador a cadena.
+ * hace es elegir los nombres del contrato (`profileId` → `id`, `name` → `alias`,
+ * `country` → `pais`, `avatarUrl` → `avatar_url`) y convertir el identificador a
+ * cadena.
  */
 export function overlayParticipants(
-  rows: readonly { profileId: number; name: string }[],
+  rows: readonly {
+    profileId: number;
+    name: string;
+    country: string | null;
+    avatarUrl: string | null;
+  }[],
 ): OverlayParticipante[] {
-  return rows.map((row) => ({ id: String(row.profileId), alias: row.name }));
+  return rows.map((row) => ({
+    id: String(row.profileId),
+    alias: row.name,
+    pais: row.country,
+    avatar_url: row.avatarUrl,
+  }));
 }
 
 /**
@@ -408,6 +491,7 @@ export function overlayObjectives(
       volatil: definition.kind === "competition",
       repetible: objectiveRepeatable(definition.id),
       max_progreso: objectiveMaxProgress(definition, mapPoolSize),
+      metrica: definition.metric,
     });
   }
 
@@ -491,6 +575,19 @@ export function overlayEventoObjetivo(
   }
 
   return evento;
+}
+
+/**
+ * Un evento de progreso → un elemento del feed ordenado de `/eventos`.
+ *
+ * Reutiliza el mapeo del mapa y le añade el id del objetivo, que en el mapa era
+ * la clave. No hay una segunda forma de construir un evento en este módulo: el
+ * tipo, la fecha y los opcionales se resuelven una sola vez.
+ */
+export function overlayEventoObjetivoListado(
+  event: OverlayProgressEventSource,
+): OverlayEventoObjetivoListado {
+  return { objetivo_id: event.objectiveId, ...overlayEventoObjetivo(event) };
 }
 
 /**
@@ -627,6 +724,24 @@ export function overlayNeighborhood(
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Los ids del catálogo que siguen activos con la regla dada.
+ *
+ * Es el filtro que comparten la clasificación y el feed de eventos: un objetivo
+ * apagado por la organización no se publica, ni en el mapa ni en la lista. Se
+ * construye desde `ruleset.disabledObjectives` y no al revés porque el catálogo
+ * es la fuente del orden y de los ids conocidos.
+ */
+function activeObjectiveIds(ruleset: ScoringRuleset): Set<string> {
+  const desactivados = new Set(ruleset.disabledObjectives);
+
+  return new Set(
+    OBJECTIVE_DEFINITIONS.filter((definition) => !desactivados.has(definition.id)).map(
+      (definition) => definition.id,
+    ),
+  );
+}
+
+/**
  * Participantes aprobados, o solo uno si se pide por `profileId`.
  *
  * La consulta filtra por estado en la base y no en memoria: un participante
@@ -642,7 +757,7 @@ export async function loadOverlayParticipants(
       status: PlayerStatus.APPROVED,
       ...(profileId === undefined ? {} : { profileId }),
     },
-    select: { profileId: true, name: true },
+    select: { profileId: true, name: true, country: true, avatarUrl: true },
     orderBy: { profileId: "asc" },
   });
 
@@ -798,16 +913,71 @@ export async function loadOverlayClassification(
   ]);
 
   const lookup = objectiveLookup(ruleset);
-  const activeObjectiveIds = new Set(
-    OBJECTIVE_DEFINITIONS.filter(
-      (definition) => !ruleset.disabledObjectives.includes(definition.id),
-    ).map((definition) => definition.id),
-  );
+  const activeIds = activeObjectiveIds(ruleset);
 
-  const eventos = overlayEventosObjetivos(events, activeObjectiveIds);
+  const eventos = overlayEventosObjetivos(events, activeIds);
   const requested = overlayStanding(row, lookup, eventos);
   const arriba = above.map((fila) => overlayStanding(fila, lookup, {}));
   const abajo = below.map((fila) => overlayStanding(fila, lookup, {}));
 
   return overlayNeighborhood(requested, arriba, abajo);
+}
+
+/**
+ * Los últimos eventos **positivos** de un participante, de más reciente a más
+ * antiguo, o `null` si el participante no existe o no está aprobado.
+ *
+ * Es lo que el overlay usa para "ha cumplido esto" y para las animaciones: solo
+ * `CUMPLIDO` y `PROGRESADO`, porque un `PERDIDO` no se celebra. Se filtra por la
+ * edición activa (`windowBounds`), por los objetivos que siguen activos y por el
+ * jugador, y se ordena y recorta en la **base** con `take`: el overlay pide 3 por
+ * defecto y no tiene por qué paginar una historia que no va a pintar entera.
+ *
+ * El desempate por `objectiveId` ascendente da un orden estable a los eventos del
+ * mismo instante (la siembra de un recálculo escribe varios a la vez), el mismo
+ * criterio que usa el mapa de la clasificación.
+ *
+ * El ruleset y el jugador se leen en paralelo: la edición sale del primero y el
+ * `Player.id` del segundo, y no dependen entre sí. Si el jugador no está, se
+ * devuelve `null` sin llegar a leer el feed.
+ */
+export async function loadOverlayEvents(
+  profileId: number,
+  limite: number,
+): Promise<OverlayEventoObjetivoListado[] | null> {
+  const [ruleset, player] = await Promise.all([
+    readRuleset(),
+    db.player.findFirst({
+      where: { profileId, status: PlayerStatus.APPROVED },
+      select: { id: true },
+    }),
+  ]);
+
+  if (player === null) {
+    return null;
+  }
+
+  const editionFrom = windowBounds(ruleset.window).from;
+  const activeIds = activeObjectiveIds(ruleset);
+
+  const events = await db.objectiveProgressEvent.findMany({
+    where: {
+      playerId: player.id,
+      editionFrom,
+      kind: { in: [ObjectiveProgressKind.CUMPLIDO, ObjectiveProgressKind.PROGRESADO] },
+      objectiveId: { in: [...activeIds] },
+    },
+    select: {
+      objectiveId: true,
+      kind: true,
+      at: true,
+      ownValue: true,
+      otherValue: true,
+      repetition: true,
+    },
+    orderBy: [{ at: "desc" }, { objectiveId: "asc" }],
+    take: limite,
+  });
+
+  return events.map(overlayEventoObjetivoListado);
 }
