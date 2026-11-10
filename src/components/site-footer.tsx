@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { SPONSOR_NAME, SponsorLogo } from "@/components/sponsor";
 
 type SiteFooterProps = {
@@ -75,11 +76,19 @@ export function SiteFooter({ name, emblemUrl }: SiteFooterProps) {
 
       {/* El relleno inferior deja libre la esquina que ocupa `BackToTop`. */}
       <div className="mx-auto w-full max-w-[80rem] px-4 pb-20 sm:px-6">
-        <p className="border-t border-line pt-6 text-xs leading-relaxed text-muted">
-          Perfiles y resultados de partidas obtenidos de AoE4World. La
-          clasificación se recalcula cada pocos minutos a medida que la API publica
-          los resultados.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 border-t border-line pt-6">
+          <p className="max-w-[60ch] text-xs leading-relaxed text-muted">
+            Perfiles y resultados de partidas obtenidos de AoE4World. La
+            clasificación se recalcula cada pocos minutos a medida que la API publica
+            los resultados.
+          </p>
+          <Link
+            href="/overlay"
+            className="text-xs text-muted transition-colors hover:text-accent"
+          >
+            Overlay para streamers
+          </Link>
+        </div>
       </div>
     </footer>
   );
