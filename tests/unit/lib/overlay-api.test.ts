@@ -5,8 +5,11 @@ import {
   type ObjectiveDefinition,
 } from "@/lib/objectives";
 import {
+  OVERLAY_EVENTS_DEFAULT_LIMIT,
+  OVERLAY_EVENTS_MAX_LIMIT,
   overlayError,
   overlayEventoObjetivo,
+  overlayEventoObjetivoListado,
   overlayEventosObjetivos,
   overlayJson,
   overlayNeighborhood,
@@ -15,6 +18,7 @@ import {
   overlayPreflight,
   overlayStanding,
   readOverlayDesde,
+  readOverlayLimit,
   readOverlayProfileId,
   type OverlayClasificacion,
   type OverlayEventoObjetivo,
@@ -29,10 +33,10 @@ import { DEFAULT_RULESET, type ScoringRuleset } from "@/lib/scoring";
  * La API del overlay, en lo que se puede comprobar sin base de datos: los parsers
  * de los parámetros, los mapeadores del contrato y la forma de las respuestas.
  *
- * Los tres lectores (`loadOverlayParticipants`, `loadOverlayObjectives`,
- * `loadOverlayClassification`) no se prueban aquí: necesitan base de datos, y los
- * comprueba la API en marcha. Lo que sí se prueba es todo lo que hay entre la
- * consulta y el JSON, que es donde se decide qué se publica.
+ * Los lectores (`loadOverlayParticipants`, `loadOverlayObjectives`,
+ * `loadOverlayClassification`, `loadOverlayEvents`) no se prueban aquí: necesitan
+ * base de datos, y los comprueba la API en marcha. Lo que sí se prueba es todo lo
+ * que hay entre la consulta y el JSON, que es donde se decide qué se publica.
  */
 
 const ORIGEN = "https://liga.example";
@@ -137,23 +141,66 @@ describe("readOverlayDesde", () => {
   });
 });
 
+describe("readOverlayLimit", () => {
+  it("sin parámetro, ausente (el lector aplica el valor por defecto)", () => {
+    expect(readOverlayLimit(null)).toEqual({ status: "absent" });
+    expect(OVERLAY_EVENTS_DEFAULT_LIMIT).toBe(3);
+  });
+
+  it("acepta los enteros de 1 a 20", () => {
+    expect(readOverlayLimit("1")).toEqual({ status: "ok", value: 1 });
+    expect(readOverlayLimit("3")).toEqual({ status: "ok", value: 3 });
+    expect(readOverlayLimit("20")).toEqual({ status: "ok", value: 20 });
+    expect(OVERLAY_EVENTS_MAX_LIMIT).toBe(20);
+  });
+
+  it("rechaza fuera de rango, ceros a la izquierda, decimales y texto", () => {
+    expect(readOverlayLimit("0")).toEqual({ status: "invalid" });
+    expect(readOverlayLimit("21")).toEqual({ status: "invalid" });
+    expect(readOverlayLimit("01")).toEqual({ status: "invalid" });
+    expect(readOverlayLimit("1.5")).toEqual({ status: "invalid" });
+    expect(readOverlayLimit("muchos")).toEqual({ status: "invalid" });
+    expect(readOverlayLimit("")).toEqual({ status: "invalid" });
+  });
+});
+
 describe("overlayParticipants", () => {
-  it("mapea el identificador a cadena y el nombre a alias", () => {
-    expect(overlayParticipants([{ profileId: 42, name: "Kaiserklein" }])).toEqual([
-      { id: "42", alias: "Kaiserklein" },
+  it("mapea el identificador a cadena y resuelve alias, país y avatar", () => {
+    expect(
+      overlayParticipants([
+        {
+          profileId: 42,
+          name: "Kaiserklein",
+          country: "Alemania",
+          avatarUrl: "https://cdn.example/kai.png",
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "42",
+        alias: "Kaiserklein",
+        pais: "Alemania",
+        avatar_url: "https://cdn.example/kai.png",
+      },
     ]);
+  });
+
+  it("país y avatar ausentes viajan como null", () => {
+    expect(
+      overlayParticipants([{ profileId: 42, name: "Kaiserklein", country: null, avatarUrl: null }])[0],
+    ).toMatchObject({ pais: null, avatar_url: null });
   });
 
   it("conserva el orden de las filas y admite la lista vacía", () => {
     expect(overlayParticipants([])).toEqual([]);
     expect(
       overlayParticipants([
-        { profileId: 2, name: "B" },
-        { profileId: 1, name: "A" },
+        { profileId: 2, name: "B", country: null, avatarUrl: null },
+        { profileId: 1, name: "A", country: null, avatarUrl: null },
       ]),
     ).toEqual([
-      { id: "2", alias: "B" },
-      { id: "1", alias: "A" },
+      { id: "2", alias: "B", pais: null, avatar_url: null },
+      { id: "1", alias: "A", pais: null, avatar_url: null },
     ]);
   });
 });
@@ -165,6 +212,13 @@ describe("overlayObjectives", () => {
     expect(overlayObjectives(SUBCONJUNTO, DEFAULT_RULESET, 9, ORIGEN).map((o) => o.id)).toEqual(
       SUBCONJUNTO.map((item) => item.id),
     );
+  });
+
+  it("publica la métrica de cada definición", () => {
+    expect(objetivos.get("loco-por-ganar")?.metrica).toBe("partidas");
+    expect(objetivos.get("victorias")?.metrica).toBe("victorias");
+    expect(objetivos.get("imparable")?.metrica).toBe("dias");
+    expect(objetivos.get("lider-japanese")?.metrica).toBe("victorias");
   });
 
   it("loco-por-ganar: competición con premio fijo y sin icono", () => {
@@ -349,9 +403,43 @@ describe("overlayEventoObjetivo", () => {
   });
 });
 
+describe("overlayEventoObjetivoListado", () => {
+  it("añade el id del objetivo al evento mapeado", () => {
+    expect(
+      overlayEventoObjetivoListado(
+        evento("victorias", "PROGRESADO", "2026-10-24T14:30:00Z", {
+          ownValue: 6,
+          repetition: 6,
+        }),
+      ),
+    ).toEqual({
+      objetivo_id: "victorias",
+      tipo: "progresado",
+      fechahora: "2026-10-24T14:30:00.000Z",
+      progreso: { propio: 6 },
+      repeticion: 6,
+    });
+  });
+
+  it("un PERDIDO conserva la forma del mapa", () => {
+    expect(
+      overlayEventoObjetivoListado(
+        evento("loco-por-ganar", "PERDIDO", "2026-10-24T14:30:00Z", {
+          ownValue: 0,
+          otherValue: 29,
+        }),
+      ),
+    ).toEqual({
+      objetivo_id: "loco-por-ganar",
+      tipo: "perdido",
+      fechahora: "2026-10-24T14:30:00.000Z",
+      progreso: { propio: 0, ajeno: 29 },
+    });
+  });
+});
+
 describe("overlayEventosObjetivos", () => {
   const ACTIVOS = new Set(["victorias", "imparable", "loco-por-ganar"]);
-
   it("se queda con el evento más reciente de cada objetivo", () => {
     const mapa = overlayEventosObjetivos(
       [

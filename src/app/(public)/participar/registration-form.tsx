@@ -159,6 +159,14 @@ export function RegistrationForm({
         </Link>
         .
       </p>
+      {/* La edición nueva deja inactivas las fichas de la anterior (issue 183). Se
+          dice aquí, junto a lo que hace falta para entrar, y no en un aviso aparte:
+          la acción ya responde lo mismo al enviar y no hay nada que prometer de más. */}
+      <p className="mt-3 max-w-[58ch] text-sm leading-relaxed text-muted">
+        Quien participó en la edición anterior y quedó inactivo puede volver a
+        inscribirse con el mismo Profile ID: la solicitud entra otra vez en la cola de
+        revisión.
+      </p>
 
       {discord.configured ? (
         <DiscordStepPanel step={discord} error={fieldErrors.discord} />

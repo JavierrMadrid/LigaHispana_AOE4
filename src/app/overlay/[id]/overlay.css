@@ -1,0 +1,37 @@
+/*
+ * Solo para la ruta del overlay.
+ *
+ * OBS captura la página entera: si el documento pinta el fondo del tema, el
+ * directo se come un rectángulo opaco, y si hay scroll aparecen barras y la
+ * tarjeta se puede desplazar sin querer. Por eso el fondo y el overflow se
+ * neutralizan solo aquí, sin tocar el resto del sitio.
+ *
+ * La paleta es la de la portada nueva (`.league-home`): azul de sala de control,
+ * filetes azulados y el oro de la casa. La edición puede pisar el acento con su
+ * color desde `accentTheme`, que se aplica en el árbol del overlay.
+ */
+:root {
+  --background: #090f1a;
+  --surface: #122039;
+  --surface-raised: #1b2d48;
+  --foreground: #edf1f8;
+  --muted: #b6c3d6;
+  --line: #2b405d;
+  --line-strong: #466183;
+  --accent: #d6b568;
+  --accent-strong: #eed394;
+  --accent-ink: #17130b;
+  --thread: color-mix(in oklab, var(--accent) 30%, transparent);
+}
+
+html,
+body {
+  background: transparent !important;
+  overflow: hidden !important;
+}
+
+/* El layout raíz añade el control de «volver arriba» a todas las páginas. En el
+   overlay no hay scroll ni nadie que pulse, así que se retira. */
+body > button[aria-label="Volver arriba"] {
+  display: none !important;
+}
