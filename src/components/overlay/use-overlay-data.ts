@@ -64,8 +64,14 @@ const POLL_INTERVAL_MS = 30_000;
 const CATALOG_REFRESH_POLLS = 20;
 /** Eventos que se piden en la carga inicial del feed. */
 const INITIAL_EVENT_LIMIT = 12;
-/** Tope de la cola de animación: evita que un reintento largo la deje creciendo. */
-const QUEUE_LIMIT = 5;
+/**
+ * Tope de la cola de animación.
+ *
+ * Es alto a propósito: un recálculo puede avanzar una decena de objetivos con la
+ * misma partida y todos se animan. Solo frena un caso patológico (un reintento
+ * largo o una respuesta con cientos de eventos) para que la cola no crezca sin fin.
+ */
+const QUEUE_LIMIT = 60;
 /** Hitos recientes que se exponen en `recentEvents`. */
 const RECENT_LIMIT = 3;
 

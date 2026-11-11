@@ -224,6 +224,7 @@ describe("overlayObjectives", () => {
   it("loco-por-ganar: competición con premio fijo y sin icono", () => {
     expect(objetivos.get("loco-por-ganar")).toMatchObject({
       puntos: 25,
+      puntos_por_unidad: null,
       volatil: true,
       repetible: false,
       max_progreso: null,
@@ -234,6 +235,7 @@ describe("overlayObjectives", () => {
   it("victorias: paga los puntos por victoria de la regla y no tiene tope", () => {
     expect(objetivos.get("victorias")).toMatchObject({
       puntos: DEFAULT_RULESET.pointsPerWin,
+      puntos_por_unidad: DEFAULT_RULESET.pointsPerWin,
       volatil: false,
       repetible: true,
       max_progreso: null,
@@ -244,6 +246,7 @@ describe("overlayObjectives", () => {
   it("imparable: logro repetible con tope de 14", () => {
     expect(objetivos.get("imparable")).toMatchObject({
       puntos: 14,
+      puntos_por_unidad: 1,
       volatil: false,
       repetible: true,
       max_progreso: 14,

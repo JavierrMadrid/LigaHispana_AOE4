@@ -59,7 +59,10 @@ export type OverlayEventView = {
   maxProgreso: number | null;
   volatil: boolean;
   repetible: boolean;
+  /** Premio del catálogo; en las metas y competiciones, lo que pagan de una vez. */
   puntos: number;
+  /** Lo que paga por unidad un repetible (`victorias`, `imparable`); `null` si no. */
+  puntosPorUnidad: number | null;
 };
 
 /** Un participante del selector de `/overlay` (el configurador), no del ranking. */
@@ -161,6 +164,7 @@ export function overlayEventView(
     volatil: objective?.volatil ?? false,
     repetible: objective?.repetible ?? false,
     puntos: objective?.puntos ?? 0,
+    puntosPorUnidad: objective?.puntos_por_unidad ?? null,
   };
 }
 
@@ -243,18 +247,21 @@ export function overlayMergeEvents(
 /**
  * Las vistas de los eventos que aún no se habían visto, en orden ascendente.
  *
- * Solo `cumplido` y `progresado`: un `perdido` se anota como visto pero no se
- * encola ni interrumpe. El recorte se hace **después** de ordenar, para animar
- * primero lo más antiguo de lo nuevo y no perder el orden natural.
+ * Solo lo que cobra: los objetivos directos en cada avance y las metas y los
+ * lideratos al cobrarse de verdad (`overlayAnimates`). Un `perdido` o el avance
+ * parcial de una meta se anotan como vistos pero no se encolan ni interrumpen. El
+ * recorte se hace **después** de ordenar, para animar primero lo más antiguo de
+ * lo nuevo y no perder el orden natural; por defecto no recorta, porque un
+ * recálculo puede avanzar muchos objetivos a la vez y todos tienen su animación.
  */
 export function overlayNewEventViews(
   seenKeys: ReadonlySet<string>,
   incoming: Readonly<Record<string, OverlayEventoObjetivo>>,
   objectives: ReadonlyMap<string, OverlayObjetivo>,
-  limit = 5,
+  limit = Number.POSITIVE_INFINITY,
 ): OverlayEventView[] {
   return overlayEventViews(incoming, objectives)
-    .filter((view) => isPositiveEvent(view.tipo) && !seenKeys.has(view.key))
+    .filter((view) => overlayAnimates(view) && !seenKeys.has(view.key))
     .slice(0, Math.max(0, limit));
 }
 
@@ -497,7 +504,9 @@ export function overlayEventProgress(view: OverlayEventView): string {
 
   if (view.tipo === "cumplido") {
     if (maximo === null) {
-      return "Cumplido";
+      // Un repetible sin tope nunca se completa (`victorias`); un `cumplido` así
+      // solo puede venir de la primera siembra antigua, y lo que toca es su cuenta.
+      return view.repetible ? eventCountText(view) : "Cumplido";
     }
 
     const propio = Math.min(view.progresoPropio, maximo);
@@ -512,11 +521,7 @@ export function overlayEventProgress(view: OverlayEventView): string {
       return `${propio}/${maximo} ${overlayMetricUnit(view.metrica, maximo)}`;
     }
 
-    if (view.repeticion !== null) {
-      return `x${view.repeticion}`;
-    }
-
-    return `${view.progresoPropio} ${overlayMetricUnit(view.metrica, view.progresoPropio)}`;
+    return eventCountText(view);
   }
 
   if (view.progresoAjeno !== null) {
@@ -524,6 +529,101 @@ export function overlayEventProgress(view: OverlayEventView): string {
   }
 
   return "Perdido";
+}
+
+/** La cuenta de un evento repetible: `xN` si la API publica la repetición. */
+function eventCountText(view: OverlayEventView): string {
+  if (view.repeticion !== null) {
+    return `x${view.repeticion}`;
+  }
+
+  return `${view.progresoPropio} ${overlayMetricUnit(view.metrica, view.progresoPropio)}`;
+}
+
+/**
+ * ¿El evento celebra un objetivo realmente completado?
+ *
+ * El tipo manda, pero no basta: `imparable` y `victorias` son repetibles y la
+ * API los anotó como `cumplido` en su primera siembra aunque solo llevaran un
+ * día o una victoria (el estado de entonces daba por cumplido a cualquier
+ * beneficiario). Un `cumplido` con menos progreso que su tope, o de un objetivo
+ * sin tope que se repite, se pinta como avance: sin tick y con la cifra.
+ */
+export function overlayEventCompleted(view: OverlayEventView): boolean {
+  if (view.tipo !== "cumplido") {
+    return false;
+  }
+
+  if (view.maxProgreso === null) {
+    return !view.repetible;
+  }
+
+  return view.progresoPropio >= view.maxProgreso;
+}
+
+/**
+ * Los tres repartos del overlay.
+ *
+ * - `directo`: paga por unidad al ganar o jugar (`victorias`, `imparable`, los
+ *   `maestro-<civ>`). Su evento se celebra cada vez que avanza.
+ * - `meta`: un logro con umbral que se cobra al completarlo (`imbatible`,
+ *   `lider-<civ>`, las hazañas). Solo se celebra al llegar.
+ * - `liderato`: una competición, que solo paga al que va primero y se puede
+ *   perder. Se celebra al ponerse primero.
+ */
+export type OverlayEventKind = "directo" | "meta" | "liderato";
+
+/** El reparto de un objetivo (o de su evento) a partir de `volatil` y `repetible`. */
+export function overlayEventKind(
+  objective: Pick<OverlayEventView, "volatil" | "repetible">,
+): OverlayEventKind {
+  if (objective.volatil) {
+    return "liderato";
+  }
+
+  return objective.repetible ? "directo" : "meta";
+}
+
+/**
+ * Los puntos que da **este evento**, o `null` si no cobra.
+ *
+ * - Competición y meta: el premio del catálogo, que es lo que pagan una vez.
+ * - Objetivos repetibles: lo que pagan por unidad, que la API resuelve
+ *   (`puntos_por_unidad`): 2 por victoria, 1 por día de `imparable`, 1 por
+ *   victoria de los `maestro-<civ>`.
+ *
+ * No es el acumulado del objetivo: una victoria enseña `+2`, no `+22` por las
+ * once que lleve. Un `perdido` no cobra.
+ */
+export function overlayEventReward(view: OverlayEventView): number | null {
+  if (view.tipo === "perdido") {
+    return null;
+  }
+
+  if (view.volatil || !view.repetible) {
+    return view.puntos;
+  }
+
+  return view.puntosPorUnidad ?? view.puntos;
+}
+
+/**
+ * ¿Este evento tiene animación?
+ *
+ * Los objetivos directos se celebran en cada avance (cobran por unidad). Las
+ * metas y los lideratos, solo cuando de verdad se cobran: al completar el umbral
+ * o al ponerse primero. Un `perdido` nunca interrumpe.
+ */
+export function overlayAnimates(view: OverlayEventView): boolean {
+  if (view.tipo === "perdido") {
+    return false;
+  }
+
+  if (overlayEventKind(view) === "directo") {
+    return true;
+  }
+
+  return view.tipo === "cumplido" && overlayEventCompleted(view);
 }
 
 /* -------------------------------------------------------------------------- */

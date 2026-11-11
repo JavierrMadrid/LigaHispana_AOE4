@@ -409,7 +409,7 @@ export type ObjectiveProgressStatePlan = {
  * el feed que lee el overlay es `ObjectiveProgressEvent`. Por eso aquí no se decide
  * nada del torneo, solo qué filas hay que dejar como están y cuáles no, de modo que
  * una pasada sin cambios devuelve los tres arrays vacíos y no ejecuta ni una
- * escritura (el worker corre cada 10 minutos).
+ * escritura (el worker corre cada 1-3 minutos).
  *
  * Un cambio de `value`, de `completed` o de `repetition` obliga a reescribir la fila:
  * los tres son el estado que la siguiente pasada compara, y dejar uno atrás haría

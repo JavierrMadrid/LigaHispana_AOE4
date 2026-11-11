@@ -11,9 +11,13 @@ import {
   DEFAULT_OVERLAY_CONFIG,
   overlayConfigQuery,
   overlayConfiguratorParticipants,
+  overlayAnimates,
   overlayEventBadge,
+  overlayEventCompleted,
   overlayEventKey,
+  overlayEventKind,
   overlayEventProgress,
+  overlayEventReward,
   overlayEventView,
   overlayEventViews,
   overlayMaxEventTime,
@@ -43,6 +47,7 @@ function objetivo(overrides: Partial<OverlayObjetivo> & Pick<OverlayObjetivo, "i
     descripcion: "",
     icono_url: "",
     puntos: 0,
+    puntos_por_unidad: null,
     volatil: false,
     repetible: false,
     max_progreso: null,
@@ -54,7 +59,14 @@ function objetivo(overrides: Partial<OverlayObjetivo> & Pick<OverlayObjetivo, "i
 const OBJETIVOS = new Map<string, OverlayObjetivo>([
   [
     "victorias",
-    objetivo({ id: "victorias", nombre: "Victorias", puntos: 2, repetible: true, metrica: "victorias" }),
+    objetivo({
+      id: "victorias",
+      nombre: "Victorias",
+      puntos: 2,
+      puntos_por_unidad: 2,
+      repetible: true,
+      metrica: "victorias",
+    }),
   ],
   [
     "imparable",
@@ -62,6 +74,7 @@ const OBJETIVOS = new Map<string, OverlayObjetivo>([
       id: "imparable",
       nombre: "Imparable",
       puntos: 14,
+      puntos_por_unidad: 1,
       max_progreso: 14,
       repetible: true,
       metrica: "dias",
@@ -208,6 +221,7 @@ describe("overlayEventView", () => {
       volatil: false,
       repetible: false,
       puntos: 12,
+      puntosPorUnidad: null,
     });
   });
 
@@ -376,10 +390,43 @@ describe("overlayNewEventViews", () => {
       "lider-japanese": evento("cumplido", "2026-10-22T10:00:00.000Z"),
     };
 
+    // `lider-japanese` va 1/3: una meta a medias no se celebra.
     expect(overlayNewEventViews(seen, incoming, OBJETIVOS).map((view) => view.key)).toEqual([
-      "lider-japanese@2026-10-22T10:00:00.000Z",
       "imparable@2026-10-24T10:00:00.000Z",
     ]);
+  });
+
+  it("celebra una meta al completarla", () => {
+    const incoming = {
+      "lider-japanese": evento("cumplido", "2026-10-22T10:00:00.000Z", {
+        progreso: { propio: 3 },
+      }),
+    };
+
+    expect(overlayNewEventViews(new Set(), incoming, OBJETIVOS)).toHaveLength(1);
+  });
+
+  it("celebra un liderato al ganarlo y no cuando se pierde", () => {
+    const ganado = {
+      "loco-por-ganar": evento("cumplido", "2026-10-22T10:00:00.000Z"),
+    };
+    const perdido = {
+      "loco-por-ganar": evento("perdido", "2026-10-22T10:00:00.000Z"),
+    };
+
+    expect(overlayNewEventViews(new Set(), ganado, OBJETIVOS)).toHaveLength(1);
+    expect(overlayNewEventViews(new Set(), perdido, OBJETIVOS)).toHaveLength(0);
+  });
+
+  it("sin límite devuelve todos los nuevos, no solo cinco", () => {
+    const incoming = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [
+        `objetivo-${index}`,
+        evento("cumplido", "2026-10-24T10:00:00.000Z"),
+      ]),
+    );
+
+    expect(overlayNewEventViews(new Set(), incoming, new Map())).toHaveLength(8);
   });
 
   it("recorta al límite", () => {
@@ -674,6 +721,17 @@ describe("overlayEventProgress", () => {
     expect(overlayEventProgress(view)).toBe("1 victoria");
   });
 
+  it("cumplido repetible sin tope: la cuenta, no «Cumplido»", () => {
+    const view = overlayEventView(
+      "victorias",
+      evento("cumplido", "2026-10-24T10:00:00.000Z", { progreso: { propio: 6 }, repeticion: 6 }),
+      OBJETIVOS.get("victorias"),
+    );
+
+    expect(overlayEventProgress(view)).toBe("x6");
+    expect(overlayEventProgress({ ...view, repeticion: null })).toBe("6 victorias");
+  });
+
   it("perdido con nuevo poseedor y sin él", () => {
     const conAjeno = overlayEventView(
       "loco-por-ganar",
@@ -688,5 +746,122 @@ describe("overlayEventProgress", () => {
 
     expect(overlayEventProgress(conAjeno)).toBe("Ahora 29 partidas");
     expect(overlayEventProgress(sinAjeno)).toBe("Perdido");
+  });
+});
+
+describe("overlayEventKind", () => {
+  it("separa directos, metas y lideratos", () => {
+    const view = (id: string) =>
+      overlayEventView(id, evento("progresado", "2026-10-24T10:00:00.000Z"), OBJETIVOS.get(id));
+
+    expect(overlayEventKind(view("victorias"))).toBe("directo");
+    expect(overlayEventKind(view("imparable"))).toBe("directo");
+    expect(overlayEventKind(view("lider-japanese"))).toBe("meta");
+    expect(overlayEventKind(view("loco-por-ganar"))).toBe("liderato");
+  });
+});
+
+describe("overlayEventReward", () => {
+  const view = (
+    id: string,
+    tipo: OverlayEventoObjetivo["tipo"],
+    extra: Partial<OverlayEventoObjetivo> = {},
+  ) => overlayEventView(id, evento(tipo, "2026-10-24T10:00:00.000Z", extra), OBJETIVOS.get(id));
+
+  it("paga lo que da el evento de un objetivo directo, no el acumulado", () => {
+    // victorias: 2 por victoria, aunque lleve 11.
+    expect(
+      overlayEventReward(view("victorias", "progresado", { progreso: { propio: 11 }, repeticion: 11 })),
+    ).toBe(2);
+    // imparable: 1 por día.
+    expect(
+      overlayEventReward(view("imparable", "cumplido", { progreso: { propio: 2 }, repeticion: 2 })),
+    ).toBe(1);
+    // Con muchas repeticiones sigue pagando una unidad.
+    expect(
+      overlayEventReward(view("imparable", "cumplido", { progreso: { propio: 20 }, repeticion: 20 })),
+    ).toBe(1);
+  });
+
+  it("paga el premio de una meta y de un liderato", () => {
+    expect(
+      overlayEventReward(view("lider-japanese", "cumplido", { progreso: { propio: 3 } })),
+    ).toBe(12);
+    expect(overlayEventReward(view("loco-por-ganar", "cumplido"))).toBe(25);
+  });
+
+  it("un perdido no cobra", () => {
+    expect(overlayEventReward(view("loco-por-ganar", "perdido"))).toBeNull();
+  });
+});
+
+describe("overlayAnimates", () => {
+  const view = (
+    id: string,
+    tipo: OverlayEventoObjetivo["tipo"],
+    extra: Partial<OverlayEventoObjetivo> = {},
+  ) => overlayEventView(id, evento(tipo, "2026-10-24T10:00:00.000Z", extra), OBJETIVOS.get(id));
+
+  it("un directo se celebra en cada avance", () => {
+    expect(overlayAnimates(view("victorias", "progresado", { progreso: { propio: 6 }, repeticion: 6 }))).toBe(true);
+    expect(overlayAnimates(view("imparable", "cumplido", { progreso: { propio: 2 }, repeticion: 2 }))).toBe(true);
+  });
+
+  it("una meta, solo al completarla", () => {
+    expect(
+      overlayAnimates(view("lider-japanese", "progresado", { progreso: { propio: 1 } })),
+    ).toBe(false);
+    expect(
+      overlayAnimates(view("lider-japanese", "cumplido", { progreso: { propio: 3 } })),
+    ).toBe(true);
+  });
+
+  it("un liderato, al ganarlo; nunca un perdido", () => {
+    expect(overlayAnimates(view("loco-por-ganar", "cumplido"))).toBe(true);
+    expect(overlayAnimates(view("loco-por-ganar", "perdido"))).toBe(false);
+  });
+});
+
+describe("overlayEventCompleted", () => {
+  it("un logro con tope solo está completo al llegar al tope", () => {
+    const parcial = overlayEventView(
+      "imparable",
+      evento("cumplido", "2026-10-24T10:00:00.000Z", { progreso: { propio: 2 }, repeticion: 2 }),
+      OBJETIVOS.get("imparable"),
+    );
+    const completo = overlayEventView(
+      "imparable",
+      evento("cumplido", "2026-10-24T10:00:00.000Z", { progreso: { propio: 14 }, repeticion: 14 }),
+      OBJETIVOS.get("imparable"),
+    );
+
+    expect(overlayEventCompleted(parcial)).toBe(false);
+    expect(overlayEventCompleted(completo)).toBe(true);
+  });
+
+  it("una victoria no se completa nunca; un progreso tampoco", () => {
+    const victoria = overlayEventView(
+      "victorias",
+      evento("cumplido", "2026-10-24T10:00:00.000Z", { progreso: { propio: 11 }, repeticion: 11 }),
+      OBJETIVOS.get("victorias"),
+    );
+    const progreso = overlayEventView(
+      "imparable",
+      evento("progresado", "2026-10-24T10:00:00.000Z", { progreso: { propio: 14 } }),
+      OBJETIVOS.get("imparable"),
+    );
+
+    expect(overlayEventCompleted(victoria)).toBe(false);
+    expect(overlayEventCompleted(progreso)).toBe(false);
+  });
+
+  it("una competición cumplida sí es un logro completo", () => {
+    const competencia = overlayEventView(
+      "loco-por-ganar",
+      evento("cumplido", "2026-10-24T10:00:00.000Z", { progreso: { propio: 29 } }),
+      OBJETIVOS.get("loco-por-ganar"),
+    );
+
+    expect(overlayEventCompleted(competencia)).toBe(true);
   });
 });

@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check } from "@phosphor-icons/react/dist/csr/Check";
 
 import type { OverlayEventoObjetivo } from "@/lib/overlay-api";
 import { countryFlagUrl } from "@/lib/flag";
 import {
+  overlayEventCompleted,
+  overlayEventKind,
   overlayEventProgress,
+  overlayEventReward,
   overlayRankingRows,
   type OverlayConfig,
   type OverlayEventView,
@@ -19,8 +22,14 @@ import { OverlayCard, OverlayCardHeader } from "@/components/overlay/overlay-car
 import { OverlayObjectiveIcon } from "@/components/overlay/overlay-objective-icon";
 import { useOverlayData } from "@/components/overlay/use-overlay-data";
 
-/** Lo que dura cada objetivo en la rotación de la animación. */
-const EVENT_DURATION_MS = 4_500;
+/** Los dos pasos de la animación de un evento. */
+type FocusPhase = "objetivo" | "recompensa";
+
+/** Lo que dura la ficha del objetivo antes de pasar a la recompensa. */
+const EVENT_DURATION_MS = 4_000;
+
+/** Lo que dura la tarjeta de recompensa antes de volver a la vista fija. */
+const REWARD_DURATION_MS = 3_000;
 
 /** Emblema de la casa, para cuando la edición no publica uno. */
 const HOUSE_EMBLEM = "/imagenes/marca/emblema-256.png";
@@ -97,15 +106,30 @@ export function OverlayApp({
   const showRanking = config.secciones !== "objetivos";
   const showObjectives = config.secciones !== "ranking";
 
+  // La animación de un evento tiene dos pasos: la ficha del objetivo y la
+  // recompensa. La fase se guarda con la clave del evento para que un evento
+  // nuevo empiece siempre por la ficha, sin un efecto que la reinicie.
+  const [phase, setPhase] = useState<{ key: string; step: FocusPhase } | null>(null);
+  const step: FocusPhase =
+    phase !== null && phase.key === activeKey ? phase.step : "objetivo";
+
   useEffect(() => {
     if (activeKey === null) {
       return;
     }
 
-    const timer = setTimeout(advanceQueue, EVENT_DURATION_MS);
+    const timer = setTimeout(() => {
+      if (step === "objetivo") {
+        setPhase({ key: activeKey, step: "recompensa" });
+        return;
+      }
+
+      setPhase(null);
+      advanceQueue();
+    }, step === "objetivo" ? EVENT_DURATION_MS : REWARD_DURATION_MS);
 
     return () => clearTimeout(timer);
-  }, [activeKey, advanceQueue]);
+  }, [activeKey, step, advanceQueue]);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -183,21 +207,27 @@ export function OverlayApp({
         ) : null}
 
         {status === "ready" ? (
-          <>
+          <div className="h-[13rem]">
             <AnimatePresence mode="wait" initial={false}>
               {activeEvent !== null ? (
                 <motion.div
-                  key={activeEvent.key}
+                  key={`${activeEvent.key}:${step}`}
+                  className="h-full"
                   initial={reduceMotion ? false : { opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6 }}
                   transition={{ duration: reduceMotion ? 0.12 : 0.28, ease: "easeOut" }}
                 >
-                  <EventFocus view={activeEvent} pending={queue.length} />
+                  {step === "objetivo" ? (
+                    <EventFocus view={activeEvent} pending={queue.length} />
+                  ) : (
+                    <RewardFocus view={activeEvent} />
+                  )}
                 </motion.div>
               ) : (
                 <motion.div
                   key="card"
+                  className="h-full"
                   initial={reduceMotion ? false : { opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
@@ -212,7 +242,7 @@ export function OverlayApp({
                 </motion.div>
               )}
             </AnimatePresence>
-          </>
+          </div>
         ) : null}
       </OverlayCard>
     </div>
@@ -401,7 +431,7 @@ function RecentRow({ view }: { view: OverlayEventView }) {
       <span className="min-w-0 flex-1 truncate text-[11px] text-foreground/90">
         {view.nombre}
       </span>
-      {view.tipo === "cumplido" ? (
+      {overlayEventCompleted(view) ? (
         <span className="flex shrink-0 items-center text-accent">
           <Check size={13} aria-hidden="true" />
           <span className="sr-only">Cumplido</span>
@@ -416,13 +446,19 @@ function RecentRow({ view }: { view: OverlayEventView }) {
   );
 }
 
-/** La tarjeta de foco que sustituye la vista fija mientras dura un evento. */
+/**
+ * La ficha del objetivo, el primer paso de la animación.
+ *
+ * Según el reparto del objetivo (`overlayEventKind`): los directos no llevan
+ * cifra, las metas llevan su progreso (`3/3`, `14/14`) y los lideratos, «1º» en
+ * su lugar. El tick es el mismo en los tres: el evento solo llega aquí cuando
+ * cobra.
+ */
 function EventFocus({ view, pending }: { view: OverlayEventView; pending: number }) {
-  const completed = view.tipo === "cumplido";
-  const progress = overlayEventProgress(view);
+  const kind = overlayEventKind(view);
 
   return (
-    <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-1.5 px-3 py-3 text-center">
       <span className="flex size-14 items-center justify-center rounded-md border border-accent/30 bg-surface-raised/60 text-accent">
         <OverlayObjectiveIcon
           iconoUrl={view.iconoUrl}
@@ -431,15 +467,12 @@ function EventFocus({ view, pending }: { view: OverlayEventView; pending: number
         />
       </span>
 
-      {completed ? (
-        <span
-          role="img"
-          aria-label="Cumplido"
-          className="flex size-6 items-center justify-center rounded-full border border-accent/40 bg-accent/10 text-accent"
-        >
-          <Check size={15} aria-hidden="true" />
-        </span>
-      ) : null}
+      <span
+        aria-hidden="true"
+        className="flex size-6 items-center justify-center rounded-full border border-accent/40 bg-accent/10 text-accent"
+      >
+        <Check size={15} aria-hidden="true" />
+      </span>
 
       <p className="font-display text-[15px] font-semibold leading-tight text-foreground">
         {view.nombre}
@@ -451,9 +484,15 @@ function EventFocus({ view, pending }: { view: OverlayEventView; pending: number
         </p>
       ) : null}
 
-      {progress !== "Cumplido" && progress !== "Perdido" ? (
+      {kind === "meta" ? (
         <p className="font-display text-[13px] font-semibold tabular-nums text-accent-strong">
-          {progress}
+          {overlayEventProgress(view)}
+        </p>
+      ) : null}
+
+      {kind === "liderato" ? (
+        <p className="font-display text-[15px] font-semibold tabular-nums text-accent-strong">
+          1º
         </p>
       ) : null}
 
@@ -468,6 +507,39 @@ function EventFocus({ view, pending }: { view: OverlayEventView; pending: number
             />
           ))}
         </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * La recompensa, el segundo paso de la animación.
+ *
+ * Ocupa la misma ventana que la ficha y solo enseña lo que ha dado el objetivo.
+ * En un liderato avisa de que esos puntos se pierden si deja de ir primero.
+ */
+function RewardFocus({ view }: { view: OverlayEventView }) {
+  const reward = overlayEventReward(view) ?? 0;
+  const temporary = overlayEventKind(view) === "liderato";
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center px-3 py-4 text-center">
+      <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-accent">
+        Recompensa:
+      </p>
+
+      <p className="mt-3 font-display text-[44px] font-semibold leading-none tabular-nums text-accent-strong">
+        +{reward}
+      </p>
+
+      <p className="mt-1 text-[10px] font-medium uppercase tracking-[0.22em] text-muted">
+        puntos
+      </p>
+
+      {temporary ? (
+        <p className="mt-2 max-w-[28ch] text-[10px] leading-relaxed text-muted">
+          Temporales: se pierden si dejas de ser 1º.
+        </p>
       ) : null}
     </div>
   );
