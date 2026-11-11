@@ -123,23 +123,33 @@ async function ParticipantFrame({
 
   return (
     <div className="flex flex-col gap-8">
-      <nav aria-label="Migas de pan" className="min-w-0 text-sm">
-        <ol className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <li className="flex min-w-0 items-center gap-x-2">
-            <Link href="/" className="text-muted transition-colors hover:text-accent">
-              Clasificación
-            </Link>
-            <span aria-hidden="true" className="text-muted/50">
-              /
-            </span>
-          </li>
-          <li className="min-w-0">
-            <span aria-current="page" title={player.name} className="block truncate">
-              {player.name}
-            </span>
-          </li>
-        </ol>
-      </nav>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
+        <nav aria-label="Migas de pan" className="min-w-0">
+          <ol className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <li className="flex min-w-0 items-center gap-x-2">
+              <Link href="/" className="text-muted transition-colors hover:text-accent">
+                Clasificación
+              </Link>
+              <span aria-hidden="true" className="text-muted/50">
+                /
+              </span>
+            </li>
+            <li className="min-w-0">
+              <span aria-current="page" title={player.name} className="block truncate">
+                {player.name}
+              </span>
+            </li>
+          </ol>
+        </nav>
+        <Link
+          href={`/overlay/${player.profileId}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-muted transition-colors hover:text-accent"
+        >
+          Abrir overlay del directo
+        </Link>
+      </div>
 
       <ParticipantHeader player={player} figures={figures} />
 

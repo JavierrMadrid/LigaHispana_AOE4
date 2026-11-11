@@ -15,8 +15,10 @@ import {
 import { objectiveMaxProgress } from "@/lib/objective-progress";
 import {
   loadOverlayClassification,
+  loadOverlayEvents,
   loadOverlayObjectives,
   loadOverlayParticipants,
+  overlayEventoObjetivoListado,
   overlayEventosObjetivos,
   type OverlayClasificacion,
   type OverlayEventoObjetivo,
@@ -111,6 +113,12 @@ async function checkParticipantes(): Promise<number> {
     `la API publica ${participantes.length} participantes y hay ${aprobados} aprobados`,
   );
 
+  const filas = await db.player.findMany({
+    where: { status: PlayerStatus.APPROVED },
+    select: { profileId: true, country: true, avatarUrl: true },
+  });
+  const porProfileId = new Map(filas.map((fila) => [String(fila.profileId), fila]));
+
   let anterior = 0;
 
   for (const participante of participantes) {
@@ -126,6 +134,20 @@ async function checkParticipantes(): Promise<number> {
     anterior = profileId;
 
     assert.ok(participante.alias.trim() !== "", `el participante ${participante.id} no tiene alias`);
+
+    const fila = porProfileId.get(participante.id);
+
+    assert.ok(fila !== undefined, `el participante ${participante.id} no está en la base`);
+    assert.equal(
+      participante.pais,
+      fila.country,
+      `el país de ${participante.id} no es el de la base`,
+    );
+    assert.equal(
+      participante.avatar_url,
+      fila.avatarUrl,
+      `el avatar de ${participante.id} no es el de la base`,
+    );
   }
 
   if (participantes.length > 0) {
@@ -173,6 +195,11 @@ async function checkObjetivos(contexto: Contexto): Promise<number> {
 
     assert.ok(objetivo !== undefined, `falta el objetivo activo ${definicion.id}`);
     assert.equal(objetivo.nombre, definicion.label, `el nombre de ${definicion.id} no es el del catálogo`);
+    assert.equal(
+      objetivo.metrica,
+      definicion.metric,
+      `la métrica de ${definicion.id} no es la del catálogo`,
+    );
     assert.equal(
       objetivo.max_progreso,
       objectiveMaxProgress(definicion, contexto.mapPoolSize),
@@ -329,7 +356,14 @@ function assertEventoValido(id: string, evento: OverlayEventoObjetivo, contexto:
   }
 }
 
-async function checkClasificacion(contexto: Contexto): Promise<number> {
+/**
+ * Las filas publicadas, en el orden de presentación y sin filtrar.
+ *
+ * Se cargan una vez por comprobación; la igualdad entre el orden por criterios y
+ * el orden por `rank`/`profileId` se afirma aquí porque es la invariante de la
+ * que dependen la ventana de vecinos y el feed.
+ */
+async function loadPublishedStandings(): Promise<FilaPublicada[]> {
   const version = await publishedRuleSetVersion();
   const filas = await db.playerScore.findMany({
     where: { ruleSetVersion: version, player: { status: PlayerStatus.APPROVED } },
@@ -359,6 +393,11 @@ async function checkClasificacion(contexto: Contexto): Promise<number> {
     "el orden por criterios y el orden por rank/profileId no coinciden",
   );
 
+  return orden;
+}
+
+async function checkClasificacion(contexto: Contexto): Promise<number> {
+  const orden = await loadPublishedStandings();
   for (let indice = 0; indice < orden.length; indice += 1) {
     const fila = orden[indice];
     const esperados = neighborhood(orden, indice).map((vecino) =>
@@ -467,6 +506,104 @@ async function checkDesde(contexto: Contexto, orden: readonly FilaPublicada[]): 
       `el recorte de desde de ${fila.player.profileId} no es el de los eventos con at >= desde`,
     );
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Feed de eventos                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * El feed de `/eventos`: últimos positivos, de más reciente a más antiguo.
+ *
+ * Se comprueba contra los eventos cargados de la edición, con el mismo filtro
+ * que aplica el lector —solo activos y solo `CUMPLIDO`/`PROGRESADO`— y con el
+ * mismo orden y tope. Además se verifica el límite y el 404 de un id inventado.
+ */
+async function checkEventos(contexto: Contexto, orden: readonly FilaPublicada[]): Promise<number> {
+  let comprobados = 0;
+  let conEventos: FilaPublicada | null = null;
+
+  for (const fila of orden) {
+    const eventos = contexto.eventosPorJugador.get(fila.player.id) ?? [];
+    const positivos = eventos
+      .filter(
+        (evento) =>
+          (evento.kind === ObjectiveProgressKind.CUMPLIDO ||
+            evento.kind === ObjectiveProgressKind.PROGRESADO) &&
+          contexto.activeObjectiveIds.has(evento.objectiveId),
+      )
+      .sort(
+        (a, b) =>
+          b.at.getTime() - a.at.getTime() ||
+          (a.objectiveId === b.objectiveId ? 0 : a.objectiveId < b.objectiveId ? -1 : 1),
+      );
+
+    const respuesta = await loadOverlayEvents(fila.player.profileId, 3);
+
+    assert.ok(
+      respuesta !== null,
+      `el feed de ${fila.player.profileId} devuelve null y el participante está aprobado`,
+    );
+    assert.deepEqual(
+      respuesta,
+      positivos.slice(0, 3).map(overlayEventoObjetivoListado),
+      `el feed de ${fila.player.profileId} no coincide con sus últimos positivos de la edición`,
+    );
+
+    for (const evento of respuesta) {
+      assert.ok(
+        contexto.activeObjectiveIds.has(evento.objetivo_id),
+        `el feed de ${fila.player.profileId} publica un objetivo apagado: ${evento.objetivo_id}`,
+      );
+      assert.ok(
+        evento.tipo === "cumplido" || evento.tipo === "progresado",
+        `el feed de ${fila.player.profileId} publica un ${evento.tipo}`,
+      );
+    }
+
+    if (conEventos === null && positivos.length >= 2) {
+      conEventos = fila;
+    }
+
+    comprobados += 1;
+  }
+
+  if (conEventos !== null) {
+    const todos = (contexto.eventosPorJugador.get(conEventos.player.id) ?? [])
+      .filter(
+        (evento) =>
+          (evento.kind === ObjectiveProgressKind.CUMPLIDO ||
+            evento.kind === ObjectiveProgressKind.PROGRESADO) &&
+          contexto.activeObjectiveIds.has(evento.objectiveId),
+      )
+      .sort(
+        (a, b) =>
+          b.at.getTime() - a.at.getTime() ||
+          (a.objectiveId === b.objectiveId ? 0 : a.objectiveId < b.objectiveId ? -1 : 1),
+      );
+
+    assert.deepEqual(
+      await loadOverlayEvents(conEventos.player.profileId, 1),
+      todos.slice(0, 1).map(overlayEventoObjetivoListado),
+      `el límite 1 de ${conEventos.player.profileId} no devuelve solo el evento más reciente`,
+    );
+    assert.deepEqual(
+      await loadOverlayEvents(conEventos.player.profileId, 20),
+      todos.slice(0, 20).map(overlayEventoObjetivoListado),
+      `el límite 20 de ${conEventos.player.profileId} no devuelve el feed esperado`,
+    );
+  }
+
+  const maximo = await db.player.aggregate({ _max: { profileId: true } });
+  const inventado = (maximo._max.profileId ?? 0) + 1;
+
+  assert.equal(
+    await loadOverlayEvents(inventado, 3),
+    null,
+    `el profileId inventado ${inventado} debería devolver null en el feed`,
+  );
+
+  return comprobados;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -645,6 +782,7 @@ async function main(): Promise<void> {
   let participantes = 0;
   let objetivos = 0;
   let clasificaciones = 0;
+  let feeds = 0;
 
   await check("participantes", async () => {
     participantes = await checkParticipantes();
@@ -654,6 +792,11 @@ async function main(): Promise<void> {
   });
   await check("clasificación de los aprobados", async () => {
     clasificaciones = await checkClasificacion(contexto);
+  });
+  await check("feed de eventos", async () => {
+    const orden = await loadPublishedStandings();
+
+    feeds = await checkEventos(contexto, orden);
   });
 
   let progreso = { eventos: contexto.eventos.length, estados: 0 };
@@ -667,6 +810,7 @@ async function main(): Promise<void> {
   console.log(`Participantes aprobados: ${participantes}`);
   console.log(`Objetivos activos: ${objetivos}`);
   console.log(`Clasificaciones comprobadas: ${clasificaciones}`);
+  console.log(`Feeds de eventos comprobados: ${feeds}`);
   console.log(`Eventos de la edición: ${progreso.eventos}`);
   console.log(`Estados de la edición: ${progreso.estados}`);
   console.log("");

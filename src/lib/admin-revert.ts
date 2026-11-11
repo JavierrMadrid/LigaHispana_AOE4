@@ -91,6 +91,7 @@ import { deletePlayerSyncState } from "@/lib/settings";
  * | `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED` | No | La baja de un admin ya se deshace con `reactivateAdmin`, y quién puede entrar no se reescribe desde el historial. |
  * | `ACTION_REVERTED` | No | Una reversión no se revierte: para volver atrás está la acción que se deshizo. |
  * | `CONFIG_CHANGED` | No | La configuración se cambia publicando otra, que es otra acción con su propio rastro. |
+ * | `PLAYERS_DEACTIVATED` | No | La desactivación de una edición nueva se deshace por participante, reinscribiéndose y aprobándolo: eso deja su propio rastro. |
  */
 const REVERTIBLE: Record<AdminActionType, boolean> = {
   PLAYER_CREATED: true,
@@ -105,6 +106,7 @@ const REVERTIBLE: Record<AdminActionType, boolean> = {
   ADMIN_REACTIVATED: false,
   ACTION_REVERTED: false,
   CONFIG_CHANGED: false,
+  PLAYERS_DEACTIVATED: false,
 };
 
 /**
@@ -535,6 +537,8 @@ function statusLabel(status: PlayerStatus): string {
       return "rechazado";
     case PlayerStatus.BANNED:
       return "expulsado";
+    case PlayerStatus.INACTIVE:
+      return "inactivo";
   }
 }
 
@@ -543,7 +547,8 @@ function readPlayerStatus(value: unknown): PlayerStatus | null {
   return value === PlayerStatus.PENDING ||
     value === PlayerStatus.APPROVED ||
     value === PlayerStatus.REJECTED ||
-    value === PlayerStatus.BANNED
+    value === PlayerStatus.BANNED ||
+    value === PlayerStatus.INACTIVE
     ? value
     : null;
 }
