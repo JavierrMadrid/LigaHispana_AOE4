@@ -192,6 +192,38 @@ describe("adminActionSummary", () => {
       }),
     ).toBe("Cambio de configuración: inicio del torneo, objetivos activos");
   });
+
+  describe("PLAYERS_DEACTIVATED", () => {
+    function desactiva(approved: number, pending: number): string {
+      return adminActionSummary({
+        type: AdminActionType.PLAYERS_DEACTIVATED,
+        approved,
+        pending,
+        editionFrom: "2026-11-01T00:00:00.000Z",
+      });
+    }
+
+    it("suma los dos recuentos y los desglosa", () => {
+      expect(desactiva(31, 11)).toBe(
+        "Participantes desactivados al empezar una edición nueva: 42 (31 aprobados y 11 pendientes)",
+      );
+    });
+
+    it("usa el singular en cada lado cuando vale 1", () => {
+      expect(desactiva(1, 1)).toBe(
+        "Participantes desactivados al empezar una edición nueva: 2 (1 aprobado y 1 pendiente)",
+      );
+    });
+
+    it("no nombra el lado que vale 0", () => {
+      expect(desactiva(1, 0)).toBe(
+        "Participantes desactivados al empezar una edición nueva: 1 (1 aprobado)",
+      );
+      expect(desactiva(0, 1)).toBe(
+        "Participantes desactivados al empezar una edición nueva: 1 (1 pendiente)",
+      );
+    });
+  });
 });
 
 describe("puntos", () => {
@@ -314,6 +346,22 @@ describe("adminActionDetails", () => {
       campos: "window.from",
       "window.from.antes": "2026-01-01",
       "window.from.despues": "2026-02-01",
+    });
+  });
+
+  it("la desactivación de una edición nueva guarda el total, el desglose y la ventana", () => {
+    expect(
+      adminActionDetails({
+        type: AdminActionType.PLAYERS_DEACTIVATED,
+        approved: 31,
+        pending: 11,
+        editionFrom: "2026-11-01T00:00:00.000Z",
+      }),
+    ).toEqual({
+      count: 42,
+      approved: 31,
+      pending: 11,
+      editionFrom: "2026-11-01T00:00:00.000Z",
     });
   });
 });

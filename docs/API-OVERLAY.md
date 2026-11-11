@@ -1,7 +1,7 @@
 # API para el overlay
 
 Contrato de lectura que consume el overlay del stream. El esquema formal, para generadores y
-validadores, está en [`openapi-overlay.yaml`](./openapi-overlay.yaml) (OpenAPI 3.2.1, versión 1.1.1).
+validadores, está en [`openapi-overlay.yaml`](./openapi-overlay.yaml) (OpenAPI 3.2.1, versión 1.3.0).
 Este documento es la versión humana: qué hay, qué significa cada campo y qué se puede esperar.
 
 ## Base
@@ -14,16 +14,19 @@ Este documento es la versión humana: qué hay, qué significa cada campo y qué
 | Caché | `Cache-Control: no-store` |
 | Polling recomendado | 30 s |
 
-El dato de fondo cambia al ritmo del recálculo (cada 10 minutos), así que pedir más a menudo no
-adelanta nada. Las rutas no pasan por sesión: no están en el `matcher` del Proxy.
+El dato de fondo cambia con las pasadas del sincronizador (una cada 1-3 minutos, ver
+[`OPERACION.md`](./OPERACION.md#sincronización)); la clasificación se recalcula al final de la pasada
+que trae algo nuevo, así que sondear más a menudo que 30 s no adelanta nada. Las rutas no pasan por
+sesión: no están en el `matcher` del Proxy.
 
 ## Endpoints
 
 | Endpoint | Devuelve |
 |---|---|
-| [`GET /participantes`](#participantes) | Los participantes aprobados: `id` y `alias`. |
+| [`GET /participantes`](#participantes) | Los participantes aprobados: `id`, `alias`, país y avatar. |
 | [`GET /clasificacion`](#clasificacion) | La fila de un participante y hasta dos vecinos, con su feed de objetivos. |
-| [`GET /objetivos`](#objetivos) | El catálogo de objetivos activos con sus puntos y su icono. |
+| [`GET /eventos`](#eventos) | Los últimos objetivos cumplidos o progresados de un participante. |
+| [`GET /objetivos`](#objetivos) | El catálogo de objetivos activos con sus puntos, su métrica y su icono. |
 
 ## `/participantes`
 
@@ -39,11 +42,18 @@ adelanta nada. Las rutas no pasan por sesión: no están en el `matcher` del Pro
 |---|---|---|
 | `id` | `Player.profileId` | Cadena, no número. |
 | `alias` | `Player.name` | Nombre con el que compite. |
+| `pais` | `Player.country` | Rótulo canónico del país, o `null` si no consta. No es un código ISO. |
+| `avatar_url` | `Player.avatarUrl` | URL del avatar, o `null` si no hay; entonces se dibuja un monograma. |
 
 ```json
 [
-  { "id": "7099800", "alias": "Miguel Narvaez" },
-  { "id": "6946414", "alias": "Mecroid" }
+  {
+    "id": "7099800",
+    "alias": "Miguel Narvaez",
+    "pais": "España",
+    "avatar_url": "https://cdn.aoe4world.com/players/7099800/avatar.png"
+  },
+  { "id": "6946414", "alias": "Mecroid", "pais": null, "avatar_url": null }
 ]
 ```
 
@@ -117,9 +127,9 @@ por la organización se descartan).
 - `repeticion` solo aparece en objetivos repetibles (`victorias`, `imparable` y los `maestro-<civ>`).
 - `fechahora` es ISO 8601 con zona.
 
-**Cuándo se escribe.** El feed sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` en
-cada pasada (cada 10 minutos). Los logros y las competiciones aparecen **en vivo**, con el retraso
-del recálculo, no solo al cierre de la edición.
+**Cuándo se escribe.** El feed sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` al
+final de cada pasada que tiene algo que recalcular (una cada 1-3 minutos). Los logros y las
+competiciones aparecen **en vivo**, con el retraso de esa pasada, no solo al cierre de la edición.
 
 - La primera pasada de una edición siembra `CUMPLIDO` y `PROGRESADO`; **no hay `PERDIDO`** en la
   siembra, porque no había nada que perder.
@@ -190,6 +200,51 @@ competiciones, perder el liderazgo sí genera `perdido`.
 ]
 ```
 
+## `/eventos`
+
+| Aspecto | Comportamiento |
+|---|---|
+| `id` | **Obligatorio**. 400 si falta o no es válido. |
+| `limite` | Opcional, entero de **1 a 20**. Por defecto 3. 400 si no es válido. |
+| 200 | Lista de eventos positivos, de más reciente a más antiguo. Vacía si no hay. |
+| 404 | El participante no existe o no está aprobado. |
+| 503 | La base de datos no responde. |
+
+Solo aparecen `cumplido` y `progresado`: un `perdido` no se celebra y no entra en
+el feed. Se filtra por la **edición activa** y por los objetivos que la
+organización no ha apagado, igual que `eventos_objetivos` de `/clasificacion`.
+
+Un mismo objetivo puede repetirse si tiene varias anotaciones entre los eventos
+pedidos (por ejemplo, `victorias` con cada victoria): la lista es una secuencia,
+no un mapa. El overlay deduplica por objetivo cuando pinta «los últimos» y se
+queda con el más reciente de cada uno.
+
+| Campo | Origen | Nota |
+|---|---|---|
+| `objetivo_id` | `ObjectiveProgressEvent.objectiveId` | Id del catálogo. |
+| `tipo` | `kind` | `cumplido` o `progresado`; nunca `perdido`. |
+| `fechahora` | `at` | ISO 8601 con zona. |
+| `progreso` | `ownValue` | `{ "propio": n }`; en este endpoint no hay `ajeno`. |
+| `repeticion` | `repetition` | Solo en objetivos repetibles; se omite si no la hay. |
+
+```json
+[
+  {
+    "objetivo_id": "victorias",
+    "tipo": "progresado",
+    "fechahora": "2026-10-24T14:30:00.000Z",
+    "progreso": { "propio": 6 },
+    "repeticion": 6
+  },
+  {
+    "objetivo_id": "imparable",
+    "tipo": "cumplido",
+    "fechahora": "2026-10-24T14:20:00.000Z",
+    "progreso": { "propio": 14 }
+  }
+]
+```
+
 ## `/objetivos`
 
 Catálogo activo, en orden de presentación. Sin parámetros.
@@ -201,6 +256,8 @@ Catálogo activo, en orden de presentación. Sin parámetros.
 | `descripcion` | Frase de la regla. |
 | `icono_url` | URL **absoluta** en los objetivos de civilización; `""` en el resto. |
 | `puntos` | Puntos con la regla activa. En `victorias`, el precio **por victoria**; en los objetivos por unidad con tope (`maestro-<civ>`), el premio **máximo**. |
+| `puntos_por_unidad` | Lo que paga **por unidad** un repetible: `pointsPerWin` en `victorias`, 1 por día en `imparable` y 1 por victoria en los `maestro-<civ>`. `null` en metas y competiciones, que cobran una sola vez. |
+| `metrica` | Qué mide el objetivo: `partidas`, `victorias`, `racha`, `racha-partidas`, `dias`, `civilizaciones`, `mapas` o `subobjetivos`. El overlay la usa para las unidades («6 victorias», «6/14 días»). |
 | `volatil` | `true` en competiciones (se poseen y se pierden); `false` en logros. |
 | `repetible` | `true` en `victorias`, `imparable` y los `maestro-<civ>`. |
 | `max_progreso` | `null` en competiciones y en `victorias`; umbral en los logros con tope; tamaño del pool en `por-tierra-y-agua`. |
@@ -215,6 +272,8 @@ Catálogo activo, en orden de presentación. Sin parámetros.
     "descripcion": "El jugador con más partidas clasificatorias jugadas en el torneo. En caso de empate, lo cobra quien alcanzó esta cifra antes.",
     "icono_url": "",
     "puntos": 50,
+    "puntos_por_unidad": null,
+    "metrica": "partidas",
     "volatil": true,
     "repetible": false,
     "max_progreso": null
@@ -225,6 +284,8 @@ Catálogo activo, en orden de presentación. Sin parámetros.
     "descripcion": "Gana al menos 3 partidas con Japoneses.",
     "icono_url": "https://laligahispana.es/imagenes/civilizaciones/Japanese_AoE4.webp",
     "puntos": 12,
+    "puntos_por_unidad": null,
+    "metrica": "victorias",
     "volatil": false,
     "repetible": false,
     "max_progreso": 3
@@ -267,10 +328,11 @@ npm run score                    # siembra el feed (idempotente)
 npm run verify:overlay-api       # comprueba la API contra DATABASE_URL, solo lectura
 ```
 
-- `SCORING_CACHE_VERSION = 4` fuerza el recálculo en el primer pase tras el despliegue; el salto de
-  la v4 es por el catálogo de 120 objetivos (la prueba de concepto de subobjetivos, familia
-  `maestro`). Sin un salto, el worker podría saltarse la pasada y un cambio que dependa del motor no
-  llegaría hasta la siguiente partida.
+- `SCORING_CACHE_VERSION = 5` fuerza el recálculo en el primer pase tras el despliegue; el salto de
+  la v5 es por las familias de hazañas (`avance-relampago` y `tira-y-afloja`, catálogo de 122
+  objetivos); el de la v4, por el catálogo de 120 objetivos (la prueba de concepto de subobjetivos,
+  familia `maestro`). Sin un salto, el worker podría saltarse la pasada y un cambio que dependa del
+  motor no llegaría hasta la siguiente partida.
 - Las dos tablas se leen **solo** por el DAL: la Data API no las expone.
 - `verify:overlay-api` es de solo lectura y compara lo que devuelven los lectores de
   [`src/lib/overlay-api.ts`](../src/lib/overlay-api.ts) con lo que hay en la base.

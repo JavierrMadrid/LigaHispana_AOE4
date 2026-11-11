@@ -4,7 +4,7 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 | Elemento                     | Regla                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| Ámbito                       | Solo `/`, incluida cabecera y pie; otras rutas conservan su diseño                          |
+| Ámbito                       | `/` y `/partidas`, incluida cabecera y pie; otras rutas conservan su diseño                  |
 | Fondo / panel / borde        | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D`                        |
 | Texto principal / secundario | `#EDF1F8` / `#B6C3D6`                                                                       |
 | Acento                       | Oro `#D6B568` para inscripción, selección, foco y primer puesto; rojo para emisión          |
@@ -55,7 +55,7 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Previews solo en desarrollo: `loading`, `empty`, `unavailable`, `live` y `stress`; no leen ni escriben clasificación en base de datos. `stress` contiene 1500 jugadores deterministas y primeras filas con actividad variada.
 - Fuera de previews no se inventan participantes, partidas, objetivos ni horas de sincronización. Una lectura fallida muestra recuperación y actividad no disponible.
 - Sin nuevos premios, campañas ni anuncios inventados. Se conservan los banners de eventos y donaciones, el estandarte y crédito del patrocinador y la configuración de edición (nombre, emblema y acento), también en la portada.
-- Navegación y pie mantienen identidad, paleta y enlaces en pestaña nueva, salvo salto al contenido. Marca de cabecera: «La Liga Hispana».
+- El menú principal navega en la misma pestaña. Los demás enlaces de cabecera y pie abren otra pestaña; el salto al contenido permanece en la página. Marca de cabecera: «La Liga Hispana».
 - Inscripción mantiene su acabado dorado; navegación textual con subrayado de estado. La navegación sticky recupera su fondo azul opaco, sin imagen. El panorama aparece en una franja de 220px inmediatamente debajo de la navegación, a todo el ancho y detrás de la parte superior del contenido (160px en móvil). Un único velo azul tinta se oscurece hacia abajo y funde a sólido al final de la franja. El contenido empieza a 64px bajo la navegación en escritorio (+40px frente a la vista compacta) y 36px en móvil (+24px), dejando una banda ilustrada visible. La imagen no intercepta eventos ni se fija al scroll; el resto de la página es tinta sólida y la tabla permanece opaca.
 
 ## Assets y criterio
@@ -63,3 +63,17 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Escudo: `public/imagenes/portada/escudo-liga-hispana.webp`, WebP transparente 960×804px, extraído con ImageGen del material facilitado. Los textos son HTML.
 - Panorama superior del contenido: `public/imagenes/portada/aoe4-hre-panorama.webp`, WebP 1920×320px (~211KB), sin transparencias, texto ni degradados integrados. Adaptación con ImageGen del [arte oficial del Sacro Imperio Romano](https://cdn.ageofempires.com/aoe/wp-content/uploads/2021/08/bg-age4-civ-hre-splash-right-desk.webp), referencia propiedad de Microsoft / World's Edge; no es el original oficial. Composición: paisaje completo, caballero y estandarte rojo a la derecha, en formato panorámico bajo. Exportado desde el generado 2172×724 con recorte vertical 90–452 y reducción a 1920×320.
 - `frontend-design`: jerarquía y tipografía de competición. `impeccable` en modo Operate: reducir ruido, conservar funciones mediante detalle y verificar estados/responsive. El encargo explícito prevalece sobre patrones cinematográficos de las skills.
+
+## Partidas en juego (`/partidas`)
+
+- Comparte cabecera, pie, panorama y configuración de edición con la portada; la navegación marca «Partidas». Su CSS está limitado a `.league-matches`; la clasificación conserva su composición.
+- Orientación y recuentos compactos a la izquierda; panel principal con búsqueda, filtros y dos tarjetas por fila. Por debajo de 1100px, resumen superior; en móvil, una tarjeta por fila y equipos apilados.
+- Mapa e imagen reconocible encabezan la ficha; formato y duración acompañan la alineación. Civilización, bandera, división del torneo y canales comprobados permanecen junto a cada jugador.
+- «En directo» cuenta partidas con retransmisión; «Total» cuenta jugadores distintos de la liga en juego. Los nombres accesibles explicitan ambas medidas.
+- Si hay Twitch confirmado, la ficha intenta cargar una miniatura pública desde el navegador al acercarse a la pantalla. Conserva el mapa ante fallo o redirección; la miniatura legible enlaza a Twitch en otra pestaña. Las previsualizaciones usan imágenes locales y no consultan canales ficticios.
+- Dos equipos conocidos se muestran enfrentados. FFA y equipos desconocidos usan la alineación plana, sin inventar bandos. Mapa, nombre, civilización o perfil ausentes tienen una alternativa honesta.
+- Formato, varias divisiones y emisión se combinan con AND; las divisiones seleccionadas se combinan con OR. La división debe aparecer en algún participante de la liga; el directo puede pertenecer a cualquiera de la partida.
+- Buscar por jugador/canal/mapa, ordenar y filtrar se aplica a toda la colección antes de paginar en grupos de 12. Los cambios vuelven a página 1. Refresco conserva el estado local.
+- Solo aparecen canales comprobados en directo. El pie de una ficha existe únicamente si ofrece el visor multi-stream; no añade mensajes repetidos sin acción.
+- Enlaces de las fichas y acciones de contenido en pestaña nueva. Foco visible, selector nativo y divisiones con checkbox; Escape y clic exterior cierran el panel. Sin entradas decorativas de tarjetas; movimiento reducido estático.
+- Vacío real, fallo, sin resultados y carga conservan estructura y distinción de datos desconocidos. Previews de desarrollo: ver [OPERACION.md](docs/OPERACION.md#previews-de-partidas).

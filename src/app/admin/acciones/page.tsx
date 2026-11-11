@@ -35,6 +35,7 @@ const ACTION_LABELS: Record<AdminActionType, string> = {
   ADMIN_REACTIVATED: "Reactivación de admin",
   ACTION_REVERTED: "Acción revertida",
   CONFIG_CHANGED: "Cambio de configuración",
+  PLAYERS_DEACTIVATED: "Participantes desactivados",
 };
 
 /**
@@ -59,6 +60,11 @@ const ACTION_LABELS: Record<AdminActionType, string> = {
  * baja en el rojo y reactivación en el verde. Revertir una acción y cambiar la
  * configuración son anotaciones —no expulsan a nadie—, así que van en el mismo oro
  * de los puntos revertidos (la reversión) y en el neutro del alta (la configuración).
+ *
+ * La desactivación masiva de participantes al empezar una edición nueva no es una
+ * sanción: lleva el gris apagado con el que `participant-status.ts` pinta el estado
+ * `INACTIVE` en el que los deja, no el rojo de la baja. La acción es la misma cosa
+ * que se ve después en el listado de participantes y no puede verse con otro color.
  */
 const ACTION_STYLES: Record<AdminActionType, string> = {
   PLAYER_CREATED: "border-line-strong text-foreground",
@@ -73,6 +79,7 @@ const ACTION_STYLES: Record<AdminActionType, string> = {
   ADMIN_REACTIVATED: "border-win/40 text-win",
   ACTION_REVERTED: "border-accent/40 text-accent",
   CONFIG_CHANGED: "border-line-strong text-foreground",
+  PLAYERS_DEACTIVATED: "border-line-strong text-muted",
 };
 
 /** Un valor de `searchParams` reducido a texto, para los enlaces de paginación. */
