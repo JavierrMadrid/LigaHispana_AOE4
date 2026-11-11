@@ -54,8 +54,8 @@
 
 /**
  * Cuánto se cachea el veredicto, en horas. **12 h**, la misma cifra que usa el sondeo
- * del historial de partidas y por el mismo motivo: el worker corre cada ~10 minutos,
- * así que comprobar en cada pasada sería una petición por jugador cada diez minutos
+ * del historial de partidas y por el mismo motivo: el worker corre cada 1-3 minutos,
+ * así que comprobar en cada pasada sería una petición por jugador cada pocos minutos
  * para no aprender nada nuevo.
  *
  * No es "una comprobación por algo que haya pasado" porque el dato es de estado y no

@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { divisionFromRankLevel, subdivisionNumber } from "@/lib/divisions";
 import { objectiveMaxProgress } from "@/lib/objective-progress";
 import {
+  IMPARABLE_ID,
   OBJECTIVE_DEFINITIONS,
   VICTORIAS_ID,
   objectiveRepeatable,
@@ -117,6 +118,15 @@ export type OverlayObjetivo = {
    * premio único: el objetivo se repite con cada victoria.
    */
   puntos: number;
+  /**
+   * Lo que paga **por unidad** un objetivo repetible, o `null` si no paga por
+   * unidad (metas y competiciones).
+   *
+   * `puntos` no sirve para esto: en `imparable` y los `maestro-<civ>` publica el
+   * tope (14 y 5), no lo que entra cada día o cada victoria. El overlay lo usa
+   * para la tarjeta de recompensa, que enseña lo que acaba de dar el evento.
+   */
+  puntos_por_unidad: number | null;
   /**
    * ¿El objetivo se posee y se pierde?
    *
@@ -488,6 +498,7 @@ export function overlayObjectives(
       descripcion: definition.description,
       icono_url: objectiveIconUrl(definition.id, base),
       puntos: objectivePoints(definition, ruleset),
+      puntos_por_unidad: objectivePointsPerUnit(definition, ruleset),
       volatil: definition.kind === "competition",
       repetible: objectiveRepeatable(definition.id),
       max_progreso: objectiveMaxProgress(definition, mapPoolSize),
@@ -512,6 +523,29 @@ function objectivePoints(definition: ObjectiveDefinition, ruleset: ScoringRulese
   }
 
   return ruleset.objectives[definition.id] ?? definition.points;
+}
+
+/**
+ * Lo que paga un objetivo **por unidad**, o `null` si cobra de una vez.
+ *
+ * Son los dos repartos variables del catálogo: `victorias` paga
+ * `ruleset.pointsPerWin` por victoria, e `imparable` paga 1 por día (su `puntos`
+ * es el tope, no el precio). Los `maestro-<civ>` traen su `pointsPerUnit` en la
+ * definición. El motor cobra con estas mismas reglas.
+ */
+function objectivePointsPerUnit(
+  definition: ObjectiveDefinition,
+  ruleset: ScoringRuleset,
+): number | null {
+  if (definition.id === VICTORIAS_ID) {
+    return ruleset.pointsPerWin;
+  }
+
+  if (definition.id === IMPARABLE_ID) {
+    return 1;
+  }
+
+  return definition.pointsPerUnit ?? null;
 }
 
 /**

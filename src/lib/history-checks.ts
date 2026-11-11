@@ -130,9 +130,9 @@ export type HistoryChecksResult = {
  * pasada, el despliegue se escalona en cinco pasadas (unos 50 minutos) y a partir de
  * ahí el ritmo es de uno por jugador cada 12 horas.
  *
- * Con el cron de 10 minutos, seis por pasada dan 864 comprobaciones al día, que
- * mantienen ese ritmo hasta unos 430 participantes. Si algún día el torneo fuera más
- * grande, el tope es lo primero que habría que tocar, y subirlo no cuesta nada.
+ * Con las pasadas actuales (1-3 min), seis por pasada dan entre 2.880 y 8.640
+ * comprobaciones al día, muy por encima del ritmo de una por jugador cada 12 h: el
+ * tope solo aprieta con un torneo de más de mil participantes, y subirlo no cuesta.
  */
 export const HISTORY_CHECK_MAX_PER_RUN = 6;
 
@@ -529,7 +529,7 @@ export async function checkPlayerHistory(
     try {
       // `skipDuplicates` sobre `dedupeKey`: la idempotencia de las reglas de estado sale
       // de que su clave no lleve ni partida ni número (ver `alertDedupeKey()`), así que
-      // reevaluarlas cada 10 minutos inserta 0 filas.
+      // reevaluarlas en cada pasada inserta 0 filas.
       const written = await db.alert.createMany({
         data: alerts.map((alert) => ({
           rule: alert.rule,

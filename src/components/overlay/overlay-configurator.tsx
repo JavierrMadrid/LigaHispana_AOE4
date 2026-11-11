@@ -10,11 +10,20 @@ import { MagnifyingGlass } from "@phosphor-icons/react/dist/csr/MagnifyingGlass"
 
 import { countryFlagUrl } from "@/lib/flag";
 import { normalizeSearchText } from "@/lib/format";
+import type {
+  OverlayClasificacion,
+  OverlayEventoObjetivo,
+  OverlayObjetivo,
+} from "@/lib/overlay-api";
 import {
   DEFAULT_OVERLAY_CONFIG,
+  overlayAnimates,
+  overlayEventKind,
+  overlayEventView,
   overlayPreviewUrl,
   type OverlayConfig,
   type OverlayConfiguratorParticipant,
+  type OverlayEventKind,
   type OverlayPosition,
   type OverlaySize,
 } from "@/lib/overlay-view";
@@ -65,6 +74,42 @@ function subscribeToOrigin(): () => void {
   return () => {};
 }
 
+/** El catálogo de objetivos, para saber de qué tipo es cada evento. */
+async function loadObjectives(): Promise<OverlayObjetivo[] | null> {
+  try {
+    const response = await fetch("/api/v0/objetivos", { cache: "no-store" });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const objectives: unknown = await response.json();
+
+    return Array.isArray(objectives) ? (objectives as OverlayObjetivo[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** La fila del participante en `/clasificacion`, o `null` si no se puede leer. */
+async function loadClassification(id: string): Promise<OverlayClasificacion | null> {
+  try {
+    const response = await fetch(`/api/v0/clasificacion?id=${encodeURIComponent(id)}`, {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const rows = (await response.json()) as OverlayClasificacion[];
+
+    return rows.find((row) => row.id === id) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * El configurador del overlay: elegir participante, ajustar la tarjeta, copiar
  * la URL y probar la animación, con la vista previa al lado y los pasos de OBS.
@@ -85,6 +130,7 @@ export function OverlayConfigurator({
   const [selectedId, setSelectedId] = useState(participants[0]?.id ?? "");
   const [config, setConfig] = useState<OverlayConfig>(DEFAULT_OVERLAY_CONFIG);
   const [copied, setCopied] = useState(false);
+  const [demoNotice, setDemoNotice] = useState<string | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
@@ -147,6 +193,7 @@ export function OverlayConfigurator({
     setSelectedId(id);
     setIframeLoaded(false);
     setCopied(false);
+    setDemoNotice(null);
   }
 
   function updateConfig(patch: Partial<OverlayConfig>) {
@@ -188,24 +235,120 @@ export function OverlayConfigurator({
     }
   }
 
-  function testAnimation() {
+  function postDemo(objetivoId: string, evento: OverlayEventoObjetivo) {
     if (!config.animaciones || !iframeLoaded || selected === null) {
       return;
     }
 
     iframeRef.current?.contentWindow?.postMessage(
-      {
-        type: "overlay:demo",
-        objetivoId: "imparable",
-        evento: {
-          tipo: "cumplido",
-          fechahora: new Date().toISOString(),
-          progreso: { propio: 14 },
-          repeticion: 14,
-        },
-      },
+      { type: "overlay:demo", objetivoId, evento },
       window.location.origin,
     );
+  }
+
+  async function loadDemoEvent(
+    kind: OverlayEventKind,
+  ): Promise<{ objetivoId: string; evento: OverlayEventoObjetivo } | null> {
+    const target = selected;
+
+    if (target === null) {
+      return null;
+    }
+
+    const [row, objectives] = await Promise.all([
+      loadClassification(target.id),
+      loadObjectives(),
+    ]);
+
+    if (row === null || objectives === null) {
+      return null;
+    }
+
+    const catalog = new Map(objectives.map((objective) => [objective.id, objective]));
+    let latest: { objetivoId: string; evento: OverlayEventoObjetivo } | null = null;
+
+    for (const [objetivoId, evento] of Object.entries(row.eventos_objetivos)) {
+      const objective = catalog.get(objetivoId);
+
+      if (objective === undefined) {
+        continue;
+      }
+
+      const view = overlayEventView(objetivoId, evento, objective);
+
+      if (overlayEventKind(view) !== kind || !overlayAnimates(view)) {
+        continue;
+      }
+
+      if (latest === null || Date.parse(evento.fechahora) >= Date.parse(latest.evento.fechahora)) {
+        latest = { objetivoId, evento };
+      }
+    }
+
+    return latest;
+  }
+
+  async function testAnimation(kind: OverlayEventKind) {
+    if (selected === null || !config.animaciones || !iframeLoaded) {
+      return;
+    }
+
+    const source = await loadDemoEvent(kind);
+
+    if (source === null) {
+      setDemoNotice("Este participante no tiene un objetivo de ese tipo para reproducir.");
+      return;
+    }
+
+    setDemoNotice(null);
+    postDemo(source.objetivoId, source.evento);
+  }
+
+  async function testLossAnimation() {
+    const target = selected;
+
+    if (target === null || !config.animaciones || !iframeLoaded) {
+      return;
+    }
+
+    const [row, objectives] = await Promise.all([
+      loadClassification(target.id),
+      loadObjectives(),
+    ]);
+
+    if (objectives === null) {
+      setDemoNotice("No se ha podido leer el catálogo de objetivos.");
+      return;
+    }
+
+    const byId = new Map(objectives.map((objective) => [objective.id, objective]));
+    const eventos = row?.eventos_objetivos ?? {};
+    const perdido = Object.entries(eventos).find(
+      ([id, evento]) => evento.tipo === "perdido" && byId.get(id)?.volatil === true,
+    );
+
+    if (perdido !== undefined) {
+      setDemoNotice(null);
+      postDemo(perdido[0], perdido[1]);
+      return;
+    }
+
+    // Sin una pérdida reciente, usa una competición real para probar la tarjeta.
+    const competencia =
+      Object.keys(eventos).find((id) => byId.get(id)?.volatil === true) ??
+      objectives.find((objective) => objective.volatil)?.id;
+
+    if (competencia === undefined) {
+      setDemoNotice("No hay competiciones en el catálogo para probar la pérdida.");
+      return;
+    }
+
+    setDemoNotice(null);
+    postDemo(competencia, {
+      tipo: "perdido",
+      fechahora: new Date().toISOString(),
+      progreso: { propio: 0 },
+    });
   }
 
   return (
@@ -372,17 +515,44 @@ export function OverlayConfigurator({
           </div>
 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <button
-              type="button"
-              onClick={testAnimation}
-              disabled={!config.animaciones || !iframeLoaded || selected === null}
-              className="inline-flex min-h-9 items-center justify-center rounded-md border border-accent/50 bg-accent/10 px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
-            >
-              Probar animación
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void testAnimation("directo")}
+                disabled={!config.animaciones || !iframeLoaded || selected === null}
+                className="inline-flex min-h-9 items-center justify-center rounded-md border border-accent/50 bg-accent/10 px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+              >
+                Probar puntos
+              </button>
+              <button
+                type="button"
+                onClick={() => void testAnimation("meta")}
+                disabled={!config.animaciones || !iframeLoaded || selected === null}
+                className="inline-flex min-h-9 items-center justify-center rounded-md border border-accent/50 bg-accent/10 px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+              >
+                Probar meta
+              </button>
+              <button
+                type="button"
+                onClick={() => void testAnimation("liderato")}
+                disabled={!config.animaciones || !iframeLoaded || selected === null}
+                className="inline-flex min-h-9 items-center justify-center rounded-md border border-accent/50 bg-accent/10 px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+              >
+                Probar 1º
+              </button>
+              <button
+                type="button"
+                onClick={() => void testLossAnimation()}
+                disabled={!config.animaciones || !iframeLoaded || selected === null}
+                className="inline-flex min-h-9 items-center justify-center rounded-md border border-loss/50 bg-loss/10 px-3 text-sm font-semibold text-loss transition-colors hover:bg-loss/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+              >
+                Probar pérdida
+              </button>
+            </div>
             <p className="text-xs text-muted">
               {config.animaciones
-                ? "Reproduce una animación de prueba en la vista previa; no cambia nada del torneo."
+                ? (demoNotice ??
+                  "Reproduce cada animación en la vista previa; no cambia nada del torneo.")
                 : "Activa las animaciones para probarlas."}
             </p>
           </div>

@@ -22,7 +22,8 @@ info:
 
     Donde `Y` es el identificador del participante y `Z` es la fecha/hora del último evento
     procesado en formato ISO 8601 con zona, por ejemplo `2026-10-24T14:30:00Z`. El overlay debe
-    sondear cada 30 segundos: el dato de fondo cambia al ritmo del recálculo (10 minutos), así que
+    sondear cada 30 segundos: el dato de fondo cambia con las pasadas del sincronizador (una cada
+    1-3 minutos) y la clasificación se recalcula al final de la pasada que trae algo nuevo, así que
     pedir más a menudo no adelanta nada.
 
     La primera llamada sin `desde` devuelve la foto completa (el último evento de cada objetivo).
@@ -30,9 +31,9 @@ info:
     forma inclusiva (`>=`) y el cliente debe deduplicar los eventos por `id` + `fechahora`, porque
     dos eventos pueden compartir instante.
 
-    `eventos_objetivos` sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` en cada
-    pasada del motor (cada 10 minutos). Los logros y las competiciones aparecen **en vivo**, con el
-    retraso del recálculo, no solo al cierre de la edición. La primera pasada de una edición siembra
+    `eventos_objetivos` sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` al final de
+    cada pasada del motor que tiene algo que recalcular (una cada 1-3 minutos). Los logros y las
+    competiciones aparecen **en vivo**, con el retraso de esa pasada, no solo al cierre de la edición. La primera pasada de una edición siembra
     `cumplido` y `progresado`; no hay `perdido` en la siembra, porque no había nada que perder. `at`
     es el instante del pase, salvo la siembra de un logro con la ventana ya cerrada, que usa el
     cierre de la ventana.
@@ -80,7 +81,7 @@ info:
     límite es de 1 a 20 y vale 3 por defecto.
 
     Todas las respuestas, también las de error, llevan `Cache-Control: no-store`.
-  version: 1.2.0
+  version: 1.3.0
   contact:
     name: Equipo de la Liga Hispana
 servers:
@@ -386,6 +387,7 @@ paths:
                   descripcion: El jugador con más partidas clasificatorias jugadas en el torneo. En caso de empate, lo cobra quien alcanzó esta cifra antes.
                   icono_url: ''
                   puntos: 50
+                  puntos_por_unidad: null
                   metrica: partidas
                   volatil: true
                   repetible: false
@@ -395,6 +397,7 @@ paths:
                   descripcion: Gana al menos 3 partidas con Japoneses.
                   icono_url: https://laligahispana.es/imagenes/civilizaciones/Japanese_AoE4.webp
                   puntos: 12
+                  puntos_por_unidad: null
                   metrica: victorias
                   volatil: false
                   repetible: false
@@ -752,6 +755,7 @@ components:
         - descripcion
         - icono_url
         - puntos
+        - puntos_por_unidad
         - metrica
         - volatil
         - repetible
@@ -778,8 +782,19 @@ components:
           minimum: 0
           description: |
             Puntos con la regla activa. En `victorias` es el precio por victoria
-            (`pointsPerWin`), no un premio único.
+            (`pointsPerWin`), no un premio único; en los repetibles con tope
+            (`imparable`, `maestro-<civ>`), el premio máximo.
           example: 50
+        puntos_por_unidad:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+          description: |
+            Lo que paga por unidad un objetivo repetible: `pointsPerWin` por victoria en
+            `victorias`, 1 por día en `imparable` y 1 por victoria en los `maestro-<civ>`.
+            `null` en las metas y competiciones, que cobran una sola vez.
+          example: null
         metrica:
           type: string
           description: |
