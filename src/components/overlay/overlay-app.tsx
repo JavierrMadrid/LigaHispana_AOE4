@@ -405,12 +405,6 @@ function RankingRow({ row }: { row: OverlayRankingRow }) {
         {row.alias}
       </span>
 
-      {row.isRequested ? (
-        <span className="shrink-0 rounded-full border border-accent/40 px-1 py-px text-[8px] font-semibold uppercase tracking-[0.12em] text-accent">
-          Tú
-        </span>
-      ) : null}
-
       <span className="shrink-0 text-[13px] font-semibold tabular-nums text-foreground">
         {row.puntos.toLocaleString("es-ES")}
         <span className="ml-0.5 text-[9px] font-normal text-muted">pts</span>

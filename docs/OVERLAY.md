@@ -38,7 +38,7 @@ demás se pueden escribir a mano para OBS. Un valor desconocido cae al defecto e
 
 | Vista | Contenido |
 |---|---|
-| Ranking | El puesto, el nombre y los puntos del jugador y de sus vecinos: uno por arriba y otro por abajo; en un extremo, los dos del lado disponible. La fila propia va con filete y la etiqueta «Tú». |
+| Ranking | El puesto, el nombre y los puntos del jugador y de sus vecinos: uno por arriba y otro por abajo; en un extremo, los dos del lado disponible. La fila propia va con filete y sombreado. |
 | Últimos objetivos | Hasta tres hitos recientes (solo `cumplido` y `progresado`, sin repetir objetivo). Los cumplidos llevan un tick; el progreso numérico (`2/3`, `8/8`) se mantiene en ambos casos. No hay etiquetas de «Cumplido» ni «Progreso». |
 | Animación | Cada evento que cobra (o deja de cobrar) tiene dos pasos: la ficha del objetivo y su recompensa. La ficha lleva icono, tick, nombre y descripción; las metas añaden el progreso (`3/3`) y los lideratos, «1º» («2º» si se pierde). La recompensa cambia la ventana a «Recompensa:» con lo que da el evento (+2 por una victoria, el premio de una meta); en un liderato avisa de que son temporales. Un liderato perdido cambia el tick por una X roja y la recompensa por «Pérdida:» con el importe en negativo y en rojo. El avance parcial de una meta no interrumpe. El cuerpo tiene altura fija, así que la ventana no cambia de tamaño entre pasos. |
 
