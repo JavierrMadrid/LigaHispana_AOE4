@@ -38,13 +38,23 @@ demás se pueden escribir a mano para OBS. Un valor desconocido cae al defecto e
 
 | Vista | Contenido |
 |---|---|
-| Ranking | El puesto, el nombre y los puntos del jugador y de sus vecinos: uno por arriba y otro por abajo; en un extremo, los dos del lado disponible. La fila propia va con filete y la etiqueta «Tú». |
+| Ranking | El puesto, el nombre y los puntos del jugador y de sus vecinos: uno por arriba y otro por abajo; en un extremo, los dos del lado disponible. La fila propia va con filete y sombreado. |
 | Últimos objetivos | Hasta tres hitos recientes (solo `cumplido` y `progresado`, sin repetir objetivo). Los cumplidos llevan un tick; el progreso numérico (`2/3`, `8/8`) se mantiene en ambos casos. No hay etiquetas de «Cumplido» ni «Progreso». |
-| Animación | Cuando llega un objetivo cumplido o progresado, sustituye la vista fija unos 4,5 s por evento, rota por todos los de la cola y vuelve a ella. Un `perdido` no interrumpe. |
+| Animación | Cada evento que cobra (o deja de cobrar) tiene dos pasos: la ficha del objetivo y su recompensa. La ficha lleva icono, tick, nombre y descripción; las metas añaden el progreso (`3/3`) y los lideratos, «1º» («2º» si se pierde). La recompensa cambia la ventana a «Recompensa:» con lo que da el evento (+2 por una victoria, el premio de una meta); en un liderato avisa de que son temporales. Un liderato perdido cambia el tick por una X roja y la recompensa por «Pérdida:» con el importe en negativo y en rojo. El avance parcial de una meta no interrumpe. El cuerpo tiene altura fija, así que la ventana no cambia de tamaño entre pasos. |
 
-La primera carga **no anima**: siembra el estado y solo anima lo que llegue después. La marca de la
-tarjeta es el emblema y el nombre de la edición activa; si la configuración no se puede leer, usa el
-emblema y el oro de la casa.
+Los objetivos se celebran según su reparto: los **directos** (`victorias`, `imparable`, los
+`maestro-<civ>`) en cada avance, porque cobran por unidad; las **metas** (`imbatible`,
+`lider-<civ>`, las hazañas) al completarlas; y los **lideratos** (las competiciones) al ponerse
+primero o al dejar de estarlo.
+
+En el configurador, «Probar puntos», «Probar meta», «Probar 1º» y «Probar pérdida» reproducen cada
+animación; ninguno cambia nada del torneo.
+
+La primera carga **no anima**: siembra el estado y solo anima lo que llegue después. Las
+animaciones salen en el primer sondeo que ve un evento nuevo, es decir, hasta 30 s después de la
+pasada del sincronizador que lo anotó (una cada 1-3 minutos). La marca de la tarjeta es el emblema
+y el nombre de la edición activa; si la configuración no se puede leer, usa el emblema y el oro de
+la casa.
 
 ## Añadirlo en OBS
 
@@ -71,7 +81,7 @@ esquinas. En OBS se puede mover o recortar como cualquier fuente.
 | Aspecto | Comportamiento |
 |---|---|
 | Sondeo | Cada **30 s** contra `/api/v0`. |
-| Recálculo del torneo | Cada **10 min**; pedir más a menudo no adelanta el dato. |
+| Recálculo del torneo | Al final de cada pasada del sincronizador que trae algo nuevo (una cada **1-3 min**); pedir más a menudo no adelanta el dato. |
 | Pestaña oculta | El sondeo se pausa y se reanuda al volver a la escena. |
 | Primera carga | Se siembra sin animar. |
 | Fallo de red | Reintento con espera creciente (30, 60 y 120 s) conservando los últimos datos. |

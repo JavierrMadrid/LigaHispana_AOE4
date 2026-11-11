@@ -283,9 +283,9 @@ clasificación y después de calcular los objetivos, con el mismo cerrojo:
   el catálogo de 94 objetivos (Vikingos y Escoceses), y la v4, por el catálogo de 120 objetivos (la
   prueba de concepto de subobjetivos, familia `maestro`).
 - **La API del overlay lee `ObjectiveProgressEvent`**: polling recomendado de 30 s. El dato cambia al
-  ritmo del recálculo (10 min), así que pedir más a menudo no adelanta nada.
+  ritmo de las pasadas del sincronizador (1-3 min), así que pedir más a menudo no adelanta nada.
 - **El feed se escribe en cada recálculo**: los logros y las competiciones aparecen **en vivo**, con
-  el retraso del pase (10 min), no solo al cierre de la edición. El contrato publicado está en
+  el retraso de la pasada (1-3 min), no solo al cierre de la edición. El contrato publicado está en
   [`API-OVERLAY.md`](./API-OVERLAY.md).
 - **Una bajada de progreso** (revertir una partida) actualiza el estado pero no emite evento: el feed
   cuenta avances y `PERDIDO` es solo de competiciones. La siguiente subida vuelve a anotarse.
@@ -306,7 +306,7 @@ Hay **dos relojes**, y el primario no es GitHub:
 ## El reloj: Supabase Cron
 
 ```bash
-npm run db:cron              # aplica extensiones + job de 10 min (idempotente)
+npm run db:cron              # aplica extensiones + job de cada minuto (idempotente)
 npm run db:cron -- --check   # comprueba y no escribe; sale con 1 si no cuadra
 npm run db:cron -- --remove  # desprograma el job
 ```

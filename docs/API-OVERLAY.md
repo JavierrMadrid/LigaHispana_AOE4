@@ -1,7 +1,7 @@
 # API para el overlay
 
 Contrato de lectura que consume el overlay del stream. El esquema formal, para generadores y
-validadores, está en [`openapi-overlay.yaml`](./openapi-overlay.yaml) (OpenAPI 3.2.1, versión 1.2.0).
+validadores, está en [`openapi-overlay.yaml`](./openapi-overlay.yaml) (OpenAPI 3.2.1, versión 1.3.0).
 Este documento es la versión humana: qué hay, qué significa cada campo y qué se puede esperar.
 
 ## Base
@@ -14,8 +14,10 @@ Este documento es la versión humana: qué hay, qué significa cada campo y qué
 | Caché | `Cache-Control: no-store` |
 | Polling recomendado | 30 s |
 
-El dato de fondo cambia al ritmo del recálculo (cada 10 minutos), así que pedir más a menudo no
-adelanta nada. Las rutas no pasan por sesión: no están en el `matcher` del Proxy.
+El dato de fondo cambia con las pasadas del sincronizador (una cada 1-3 minutos, ver
+[`OPERACION.md`](./OPERACION.md#sincronización)); la clasificación se recalcula al final de la pasada
+que trae algo nuevo, así que sondear más a menudo que 30 s no adelanta nada. Las rutas no pasan por
+sesión: no están en el `matcher` del Proxy.
 
 ## Endpoints
 
@@ -125,9 +127,9 @@ por la organización se descartan).
 - `repeticion` solo aparece en objetivos repetibles (`victorias`, `imparable` y los `maestro-<civ>`).
 - `fechahora` es ISO 8601 con zona.
 
-**Cuándo se escribe.** El feed sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` en
-cada pasada (cada 10 minutos). Los logros y las competiciones aparecen **en vivo**, con el retraso
-del recálculo, no solo al cierre de la edición.
+**Cuándo se escribe.** El feed sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` al
+final de cada pasada que tiene algo que recalcular (una cada 1-3 minutos). Los logros y las
+competiciones aparecen **en vivo**, con el retraso de esa pasada, no solo al cierre de la edición.
 
 - La primera pasada de una edición siembra `CUMPLIDO` y `PROGRESADO`; **no hay `PERDIDO`** en la
   siembra, porque no había nada que perder.
@@ -254,6 +256,7 @@ Catálogo activo, en orden de presentación. Sin parámetros.
 | `descripcion` | Frase de la regla. |
 | `icono_url` | URL **absoluta** en los objetivos de civilización; `""` en el resto. |
 | `puntos` | Puntos con la regla activa. En `victorias`, el precio **por victoria**; en los objetivos por unidad con tope (`maestro-<civ>`), el premio **máximo**. |
+| `puntos_por_unidad` | Lo que paga **por unidad** un repetible: `pointsPerWin` en `victorias`, 1 por día en `imparable` y 1 por victoria en los `maestro-<civ>`. `null` en metas y competiciones, que cobran una sola vez. |
 | `metrica` | Qué mide el objetivo: `partidas`, `victorias`, `racha`, `racha-partidas`, `dias`, `civilizaciones`, `mapas` o `subobjetivos`. El overlay la usa para las unidades («6 victorias», «6/14 días»). |
 | `volatil` | `true` en competiciones (se poseen y se pierden); `false` en logros. |
 | `repetible` | `true` en `victorias`, `imparable` y los `maestro-<civ>`. |
@@ -269,6 +272,7 @@ Catálogo activo, en orden de presentación. Sin parámetros.
     "descripcion": "El jugador con más partidas clasificatorias jugadas en el torneo. En caso de empate, lo cobra quien alcanzó esta cifra antes.",
     "icono_url": "",
     "puntos": 50,
+    "puntos_por_unidad": null,
     "metrica": "partidas",
     "volatil": true,
     "repetible": false,
@@ -280,6 +284,7 @@ Catálogo activo, en orden de presentación. Sin parámetros.
     "descripcion": "Gana al menos 3 partidas con Japoneses.",
     "icono_url": "https://laligahispana.es/imagenes/civilizaciones/Japanese_AoE4.webp",
     "puntos": 12,
+    "puntos_por_unidad": null,
     "metrica": "victorias",
     "volatil": false,
     "repetible": false,
