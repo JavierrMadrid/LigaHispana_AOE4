@@ -3,12 +3,14 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check } from "@phosphor-icons/react/dist/csr/Check";
+import { X } from "@phosphor-icons/react/dist/csr/X";
 
 import type { OverlayEventoObjetivo } from "@/lib/overlay-api";
 import { countryFlagUrl } from "@/lib/flag";
 import {
   overlayEventCompleted,
   overlayEventKind,
+  overlayEventLoss,
   overlayEventProgress,
   overlayEventReward,
   overlayRankingRows,
@@ -451,11 +453,12 @@ function RecentRow({ view }: { view: OverlayEventView }) {
  *
  * Según el reparto del objetivo (`overlayEventKind`): los directos no llevan
  * cifra, las metas llevan su progreso (`3/3`, `14/14`) y los lideratos, «1º» en
- * su lugar. El tick es el mismo en los tres: el evento solo llega aquí cuando
- * cobra.
+ * su lugar. El tick verde marca lo conseguido; un `perdido` de competición lo
+ * cambia por una X roja, porque el evento solo llega aquí cuando cobra o pierde.
  */
 function EventFocus({ view, pending }: { view: OverlayEventView; pending: number }) {
   const kind = overlayEventKind(view);
+  const lost = view.tipo === "perdido";
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1.5 px-3 py-3 text-center">
@@ -469,9 +472,13 @@ function EventFocus({ view, pending }: { view: OverlayEventView; pending: number
 
       <span
         aria-hidden="true"
-        className="flex size-6 items-center justify-center rounded-full border border-accent/40 bg-accent/10 text-accent"
+        className={`flex size-6 items-center justify-center rounded-full border ${
+          lost
+            ? "border-loss/50 bg-loss/10 text-loss"
+            : "border-accent/40 bg-accent/10 text-accent"
+        }`}
       >
-        <Check size={15} aria-hidden="true" />
+        {lost ? <X size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}
       </span>
 
       <p className="font-display text-[15px] font-semibold leading-tight text-foreground">
@@ -491,8 +498,12 @@ function EventFocus({ view, pending }: { view: OverlayEventView; pending: number
       ) : null}
 
       {kind === "liderato" ? (
-        <p className="font-display text-[15px] font-semibold tabular-nums text-accent-strong">
-          1º
+        <p
+          className={`font-display text-[15px] font-semibold tabular-nums ${
+            lost ? "text-loss" : "text-accent-strong"
+          }`}
+        >
+          {lost ? "2º" : "1º"}
         </p>
       ) : null}
 
@@ -513,26 +524,41 @@ function EventFocus({ view, pending }: { view: OverlayEventView; pending: number
 }
 
 /**
- * La recompensa, el segundo paso de la animación.
+ * La recompensa o la pérdida, el segundo paso de la animación.
  *
- * Ocupa la misma ventana que la ficha y solo enseña lo que ha dado el objetivo.
- * En un liderato avisa de que esos puntos se pierden si deja de ir primero.
+ * Ocupa la misma ventana que la ficha y solo enseña lo que ha dado (o quitado) el
+ * evento. Una competición ganada avisa de que los puntos son temporales; una
+ * perdida los enseña en negativo y en rojo.
  */
 function RewardFocus({ view }: { view: OverlayEventView }) {
-  const reward = overlayEventReward(view) ?? 0;
-  const temporary = overlayEventKind(view) === "liderato";
+  const loss = overlayEventLoss(view);
+  const amount = loss ?? overlayEventReward(view) ?? 0;
+  const lost = loss !== null;
+  const temporary = !lost && overlayEventKind(view) === "liderato";
 
   return (
     <div className="flex h-full flex-col items-center justify-center px-3 py-4 text-center">
-      <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-accent">
-        Recompensa:
+      <p
+        className={`text-[10px] font-medium uppercase tracking-[0.24em] ${
+          lost ? "text-loss" : "text-accent"
+        }`}
+      >
+        {lost ? "Pérdida:" : "Recompensa:"}
       </p>
 
-      <p className="mt-3 font-display text-[44px] font-semibold leading-none tabular-nums text-accent-strong">
-        +{reward}
+      <p
+        className={`mt-3 font-display text-[44px] font-semibold leading-none tabular-nums ${
+          lost ? "text-loss" : "text-accent-strong"
+        }`}
+      >
+        {lost ? `-${amount}` : `+${amount}`}
       </p>
 
-      <p className="mt-1 text-[10px] font-medium uppercase tracking-[0.22em] text-muted">
+      <p
+        className={`mt-1 text-[10px] font-medium uppercase tracking-[0.22em] ${
+          lost ? "text-loss" : "text-muted"
+        }`}
+      >
         puntos
       </p>
 

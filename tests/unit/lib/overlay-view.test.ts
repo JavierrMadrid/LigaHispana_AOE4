@@ -16,6 +16,7 @@ import {
   overlayEventCompleted,
   overlayEventKey,
   overlayEventKind,
+  overlayEventLoss,
   overlayEventProgress,
   overlayEventReward,
   overlayEventView,
@@ -381,7 +382,7 @@ describe("overlayMergeEvents", () => {
 });
 
 describe("overlayNewEventViews", () => {
-  it("solo claves nuevas y positivas, en orden ascendente", () => {
+  it("solo claves nuevas y animables, en orden ascendente", () => {
     const seen = new Set(["victorias@2026-10-20T10:00:00.000Z"]);
     const incoming = {
       victorias: evento("progresado", "2026-10-20T10:00:00.000Z"),
@@ -390,9 +391,11 @@ describe("overlayNewEventViews", () => {
       "lider-japanese": evento("cumplido", "2026-10-22T10:00:00.000Z"),
     };
 
-    // `lider-japanese` va 1/3: una meta a medias no se celebra.
+    // `lider-japanese` va 1/3 (una meta a medias no se celebra) y `victorias` ya
+    // se vio; la pérdida de la competición sí se anima.
     expect(overlayNewEventViews(seen, incoming, OBJETIVOS).map((view) => view.key)).toEqual([
       "imparable@2026-10-24T10:00:00.000Z",
+      "loco-por-ganar@2026-10-25T10:00:00.000Z",
     ]);
   });
 
@@ -406,7 +409,7 @@ describe("overlayNewEventViews", () => {
     expect(overlayNewEventViews(new Set(), incoming, OBJETIVOS)).toHaveLength(1);
   });
 
-  it("celebra un liderato al ganarlo y no cuando se pierde", () => {
+  it("celebra un liderato al ganarlo y al perderlo", () => {
     const ganado = {
       "loco-por-ganar": evento("cumplido", "2026-10-22T10:00:00.000Z"),
     };
@@ -415,7 +418,7 @@ describe("overlayNewEventViews", () => {
     };
 
     expect(overlayNewEventViews(new Set(), ganado, OBJETIVOS)).toHaveLength(1);
-    expect(overlayNewEventViews(new Set(), perdido, OBJETIVOS)).toHaveLength(0);
+    expect(overlayNewEventViews(new Set(), perdido, OBJETIVOS)).toHaveLength(1);
   });
 
   it("sin límite devuelve todos los nuevos, no solo cinco", () => {
@@ -795,6 +798,20 @@ describe("overlayEventReward", () => {
   });
 });
 
+describe("overlayEventLoss", () => {
+  const view = (id: string, tipo: OverlayEventoObjetivo["tipo"]) =>
+    overlayEventView(id, evento(tipo, "2026-10-24T10:00:00.000Z"), OBJETIVOS.get(id));
+
+  it("quita el premio de una competición perdida", () => {
+    expect(overlayEventLoss(view("loco-por-ganar", "perdido"))).toBe(25);
+  });
+
+  it("no quita nada en un progreso ni en un logro", () => {
+    expect(overlayEventLoss(view("loco-por-ganar", "progresado"))).toBeNull();
+    expect(overlayEventLoss(view("lider-japanese", "perdido"))).toBeNull();
+  });
+});
+
 describe("overlayAnimates", () => {
   const view = (
     id: string,
@@ -816,9 +833,9 @@ describe("overlayAnimates", () => {
     ).toBe(true);
   });
 
-  it("un liderato, al ganarlo; nunca un perdido", () => {
+  it("un liderato, al ganarlo y al perderlo", () => {
     expect(overlayAnimates(view("loco-por-ganar", "cumplido"))).toBe(true);
-    expect(overlayAnimates(view("loco-por-ganar", "perdido"))).toBe(false);
+    expect(overlayAnimates(view("loco-por-ganar", "perdido"))).toBe(true);
   });
 });
 

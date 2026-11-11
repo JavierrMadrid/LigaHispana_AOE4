@@ -608,15 +608,31 @@ export function overlayEventReward(view: OverlayEventView): number | null {
 }
 
 /**
+ * Los puntos que **quita** un evento, o `null` si no quita nada.
+ *
+ * Solo una competición se pierde: cuando otro jugador adelanta, el evento
+ * `perdido` devuelve el premio al marcador y la tarjeta enseña lo que deja de
+ * sumar. Un logro no se des-cumple, así que ahí nunca aplica.
+ */
+export function overlayEventLoss(view: OverlayEventView): number | null {
+  if (view.tipo !== "perdido" || !view.volatil) {
+    return null;
+  }
+
+  return view.puntos > 0 ? view.puntos : null;
+}
+
+/**
  * ¿Este evento tiene animación?
  *
  * Los objetivos directos se celebran en cada avance (cobran por unidad). Las
- * metas y los lideratos, solo cuando de verdad se cobran: al completar el umbral
- * o al ponerse primero. Un `perdido` nunca interrumpe.
+ * metas y los lideratos, cuando de verdad se cobran o se pierden: al completar
+ * el umbral, al ponerse primero y al dejar de estarlo. Un `perdido` de un logro
+ * no existe; el de una competición, sí.
  */
 export function overlayAnimates(view: OverlayEventView): boolean {
   if (view.tipo === "perdido") {
-    return false;
+    return overlayEventKind(view) === "liderato";
   }
 
   if (overlayEventKind(view) === "directo") {

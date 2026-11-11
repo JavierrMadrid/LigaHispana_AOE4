@@ -304,6 +304,53 @@ export function OverlayConfigurator({
     postDemo(source.objetivoId, source.evento);
   }
 
+  async function testLossAnimation() {
+    const target = selected;
+
+    if (target === null || !config.animaciones || !iframeLoaded) {
+      return;
+    }
+
+    const [row, objectives] = await Promise.all([
+      loadClassification(target.id),
+      loadObjectives(),
+    ]);
+
+    if (objectives === null) {
+      setDemoNotice("No se ha podido leer el catálogo de objetivos.");
+      return;
+    }
+
+    const byId = new Map(objectives.map((objective) => [objective.id, objective]));
+    const eventos = row?.eventos_objetivos ?? {};
+    const perdido = Object.entries(eventos).find(
+      ([id, evento]) => evento.tipo === "perdido" && byId.get(id)?.volatil === true,
+    );
+
+    if (perdido !== undefined) {
+      setDemoNotice(null);
+      postDemo(perdido[0], perdido[1]);
+      return;
+    }
+
+    // Sin una pérdida reciente, usa una competición real para probar la tarjeta.
+    const competencia =
+      Object.keys(eventos).find((id) => byId.get(id)?.volatil === true) ??
+      objectives.find((objective) => objective.volatil)?.id;
+
+    if (competencia === undefined) {
+      setDemoNotice("No hay competiciones en el catálogo para probar la pérdida.");
+      return;
+    }
+
+    setDemoNotice(null);
+    postDemo(competencia, {
+      tipo: "perdido",
+      fechahora: new Date().toISOString(),
+      progreso: { propio: 0 },
+    });
+  }
+
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
       <section
@@ -493,11 +540,19 @@ export function OverlayConfigurator({
               >
                 Probar 1º
               </button>
+              <button
+                type="button"
+                onClick={() => void testLossAnimation()}
+                disabled={!config.animaciones || !iframeLoaded || selected === null}
+                className="inline-flex min-h-9 items-center justify-center rounded-md border border-loss/50 bg-loss/10 px-3 text-sm font-semibold text-loss transition-colors hover:bg-loss/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+              >
+                Probar pérdida
+              </button>
             </div>
             <p className="text-xs text-muted">
               {config.animaciones
                 ? (demoNotice ??
-                  "Reproduce un objetivo real de cada tipo en la vista previa; no cambia nada del torneo.")
+                  "Reproduce cada animación en la vista previa; no cambia nada del torneo.")
                 : "Activa las animaciones para probarlas."}
             </p>
           </div>

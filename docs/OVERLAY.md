@@ -40,15 +40,15 @@ demás se pueden escribir a mano para OBS. Un valor desconocido cae al defecto e
 |---|---|
 | Ranking | El puesto, el nombre y los puntos del jugador y de sus vecinos: uno por arriba y otro por abajo; en un extremo, los dos del lado disponible. La fila propia va con filete y la etiqueta «Tú». |
 | Últimos objetivos | Hasta tres hitos recientes (solo `cumplido` y `progresado`, sin repetir objetivo). Los cumplidos llevan un tick; el progreso numérico (`2/3`, `8/8`) se mantiene en ambos casos. No hay etiquetas de «Cumplido» ni «Progreso». |
-| Animación | Cada evento que cobra tiene dos pasos: la ficha del objetivo y su recompensa. La ficha lleva icono, tick, nombre y descripción; las metas añaden el progreso (`3/3`) y los lideratos, «1º». La recompensa cambia la ventana a «Recompensa:» con lo que da el evento (+2 por una victoria, el premio de una meta); en un liderato avisa de que son temporales. Un `perdido` y el avance parcial de una meta no interrumpen. El cuerpo tiene altura fija, así que la ventana no cambia de tamaño entre pasos. |
+| Animación | Cada evento que cobra (o deja de cobrar) tiene dos pasos: la ficha del objetivo y su recompensa. La ficha lleva icono, tick, nombre y descripción; las metas añaden el progreso (`3/3`) y los lideratos, «1º» («2º» si se pierde). La recompensa cambia la ventana a «Recompensa:» con lo que da el evento (+2 por una victoria, el premio de una meta); en un liderato avisa de que son temporales. Un liderato perdido cambia el tick por una X roja y la recompensa por «Pérdida:» con el importe en negativo y en rojo. El avance parcial de una meta no interrumpe. El cuerpo tiene altura fija, así que la ventana no cambia de tamaño entre pasos. |
 
 Los objetivos se celebran según su reparto: los **directos** (`victorias`, `imparable`, los
 `maestro-<civ>`) en cada avance, porque cobran por unidad; las **metas** (`imbatible`,
 `lider-<civ>`, las hazañas) al completarlas; y los **lideratos** (las competiciones) al ponerse
-primero.
+primero o al dejar de estarlo.
 
-En el configurador, «Probar puntos», «Probar meta» y «Probar 1º» reproducen un objetivo real de
-cada tipo; ninguno cambia nada del torneo.
+En el configurador, «Probar puntos», «Probar meta», «Probar 1º» y «Probar pérdida» reproducen cada
+animación; ninguno cambia nada del torneo.
 
 La primera carga **no anima**: siembra el estado y solo anima lo que llegue después. Las
 animaciones salen en el primer sondeo que ve un evento nuevo, es decir, hasta 30 s después de la
