@@ -1,317 +1,267 @@
 import Image from "next/image";
+import { ArrowUpRight } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
+import { Broadcast } from "@phosphor-icons/react/dist/csr/Broadcast";
+import { Clock } from "@phosphor-icons/react/dist/csr/Clock";
+import { MapTrifold } from "@phosphor-icons/react/dist/csr/MapTrifold";
+import { SquaresFour } from "@phosphor-icons/react/dist/csr/SquaresFour";
 import type { DivisionId, LiveMatch, LiveMatchParticipant } from "@/lib/public";
 import { civilizationName } from "@/lib/civs";
+import { countryFlagUrl } from "@/lib/flag";
 import { ChannelLinks } from "@/components/channel-links";
 import { CivilizationIcon } from "@/components/civilization-icon";
-import { divisionColor, divisionLabel } from "@/components/division-icon";
+import { divisionLabel } from "@/components/division-icon";
 import { LeagueIcon, leagueFilterRank } from "@/components/league-icon";
-import { liveChannelValues, matchLiveChannels, participantIsLive } from "@/components/live-channels";
-import { LiveDot } from "@/components/live-dot";
+import {
+  liveChannelValues,
+  matchLiveChannels,
+  participantIsLive,
+} from "@/components/live-channels";
 import { formatAbsoluteTime, multistreamViewerUrl } from "@/lib/format";
 import { mapImage } from "@/lib/maps";
+import { normalizeTwitchChannel } from "@/lib/stream-channels";
+import { MatchTwitchPreview } from "@/components/match-twitch-preview";
 
-/**
- * Una partida en juego, con la alineación completa que resuelve `getLiveMatches()`.
- *
- * La tarjeta se lee como la ficha de un enfrentamiento que está pasando ahora:
- * el mapa ocupa la banda superior, porque es el único asset del juego que el
- * lector reconoce de un vistazo, y debajo van los dos bandos. En un 1vs1 cada
- * lado lleva un jugador, así que la misma rejilla se lee "A contra B"; en 2v2 y
- * superiores cada lado es una columna con sus jugadores. Nunca se repite un
- * nombre ni se pintan dos tarjetas de la misma partida: la alineación ya llega
- * resuelta y sin duplicados.
- *
- * Los participantes de la liga se distinguen por peso de nombre y por el emblema
- * de su división; los rivales de ladder que no están en el torneo se pintan sin
- * emblema, en un tono un punto por debajo. No se pinta avatar: cada jugador lleva
- * su icono de civilización, que es lo que el ojo busca en una partida, y así la
- * fila queda alineada también para los rivales, que no tienen foto.
- *
- * Lo que se puede ir a ver tiene su sitio: el canal de cada participante que está
- * emitiendo va pegado al final de su fila —es de ese jugador, no de la partida—,
- * y cuando en la misma partida hay dos canales de Twitch o Kick, el visor
- * multi-stream ocupa el pie de la tarjeta, que es una acción de la partida entera.
- */
-export function LiveMatchCard({ match }: { match: LiveMatch }) {
+export function LiveMatchCard({
+  match,
+  previewThumbnails = false,
+}: {
+  match: LiveMatch;
+  previewThumbnails?: boolean;
+}) {
   const teams = groupTeams(match.participants);
   const image = mapImage(match.map);
-  const mapName = match.map !== null && match.map.trim() !== "" ? match.map : null;
+  const mapName = match.map?.trim() || "Mapa por determinar";
   const livePlayerCount = match.participants.filter(participantIsLive).length;
-  const multistream = multistreamViewerUrl(matchLiveChannels(match.participants));
-
+  const twitch = match.participants.flatMap((player) => {
+    const login = player.twitchIsLive
+      ? normalizeTwitchChannel(player.twitchChannel)
+      : null;
+    return login ? [{ login, name: player.name.trim() || login }] : [];
+  })[0];
+  const multistream = multistreamViewerUrl(
+    matchLiveChannels(match.participants)
+  );
   return (
-    <li className="overflow-hidden rounded-lg border border-line bg-surface">
-      <h2 className="sr-only">
-        {match.format}
-        {mapName === null ? "" : ` en ${mapName}`}
-        {match.leaguePlayerCount > 1
-          ? `, ${match.leaguePlayerCount} jugadores de la liga`
-          : match.leaguePlayerCount === 1
-            ? ", 1 jugador de la liga"
-            : ""}
-        {livePlayerCount > 0 ? `, ${livePlayerCount} en directo` : ""}
-      </h2>
-
-      <div className="relative aspect-[16/7] w-full overflow-hidden bg-surface-raised">
-        {image !== null ? (
-          <Image
-            src={image}
-            alt=""
-            fill
-            sizes="(min-width: 1280px) 19rem, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
-            className="object-cover"
-          />
-        ) : (
-          // Sin asset no se deja un hueco: la retícula recuerda a un plano y el
-          // nombre del mapa, abajo, sigue diciendo qué se está jugando.
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 bg-[repeating-linear-gradient(135deg,var(--line)_0_1px,transparent_1px_10px)]"
-          />
-        )}
-
-        {/* Velo inferior: da contraste al nombre del mapa sobre la imagen. */}
-        <div
-          aria-hidden="true"
-          className="absolute inset-x-0 bottom-0 h-3/4 bg-gradient-to-t from-background via-background/70 to-transparent"
-        />
-
-        <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
-          <span className="inline-flex min-w-0 items-center gap-2 rounded-full border border-line bg-background/80 px-2.5 py-1 text-xs font-semibold text-foreground backdrop-blur">
-            <LiveDot />
-            {/* El tipo de partida es lo único que puede estirarse: en un móvil
-                estrecho se recorta antes que empujar el tiempo fuera de la banda. */}
-            <span className="truncate">{match.format}</span>
-            <span className="sr-only">en juego</span>
-          </span>
-
-          <span
-            title={`Empezó a las ${formatAbsoluteTime(match.startedAt)}`}
-            className="shrink-0 rounded-full border border-line bg-background/80 px-2.5 py-1 text-xs tabular-nums text-muted backdrop-blur"
-          >
-            {formatElapsed(match.elapsedSeconds)}
-          </span>
-        </div>
-
-        <p className="absolute inset-x-0 bottom-0 flex min-w-0 p-3">
-          <span
-            title={mapName ?? undefined}
-            className={`truncate font-display text-sm font-semibold ${
-              mapName === null ? "italic text-muted" : "text-foreground"
-            }`}
-          >
-            {mapName ?? "Mapa por determinar"}
-          </span>
-        </p>
-      </div>
-
-      <div className="p-4">
-        {teams.length === 2 ? (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch sm:gap-3">
-            <TeamBlock participants={teams[0]} label="Equipo 1" />
-            <Versus />
-            <TeamBlock participants={teams[1]} label="Equipo 2" alignRight />
+    <li className="matches-card">
+      <article aria-labelledby={`match-${match.gameId}`}>
+        <header className="matches-map">
+          {image ? (
+            <Image
+              src={image}
+              alt=""
+              fill
+              sizes="(min-width:1440px) 550px, (min-width:1100px) 40vw, (min-width:768px) 50vw, 100vw"
+              className="matches-map-image"
+            />
+          ) : (
+            <div className="matches-map-fallback" aria-hidden="true">
+              <MapTrifold size={40} />
+            </div>
+          )}
+          {twitch ? (
+            <MatchTwitchPreview
+              key={twitch.login}
+              login={twitch.login}
+              name={twitch.name}
+              previewSrc={
+                previewThumbnails
+                  ? image ?? "/imagenes/portada/aoe4-hre-panorama.webp"
+                  : undefined
+              }
+            />
+          ) : null}
+          <div className="matches-map-veil" aria-hidden="true" />
+          <div className="matches-map-top">
+            <span className="matches-format">
+              <span className="matches-live-dot" aria-hidden="true" />
+              {match.format}
+              <span className="sr-only"> en juego</span>
+            </span>
+            <span
+              className="matches-elapsed"
+              title={`Empezó a las ${formatAbsoluteTime(match.startedAt)}`}
+            >
+              <Clock size={14} aria-hidden="true" />
+              {formatElapsed(match.elapsedSeconds)}
+            </span>
           </div>
-        ) : (
-          <ul aria-label="Jugadores de la partida" className="flex flex-col gap-2">
-            {match.participants.map((participant, index) => (
-              <ParticipantRow
-                key={`${participant.profileId ?? "sin-perfil"}-${index}`}
-                participant={participant}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/* Acción de la partida, no de un jugador: su sitio es el pie de la
-          tarjeta. `multistreamViewerUrl` devuelve `null` mientras no haya al
-          menos dos canales que meter (los de YouTube van por su cuenta, con su
-          icono), y entonces no se pinta ni el filete. */}
-      {multistream !== null ? (
-        <div className="border-t border-line">
-          <a
-            href={multistream}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Visor multi-stream de StreamsCharts"
-            className="flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-muted underline-offset-4 transition-colors hover:bg-surface-raised hover:text-accent hover:underline"
-          >
-            Ver los directos a la vez
-            <span className="sr-only"> (se abre en una pestaña nueva)</span>
-          </a>
+          <h2 id={`match-${match.gameId}`}>
+            <MapTrifold size={16} aria-hidden="true" />
+            {mapName}
+          </h2>
+        </header>
+        <div className="matches-card-meta">
+          <span>
+            {match.leaguePlayerCount === 1
+              ? "1 jugador de la liga"
+              : `${match.leaguePlayerCount} jugadores de la liga`}
+          </span>
+          {livePlayerCount > 0 ? (
+            <span className="matches-broadcast-count">
+              <Broadcast size={14} aria-hidden="true" />
+              {livePlayerCount} en directo
+            </span>
+          ) : (
+            <span>Sin directo confirmado</span>
+          )}
         </div>
-      ) : null}
+        <div className="matches-roster">
+          {teams.length === 2 ? (
+            <div className="matches-duel">
+              <TeamBlock participants={teams[0]} label="Equipo 1" />
+              <span className="matches-versus" aria-hidden="true">
+                vs
+              </span>
+              <TeamBlock participants={teams[1]} label="Equipo 2" />
+            </div>
+          ) : (
+            <div className="matches-flat-roster">
+              <p>Alineación de la partida</p>
+              <ul aria-label="Jugadores de la partida">
+                {match.participants.map((participant, index) => (
+                  <ParticipantRow
+                    key={`${participant.profileId ?? "unknown"}-${index}`}
+                    participant={participant}
+                  />
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+        {multistream ? (
+          <footer className="matches-card-footer">
+            <a
+              href={multistream}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Visor multi-stream de StreamsCharts"
+            >
+              <SquaresFour size={17} aria-hidden="true" />
+              Ver directos a la vez
+              <ArrowUpRight size={15} aria-hidden="true" />
+            </a>
+          </footer>
+        ) : null}
+      </article>
     </li>
   );
 }
 
-/**
- * Un bando. Cuando los dos lados tienen un solo jugador la fila se lee como un
- * duelo; con más jugadores, como una alineación por equipos.
- */
 function TeamBlock({
   participants,
   label,
-  alignRight = false,
 }: {
   participants: LiveMatchParticipant[];
   label: string;
-  alignRight?: boolean;
 }) {
   return (
-    <ul aria-label={label} className="flex min-w-0 flex-1 flex-col gap-2">
-      {participants.map((participant, index) => (
-        <ParticipantRow
-          key={`${participant.profileId ?? "sin-perfil"}-${index}`}
-          participant={participant}
-          alignRight={alignRight}
-        />
-      ))}
-    </ul>
-  );
-}
-
-/**
- * Separador de bandos: una raya con "vs" en medio. Horizontal en móvil (donde
- * los equipos se apilan) y vertical a partir de `sm`.
- */
-function Versus() {
-  return (
-    <div
-      aria-hidden="true"
-      className="flex items-center gap-3 sm:w-8 sm:flex-col sm:gap-2"
-    >
-      <span className="h-px flex-1 bg-line sm:h-auto sm:w-px sm:flex-1" />
-      <span className="text-xs font-semibold uppercase tracking-[0.18em] text-muted/80">
-        vs
-      </span>
-      <span className="h-px flex-1 bg-line sm:h-auto sm:w-px sm:flex-1" />
+    <div className="matches-team">
+      <p>{label}</p>
+      <ul aria-label={label}>
+        {participants.map((participant, index) => (
+          <ParticipantRow
+            key={`${participant.profileId ?? "unknown"}-${index}`}
+            participant={participant}
+          />
+        ))}
+      </ul>
     </div>
   );
 }
 
 function ParticipantRow({
   participant,
-  alignRight = false,
 }: {
   participant: LiveMatchParticipant;
-  alignRight?: boolean;
 }) {
-  const name = participant.name.trim();
-  const unknown = name === "";
-  const label = unknown ? "Jugador sin identificar" : name;
-
+  const name = participant.name.trim() || "Jugador sin identificar";
+  const country = participant.country
+    ? countryFlagUrl(participant.country)
+    : null;
+  const civ = participant.civ
+    ? civilizationName(participant.civ)
+    : "Civilización sin publicar";
   return (
-    <li className={`flex min-w-0 items-center gap-2.5 sm:gap-2${alignRight ? " justify-end" : ""}`}>
+    <li
+      className={`matches-player ${
+        participant.isLeaguePlayer ? "matches-league-player" : ""
+      }`}
+    >
       <CivilizationIcon
         civ={participant.civ}
-        className="size-6 shrink-0 sm:size-5"
-        label={participant.civ === null ? undefined : civilizationName(participant.civ)}
+        className="matches-civ"
+        label={civ}
       />
-
-      {participant.isLeaguePlayer && participant.profileUrl !== null ? (
-        <a
-          href={participant.profileUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={label}
-          className="min-w-0 truncate text-sm font-semibold text-foreground underline-offset-4 transition-colors hover:text-accent hover:underline sm:text-xs"
-        >
-          {label}
-          <span className="sr-only">
-            , perfil en AoE4World (se abre en una pestaña nueva)
-          </span>
-        </a>
-      ) : (
-        <span
-          title={label}
-          className={`min-w-0 truncate text-sm sm:text-xs ${
-            participant.isLeaguePlayer
-              ? "font-semibold text-foreground"
-              : unknown
-                ? "italic text-muted"
-                : "text-foreground/80"
-          }`}
-        >
-          {label}
-        </span>
-      )}
-
-      {participant.division !== null ? (
+      <div className="matches-player-copy">
+        <div className="matches-player-name">
+          {participant.isLeaguePlayer && participant.profileUrl ? (
+            <a
+              href={participant.profileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`${name}, perfil en AoE4World (se abre en otra pestaña)`}
+            >
+              {name}
+            </a>
+          ) : (
+            <span title={name}>{name}</span>
+          )}
+          {country ? (
+            <Image
+              src={country}
+              alt={participant.country ?? ""}
+              width={18}
+              height={12}
+              unoptimized
+              style={{ height: "auto" }}
+              className="matches-country"
+            />
+          ) : null}
+        </div>
+        <div className="matches-player-detail">
+          <span title={civ}>{civ}</span>
+          <ChannelLinks name={name} {...liveChannelValues(participant)} />
+        </div>
+      </div>
+      {participant.division ? (
         <DivisionBadge division={participant.division} />
       ) : null}
-
-      {/* Solo los canales que emiten ahora mismo: es lo que se puede ir a ver.
-          `liveChannelValues` deja fuera los apagados y los que no se han podido
-          comprobar, así que aquí no hay que decidir nada más. */}
-      <ChannelLinks name={label} {...liveChannelValues(participant)} />
     </li>
   );
 }
 
-/**
- * Emblema de la división del jugador de la liga. El color y la forma ya dicen
- * cuál es; el `title` y el texto oculto lo dicen también sin depender del color.
- */
 function DivisionBadge({ division }: { division: DivisionId }) {
-  const label = divisionLabel(division);
-
   return (
     <span
-      title={label}
-      style={{ color: divisionColor(division) }}
-      className="inline-flex shrink-0 items-center"
+      title={`${divisionLabel(division)}, jugador de la liga`}
+      className="matches-player-division"
     >
-      <LeagueIcon rank={leagueFilterRank(division)} className="h-5 w-3.5 sm:h-4 sm:w-3" />
-      <span className="sr-only">{label}, jugador de la liga</span>
+      <LeagueIcon rank={leagueFilterRank(division)} className="matches-rank" />
+      <span className="sr-only">
+        {divisionLabel(division)}, jugador de la liga
+      </span>
     </span>
   );
 }
 
-/**
- * Agrupa la alineación por equipo conservando el orden de la API.
- *
- * Devuelve una lista vacía si algún jugador no tiene equipo: en el degradado sin
- * `rawJson` los bandos son desconocidos y suponerlos sería pintar un dato falso,
- * así que quien llama cae a la lista plana.
- */
-function groupTeams(participants: readonly LiveMatchParticipant[]): LiveMatchParticipant[][] {
+function groupTeams(
+  participants: readonly LiveMatchParticipant[]
+): LiveMatchParticipant[][] {
   const teams = new Map<number, LiveMatchParticipant[]>();
-
   for (const participant of participants) {
-    if (participant.team === null) {
-      return [];
-    }
-
+    if (participant.team === null) return [];
     const list = teams.get(participant.team) ?? [];
     list.push(participant);
     teams.set(participant.team, list);
   }
-
   return [...teams.entries()]
     .sort(([left], [right]) => left - right)
     .map(([, list]) => list);
 }
 
-/**
- * Tiempo transcurrido desde el arranque de la partida, en la unidad que se lee
- * de un vistazo. La ventana de una partida en juego es de una hora, así que lo
- * normal son minutos; la hora se contempla por si el dato llega con retraso.
- */
 function formatElapsed(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(total / 60);
-
-  if (minutes < 1) {
-    return "menos de 1 min";
-  }
-
-  if (minutes < 60) {
-    return `${minutes} min`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-
-  return `${hours} h ${minutes % 60} min`;
+  const minutes = Math.floor(Math.max(0, seconds) / 60);
+  if (minutes < 1) return "menos de 1 min";
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
 }

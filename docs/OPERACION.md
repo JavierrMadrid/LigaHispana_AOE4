@@ -1417,6 +1417,25 @@ recálculo de la clasificación).
 
 ## Simulaciones
 
+### Previsualización de `/partidas` sin base de datos
+
+Con `npm run dev`, el parámetro `preview` permite revisar la interfaz sin consultar partidas:
+
+| Ruta | Estado de muestra |
+|---|---|
+| `/partidas?preview=live` | 8 partidas ficticias: duelos, equipos, FFA, canales y datos incompletos. |
+| `/partidas?preview=stress` | 32 partidas ficticias para revisar la densidad y los filtros. |
+| `/partidas?preview=empty` | Sin partidas en curso. |
+| `/partidas?preview=unavailable` | Lectura no disponible, distinta de una lista vacía. |
+| `/partidas?preview=loading` | Estado visual de carga. |
+
+- Solo se activa con `NODE_ENV=development`; en producción se ignora el parámetro.
+- `src/lib/matches-preview.ts` genera datos deterministas desde la fecha recibida, sin red ni
+  escrituras en la base. Los nombres, perfiles, canales y estados de emisión son de prueba.
+- La FFA comprueba la presentación de varios bandos; no cambia las familias permitidas por el
+  ruleset de producción. Los datos ausentes conservan `null`, sin suponer equipos o divisiones.
+- Es una revisión de presentación y filtrado local, no una medición del DAL o del sincronizador.
+
 ### Con fixtures (mock de AoE4World)
 
 `AOE4WORLD_MOCK=1` intercepta el punto de salida HTTP de la API (`performRequest()`) y responde con las
