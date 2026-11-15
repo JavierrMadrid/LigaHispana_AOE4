@@ -54,6 +54,7 @@ import { AdminActionType } from "@/generated/prisma/enums";
  * | `ADMIN_REACTIVATED` | `Reactivación de pedro@correo.com` |
  * | `ACTION_REVERTED` | `Revertida la acción: Baja de BeastWizard` |
  * | `CONFIG_CHANGED` | `Cambio de configuración: ventana del torneo` |
+ * | `PLAYERS_DEACTIVATED` | `Participantes desactivados al empezar una edición nueva: 42 (31 aprobados y 11 pendientes)` |
  *
  * En `MATCH_POINTS_REVERTED` y `MATCH_POINTS_RESTORED` el nombre del jugador va al
  * final y no escondido en `details`:
@@ -273,6 +274,29 @@ type ConfigChangedEntry = {
   cambios: CampoEditado[];
 };
 
+/**
+ * Desactivación masiva al empezar una **edición nueva**.
+ *
+ * Es la línea que deja constancia de cuántos participantes se quedaron `INACTIVE` y
+ * con qué edición: no participa nadie en la siguiente sin reinscribirse, y el
+ * historial tiene que poder decir cuántos se desactivaron y de dónde venían. Lleva
+ * los dos recuentos por separado porque un `APPROVED` y un `PENDING` no significan lo
+ * mismo —uno estaba dentro y el otro esperaba—, y el total es la suma.
+ *
+ * No es reversible desde el historial: cada participante vuelve por su propio camino
+ * (reinscribirse y ser aprobado), que deja su rastro. Ver `REVERTIBLE` en
+ * `src/lib/admin-revert.ts`.
+ */
+type PlayersDeactivatedEntry = {
+  type: "PLAYERS_DEACTIVATED";
+  /** Cuántos `APPROVED` había y han quedado inactivos. */
+  approved: number;
+  /** Cuántos `PENDING` había y han quedado inactivos. */
+  pending: number;
+  /** `window.from` de la edición que empieza, en ISO-8601 UTC. */
+  editionFrom: string;
+};
+
 /** Lo que hay que saber de una acción, según su tipo. */
 export type AdminActionEntry =
   | PlayerCreatedEntry
@@ -284,11 +308,22 @@ export type AdminActionEntry =
   | AdminDeactivatedEntry
   | AdminReactivatedEntry
   | ActionRevertedEntry
-  | ConfigChangedEntry;
+  | ConfigChangedEntry
+  | PlayersDeactivatedEntry;
 
 /** `1 punto` y `0 puntos`: el plural no es un detalle de estilo en un historial. */
 export function puntos(count: number): string {
   return count === 1 ? "1 punto" : `${count} puntos`;
+}
+
+/** «1 aprobado» / «N aprobados». */
+function aprobados(count: number): string {
+  return count === 1 ? "1 aprobado" : `${count} aprobados`;
+}
+
+/** «1 pendiente» / «N pendientes». */
+function pendientes(count: number): string {
+  return count === 1 ? "1 pendiente" : `${count} pendientes`;
 }
 
 /** La parte que comparten los dos tipos de partida. */
@@ -343,6 +378,19 @@ export function adminActionSummary(entry: AdminActionEntry): string {
       return `Cambio de configuración: ${entry.cambios
         .map((cambio) => cambio.etiqueta)
         .join(", ")}`;
+    case AdminActionType.PLAYERS_DEACTIVATED: {
+      // Cero no se nombra: la acción solo se escribe cuando había alguien, y si un día
+      // llegara con un lado a cero la frase no debe decir "0 aprobados".
+      const partes = [
+        ...(entry.approved > 0 ? [aprobados(entry.approved)] : []),
+        ...(entry.pending > 0 ? [pendientes(entry.pending)] : []),
+      ];
+      const detalle = partes.length === 0 ? "" : ` (${partes.join(" y ")})`;
+
+      return `Participantes desactivados al empezar una edición nueva: ${
+        entry.approved + entry.pending
+      }${detalle}`;
+    }
   }
 }
 
@@ -438,6 +486,13 @@ export function adminActionDetails(entry: AdminActionEntry): Prisma.InputJsonObj
       return {
         campos: entry.cambios.map((cambio) => cambio.campo).join(","),
         ...camposEnDetails(entry.cambios),
+      };
+    case AdminActionType.PLAYERS_DEACTIVATED:
+      return {
+        count: entry.approved + entry.pending,
+        approved: entry.approved,
+        pending: entry.pending,
+        editionFrom: entry.editionFrom,
       };
   }
 }

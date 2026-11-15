@@ -120,7 +120,7 @@ export type { PublicRead };
  * de que un lector vea una clasificación vieja. Pero eso hace que **la página que
  * las llama tenga que ser dinámica**. Una página estática se genera en el `next
  * build` y su resultado se queda congelado en el HTML, así que la clasificación
- * dejaría de moverse sola por mucho que el worker recalcule cada 10 minutos. Lo más
+ * dejaría de moverse sola por mucho que el worker recalcule en cada pasada. Lo más
  * simple y explícito es declararlo en la propia página:
  *
  * ```tsx

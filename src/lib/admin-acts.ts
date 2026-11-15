@@ -47,8 +47,14 @@ const WORD_BOUNDARY_SLACK = 80;
  */
 export type AdminActKind = "BAN" | "MATCH_ANNULMENT" | "REVERSAL";
 
-/** Los estados de un jugador que una actuación puede dejar escrito o restaurar. */
-export type AdminActPlayerStatus = "PENDING" | "APPROVED" | "REJECTED" | "BANNED";
+/**
+ * Los estados de un jugador que una actuación puede dejar escrito o restaurar.
+ *
+ * Incluye `INACTIVE` porque una actuación puede leer la ficha de alguien a quien la
+ * edición nueva dejó fuera: no lo expulsa ni lo reactiva, pero el panel tiene que
+ * pintar su estado sin inventarse una etiqueta.
+ */
+export type AdminActPlayerStatus = "PENDING" | "APPROVED" | "REJECTED" | "BANNED" | "INACTIVE";
 
 /** Los tres tipos en el orden en que se ofrecen en el panel. */
 export const ADMIN_ACT_KINDS: readonly AdminActKind[] = ["BAN", "MATCH_ANNULMENT", "REVERSAL"];

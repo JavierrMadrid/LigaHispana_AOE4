@@ -109,9 +109,9 @@ export {
  *
  * Es un presupuesto y no una cifra de ritmo: cada summary es una petición al sitio
  * de AoE4World, así que la primera pasada —con todo el torneo sin métricas— tiene
- * que ir poco a poco igual que `HISTORY_CHECK_MAX_PER_RUN`. Diez por pasada, dos
- * segundos entre peticiones y un cron de diez minutos dan 1.440 summaries al día,
- * de sobra para el torneo vivo y con el histórico rellenándose por detrás.
+ * que ir poco a poco igual que `HISTORY_CHECK_MAX_PER_RUN`. Diez por pasada y dos
+ * segundos entre peticiones dan de sobra para el torneo vivo con las pasadas de
+ * 1-3 minutos, y el histórico se rellena por detrás.
  *
  * Es el valor por defecto: el worker pasa el suyo (`AOE4WORLD_SUMMARY_MAX_PER_RUN`,
  * ver `env.ts`), que es lo que permite bajarlo sin desplegar.

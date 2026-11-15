@@ -557,7 +557,7 @@ const RULESET_WINDOW_MOVED_ERROR =
  * deshacen con volver a escribir lo de antes se pide dos veces.
  */
 const NEW_EDITION_CONFIRMATION_REQUIRED_ERROR =
-  "Se ha movido la fecha de inicio, y eso empieza una edición nueva: la clasificación se recalcula contra la ventana nueva y la edición anterior deja de mostrarse en la web (sus partidas y sus historiales siguen guardados). Marca la confirmación de la edición nueva para guardarla; si solo querías mover el fin, deja el inicio como está.";
+  "Se ha movido la fecha de inicio, y eso empieza una edición nueva: la clasificación se recalcula contra la ventana nueva, la edición anterior deja de mostrarse en la web (sus partidas y sus historiales siguen guardados) y todos los participantes de la anterior quedan inactivos y tienen que volver a inscribirse desde /participar para entrar en la nueva. Marca la confirmación de la edición nueva para guardarla; si solo querías mover el fin, deja el inicio como está.";
 
 /**
  * Los campos del formulario que quedan congelados cuando la edición ha empezado.
@@ -1000,6 +1000,13 @@ async function saveWindowEnd(
  * se pide si se mueve el inicio: mover el fin de una edición terminada —por ejemplo para
  * corregir la fecha de cierre— no reemplaza nada.
  *
+ * Y con la edición nueva, **nadie pasa a la siguiente sin consentirlo**: la misma
+ * transacción que escribe la ventana deja `INACTIVE` a todos los `APPROVED` y `PENDING`
+ * y anota `PLAYERS_DEACTIVATED` con los recuentos (`writeScoringRuleset()` con
+ * `deactivatePlayersForNewEdition`). Para volver a la liga hay que reinscribirse por
+ * `/participar` y ser aprobado, así que el plazo de inscripciones tiene que estar
+ * abierto: el mensaje de éxito lo recuerda.
+ *
  * ## Validación, rastro y recálculo
  *
  * Las dos fechas se escriben como **fecha y hora local de Madrid** (`datetime-local`) o
@@ -1009,10 +1016,13 @@ async function saveWindowEnd(
  * conserva y se valida entero con `mergeRuleset()`.
  *
  * `writeScoringRuleset()` hace el `upsert`, el rastro (`CONFIG_CHANGED`, en la misma
- * transacción) y el recálculo de la clasificación, porque la ventana mueve puntos.
+ * transacción) y, si el cambio mueve puntos, el recálculo de la clasificación, porque la
+ * ventana mueve puntos. Si además empieza una edición nueva, esa misma transacción
+ * desactiva a los participantes y deja el rastro `PLAYERS_DEACTIVATED`.
  *
  * Revalida las pantallas que leen las fechas: la Administración, la propia subpestaña de
- * fechas, el historial, la clasificación, los objetivos y la puntuación.
+ * fechas, el historial, la clasificación, los objetivos y la puntuación; y, al empezar
+ * una edición, la lista de participantes y el formulario público.
  */
 export async function saveTournamentWindow(
   _prevState: AdminActionResult,
@@ -1107,7 +1117,17 @@ export async function saveTournamentWindow(
   let resultado;
 
   try {
-    resultado = await writeScoringRuleset(despues, cambios, actorEmail(admin));
+    resultado = await writeScoringRuleset(
+      despues,
+      cambios,
+      actorEmail(admin),
+      // Al empezar otra edición, la misma transacción del ruleset desactiva a los
+      // `APPROVED` y `PENDING`: nadie pasa a la siguiente sin reinscribirse. La fecha
+      // del rastro es el `window.from` nuevo, que es la edición que empieza.
+      empiezaOtraEdicion
+        ? { deactivatePlayersForNewEdition: new Date(windowFromInstant) }
+        : undefined,
+    );
   } catch (error) {
     logDatabaseFailure("admin/saveTournamentWindow", error);
 
@@ -1121,12 +1141,26 @@ export async function saveTournamentWindow(
   revalidatePath("/objetivos");
   revalidatePath("/puntuacion");
 
+  if (empiezaOtraEdicion) {
+    // La lista de participantes y el formulario público cambian con la
+    // desactivación: los dos leen el estado de las filas.
+    revalidatePath("/admin/jugadores");
+    revalidatePath("/participar");
+  }
+
   return {
     status: "success",
     message: frase(
       "Se han guardado las fechas del torneo.",
       empiezaOtraEdicion
-        ? "Al mover el inicio empieza una edición nueva: la anterior deja de mostrarse en la web, aunque sus partidas y sus historiales siguen guardados."
+        ? frase(
+            "Al mover el inicio empieza una edición nueva: la anterior deja de mostrarse en la web, aunque sus partidas y sus historiales siguen guardados.",
+            resultado.playersDeactivated === 0
+              ? "No había participantes activos que desactivar."
+              : resultado.playersDeactivated === 1
+                ? "El participante de la edición anterior ha quedado inactivo y tiene que volver a inscribirse desde /participar: reabre el plazo de inscripciones para que pueda hacerlo."
+                : `Los ${resultado.playersDeactivated} participantes de la edición anterior han quedado inactivos y tienen que volver a inscribirse desde /participar: reabre el plazo de inscripciones para que puedan hacerlo.`,
+          )
         : "",
       resultado.recomputed
         ? "La clasificación se ha recalculado con las reglas nuevas."

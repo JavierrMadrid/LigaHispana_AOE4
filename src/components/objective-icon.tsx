@@ -1,6 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
 import { civilizationFile, objectiveCivilization } from "@/lib/civs";
-import type { ObjectiveOption } from "@/lib/public";
 import { CivilizationIcon, CivilizationPlaceholderIcon } from "@/components/civilization-icon";
 
 /**
@@ -27,13 +26,13 @@ import { CivilizationIcon, CivilizationPlaceholderIcon } from "@/components/civi
  */
 
 /**
- * Forma mínima que necesita el icono. La comparten `ObjectiveOption` (tarjetas
- * de `/objetivos`) y `StandingObjective` (fila de la clasificación), así que el
- * mismo icono sirve en los dos sitios sin adaptar el dato ni castear. El glifo
- * se elige solo por `id`; los otros dos campos viajan con él porque los
- * consumidores comparten el mismo tipo.
+ * Forma mínima que necesita el icono: solo el `id`, que es lo que elige el
+ * glifo. La comparten `ObjectiveOption` (tarjetas de `/objetivos`),
+ * `StandingObjective` (fila de la clasificación) y el overlay, que tiene sus
+ * propios objetivos sin `group` ni `metric`, así que el mismo icono sirve en los
+ * tres sitios sin adaptar el dato ni castear.
  */
-type ObjectiveIconInput = Pick<ObjectiveOption, "id" | "group" | "metric">;
+type ObjectiveIconInput = { id: string };
 
 type ObjectiveIconProps = {
   option: ObjectiveIconInput;

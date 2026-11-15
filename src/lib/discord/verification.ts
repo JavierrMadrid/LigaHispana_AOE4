@@ -32,8 +32,14 @@
  * se usan.
  */
 
-/** Los estados de `PlayerStatus` que le importan a la puerta. */
-export type VerificationPlayerStatus = "PENDING" | "APPROVED" | "REJECTED" | "BANNED";
+/**
+ * Los estados de `PlayerStatus` que le importan a la puerta.
+ *
+ * `INACTIVE` no la abre ni la cierra: la puerta solo actúa sobre `PENDING`, así que
+ * una pulsación sobre un inactivo sale `stale` como cualquier otra fuera de la cola de
+ * revisión. El estado está en la unión para que el panel pueda pasarlo sin conversión.
+ */
+export type VerificationPlayerStatus = "PENDING" | "APPROVED" | "REJECTED" | "BANNED" | "INACTIVE";
 
 /* -------------------------------------------------------------------------- */
 /* La configuración                                                            */

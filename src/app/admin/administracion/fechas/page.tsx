@@ -29,8 +29,9 @@ export const metadata: Metadata = {
  * congelado y solo se puede fijar, mover o vaciar el fin; y **terminada**
  * (`editionEnded()`), donde las dos vuelven a ser editables porque el torneo ya no
  * reparte puntos. En la terminada, mover el inicio **empieza una edición nueva** y hay
- * que confirmarlo (`confirmNewEdition`): la clasificación se recalcula y la anterior deja
- * de mostrarse en la web, aunque sus partidas e historiales siguen guardados.
+ * que confirmarlo (`confirmNewEdition`): la clasificación se recalcula, la anterior deja
+ * de mostrarse en la web —aunque sus partidas e historiales siguen guardados— y todos los
+ * participantes quedan inactivos hasta que se reinscriben por `/participar`.
  *
  * La acción lo vuelve a comprobar por su cuenta —una Server Action es un endpoint
  * público—, así que lo de aquí es la explicación del bloqueo y de la confirmación, no su

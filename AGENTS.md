@@ -79,6 +79,7 @@ toques la documentación.
 | Despliegue, variables, dominio, build, previews, Actions | `docs/DESPLIEGUE.md` |
 | Sincronización, reloj, alertas, simulaciones, operativa | `docs/OPERACION.md` |
 | Endpoints, contrato o eventos de la API del overlay | `docs/API-OVERLAY.md` y `docs/openapi-overlay.yaml` |
+| Overlay del directo: uso, OBS, URL | `docs/OVERLAY.md` |
 | Stack, páginas y funcionalidad visible, comandos, puesta en marcha | `README.md` |
 | Enrutado, convenciones o reglas de los propios agentes | `AGENTS.md` y `.opencode/agent/*.md` |
 

@@ -25,10 +25,10 @@ function subjectStem(child: ObjectiveOption): string {
 }
 
 /**
- * Cómo puntúa una familia: lo que da cada subobjetivo y lo que suma completarlos
- * todos con el logro global. Los números salen del contrato (`head.points` y los
- * `points` de los hijos); con hijos de puntos distintos no se pinta, antes que
- * inventar una cifra que el motor no aplica.
+ * Cómo puntúa una familia **de civilización**: lo que da cada subobjetivo y lo
+ * que suma completarlos todos con el logro global. Los números salen del contrato
+ * (`head.points` y los `points` de los hijos); con hijos de puntos distintos no se
+ * pinta, antes que inventar una cifra que el motor no aplica.
  *
  * Un hijo con `pointsPerUnit` (los `maestro-<civ>`) no reparte un premio cerrado:
  * cobra por unidad hasta su tope, y su `points` es ese **máximo**. La nota lo dice
@@ -70,23 +70,91 @@ function familyScoringNote(
   );
 }
 
+/**
+ * Si la familia es de civilización: todos sus hijos llevan la civilización pegada
+ * al id (`lider-<civ>`, `acolito-<civ>`, `maestro-<civ>`). Las familias que no
+ * —`avance-relampago` agrupa hazañas— no llevan riel de banderas: una rejilla con
+ * las tarjetas de los hijos se lee mejor y no promete un filtro que no existe.
+ */
+function isCivFamily(subobjectives: ObjectiveOption[]): boolean {
+  return (
+    subobjectives.length > 0 &&
+    subobjectives.every((child) => familyCivId(child.id) !== null)
+  );
+}
+
+/**
+ * El nombre del subobjetivo de una familia de hazañas, sin la cabeza delante
+ * ("Avance relámpago: Feudal" → "Feudal"), para poder enumerarlos en la nota.
+ */
+function subobjectiveStem(head: ObjectiveOption, child: ObjectiveOption): string {
+  const stem = child.label
+    .slice(child.label.startsWith(head.label) ? head.label.length : 0)
+    .replace(/^[\s:·-]+/, "")
+    .trim();
+
+  return stem || child.label;
+}
+
+/**
+ * La nota de una familia que **no** es de civilización: los hijos son hazañas que
+ * se cobran por separado y la cabeza paga un extra al completarlos todos. Si los
+ * hijos comparten puntos se dice cuánto da cada uno; si no (aquí son 3, 6 y 9), se
+ * calla antes que inventar un reparto que el motor no aplica. Las cifras salen de
+ * `head.points` y de los hijos.
+ */
+function familyExtraNote(
+  head: ObjectiveOption,
+  subobjectives: ObjectiveOption[],
+): ReactNode {
+  const [first] = subobjectives;
+  const shared =
+    first !== undefined &&
+    first.pointsPerUnit === undefined &&
+    subobjectives.every(
+      (child) => child.points === first.points && child.pointsPerUnit === undefined,
+    );
+
+  return (
+    <>
+      {shared ? (
+        <>
+          Cada subobjetivo:{" "}
+          <span className="font-medium tabular-nums text-foreground">
+            {first.points} {first.points === 1 ? "punto" : "puntos"}
+          </span>{" "}
+          ({subobjectives.map((child) => subobjectiveStem(head, child)).join(", ")}).{" "}
+        </>
+      ) : null}
+      Completar{" "}
+      {subobjectives.length === 1 ? "el subobjetivo" : `los ${subobjectives.length}`}:{" "}
+      <span className="font-medium tabular-nums text-accent">+{head.points} extra</span>{" "}
+      ({head.label}).
+    </>
+  );
+}
+
 type ObjectiveFamilySectionProps = {
   /** El logro global, cabeza de la familia. */
   head: ObjectiveOption;
-  /** Sus subobjetivos, uno por civilización, en el orden del catálogo. */
+  /** Sus subobjetivos, en el orden del catálogo. */
   subobjectives: ObjectiveOption[];
   standings: ObjectiveStandingPlayer[] | null;
-  /** El pool de mapas no afecta a las familias, pero se pasa para reutilizar la tarjeta. */
+  /** El pool de mapas no afecta a las familias de civilización, pero se pasa para reutilizar la tarjeta. */
   mapPool?: readonly string[];
 };
 
 /**
- * Una familia de objetivos: el logro global arriba, el filtro de banderas debajo
- * y un riel horizontal con una tarjeta por subobjetivo.
+ * Una familia de objetivos: el logro global arriba y sus subobjetivos debajo.
  *
- * El riel —el gesto de arrastre, el teclado y el salto por civilización— vive en
- * `ObjectiveFamilyRail`, que comparte con la ficha de un participante: las dos
- * pantallas montan el mismo recorrido sobre tarjetas distintas.
+ * En las familias **de civilización** los hijos van en un riel horizontal con el
+ * filtro de banderas. El riel —el gesto de arrastre, el teclado y el salto por
+ * civilización— vive en `ObjectiveFamilyRail`, que comparte con la ficha de un
+ * participante: las dos pantallas montan el mismo recorrido sobre tarjetas
+ * distintas. En las familias que **no** lo son (las hazañas de
+ * `avance-relampago`) no hay civilización que filtrar: los hijos van en la misma
+ * rejilla de tres columnas que los objetivos sueltos, para que el ritmo de la
+ * página no cambie.
  */
 export function ObjectiveFamilySection({
   head,
@@ -94,6 +162,8 @@ export function ObjectiveFamilySection({
   standings,
   mapPool = [],
 }: ObjectiveFamilySectionProps) {
+  const civFamily = isCivFamily(subobjectives);
+
   return (
     <section className="flex flex-col gap-4">
       <ObjectiveDialogCard
@@ -101,19 +171,37 @@ export function ObjectiveFamilySection({
         standings={standings}
         mapPool={mapPool}
         actionLabel="Ver completados"
-        note={familyScoringNote(head, subobjectives)}
+        note={
+          civFamily
+            ? familyScoringNote(head, subobjectives)
+            : familyExtraNote(head, subobjectives)
+        }
       />
 
-      <ObjectiveFamilyRail
-        items={subobjectives}
-        renderCard={(child) => (
-          <ObjectiveDialogCard
-            option={child}
-            standings={standings}
-            actionLabel="Ver clasificación"
-          />
-        )}
-      />
+      {civFamily ? (
+        <ObjectiveFamilyRail
+          items={subobjectives}
+          renderCard={(child) => (
+            <ObjectiveDialogCard
+              option={child}
+              standings={standings}
+              actionLabel="Ver clasificación"
+            />
+          )}
+        />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {subobjectives.map((child) => (
+            <ObjectiveDialogCard
+              key={child.id}
+              option={child}
+              standings={standings}
+              mapPool={mapPool}
+              actionLabel="Ver clasificación"
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }

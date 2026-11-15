@@ -381,6 +381,12 @@ describe("la pulsación de un botón", () => {
     expect(pulsacion("confirm", { status: "BANNED" })).toBe("stale");
   });
 
+  it("una pulsación sobre un INACTIVE de una edición anterior no hace nada", () => {
+    // El botón pudo quedarse en el privado de una edición que ya terminó y la fila se
+    // desactivó al empezar la siguiente. La puerta solo actúa sobre `PENDING`.
+    expect(pulsacion("confirm", { status: "INACTIVE" })).toBe("stale");
+  });
+
   it("una fila ya confirmada o no sujeta no vuelve a resolverse", () => {
     expect(pulsacion("confirm", { state: VERIFICADA })).toBe("stale");
     expect(pulsacion("decline", { state: SIN_PUERTA })).toBe("stale");

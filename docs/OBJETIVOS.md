@@ -1,6 +1,6 @@
 # Objetivos
 
-Los **120 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
+Los **122 objetivos** del torneo, que reparten puntuación extra sobre la clasificación. Es el catálogo
 funcional: qué mide cada uno, cuántos puntos da y **quién lo cobra**. La puntuación base está en
 [`docs/PUNTUACION.md`](./PUNTUACION.md); aquí solo están los objetivos. El catálogo es el del código,
 pero el ruleset puede **desactivar** objetivos de una edición a otra (ver
@@ -30,10 +30,10 @@ como **temporales** (puede cambiar de dueño hasta el cierre): ver [`PUNTUACION.
 |---|---|---|---|
 | Actividad | 1 | 2 | 3 |
 | Racha | 1 | 2 | 3 |
-| Hazañas | 0 | 7 | 7 |
+| Hazañas | 0 | 9 | 9 |
 | Formatos | 4 | 0 | 4 |
 | Civilizaciones | 25 | 78 | 103 |
-| **Total** | **31** | **89** | **120** |
+| **Total** | **31** | **91** | **122** |
 
 El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 
@@ -63,16 +63,18 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 | Victorias | `pointsPerWin` por victoria, sin tope | Cada victoria clasificatoria. Es el objetivo que paga las victorias del torneo. |
 | Imbatible | 32 | Conseguir una racha de 5 victorias seguidas. |
 | Ansioso | 6 | Encadenar 3 partidas clasificatorias seguidas con 120 APM o más. |
+| Tira y afloja | 24 | Completar los dos retos de abajo: Agresor (partidas cortas) y Estratega (partidas largas). Es la cabeza de sus dos subobjetivos. |
 | Agresor | 24 | Ganar al menos 3 partidas de menos de 10 minutos. |
 | Estratega | 24 | Ganar al menos 3 partidas de más de 20 minutos. |
+| Avance relámpago | 9 | Completar los tres avances relámpago (Feudal, Castillos e Imperial). Es la cabeza de los tres subobjetivos de abajo. |
 | Avance relámpago: Feudal | 3 | Llegar a la Edad Feudal antes de 4 minutos en una partida clasificatoria. |
 | Avance relámpago: Castillos | 6 | Llegar a la Edad de los Castillos antes de 9 minutos en una partida clasificatoria. |
 | Avance relámpago: Imperial | 9 | Llegar a la Edad Imperial antes de 16 minutos en una partida clasificatoria. |
 | Defensor del pueblo | 12 | Terminar una partida de 15 minutos o más perdiendo menos de 3 aldeanos, menos de 2 aldeanos dorados y ningún aldeano montado. |
 | Por tierra y agua | 41 | Jugar al menos 3 partidas en **cada** mapa del pool activo. |
-| Polifacético | 41 | Ganar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
+| Polifacético | 134 | Ganar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
 | Líder `<civ>` (×25) | 9 | Ganar al menos 3 partidas con esa civilización. |
-| Jugón | 10 | Jugar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
+| Jugón | 69 | Jugar al menos 3 partidas con **cada una** de las 25 civilizaciones. |
 | Acólito `<civ>` (×25) | 5 | Jugar al menos 3 partidas con esa civilización. |
 | Maestro de todas las civilizaciones | 50 | Ganar al menos 5 partidas con **cada una** de las 25 civilizaciones. |
 | Maestro `<civ>` (×25) | 1 por victoria, tope 5 | Cada victoria con esa civilización; el `points` de la tarjeta (5) es el máximo. |
@@ -80,17 +82,20 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 - `victorias` **no tiene premio propio**: cada victoria vale lo que diga `pointsPerWin` del ruleset (hoy
   2). Es la única fuente de lo que vale una victoria, así que un `objectives["victorias"]` retocado en
   `Setting` se ignora. Su `points` en el catálogo (2) es documental.
-- La hoja de la organización expresa algunos valores con decimales (40,5, 10,125 y 4,5). El catálogo los
-  redondea al entero normal —41, 10 y 5— porque `PlayerScore.total` es un entero y el panel solo admite
-  enteros.
+- La hoja de la organización expresa algunos valores con decimales (40,5 y 4,5). El catálogo los
+  redondea al entero normal —41 y 5— porque `PlayerScore.total` es un entero y el panel solo admite
+  enteros. **Polifacético y Jugón no son un redondeo**: llevan los importes de la propuesta de la
+  organización para el extra por totalidad de cada familia (134 y 69).
 - En `agresor`/`estratega` las partidas sin duración quedan fuera. Umbrales: `< 600 s` y `> 1200 s`.
-- **`ansioso`, los tres `avance-relampago` y `defensor-del-pueblo`** salen del **resumen de partida**
+- **`ansioso`, los tres `avance-relampago-*` y `defensor-del-pueblo`** salen del **resumen de partida**
   (APM, tiempos de edad y pérdidas), que vive en el sitio de AoE4World —no en su API— y el worker pide
   aparte y guarda en `Match`. Una partida
   **sin resumen** no cumple ninguna hazaña y **corta** la racha de `ansioso`: un umbral sobre un dato que
   no existe no se puede afirmar. `ansioso` publica su racha (métrica `racha-partidas`, la de partidas
-  seguidas por APM) y los cuatro `avance-relampago`/`defensor` el recuento de partidas que consiguen la
-  hazaña (métrica `partidas`): ese recuento es su valor de ranking, con umbral 1. Cómo se consigue, en
+  seguidas por APM) y los tres `avance-relampago-*` y `defensor-del-pueblo` el recuento de partidas que
+  consiguen la hazaña (métrica `partidas`): ese recuento es su valor de ranking, con umbral 1. La
+  cabeza `avance-relampago` no mira partidas, sino cuántos de esos tres subobjetivos están completos
+  (métrica `subobjetivos`). Cómo se consigue, en
   [`OPERACION.md`](./OPERACION.md#resumen-de-partida).
 - En `imparable` el valor del ranking es el número real de días; los puntos van con tope (14). Las
   **repeticiones** que publica la web también son los días reales ("20 x Imparable +14").
@@ -103,25 +108,44 @@ El grupo **Divisiones desaparece**: los antiguos `sensei-*` ya no existen.
 ### Familias
 
 `polifacético` es la cabeza de los 25 `lider-<civ>`, `jugón` lo es de los 25 `acolito-<civ>` y
-`maestro` de los 25 `maestro-<civ>`: son los logros globales de cada familia. Se modelan con un
-campo `parent` en la definición (la cabeza tiene `parent: null`; cada hijo apunta a su cabeza) y la
-interfaz los agrupa en un bloque. En `/objetivos` el bloque es la tarjeta de la cabeza más un riel de
-subobjetivos, y la tarjeta explica el reparto del conjunto —lo que da cada subobjetivo y lo que suma
-completarlos todos con el global— a partir de sus `points` y del número de hijos. En los hijos con
-`pointsPerUnit` el `points` es el **premio máximo**, así que la tarjeta no lo anuncia como premio
-cerrado: la placa de cada subobjetivo enseña el pago por unidad (`+1 · puntos por victoria`) y la nota
-de la cabeza dice cuánto paga cada victoria y hasta cuánto, además del extra por completar la familia
-(«Cada civilización: 1 punto por victoria, hasta 5 (Maestro). Completar las 25: +50 extra»). En la
-ficha de un participante la cabeza sigue en las secciones (es un objetivo que se consigue) y sus hijos
-van en un carrusel por familia, **dentro de "Al alcance"** y tras sus tarjetas individuales, con el
-avance del jugador y las tarjetas ordenadas de mayor a menor porcentaje de consecución. La placa de
-puntos de esa ficha enseña lo **cobrado** y, mientras el jugador no haya ganado ninguna, el precio de
-la próxima victoria (1 · puntos por victoria): el máximo nunca se lee como si estuviera en su haber.
+`maestro` de los 25 `maestro-<civ>`: son los logros globales de cada familia de civilización. Se
+modelan con un campo `parent` en la definición (la cabeza tiene `parent: null`; cada hijo apunta a su
+cabeza) y la interfaz los agrupa en un bloque. En `/objetivos` el bloque es la tarjeta de la cabeza
+más un riel de subobjetivos, y la tarjeta explica el reparto del conjunto —lo que da cada
+subobjetivo y lo que suma completarlos todos con el global— a partir de sus `points` y del número de
+hijos. En los hijos con `pointsPerUnit` el `points` es el **premio máximo**, así que la tarjeta no lo
+anuncia como premio cerrado: la placa de cada subobjetivo enseña el pago por unidad (`+1 · puntos por
+victoria`) y la nota de la cabeza dice cuánto paga cada victoria y hasta cuánto, además del extra por
+completar la familia («Cada civilización: 1 punto por victoria, hasta 5 (Maestro). Completar las 25:
++50 extra»).
 
-La tarjeta de la cabeza añade además el detalle por civilización: la **lista más corta de las dos**
+Una familia no tiene por qué ser de civilizaciones: las **familias de hazañas** agrupan objetivos del
+grupo Hazañas. Hay dos hoy:
+
+- **`avance-relampago`** agrupa las tres hazañas `avance-relampago-feudal`, `-castillos` e
+  `-imperial`, que siguen cobrándose por separado (3, 6 y 9 puntos) y suman **9 más** cuando un
+  jugador completa las tres.
+- **`tira-y-afloja`** agrupa `agresor` (partidas cortas) y `estratega` (partidas largas), que siguen
+  cobrándose por separado (24 cada uno) y suman **24 más** cuando un jugador completa los dos.
+
+La cabeza de una familia de hazañas cobra, por tanto, un extra por totalidad: paga una vez por
+jugador y solo con todos los hijos cumplidos, igual que el bonus de `maestro` con las 25
+civilizaciones. Su métrica es `subobjetivos` (cuántos hijos lleva completados, de 0 al número de
+hijos) y no es una competición: cada jugador que cierra la familia cobra el extra. En `/objetivos` el
+bloque es la tarjeta de la cabeza y, debajo, la rejilla de sus subobjetivos —sin riel ni filtro de
+banderas, que no hay civilización que filtrar—, con la nota de la cabeza diciendo lo que suma
+completarlos. En la ficha de un participante, la cabeza y sus hijos se leen como objetivos
+individuales, en las secciones de siempre: tampoco allí hay carrusel.
+
+La tarjeta de la cabeza de una familia de **civilización** añade además el detalle por civilización:
+la **lista más corta de las dos**
 —las hechas o las que quedan— con la bandera de cada una y la cifra en partidas (Jugón) o victorias
 (Polifacético y Maestro). La ventana volteable la lista entera, en el resumen frontal y en la cara de
-clasificación.
+clasificación. En la ficha de un participante la cabeza sigue en las secciones y sus hijos van en un
+carrusel por familia, **dentro de "Al alcance"** y tras sus tarjetas individuales, ordenados de mayor
+a menor porcentaje de consecución. La placa de puntos de esa ficha enseña lo **cobrado** y, mientras
+el jugador no haya ganado ninguna, el precio de la próxima victoria (1 · puntos por victoria): el
+máximo nunca se lee como si estuviera en su haber.
 
 Los 25 `masterizando-<civ>` no forman familia —no tienen cabeza que los agrupe—, pero en `/objetivos`
 se leen igual: bajo el titular «Masterizando», un riel con el mismo filtro de banderas y la misma
@@ -141,9 +165,10 @@ uno y por su `id`. Un objetivo apagado:
   desaparece del cómputo y el registro de liderazgos (`ObjectiveLeadEvent`) anota una `LOST` para el
   que la tenía.
 
-Apagar la **cabeza** de una familia (`polifacetico`, `jugon`) no apaga a sus hijos: la familia es una
-agrupación de la interfaz, no una dependencia, y cada objetivo se apaga por su id. Un id que no exista
-en el catálogo o repetido se avisa y se ignora.
+Apagar la **cabeza** de una familia (`polifacetico`, `jugon`, `maestro`, `avance-relampago`,
+`tira-y-afloja`) no apaga a sus hijos: la familia es una agrupación de la interfaz, no una
+dependencia, y cada objetivo se apaga por su id. Un id que no exista en el catálogo o repetido se
+avisa y se ignora.
 
 La etiqueta de la regla se recalcula con los objetivos activos, así que la web no anuncia objetivos que
 ya no existen. Lo cambia el superadministrador desde el panel; el detalle, en
@@ -204,7 +229,7 @@ A diferencia del catálogo anterior, el total en juego **no es un número cerrad
 cada participante que lo cumple, así que su reparto se multiplica por el número de beneficiarios.
 `imparable` reparte puntos variables por jugador. La **suma nominal** del catálogo —cada objetivo de
 premio fijo contado una vez, `imparable` a su tope de 14 y cada `maestro-<civ>` a su premio máximo de
-5— es **3.107 puntos**: es la cifra que resume la
+5— es **3.292 puntos**: es la cifra que resume la
 banda de `/puntuacion`. `victorias` **queda fuera** de esa suma, porque no reparte un premio fijo sino
 `pointsPerWin` por victoria y sin tope: contarlo una vez diría que el catálogo reparte una cifra que no
 reparte. El criterio está en código (`hasFixedPrize()`), y en una tarjeta ya resuelta se lee en

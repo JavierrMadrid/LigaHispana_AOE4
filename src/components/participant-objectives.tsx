@@ -10,7 +10,10 @@ import { BorderGlow } from "@/components/border-glow";
 import { MapGaps, MapPool } from "@/components/objective-card";
 import { ObjectiveFeatureFrame } from "@/components/objective-feature-summary";
 import { FamilyCivDetail } from "@/components/objective-family-detail";
-import { ObjectiveFamilyRail } from "@/components/objective-family-rail";
+import {
+  familyCivId,
+  ObjectiveFamilyRail,
+} from "@/components/objective-family-rail";
 import { ObjectiveIcon } from "@/components/objective-icon";
 import { ObjectiveRankingDialog } from "@/components/objective-ranking-dialog";
 import { SectionIndexBar, type DocSection } from "@/components/section-index";
@@ -27,11 +30,17 @@ import {
 } from "@/lib/objective-format";
 
 /**
- * Las familias de objetivos de civilización, en el orden en que se leen: la
+ * Las familias de objetivos **de civilización**, en el orden en que se leen: la
  * cabeza (que sigue en las secciones, porque es un objetivo que se consigue) y
  * el rótulo del carrusel de sus subobjetivos. Los ids de las cabezas van como
  * literales: son contrato estable (ver `src/lib/objectives.ts`), pero este
  * componente es de cliente y no puede importar de `@/lib/public`.
+ *
+ * Solo las familias de civilización tienen carrusel: sus hijos comparten forma
+ * (3 victorias o partidas con cada civilización) y son 25, así que el riel con
+ * filtro de banderas es la lectura natural. Los hijos de una familia que no lo es
+ * —`avance-relampago`— no llevan civilización y se listan como objetivos
+ * individuales en las secciones.
  */
 const FAMILIES: readonly { headId: string; id: string; title: string }[] = [
   { headId: "polifacetico", id: "lider", title: "Líder" },
@@ -81,9 +90,12 @@ const SECTION_INDEX_LABEL = "Secciones de los objetivos del participante";
  * tarjetas individuales, porque su avance se sigue igual que el de ellas. Las
  * tarjetas de cada carrusel van de mayor a menor porcentaje de consecución. La
  * cabeza de cada familia (`polifacetico`, `jugon`, `maestro`) sí es un objetivo
- * individual y sigue en su sección. La clasificación completa de un objetivo se abre
- * en la misma ventana volteable que usa `/objetivos` (`ObjectiveRankingDialog`): al
- * pulsar se ve la clasificación y el giro descubre el resumen del avance del jugador.
+ * individual y sigue en su sección. Los subobjetivos de una familia que **no** es
+ * de civilización (`avance-relampago-feudal` y compañía) no tienen carrusel: se
+ * leen como objetivos individuales, junto a su cabeza. La clasificación completa
+ * de un objetivo se abre en la misma ventana volteable que usa `/objetivos`
+ * (`ObjectiveRankingDialog`): al pulsar se ve la clasificación y el giro descubre
+ * el resumen del avance del jugador.
  */
 export function ParticipantObjectivesView({
   data,
@@ -96,8 +108,12 @@ export function ParticipantObjectivesView({
   const [active, setActive] = useState<ParticipantObjective | null>(null);
 
   // Las secciones y los carruseles se reparten los objetivos: los hijos de una
-  // familia van al carrusel de su cabeza; todo lo demás, a las secciones.
-  const individual = options.filter((option) => option.parent === null);
+  // familia de civilización van al carrusel de su cabeza; todo lo demás, a las
+  // secciones. Un hijo sin civilización (los de `avance-relampago`) no tiene riel
+  // donde encajar y se lista como individual, para que no desaparezca de la ficha.
+  const individual = options.filter(
+    (option) => option.parent === null || familyCivId(option.id) === null,
+  );
   const achievedIndividual = individual.filter((option) => option.achieved);
   // "Al alcance" se ordena por cercanía a cobrarlo (ver `objectiveCloseness`):
   // más avance o mejor puesto, más arriba. `options` llega en el orden del
@@ -1213,6 +1229,10 @@ function formatMetricValue(objective: ParticipantObjective): string {
       return `${value}/${objective.target?.value ?? "?"} civilizaciones`;
     case "mapas":
       return `${value}/${objective.target?.value ?? "?"} mapas`;
+    case "subobjetivos":
+      return value === 1
+        ? "1 subobjetivo"
+        : `${value}/${objective.target?.value ?? "?"} subobjetivos`;
   }
 }
 
@@ -1244,6 +1264,8 @@ function remainingText(objective: ParticipantObjective): string | null {
       return `${remaining} civilizaciones`;
     case "mapas":
       return `${remaining} mapas`;
+    case "subobjetivos":
+      return remaining === 1 ? "1 subobjetivo" : `${remaining} subobjetivos`;
   }
 }
 

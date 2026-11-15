@@ -138,7 +138,7 @@ export default async function AdminPage() {
     <div className="flex flex-col gap-8">
       <AdminPageHeader
         title="Participantes"
-        description="Altas y aprobaciones del torneo: solo los aprobados entran en la clasificación."
+        description="Altas y aprobaciones del torneo: solo los aprobados entran en la clasificación. Un inactivo no participa en esta edición hasta que se reinscribe."
       />
 
       {/* El aviso va aquí, entre el titular y el resumen, porque es lo primero que

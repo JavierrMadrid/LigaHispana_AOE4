@@ -276,15 +276,16 @@ clasificación y después de calcular los objetivos, con el mismo cerrojo:
   `window.to` (es cuando el torneo lo dio por cumplido).
 - **Solo se escribe lo que difiere**: una pasada sin cambios no toca ninguna de las dos tablas.
 - **`PERDIDO` solo se emite en competiciones**: un logro revertido no genera evento.
-- **`SCORING_CACHE_VERSION` sube a 4** para forzar ese primer pase tras el despliegue: el salto es
-  por el catálogo de 120 objetivos (la prueba de concepto de subobjetivos, familia `maestro`), y sin
-  él el worker podría saltarse el recálculo y los objetivos nuevos no repartirían hasta la siguiente
-  partida. La v2 fue por el feed del overlay, que no se sembraría sin el salto; la v3, por el catálogo
-  de 94 objetivos (Vikingos y Escoceses).
+- **`SCORING_CACHE_VERSION` sube a 5** para forzar ese primer pase tras el despliegue: el salto es
+  por las familias de hazañas (`avance-relampago` y `tira-y-afloja`, catálogo de 122 objetivos), y sin
+  él el worker podría saltarse el recálculo y el extra de las familias no repartiría hasta la
+  siguiente partida. La v2 fue por el feed del overlay, que no se sembraría sin el salto; la v3, por
+  el catálogo de 94 objetivos (Vikingos y Escoceses), y la v4, por el catálogo de 120 objetivos (la
+  prueba de concepto de subobjetivos, familia `maestro`).
 - **La API del overlay lee `ObjectiveProgressEvent`**: polling recomendado de 30 s. El dato cambia al
-  ritmo del recálculo (10 min), así que pedir más a menudo no adelanta nada.
+  ritmo de las pasadas del sincronizador (1-3 min), así que pedir más a menudo no adelanta nada.
 - **El feed se escribe en cada recálculo**: los logros y las competiciones aparecen **en vivo**, con
-  el retraso del pase (10 min), no solo al cierre de la edición. El contrato publicado está en
+  el retraso de la pasada (1-3 min), no solo al cierre de la edición. El contrato publicado está en
   [`API-OVERLAY.md`](./API-OVERLAY.md).
 - **Una bajada de progreso** (revertir una partida) actualiza el estado pero no emite evento: el feed
   cuenta avances y `PERDIDO` es solo de competiciones. La siguiente subida vuelve a anotarse.
@@ -305,7 +306,7 @@ Hay **dos relojes**, y el primario no es GitHub:
 ## El reloj: Supabase Cron
 
 ```bash
-npm run db:cron              # aplica extensiones + job de 10 min (idempotente)
+npm run db:cron              # aplica extensiones + job de cada minuto (idempotente)
 npm run db:cron -- --check   # comprueba y no escribe; sale con 1 si no cuadra
 npm run db:cron -- --remove  # desprograma el job
 ```
@@ -576,6 +577,11 @@ Qué se puede hacer con un participante y **dónde** se ofrece cada acción:
 | **Editar** los datos | Listado de participantes («Todos los jugadores») | Corrige nombre, país, correo, canales y `@usuario`; no toca el estado |
 | **Expulsar** a un aprobado | Actuaciones (`BAN`); el listado enlaza a la actuación ya prefijada | Deja `BANNED`, reversible y sin perder datos |
 | **Anular** partidas | Actuaciones (`MATCH_ANNULMENT`) | La victoria deja de puntuar sin borrarse |
+| **Volver a participar** tras una edición nueva | Solo desde `/participar`, con el plazo abierto | Deja `INACTIVE` → `PENDING` y reescribe `registeredAt`; después hay que aprobarlo. El alta manual de admin **no** reactiva a un inactivo |
+
+- **Al empezar una edición nueva se desactivan todos** los `APPROVED` y `PENDING` (ver el punto
+  anterior sobre reemplazar una edición terminada). El listado los enseña como inactivos y no se
+  reactivan desde el panel: el consentimiento es la reinscripción pública.
 
 - **El listado completo no cambia estados**: no ofrece rechazar (retirar) a un aprobado ni aprobar
   (restaurar) a un rechazado. Esas decisiones viven en la cola de pendientes y en Actuaciones.
@@ -602,8 +608,9 @@ marca dice que la acción ya no está vigente.
 - **Solo los tipos revertibles** (`isRevertibleActionType()`, `src/lib/admin-revert.ts`) y **una acción
   ya revertida no se revierte dos veces**. `PLAYER_REMOVED` es un tipo **histórico** —la baja
   destructiva ya no existe— y no está: el dato ya no existe. Tampoco
-  `ADMIN_*` (la baja de un admin se deshace reactivándolo), `ACTION_REVERTED` ni `CONFIG_CHANGED` (la
-  configuración se cambia publicando otra).
+  `ADMIN_*` (la baja de un admin se deshace reactivándolo), `ACTION_REVERTED`, `CONFIG_CHANGED` (la
+  configuración se cambia publicando otra) ni `PLAYERS_DEACTIVATED` (la desactivación de una edición
+  nueva se rehace por participante: reinscribirse y aprobarlo).
 - **Si algo ha cambiado después, se dice y no se escribe nada.** Deshacer una aprobación cuando el
   jugador ya está en otro estado —o una edición cuyos valores ya volvieron— pisaría ese cambio
   posterior: el panel lo explica en vez de deshacer "todo lo que vino detrás".
@@ -732,6 +739,17 @@ puntuales no están ahí porque son contenido de cada evento (ver
   Mover solo el fin no pide confirmación. Con el inicio nuevo en el futuro la edición vuelve a estar
   sin empezar, así que `Puntuación` vuelve a dejar editar las reglas. La confirmación existe para que
   un envío con la fecha de inicio cambiada sin querer no reemplace el torneo.
+- **Al empezar una edición nueva, los participantes quedan `INACTIVE`.** En la misma transacción que
+  escribe la ventana, `writeScoringRuleset()` desactiva a todos los `APPROVED` y `PENDING` y anota
+  `PLAYERS_DEACTIVATED` en `/admin/acciones` con los dos recuentos y la ventana nueva
+  (`details.editionFrom`). Nadie pasa a la siguiente edición sin consentirlo: para volver hay que
+  reinscribirse por `/participar` y ser aprobado, y eso reescribe `registeredAt` (el corte de
+  partidas). Por eso, después de empezar la edición, hay que **reabrir el plazo de inscripciones**
+  (`registration.open` y `registration.closesAt`) o los participantes desactivados no podrán hacerlo.
+  El mensaje de éxito del panel lo recuerda con la cifra. La desactivación **no se deshace** desde el
+  historial: cada participante vuelve por su cuenta y deja su propio `PLAYER_APPROVED`. El sync del
+  rol de participante en Discord solo mira `APPROVED`, así que en la siguiente pasada les retira el
+  rol a los inactivos; al reaprobarse, se lo vuelve a poner.
 - **La retransmisión obligatoria** enciende la alerta `NO_STREAM_CHANNEL` (ver
   [Alertas de comportamiento](#alertas-de-comportamiento)). Apagarla **no** borra las alertas ya
   escritas: `Alert` es *append-only*.
@@ -1398,6 +1416,25 @@ recálculo de la clasificación).
   `discordError`: el evento que exige Discord no repartirá bono hasta que se configure.
 
 ## Simulaciones
+
+### Previsualización de `/partidas` sin base de datos
+
+Con `npm run dev`, el parámetro `preview` permite revisar la interfaz sin consultar partidas:
+
+| Ruta | Estado de muestra |
+|---|---|
+| `/partidas?preview=live` | 8 partidas ficticias: duelos, equipos, FFA, canales y datos incompletos. |
+| `/partidas?preview=stress` | 32 partidas ficticias para revisar la densidad y los filtros. |
+| `/partidas?preview=empty` | Sin partidas en curso. |
+| `/partidas?preview=unavailable` | Lectura no disponible, distinta de una lista vacía. |
+| `/partidas?preview=loading` | Estado visual de carga. |
+
+- Solo se activa con `NODE_ENV=development`; en producción se ignora el parámetro.
+- `src/lib/matches-preview.ts` genera datos deterministas desde la fecha recibida, sin red ni
+  escrituras en la base. Los nombres, perfiles, canales y estados de emisión son de prueba.
+- La FFA comprueba la presentación de varios bandos; no cambia las familias permitidas por el
+  ruleset de producción. Los datos ausentes conservan `null`, sin suponer equipos o divisiones.
+- Es una revisión de presentación y filtrado local, no una medición del DAL o del sincronizador.
 
 ### Con fixtures (mock de AoE4World)
 

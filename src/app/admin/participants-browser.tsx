@@ -41,12 +41,15 @@ function initials(name: string): string {
 
 type StatusFilter = PlayerStatus | "ALL";
 
+// Los inactivos van al final, en su propio bloque: son los que la edición nueva
+// dejó fuera y solo se miran cuando se prepara la siguiente, no en el día a día.
 const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
   { id: "ALL", label: "Todos" },
   { id: "APPROVED", label: "Aprobados" },
   { id: "PENDING", label: "Pendientes" },
   { id: "REJECTED", label: "Rechazados" },
   { id: "BANNED", label: "Expulsados" },
+  { id: "INACTIVE", label: "Inactivos" },
 ];
 
 const CELL = "px-4 py-3 align-top";
@@ -65,14 +68,16 @@ type SortKey = "name" | "aoe4WorldName" | "country" | "status" | "matchCount" | 
 /**
  * Orden de los estados, calcado del que aplica el servidor (`status asc`): en
  * Postgres el enum se ordena por el orden de declaración (`PENDING`, `APPROVED`,
- * `REJECTED`, `BANNED`), que es el que deja la cola de solicitudes primero y a
- * los expulsados, que no piden nada, al final.
+ * `REJECTED`, `BANNED`, `INACTIVE`), que es el que deja la cola de solicitudes
+ * primero y a los expulsados —que no piden nada— y a los inactivos —que no
+ * participan en esta edición— al final.
  */
 const STATUS_ORDER: Record<PlayerStatus, number> = {
   PENDING: 0,
   APPROVED: 1,
   REJECTED: 2,
   BANNED: 3,
+  INACTIVE: 4,
 };
 
 /**
@@ -156,8 +161,9 @@ function comparePlayers(
  *
  * La columna de acciones no da de alta ni de baja a nadie: edita la ficha y, si el
  * participante está aprobado, abre una actuación de expulsión con él ya elegido.
- * Aprobar y rechazar son de la cola de pendientes de `/admin`, y la baja destructiva
- * ya no existe.
+ * Aprobar y rechazar son de la cola de pendientes de `/admin`, la baja destructiva
+ * ya no existe y a un inactivo no se le reactiva desde aquí: su vuelta es
+ * reinscribirse por `/participar`, que reescribe también el corte de partidas.
  */
 export function ParticipantsBrowser({
   participants,
@@ -181,6 +187,7 @@ export function ParticipantsBrowser({
       PENDING: 0,
       REJECTED: 0,
       BANNED: 0,
+      INACTIVE: 0,
     };
 
     for (const player of participants) {
@@ -686,6 +693,17 @@ function ParticipantRow({
               Expulsado: se levanta con una actuación de reversión.
               {canReverse ? null : " Solo el superadministrador puede revertirla."} No
               se puede aprobar ni rechazar mientras la expulsión siga vigente.
+            </p>
+          </div>
+        ) : player.status === "INACTIVE" ? (
+          /* Se edita la ficha, pero no se aprueba ni se rechaza: el servidor lo deniega
+             porque la vuelta de un inactivo es reinscribirse, y eso mueve además el
+             corte de partidas. */
+          <div className="flex flex-col items-end gap-1.5">
+            <PlayerEditDialog player={player} countries={countries} canReverse={canReverse} />
+            <p className="text-right text-xs leading-relaxed text-muted">
+              Para volver, debe reinscribirse por{" "}
+              <span className="whitespace-nowrap">/participar</span>.
             </p>
           </div>
         ) : (

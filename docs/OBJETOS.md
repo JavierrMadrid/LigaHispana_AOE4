@@ -324,7 +324,7 @@ exigiría guardar el histórico de ventanas que este diseño evita a propósito.
 
 | Hay | No hay |
 |---|---|
-| Esquema (`ObjectAward`, `ObjectThrow`, enum `ObjectKind`, `Match.excludedByAwardId`) | Migración aplicada: el `db push` queda pendiente |
+| Esquema (`ObjectAward`, `ObjectThrow`, enum `ObjectKind`, `Match.excludedByAwardId`), aplicado con `db:push` y `db:security` | — |
 | Catálogo y reglas puras en `src/lib/objects.ts`, con sus tests | Sorteo manual del objeto desde el panel: la desventaja se sortea al crearlo |
 | Persistencia y operaciones en `src/lib/object-awards.ts` | Probabilidad aplicada en cada lanzamiento: se guardan la tirada y si se devolvió |
 | Exclusión en el motor (`Match.excludedByAwardId`) y paso del worker, con su efecto en el recálculo | Notificaciones por privado o menciones al rol de participante |

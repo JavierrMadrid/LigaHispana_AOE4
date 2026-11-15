@@ -31,6 +31,7 @@ Lo que hace falta para inscribirse.
 |---|---|
 | El alta se hace por **`profileId`** de AoE4World, con **correo** obligatorio. | Alta |
 | Toda solicitud queda **pendiente de aprobación**: la organización la aprueba o la rechaza. | Organización |
+| **Cada edición exige una inscripción nueva**: al empezar una edición, los participantes de la anterior quedan **inactivos** y no entran automáticamente. Hay que volver a inscribirse y ser aprobado. | Organización |
 | El **alta de la organización** se confirma con la persona: el bot le manda un **privado de Discord** con «Sí, participo» / «No, no participo». Hasta que confirma, el alta no queda aprobada y no aparece en la clasificación; un «no» la deja rechazada. | Organización (y el bot) |
 | Las inscripciones se hacen **hasta la fecha de cierre que publica la organización**. | Organización |
 

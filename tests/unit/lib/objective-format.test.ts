@@ -705,6 +705,7 @@ describe("leaderDistance: lo que separa del primero, nunca un 0", () => {
     dias: ["día", "días"],
     civilizaciones: ["civilización", "civilizaciones"],
     mapas: ["mapa", "mapas"],
+    subobjetivos: ["subobjetivo", "subobjetivos"],
   };
 
   const METRICS = Object.keys(UNITS) as ObjectiveMetric[];

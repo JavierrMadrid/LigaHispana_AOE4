@@ -8,6 +8,7 @@ import { ArrowUpRight } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
 import { PUBLIC_NAVIGATION } from "@/lib/public-navigation";
 import { HomeObjectiveHelpProvider } from "@/components/home-objective-help";
 import "./home.css";
+import "./matches.css";
 
 export function HomeShell({
   legacy,
@@ -33,10 +34,15 @@ export function HomeShell({
   sponsorCredit: ReactNode;
 }) {
   const pathname = usePathname();
-  if (pathname !== "/") return legacy;
+  if (pathname !== "/" && pathname !== "/partidas") return legacy;
 
   return (
-    <div className={`league-home ${fonts}`} style={accentStyle}>
+    <div
+      className={`league-home ${
+        pathname === "/partidas" ? "league-matches" : ""
+      } ${fonts}`}
+      style={accentStyle}
+    >
       <a href="#contenido" className="home-skip">
         Saltar al contenido
       </a>
@@ -62,11 +68,9 @@ export function HomeShell({
           <nav aria-label="Navegación principal" className="home-nav">
             {PUBLIC_NAVIGATION.map((item) => (
               <Link
-                target="_blank"
-                rel="noopener noreferrer"
                 key={item.href}
                 href={item.href}
-                aria-current={item.href === "/" ? "page" : undefined}
+                aria-current={item.href === pathname ? "page" : undefined}
               >
                 {"homeLabel" in item ? item.homeLabel : item.label}
               </Link>

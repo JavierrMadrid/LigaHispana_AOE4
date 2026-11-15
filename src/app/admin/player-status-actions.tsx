@@ -43,6 +43,7 @@ type Tone = keyof typeof TONES;
  * | Pendiente sin verificación | «Aprobar» y «Rechazar» |
  * | Aprobada | «Rechazar» |
  * | Rechazada | «Aprobar» o, si la fila conserva la puerta, «Aprobar y verificar»: el privado sale al aprobar y el alta sigue pendiente |
+ * | Inactiva o expulsada | Ninguna: no se aprueba ni se rechaza desde aquí |
  *
  * Un alta sujeta **no** ofrece «Aprobar»: aprobarla no la aprueba, solo manda el
  * privado, así que el botón que sí hace algo es el de reenviar. La aprobación
@@ -68,10 +69,11 @@ export function PlayerStatusActions({
   const [error, setError] = useState<string | null>(null);
   const end = align === "end";
 
-  // Un expulsado no se aprueba ni se rechaza desde aquí: su salida es revertir la
-  // actuación. La cola no pinta expulsados, y esto evita que un uso nuevo pinte
-  // botones que el servidor va a denegar.
-  if (player.status === "BANNED") {
+  // Ni un expulsado ni un inactivo se aprueban ni se rechazan desde aquí: el primero
+  // sale revirtiendo la actuación y el segundo, reinscribiéndose por `/participar` (el
+  // servidor deniega las dos acciones para él). La cola no pinta ninguno de los dos, y
+  // esto evita que un uso nuevo pinte botones condenados a fallar.
+  if (player.status === "BANNED" || player.status === "INACTIVE") {
     return null;
   }
 

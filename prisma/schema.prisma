@@ -37,6 +37,17 @@ enum PlayerStatus {
   /// devolverlo al torneo hay que revertir la actuación. Va al final por la regla de
   /// `ALTER TYPE … ADD VALUE`.
   BANNED
+  /// Inactivo en la edición actual: no participa, no puntúa y conserva todos sus datos.
+  ///
+  /// Se escribe al empezar una **edición nueva** sobre los `APPROVED` y los `PENDING`
+  /// (ver `writeScoringRuleset()` con `deactivatePlayersForNewEdition` y
+  /// `PLAYERS_DEACTIVATED` en `AdminAction`): nadie pasa a la edición siguiente sin
+  /// consentirlo. Para volver a la liga hay que **reinscribirse** por `/participar`
+  /// —lo que reescribe `registeredAt` y vuelve a marcar el corte de partidas— y pasar
+  /// por la aprobación de siempre. Es reversible y no destructivo, como `BANNED`: la
+  /// fila, sus partidas y su historial siguen ahí. Va al final por la regla de
+  /// `ALTER TYPE … ADD VALUE`.
+  INACTIVE
 }
 
 enum MatchResult {
@@ -74,6 +85,15 @@ enum AdminActionType {
   ADMIN_REACTIVATED
   ACTION_REVERTED
   CONFIG_CHANGED
+  /// Desactivación masiva al empezar una edición nueva: cuántos participantes
+  /// quedaron `INACTIVE` y con qué ventana.
+  ///
+  /// Es una acción **masiva**, no una decisión sobre un participante concreto: no se
+  /// revierte desde el historial (cada participante vuelve reinscribiéndose, y eso deja
+  /// su propio rastro en `PLAYER_APPROVED`). Guarda los recuentos de `APPROVED` y
+  /// `PENDING` porque son justo lo que se viene a mirar. Va al final por la regla de
+  /// `ALTER TYPE … ADD VALUE`.
+  PLAYERS_DEACTIVATED
 }
 
 /// Qué hizo una **actuación administrativa** (`AdminAct`).

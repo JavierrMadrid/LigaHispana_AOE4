@@ -22,7 +22,8 @@ info:
 
     Donde `Y` es el identificador del participante y `Z` es la fecha/hora del último evento
     procesado en formato ISO 8601 con zona, por ejemplo `2026-10-24T14:30:00Z`. El overlay debe
-    sondear cada 30 segundos: el dato de fondo cambia al ritmo del recálculo (10 minutos), así que
+    sondear cada 30 segundos: el dato de fondo cambia con las pasadas del sincronizador (una cada
+    1-3 minutos) y la clasificación se recalcula al final de la pasada que trae algo nuevo, así que
     pedir más a menudo no adelanta nada.
 
     La primera llamada sin `desde` devuelve la foto completa (el último evento de cada objetivo).
@@ -30,9 +31,9 @@ info:
     forma inclusiva (`>=`) y el cliente debe deduplicar los eventos por `id` + `fechahora`, porque
     dos eventos pueden compartir instante.
 
-    `eventos_objetivos` sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` en cada
-    pasada del motor (cada 10 minutos). Los logros y las competiciones aparecen **en vivo**, con el
-    retraso del recálculo, no solo al cierre de la edición. La primera pasada de una edición siembra
+    `eventos_objetivos` sale de `ObjectiveProgressEvent`, que escribe `recomputeScores()` al final de
+    cada pasada del motor que tiene algo que recalcular (una cada 1-3 minutos). Los logros y las
+    competiciones aparecen **en vivo**, con el retraso de esa pasada, no solo al cierre de la edición. La primera pasada de una edición siembra
     `cumplido` y `progresado`; no hay `perdido` en la siembra, porque no había nada que perder. `at`
     es el instante del pase, salvo la siembra de un logro con la ventana ya cerrada, que usa el
     cierre de la ventana.
@@ -69,8 +70,18 @@ info:
     en `victorias`, el umbral del logro en los objetivos con tope y el tamaño del pool activo en
     `por-tierra-y-agua`. Un `null` no es un cero: es "no hay tope".
 
+    `metrica` dice qué mide el objetivo (`partidas`, `victorias`, `racha`, `racha-partidas`,
+    `dias`, `civilizaciones`, `mapas`, `subobjetivos`) para que el overlay componga las
+    unidades del progreso.
+
+    `/eventos` devuelve los últimos eventos **positivos** (`cumplido` y `progresado`) de un
+    participante, de más reciente a más antiguo. `perdido` no entra: no se celebra. Se filtra por
+    la edición activa y por los objetivos activos. La lista puede repetir un objetivo (es una
+    secuencia, no un mapa); el overlay deduplica por objetivo cuando pinta «los últimos». El
+    límite es de 1 a 20 y vale 3 por defecto.
+
     Todas las respuestas, también las de error, llevan `Cache-Control: no-store`.
-  version: 1.1.1
+  version: 1.3.0
   contact:
     name: Equipo de la Liga Hispana
 servers:
@@ -84,6 +95,8 @@ tags:
     description: Posiciones y estadísticas
   - name: Objetivos
     description: Objetivos del torneo
+  - name: Eventos
+    description: Últimos hitos de un participante
 paths:
   /participantes:
     options:
@@ -131,10 +144,88 @@ paths:
               example:
                 - id: '7099800'
                   alias: Miguel Narvaez
+                  pais: España
+                  avatar_url: https://cdn.aoe4world.com/players/7099800/avatar.png
                 - id: '6946414'
                   alias: Mecroid
+                  pais: null
+                  avatar_url: null
                 - id: '2194511'
                   alias: Gorik
+                  pais: España
+                  avatar_url: null
+
+  /eventos:
+    options:
+      summary: Preflight de CORS
+      operationId: eventosPreflight
+      responses:
+        '204':
+          $ref: '#/components/responses/OpcionesCORS'
+    get:
+      tags:
+        - Eventos
+      summary: Últimos objetivos cumplidos o progresados
+      operationId: eventos
+      parameters:
+        - name: id
+          in: query
+          description: |
+            Identificador del participante (`profileId`). Es obligatorio: sin él se devuelve 400, y
+            si no es un entero positivo también. Un id que no existe o no está aprobado da 404.
+          required: true
+          schema:
+            type: string
+          example: '6946414'
+        - name: limite
+          in: query
+          description: |
+            Cuántos eventos se devuelven, de 1 a 20. Por defecto 3. Un valor fuera de rango, con
+            ceros a la izquierda o no entero da 400.
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 3
+          example: 3
+      responses:
+        '400':
+          $ref: '#/components/responses/ParametroInvalido'
+        '404':
+          $ref: '#/components/responses/ParticipanteNoEncontrado'
+        '503':
+          $ref: '#/components/responses/ServicioNoDisponible'
+        '200':
+          description: |
+            Eventos positivos de la edición activa, de más reciente a más antiguo. Solo `cumplido`
+            y `progresado`, solo de objetivos activos. La lista puede estar vacía. A igualdad de
+            instante se ordena por id de objetivo ascendente.
+          headers:
+            Cache-Control:
+              description: El feed no se sirve desde caché para el polling del overlay.
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 20
+                items:
+                  $ref: '#/components/schemas/EventoObjetivoListado'
+              example:
+                - objetivo_id: victorias
+                  tipo: progresado
+                  fechahora: '2026-10-24T14:30:00.000Z'
+                  progreso:
+                    propio: 6
+                  repeticion: 6
+                - objetivo_id: imparable
+                  tipo: cumplido
+                  fechahora: '2026-10-24T14:20:00.000Z'
+                  progreso:
+                    propio: 14
 
   /clasificacion:
     options:
@@ -296,6 +387,8 @@ paths:
                   descripcion: El jugador con más partidas clasificatorias jugadas en el torneo. En caso de empate, lo cobra quien alcanzó esta cifra antes.
                   icono_url: ''
                   puntos: 50
+                  puntos_por_unidad: null
+                  metrica: partidas
                   volatil: true
                   repetible: false
                   max_progreso: null
@@ -304,6 +397,8 @@ paths:
                   descripcion: Gana al menos 3 partidas con Japoneses.
                   icono_url: https://laligahispana.es/imagenes/civilizaciones/Japanese_AoE4.webp
                   puntos: 12
+                  puntos_por_unidad: null
+                  metrica: victorias
                   volatil: false
                   repetible: false
                   max_progreso: 3
@@ -361,6 +456,8 @@ components:
       required:
         - id
         - alias
+        - pais
+        - avatar_url
       properties:
         id:
           type: string
@@ -370,6 +467,23 @@ components:
           type: string
           description: Nombre visible del participante (`Player.name`).
           example: Miguel Narvaez
+        pais:
+          type:
+            - string
+            - 'null'
+          description: |
+            País con el rótulo canónico del torneo (`Player.country`), o `null` si no consta. No es
+            un código ISO.
+          example: España
+        avatar_url:
+          type:
+            - string
+            - 'null'
+          format: uri
+          description: |
+            URL del avatar (`Player.avatarUrl`), o `null` si no hay. Un `null` no es un error: la
+            interfaz dibuja un monograma.
+          example: https://cdn.aoe4world.com/players/7099800/avatar.png
       additionalProperties: false
 
     Clasificacion:
@@ -550,6 +664,38 @@ components:
           description: Solo aparece si el objetivo es repetible; se omite si no lo es.
       additionalProperties: false
 
+    EventoObjetivoListado:
+      type: object
+      description: |
+        Un evento positivo del feed ordenado de `/eventos`: el mismo evento que publica
+        `eventos_objetivos` más el id del objetivo, que en el mapa era la clave. Solo hay
+        `cumplido` y `progresado`; `perdido` no entra en este feed.
+      required:
+        - objetivo_id
+        - tipo
+        - fechahora
+        - progreso
+      properties:
+        objetivo_id:
+          type: string
+          description: Id del catálogo al que pertenece el evento.
+          example: victorias
+        tipo:
+          type: string
+          enum:
+            - cumplido
+            - progresado
+        fechahora:
+          type: string
+          format: date-time
+        progreso:
+          $ref: '#/components/schemas/ProgresoEventoObjetivo'
+        repeticion:
+          type: integer
+          minimum: 1
+          description: Solo aparece si el objetivo es repetible; se omite si no lo es.
+      additionalProperties: false
+
     ProgresoEventoObjetivo:
       type: object
       description: Progreso propio para eventos cumplidos o progresados.
@@ -609,6 +755,8 @@ components:
         - descripcion
         - icono_url
         - puntos
+        - puntos_por_unidad
+        - metrica
         - volatil
         - repetible
         - max_progreso
@@ -634,8 +782,27 @@ components:
           minimum: 0
           description: |
             Puntos con la regla activa. En `victorias` es el precio por victoria
-            (`pointsPerWin`), no un premio único.
+            (`pointsPerWin`), no un premio único; en los repetibles con tope
+            (`imparable`, `maestro-<civ>`), el premio máximo.
           example: 50
+        puntos_por_unidad:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+          description: |
+            Lo que paga por unidad un objetivo repetible: `pointsPerWin` por victoria en
+            `victorias`, 1 por día en `imparable` y 1 por victoria en los `maestro-<civ>`.
+            `null` en las metas y competiciones, que cobran una sola vez.
+          example: null
+        metrica:
+          type: string
+          description: |
+            Qué mide el objetivo: `partidas`, `victorias`, `racha`, `racha-partidas`, `dias`,
+            `civilizaciones`, `mapas` o `subobjetivos`. El overlay la usa para componer las
+            unidades del progreso («6 victorias», «6/14 días»). Es una cadena y no un enum para
+            que el catálogo pueda crecer sin desplegar el overlay a la vez.
+          example: partidas
         volatil:
           type: boolean
           description: |

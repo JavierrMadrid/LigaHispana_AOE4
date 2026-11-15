@@ -42,12 +42,12 @@ van como texto suelto, igual que `AdminAction.targetId`.
 
 | Enum | Valores |
 |---|---|
-| `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED`, `BANNED` |
+| `PlayerStatus` | `PENDING`, `APPROVED`, `REJECTED`, `BANNED`, `INACTIVE` |
 | `MatchResult` | `WIN`, `LOSS` |
 | `ObjectiveLeadKind` | `LOST`, `GAINED` (en ese orden, y no es decorativo: ver abajo) |
 | `ObjectiveProgressKind` | `CUMPLIDO`, `PERDIDO`, `PROGRESADO` (el orden no significa nada: el feed va por `at`) |
 | `ObjectKind` | `RELIQUIA`, `MONEDA`, `MONUMENTO` |
-| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED` (histórico), `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED` |
+| `AdminActionType` | `PLAYER_CREATED`, `PLAYER_REMOVED` (histórico), `MATCH_POINTS_REVERTED`, `MATCH_POINTS_RESTORED`, `PLAYER_EDITED`, `PLAYER_APPROVED`, `PLAYER_REJECTED`, `ADMIN_ADDED`, `ADMIN_DEACTIVATED`, `ADMIN_REACTIVATED`, `ACTION_REVERTED`, `CONFIG_CHANGED`, `PLAYERS_DEACTIVATED` |
 | `AdminActKind` | `BAN`, `MATCH_ANNULMENT`, `REVERSAL` |
 | `AlertRule` | `SHORT_MATCH_STREAK`, `SHORT_MATCH_TOTAL`, `REPEATED_OPPONENT_STREAK`, `REPEATED_OPPONENT_TOTAL`, `REPEATED_TEAMMATE_STREAK`, `REPEATED_TEAMMATE_TOTAL`, `TEAMMATE_ELO_GAP` (legado), `LOW_DIVISION_TEAM_GAME` (legado), `HISTORY_NOT_PUBLIC`, `MISSING_LADDER_MATCHES`, `DISCORD_NOT_IN_GUILD`, `NO_STREAM_CHANNEL` (solo si la edición exige retransmisión), `NO_VILLAGERS_FIRST_MINUTES`, `NO_MILITARY_GAP`, `NO_RESOURCES_GAP`, `SUMMARY_NOT_REVIEWED` |
 | `AlertKind` | `STREAK_CLOSED`, `STREAK_AT_TOURNAMENT_END`, `TOTAL_REACHED`, `STATE_DETECTED`, `MATCH_DETECTED` |
@@ -65,6 +65,13 @@ que reordenarlo; el que se añada va al final.
 tipo `BAN`) y solo se sale de él revirtiéndola. Es la forma de retirar a un participante —el panel no
 tiene baja destructiva—: conserva todos los datos del participante y el motor lo trata como no aprobado
 (solo publica `APPROVED`).
+
+`PlayerStatus.INACTIVE` es la **desactivación al empezar una edición nueva** (issue 183): no participa
+en la edición actual, no puntúa —el motor solo publica `APPROVED`— y conserva todos sus datos. Lo
+escriben `APPROVED` y `PENDING` en la misma transacción que publica la ventana nueva
+(`writeScoringRuleset()` con `deactivatePlayersForNewEdition`), y queda el rastro `PLAYERS_DEACTIVATED`.
+Para volver a la liga hay que **reinscribirse** por `/participar` —consentimiento— y ser aprobado; el
+alta manual de admin no lo reactiva.
 
 Dos valores de `AlertRule` son **legado**: `TEAMMATE_ELO_GAP` (brecha de elo con un compañero) y
 `LOW_DIVISION_TEAM_GAME` (equipo en una división muy distinta) ya no los calcula el motor, porque su
@@ -97,8 +104,8 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `discordVerificationUserId` | `String?` | Cuenta de Discord a la que se mandó el privado; la interacción comprueba que quien pulsa es esa cuenta. No es una FK ni tiene unicidad: es el destinatario del mensaje, no una identidad vinculada. |
 | `discordVerifiedAt` | `DateTime?` | La persona **confirmó** desde su cuenta. No confundir con `discordUserId`: ese es "lo que dice Discord" y puede estar resuelto sin consentimiento. Es lo que hace que la puerta deje aprobar. |
 | `discordDeclinedAt` | `DateTime?` | Cuándo pulsó "No". |
-| `status` | `PlayerStatus` | `PENDING` por defecto. `BANNED` lo pone una actuación de expulsión y solo se sale revirtiéndola. |
-| `registeredAt` | `DateTime?` | Cuándo se **inscribió** (no cuándo se aprobó). Define el corte `max(window.from, registeredAt)`. `null` = cuenta desde el inicio de la ventana; sin *backfill*. |
+| `status` | `PlayerStatus` | `PENDING` por defecto. `BANNED` lo pone una actuación de expulsión y solo se sale revirtiéndola; `INACTIVE` lo pone el cambio de edición y se sale reinscribiéndose por `/participar`. |
+| `registeredAt` | `DateTime?` | Cuándo se **inscribió** (no cuándo se aprobó). Define el corte `max(window.from, registeredAt)`. **La reinscripción desde `INACTIVE` lo reescribe** (es una inscripción nueva para la edición nueva); la de un `REJECTED` conserva la fecha del primer envío. `null` = cuenta desde el inicio de la ventana; sin *backfill*. |
 | `elo`, `rankLevel`, `streak`, `ladderGamesCount` | `Int`/`String`/`Int`/`Int?` | De la ladder (`GET /leaderboards/rm_solo`). `rankLevel` es el literal (`gold_2`), no la división resuelta. `streak` con signo. |
 | `ladderLastGameAt` | `DateTime?` | `last_game_at` de la ladder. Va por delante de lo que importamos: solo sirve para la alerta `MISSING_LADDER_MATCHES`. |
 | `ladderUpdatedAt` | `DateTime?` | Última lectura de la ladder. Distingue "sin ladder" de "sin sync". |
@@ -209,7 +216,7 @@ de puntos están siempre presentes en una fila nueva, con ceros si no aplican.
 ```json
 {
   "ruleSetVersion": 4,
-  "rule": "2 puntos por victoria clasificatoria más 120 objetivos: 31 competiciones y 89 logros",
+  "rule": "2 puntos por victoria clasificatoria más 122 objetivos: 31 competiciones y 91 logros",
   "byMode": {
     "rm_solo": { "wins": 3, "points": 6, "matches": 5 },
     "rm_team": { "wins": 1, "points": 2, "matches": 2 }
@@ -315,8 +322,9 @@ decide quien pinta.
 
 Un **cambio de progreso** de un objetivo: cuándo un jugador lo cumplió (`CUMPLIDO`), lo perdió
 (`PERDIDO`) o avanzó hacia él (`PROGRESADO`), **con los valores** de progreso de ese instante. Es el
-feed que lee la API del overlay (`GET /api/v0/clasificacion`), que publica por objetivo el `tipo`, la
-`fechahora` y el `progreso { propio, ajeno? }` de cada evento. **No alimenta la clasificación.**
+feed que leen la API del overlay (`GET /api/v0/clasificacion` y `GET /api/v0/eventos`), que publica por
+objetivo el `tipo`, la `fechahora` y el `progreso { propio, ajeno? }` de cada evento. **No alimenta la
+clasificación.**
 
 El contrato que lo publica —endpoints, campos, tipos y errores— está en
 [`API-OVERLAY.md`](./API-OVERLAY.md).
@@ -420,7 +428,9 @@ Una acción del panel, para poder pintar su historial. **Append-only**: quién h
 fila. `summary` va ya redactado en español. Registra lo que cambia datos que se ven desde fuera:
 altas y ediciones de participante, aprobaciones y rechazos de solicitud (aprobar mete al
 jugador en la clasificación y rechazar lo deja fuera), los revert/restore de puntos de una partida,
-la gestión de admins, los cambios de configuración de la edición y la **reversión** de una acción
+la gestión de admins, los cambios de configuración de la edición, la **desactivación masiva** de los
+participantes al empezar una edición nueva (`PLAYERS_DEACTIVATED`, con los recuentos de `APPROVED` y
+`PENDING` y la ventana nueva en `details`) y la **reversión** de una acción
 anterior (`ACTION_REVERTED`). `PLAYER_REMOVED` queda para las filas **históricas**: la baja destructiva
 dejó de ofrecerse en el panel (issue 167; retirar a un aprobado es una actuación de expulsión). La
 única escritura sobre una fila ya existente es la marca de revertida
@@ -552,7 +562,7 @@ Claves vivas en producción, con quién las escribe:
 | `scoring.mapPool` | Pool de mapas del objetivo `por-tierra-y-agua`. | Worker (`refreshMapPool()`) o a mano (organización) |
 | `scoring.mapPoolSync` | Contabilidad del último refresco del pool (`fetchedAt`, `startedAt`, `nextRefresh`, `maps`). | Worker (`refreshMapPool()`) |
 | `scoring.lastRun` | Rastro del último recálculo: `ruleSetVersion`, `cacheVersion` (`SCORING_CACHE_VERSION`), `playersRanked` y las cifras del resultado. Lo lee el worker para decidir si puede saltarse el recálculo. | `recomputeScores()` |
-| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 5) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
+| `scoring.objectives` | Vista pública de objetivos (`ObjectiveView`) con su `snapshotVersion` (hoy 6) y la huella del contenido. La leen `/objetivos` y la ficha de participante; si falta o no valida, se recomputa en vivo. | `recomputeScores()` |
 | `sync.lastRun` | Rastro de la última pasada de sincronización. | Worker (`src/lib/aoe4world/sync.ts`) |
 | `sync.gamesCursor` | Cursor global de partidas: `updatedAt` (el `updated_since` de la siguiente pasada), `seededAt`, `seededFrom`, la racha de lotes truncados y el mejor `backfillPending` visto. | Worker (`src/lib/aoe4world/sync.ts`), con `writeGamesCursor()` |
 | `streams.lastRun` | Cuándo se comprobó por última vez el estado de directo de YouTube/Kick, en ISO-8601 UTC. Separa el reloj del paso (10 min) del de las partidas (1-3 min) para no gastar la cuota de YouTube. | Worker (`src/lib/aoe4world/sync.ts`), con `writeStreamsLastRun()` |
@@ -685,6 +695,7 @@ aparece en una consulta, no se crea.**
 | Acceso al panel (`requireAdmin`) | `Admin` por `email` (una fila por petición con sesión) | `email` (único) |
 | Motor (recálculo) | `Match where mode = any(...) and startedAt en ventana and result/finishedAt no nulos` | `(mode, startedAt)` |
 | API del overlay (`GET /api/v0/clasificacion`) | `ObjectiveProgressEvent where playerId = X and editionFrom = edición and at >= desde order by at` | `(playerId, editionFrom, at)` |
+| API del overlay (`GET /api/v0/eventos`) | `ObjectiveProgressEvent where playerId = X and editionFrom = edición and kind in (CUMPLIDO, PROGRESADO) and objectiveId en los activos order by at desc, objectiveId asc limit N` | `(playerId, editionFrom, at)`; el `objectiveId` se filtra después de la búsqueda por jugador y edición |
 | Motor (reconciliación del progreso) | `ObjectiveProgressState where editionFrom = edición`, y una fila por `(playerId, objectiveId, editionFrom)` al comparar | `(editionFrom, objectiveId)`; pk `(playerId, objectiveId, editionFrom)` |
 
 El filtro de qué cuenta es **uno solo**: `src/lib/ranked-match.ts` (ventana, corte de inscripción,
