@@ -148,7 +148,8 @@ export type ObjectThrowAnnouncement = {
  * La probabilidad se enseña siempre, se devuelva o no: es lo que explica por qué el
  * objeto se ha quedado o ha viajado, y el panel no tiene que repetir esa frase. La
  * desventaja se recuerda porque el portador cambia y quien lee tiene que saber qué
- * carga le acaba de llegar.
+ * carga le acaba de llegar. Cuando se devuelve, el aviso dice además que el portador
+ * conserva la carga **y** el objeto: puede volver a intentarlo (issue 224).
  */
 export function objectThrowAnnouncementText(input: ObjectThrowAnnouncement): string {
   const definition = OBJECT_CATALOG[input.kind];
@@ -156,7 +157,7 @@ export function objectThrowAnnouncementText(input: ObjectThrowAnnouncement): str
   const to = playerLabel(input.toName);
   const penalty = objectPenaltyText(input.kind, input.penaltyId) ?? UNKNOWN_PENALTY_TEXT;
   const outcome = input.returned
-    ? `Se ha devuelto: el objeto sigue en manos de ${from}.`
+    ? `Se ha devuelto: la desventaja se queda con ${from}, que sigue pudiendo lanzarlo a otro jugador.`
     : `No se ha devuelto: el objeto pasa a manos de ${to}.`;
 
   return `Objeto lanzado: «${definition.name}» de ${from} a ${to}, con un ${formatReturnProbability(input.probability)} de probabilidad de devolución. ${outcome} Desventaja: ${penalty}`;

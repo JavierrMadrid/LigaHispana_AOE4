@@ -605,15 +605,25 @@ export function sameKindBlocked(
   );
 }
 /** Un lanzamiento con su lanzador, para la regla de uno por portador y día. */
-export type ObjectThrowWithThrower = ObjectThrowRecord & { fromId: string };
+export type ObjectThrowWithThrower = ObjectThrowRecord & {
+  fromId: string;
+  /** `true` = la tirada se devolvió: el intento falló y no gasta el turno del día. */
+  returned: boolean;
+};
 
 /**
- * La regla de **un lanzamiento por portador y día UTC**.
+ * La regla de **un lanzamiento que llegue por portador y día UTC**.
  *
- * Cuenta los lanzamientos que hizo el portador actual, se devolvieran o no: el
- * límite es por persona y día, no por objeto. Si el objeto cambia de manos sin
- * devolverse, el portador nuevo sí puede lanzarlo el mismo día, porque no ha
- * lanzado nada; es lo que compara `fromId` y no el `awardId`.
+ * Cuenta los lanzamientos que hizo el portador actual **y que no se devolvieron**: un
+ * tiro devuelto es un intento fallido, la desventaja se le queda al portador y el
+ * objeto sigue en su mano para volver a usarlo (issue 224), así que no gasta el turno
+ * del día. Si el objeto cambia de manos sin devolverse, el portador nuevo sí puede
+ * lanzarlo el mismo día, porque no ha lanzado nada; es lo que compara `fromId` y no el
+ * `awardId`.
+ *
+ * La **regla Y** sí cuenta los devueltos: lo que limita es no insistir dos veces sobre
+ * el mismo jugador el mismo día. Las dos reglas leen el mismo listado y cada una decide
+ * qué hace con `returned`.
  *
  * `throws` son los lanzamientos **de este objeto**; el día se normaliza con
  * `objectDay()` igual que en la regla Y.
@@ -626,6 +636,7 @@ export function sameThrowerBlocked(
   const targetDay = objectDay(day).getTime();
 
   return throws.some(
-    (item) => item.fromId === fromId && objectDay(item.at).getTime() === targetDay,
+    (item) =>
+      item.fromId === fromId && !item.returned && objectDay(item.at).getTime() === targetDay,
   );
 }

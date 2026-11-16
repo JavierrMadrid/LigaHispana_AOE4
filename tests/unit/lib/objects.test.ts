@@ -487,22 +487,44 @@ describe("sameTargetBlocked", () => {
 describe("sameThrowerBlocked", () => {
   const day = at("2026-11-04T12:00:00.000Z");
 
-  it("el portador que ya lanzó ese día UTC no puede repetir", () => {
-    const throws = [{ fromId: "p-1", toId: "p-2", at: at("2026-11-04T08:00:00.000Z") }];
+  const lanzado = (fromId: string, toId: string, iso: string, returned = false) => ({
+    fromId,
+    toId,
+    at: at(iso),
+    returned,
+  });
+
+  it("el portador que ya colocó el objeto ese día UTC no puede repetir", () => {
+    const throws = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
 
     expect(sameThrowerBlocked(throws, "p-1", day)).toBe(true);
   });
 
-  it("cuenta el lanzamiento se devolviera o no: el límite es por persona y día", () => {
+  it("un lanzamiento devuelto no gasta el turno del día (issue 224)", () => {
+    const devuelto = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z", true)];
+
+    expect(sameThrowerBlocked(devuelto, "p-1", day)).toBe(false);
+  });
+
+  it("un devuelto no deja colar un lanzamiento aceptado el mismo día", () => {
+    const throws = [
+      lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z", true),
+      lanzado("p-1", "p-3", "2026-11-04T09:00:00.000Z", false),
+    ];
+
+    expect(sameThrowerBlocked(throws, "p-1", day)).toBe(true);
+  });
+
+  it("cuenta solo el día UTC: el de ayer no bloquea", () => {
     // El portador que lanzó ayer sí puede lanzar hoy; otro portador, no.
-    const ayer = [{ fromId: "p-1", toId: "p-2", at: at("2026-11-03T23:59:59.999Z") }];
+    const ayer = [lanzado("p-1", "p-2", "2026-11-03T23:59:59.999Z")];
 
     expect(sameThrowerBlocked(ayer, "p-1", day)).toBe(false);
     expect(sameThrowerBlocked(ayer, "p-9", day)).toBe(false);
   });
 
   it("un objeto que cambió de manos deja lanzar al portador nuevo", () => {
-    const throws = [{ fromId: "p-1", toId: "p-2", at: at("2026-11-04T08:00:00.000Z") }];
+    const throws = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
 
     expect(sameThrowerBlocked(throws, "p-2", day)).toBe(false);
   });

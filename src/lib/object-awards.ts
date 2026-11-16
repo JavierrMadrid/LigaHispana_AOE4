@@ -410,9 +410,10 @@ export type ThrowObjectResult = {
  *
  * Valida, en este orden: que el premio exista, que tenga portador y siga pendiente,
  * que el objetivo no sea el portador, que ese objetivo no haya recibido ya el
- * objeto hoy (regla Y), que el portador no haya lanzado ya hoy y que el objetivo no
- * tenga ya un objeto de ese tipo (issue 225: ni pendiente ni recibido hoy). Los
- * errores son `Error` con el texto en español que el panel enseñará tal cual.
+ * objeto hoy (regla Y), que el portador no haya **colocado** ya el objeto hoy —los
+ * lanzamientos devueltos no cuentan— y que el objetivo no tenga ya un objeto de ese
+ * tipo (issue 225: ni pendiente ni recibido hoy). Los errores son `Error` con el texto
+ * en español que el panel enseñará tal cual.
  *
  * La probabilidad sale del puesto de los dos en `PlayerScore` del ruleset vigente.
  * Si falta la fila de alguno (un alta recién aprobada, un recálculo a medias) se
@@ -421,8 +422,11 @@ export type ThrowObjectResult = {
  *
  * Si **no** se devuelve, consolida la ventana actual (marca sus partidas) y mueve el
  * portador dejando la ventana nueva abierta en el instante del lanzamiento, todo en
- * la misma transacción que el `ObjectThrow`. Si **se devuelve**, la ventana no se
- * toca: solo se anota el lanzamiento con `returned = true`.
+ * la misma transacción que el `ObjectThrow`. Si **se devuelve**, la ventana no se toca:
+ * la desventaja se le queda al portador y solo se anota el lanzamiento con
+ * `returned = true`. Ese intento fallido **no gasta el turno del día** (issue 224), así
+ * que puede volver a lanzarlo a otro jugador; el que ya lo recibió queda fuera por la
+ * regla Y.
  */
 export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObjectResult> {
   const client = options.client ?? db;
@@ -460,7 +464,7 @@ export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObj
 
   const throws = await client.objectThrow.findMany({
     where: { awardId },
-    select: { fromId: true, toId: true, at: true },
+    select: { fromId: true, toId: true, at: true, returned: true },
   });
 
   if (sameTargetBlocked(throws, toId, now)) {
@@ -468,7 +472,7 @@ export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObj
   }
 
   if (sameThrowerBlocked(throws, award.holderId, now)) {
-    throw new Error("El portador ya ha lanzado este objeto hoy.");
+    throw new Error("El portador ya ha colocado este objeto hoy.");
   }
 
   // Regla de un objeto de cada tipo aplicado (issue 225): ni dos pendientes del mismo

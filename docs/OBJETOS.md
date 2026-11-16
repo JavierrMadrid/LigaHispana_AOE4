@@ -100,7 +100,9 @@ catálogo y una redacción nueva no reescribe el histórico.
 ## Lanzamiento y devolución
 
 - El portador puede **lanzar el objeto a otro jugador una vez al día**. En el POC el
-  lanzamiento se hace desde el panel de admin, no hay automatismo ni bot.
+  lanzamiento se hace desde el panel de admin, no hay automatismo ni bot. El límite
+  cuenta los lanzamientos **aceptados**: los que se devuelven no gastan el turno
+  (`sameThrowerBlocked()`, issue 224).
 - **Probabilidad de devolución** (`returnProbability()`), con el puesto en la
   clasificación (`1` = primero) y el total de jugadores clasificados:
 
@@ -112,8 +114,10 @@ catálogo y una redacción nueva no reescribe el histórico.
   se devuelva; lanzar a alguien mejor la deja en el suelo. Nunca es `0` ni `1`: la
   tirada siempre existe. Con menos de un jugador clasificado no hay proporción que
   calcular y devuelve `0,01`.
-- Si **se devuelve**, el objeto sigue en el lanzador y ese día ya no puede volver a
-  lanzarlo.
+- Si **se devuelve**, la tirada sale mal y la desventaja se le queda al portador: el
+  objeto sigue en sus manos y sus partidas siguen sin puntuar, pero **puede volver a
+  lanzarlo** ese mismo día a otro jugador. El que ya lo recibió queda fuera por la
+  regla Y, así que cada intento fallido gasta un destino.
 - Si **no se devuelve**, el portador pasa a ser el objetivo, con `heldSince` en el
   instante del lanzamiento; las partidas de la ventana anterior ya quedaron marcadas
   y la ventana nueva queda abierta (ver [Estados de la ventana](#estados-de-la-ventana)).
@@ -122,7 +126,7 @@ catálogo y una redacción nueva no reescribe el histórico.
   cambie de manos después.
 - **Regla Y:** un mismo objetivo no puede recibir el mismo objeto dos veces en el
   mismo día UTC (`sameTargetBlocked()`). Cuenta cualquier lanzamiento anotado, se
-  devolviera o no.
+  devolviera o no: lo que evita es insistir sobre la misma persona, no el turno.
 - **Un objeto de cada tipo** (issue 225): nadie puede tener dos objetos del mismo
   tipo aplicados. Se bloquea el lanzamiento si el objetivo ya lo tiene **pendiente** o
   si ya le llegó uno del mismo tipo ese día UTC (`sameKindBlocked()`); los

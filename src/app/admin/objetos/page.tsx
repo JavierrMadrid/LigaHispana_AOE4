@@ -275,7 +275,10 @@ function PendingAwardCard({
     fromId: item.from.playerId,
     toId: item.to.playerId,
     at: item.at,
+    returned: item.returned,
   }));
+  // Un lanzamiento devuelto no gasta el turno del día (issue 224): el objeto sigue en
+  // su mano y la desventaja también, así que puede volver a intentarlo con otro.
   const thrownToday =
     holder !== null && sameThrowerBlocked(throwsForRules, holder.playerId, now);
 
@@ -382,8 +385,8 @@ function PendingAwardCard({
             <h4 className="text-sm font-semibold text-foreground">Lanzar el objeto</h4>
             <p className="mt-1 max-w-[60ch] text-xs leading-relaxed text-muted">
               Una vez por portador y día UTC, y nunca a quien ya tenga uno de este tipo.
-              Si la tirada se devuelve, el objeto se queda donde está y ese portador ya no
-              puede relanzarlo hoy.
+              Si la tirada se devuelve, la desventaja se queda con el portador y el objeto
+              sigue en su mano: puede volver a lanzarlo, pero no al mismo jugador.
             </p>
 
             {holder === null ? (
@@ -394,8 +397,9 @@ function PendingAwardCard({
             ) : thrownToday ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
                 <span className="text-foreground">{playerName(holder)}</span> ya ha
-                lanzado este objeto hoy. El límite es una vez por portador y día UTC, así
-                que la acción vuelve a estar disponible a medianoche UTC.
+                colocado este objeto hoy. El límite es un lanzamiento aceptado por portador
+                y día UTC —los devueltos no cuentan—, así que la acción vuelve a estar
+                disponible a medianoche UTC.
               </p>
             ) : available.length === 0 ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
