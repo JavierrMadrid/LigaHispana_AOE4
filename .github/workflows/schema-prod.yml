@@ -1,0 +1,106 @@
+name: Esquema de producción
+
+# Aplica `prisma/schema.prisma` a la base de producción cuando entra en `main` un
+# cambio del modelo, sin que nadie tenga que acordarse del `db:push`.
+#
+# Por qué existe: Workers Builds publica el código en cuanto se hace el merge, pero
+# **no** toca el esquema. Prisma pide todas las columnas del modelo, así que un
+# merge con una tabla o una columna nueva deja el panel y el worker rotos hasta que
+# alguien se acuerda de `npm run db:push` (ver las incidencias de
+# `docs/DESPLIEGUE.md`).
+#
+# Qué hace, en orden: `db:check` (0 = al día, 2 = le falta el schema, 1 = error),
+# `db:push` solo si hace falta, `db:security` para cerrar las tablas nuevas y
+# `db:check` otra vez para terminar en verde o en rojo.
+#
+# Lo que **no** hace: `--accept-data-loss`. Si el merge quita una columna o una
+# tabla, `db:push` aborta y el job falla en rojo; el esquema de producción no pierde
+# nada por un merge. Esa decisión sigue siendo manual.
+#
+# Necesita, en el repositorio o en el entorno `produccion-bd`, el secreto
+# `PRODUCTION_DATABASE_URL` con el **Session pooler** de producción (puerto 5432):
+# los runners de GitHub son IPv4 y la conexión directa de Supabase puede resolverse
+# solo por IPv6.
+#
+# `workflow_dispatch` permite repetirlo a mano si una ejecución falló.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "prisma/schema.prisma"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Dos merges seguidos no aplican DDL a la vez.
+concurrency:
+  group: esquema-produccion
+  cancel-in-progress: false
+
+jobs:
+  esquema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Agrupa los secretos de la base de producción y deja el rastro en el historial
+    # del entorno. No lleva revisores obligatorios a propósito: el merge ya es la
+    # aprobación.
+    environment: produccion-bd
+    env:
+      DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+    steps:
+      - name: Comprobar que PRODUCTION_DATABASE_URL está definido
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Falta el secreto PRODUCTION_DATABASE_URL (Session pooler de producción)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # La misma versión que `ci.yml`: lo que se comprueba en la pull request es lo
+      # que después se aplica aquí.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: ¿Le falta el schema a producción?
+        id: check
+        shell: bash
+        run: |
+          set +e
+          npm run db:check
+          code=$?
+          set -e
+
+          case "$code" in
+            0) echo "al-dia=true" >> "$GITHUB_OUTPUT" ;;
+            2) echo "al-dia=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::db:check ha fallado con el código $code."; exit 1 ;;
+          esac
+
+      - name: Aplicar el schema
+        if: steps.check.outputs.al-dia == 'false'
+        run: npm run db:push
+
+      # Una tabla nueva nace legible para los roles de cliente: `--check` sale con 1
+      # cuando falta cerrarla, y entonces se aplica la postura —la de por defecto,
+      # `cerrada`, la misma que documenta MODELO-DATOS—. Si ya estaba bien, el `||` no
+      # se ejecuta y no se escribe nada.
+      - name: Cerrar las tablas nuevas
+        if: steps.check.outputs.al-dia == 'false'
+        run: npm run db:security -- --check || npm run db:security
+
+      - name: Verificar que producción queda al día
+        run: |
+          npm run db:check
+          echo "Esquema de producción al día." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Nada que aplicar
+        if: steps.check.outputs.al-dia == 'true'
+        run: |
+          echo "El schema no ha cambiado respecto a producción: no se ha tocado nada." >> "$GITHUB_STEP_SUMMARY"
