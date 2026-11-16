@@ -12,10 +12,12 @@ import {
   objectDay,
   pickDailyAwards,
   pickPenalty,
+  sameKindBlocked,
   sameTargetBlocked,
   sameThrowerBlocked,
   throwReturnProbability,
   type AwardMatch,
+  type KindApplication,
 } from "@/lib/objects";
 import { rankedMatchSql } from "@/lib/ranked-match";
 import { readRuleset, type ScoringRuleset } from "@/lib/scoring";
@@ -143,6 +145,7 @@ type AwardCandidateRow = {
   playerId: string;
   startedAtMs: number;
   winReason: string | null;
+  durationSeconds: number | null;
 };
 
 /**
@@ -168,7 +171,8 @@ function awardCandidatesQuery(
            m."gameId" as "gameId",
            p."id" as "playerId",
            (extract(epoch from m."startedAt" at time zone 'UTC') * 1000)::double precision as "startedAtMs",
-           m."winReason" as "winReason"
+           m."winReason" as "winReason",
+           m."durationSeconds" as "durationSeconds"
     from "Match" m
     join "Player" p on p."id" = m."playerId"
     where p."status" = 'APPROVED'
@@ -228,6 +232,7 @@ export async function syncDailyObjectAwards(
       playerId: row.playerId,
       startedAt: new Date(row.startedAtMs),
       winReason: row.winReason,
+      durationSeconds: row.durationSeconds,
     }));
 
   const planned = pickDailyAwards(candidates, { taken });
@@ -405,8 +410,10 @@ export type ThrowObjectResult = {
  *
  * Valida, en este orden: que el premio exista, que tenga portador y siga pendiente,
  * que el objetivo no sea el portador, que ese objetivo no haya recibido ya el
- * objeto hoy (regla Y) y que el portador no haya lanzado ya hoy. Los errores son
- * `Error` con el texto en español que el panel enseñará tal cual.
+ * objeto hoy (regla Y), que el portador no haya **colocado** ya el objeto hoy —los
+ * lanzamientos devueltos no cuentan— y que el objetivo no tenga ya un objeto de ese
+ * tipo (issue 225: ni pendiente ni recibido hoy). Los errores son `Error` con el texto
+ * en español que el panel enseñará tal cual.
  *
  * La probabilidad sale del puesto de los dos en `PlayerScore` del ruleset vigente.
  * Si falta la fila de alguno (un alta recién aprobada, un recálculo a medias) se
@@ -415,8 +422,11 @@ export type ThrowObjectResult = {
  *
  * Si **no** se devuelve, consolida la ventana actual (marca sus partidas) y mueve el
  * portador dejando la ventana nueva abierta en el instante del lanzamiento, todo en
- * la misma transacción que el `ObjectThrow`. Si **se devuelve**, la ventana no se
- * toca: solo se anota el lanzamiento con `returned = true`.
+ * la misma transacción que el `ObjectThrow`. Si **se devuelve**, la ventana no se toca:
+ * la desventaja se le queda al portador y solo se anota el lanzamiento con
+ * `returned = true`. Ese intento fallido **no gasta el turno del día** (issue 224), así
+ * que puede volver a lanzarlo a otro jugador; el que ya lo recibió queda fuera por la
+ * regla Y.
  */
 export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObjectResult> {
   const client = options.client ?? db;
@@ -454,7 +464,7 @@ export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObj
 
   const throws = await client.objectThrow.findMany({
     where: { awardId },
-    select: { fromId: true, toId: true, at: true },
+    select: { fromId: true, toId: true, at: true, returned: true },
   });
 
   if (sameTargetBlocked(throws, toId, now)) {
@@ -462,7 +472,38 @@ export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObj
   }
 
   if (sameThrowerBlocked(throws, award.holderId, now)) {
-    throw new Error("El portador ya ha lanzado este objeto hoy.");
+    throw new Error("El portador ya ha colocado este objeto hoy.");
+  }
+
+  // Regla de un objeto de cada tipo aplicado (issue 225): ni dos pendientes del mismo
+  // tipo sobre el mismo jugador, ni dos que le hayan llegado el mismo día UTC.
+  const [pendingSameKind, receivedToday] = await Promise.all([
+    client.objectAward.findMany({
+      where: { kind: award.kind, exitedAt: null, holderId: { not: null } },
+      select: { kind: true, holderId: true, heldSince: true },
+    }),
+    client.objectThrow.findMany({
+      where: { toId, returned: false, at: { gte: objectDay(now) }, award: { kind: award.kind } },
+      select: { toId: true, at: true, award: { select: { kind: true } } },
+    }),
+  ]);
+
+  const applications: KindApplication[] = [
+    ...pendingSameKind.flatMap((item) =>
+      item.holderId === null || item.heldSince === null
+        ? []
+        : [{ kind: item.kind, holderId: item.holderId, at: item.heldSince, pending: true }],
+    ),
+    ...receivedToday.map((item) => ({
+      kind: item.award.kind,
+      holderId: item.toId,
+      at: item.at,
+      pending: false,
+    })),
+  ];
+
+  if (sameKindBlocked(applications, award.kind, toId, now)) {
+    throw new Error("Ese jugador ya tiene un objeto de ese tipo hoy.");
   }
 
   const ruleset = await readRuleset(client);

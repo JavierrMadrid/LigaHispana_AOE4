@@ -32,6 +32,13 @@ const ADMINISTRATION_TAB: AdminTab = {
 };
 
 /**
+ * La redacción de noticias (issue 229), también solo para el superadministrador: la
+ * acción que guarda llama a `requireSuperadmin()`, así que la pestaña no se ofrece a
+ * quien no puede usarla.
+ */
+const NEWS_TAB: AdminTab = { href: "/admin/noticias", label: "Noticias" };
+
+/**
  * Navegación de las pestañas del panel.
  *
  * Es cliente porque leer la ruta activa necesita `usePathname`; el resto del
@@ -45,18 +52,20 @@ const ADMINISTRATION_TAB: AdminTab = {
  * La administración se separa con un filete del resto de pestañas porque no es
  * una pantalla más del día a día: es la configuración del torneo, y solo la ve el
  * superadministrador. La activa se marca con el oro y un fondo tenue, no solo con
- * el color del texto: en una fila de seis pestañas, el color solo se pierde.
+ * el color del texto: en una fila de siete pestañas, el color solo se pierde.
  */
 export function AdminTabs({ showAdministration }: { showAdministration: boolean }) {
   const pathname = usePathname();
-  const tabs = showAdministration ? [...TABS, ADMINISTRATION_TAB] : TABS;
+  const tabs = showAdministration ? [...TABS, NEWS_TAB, ADMINISTRATION_TAB] : TABS;
+  // El filete separa lo del día a día de lo que solo ve el superadministrador.
+  const separatorAt = tabs.length - 2;
 
   return (
     <nav aria-label="Secciones del panel" className="-mb-px overflow-x-auto overscroll-x-contain">
       <ul className="flex items-center gap-1">
         {tabs.map((tab, index) => {
           const active = tab.exact ? pathname === tab.href : pathname.startsWith(tab.href);
-          const separated = showAdministration && index === tabs.length - 1;
+          const separated = showAdministration && index === separatorAt;
 
           return (
             <Fragment key={tab.href}>

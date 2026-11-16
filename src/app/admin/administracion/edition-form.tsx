@@ -16,6 +16,11 @@ type EditionFormProps = {
   /** Topes del documento, pasados desde el servidor para no importar el módulo. */
   nameMaxLength: number;
   noteMaxLength: number;
+  /**
+   * La edición ya ha empezado: el modo de objetos solo se puede **encender** antes
+   * (issue 223). Apagarlo sigue permitido, que es la vía para levantar exclusiones.
+   */
+  objectsLocked: boolean;
 };
 
 /**
@@ -32,7 +37,12 @@ type EditionFormProps = {
  * escribe a mano en `#rrggbb` y no con un selector de color: un selector no sabe
  * expresar "vacío", que es justo "usa el color del sitio".
  */
-export function EditionForm({ edition, nameMaxLength, noteMaxLength }: EditionFormProps) {
+export function EditionForm({
+  edition,
+  nameMaxLength,
+  noteMaxLength,
+  objectsLocked,
+}: EditionFormProps) {
   const [state, formAction, pending] = useActionState(saveEditionConfig, initialState);
 
   const [name, setName] = useState(edition.name);
@@ -146,9 +156,14 @@ export function EditionForm({ edition, nameMaxLength, noteMaxLength }: EditionFo
           <SwitchField
             name="objectsEnabled"
             label="Objetos utilizables"
-            hint="Al apagarlo se desbloquean las partidas excluidas y se cierran los pendientes."
+            hint={
+              objectsLocked && !objectsEnabled
+                ? "La edición ya ha empezado: solo se puede activar antes de que empiece. Apagarlo sigue permitido."
+                : "Al apagarlo se desbloquean las partidas excluidas y se cierran los pendientes."
+            }
             checked={objectsEnabled}
             onChange={setObjectsEnabled}
+            disabled={objectsLocked && !objectsEnabled}
           />
         </div>
       </SectionCard>

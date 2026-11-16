@@ -28,6 +28,7 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `Setting` | Configuración y memoria de los procesos. | `key` |
 | `ObjectAward` | Un objeto utilizable del POC de la issue 134: tipo, día, portador y si sigue pendiente. | `id`; único `(kind, day)` |
 | `ObjectThrow` | Un lanzamiento de un objeto y si se devolvió (append-only). | `id` |
+| `Post` | Una **noticia** del torneo (issue 229): titular, cuerpo en Markdown básico y fecha de publicación. | `id`; `slug` único |
 
 Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent`, `ObjectiveLeadEvent`,
 `ObjectiveProgressEvent`, `ObjectiveProgressState` y `Alert` apuntan a `Player` con
@@ -646,6 +647,25 @@ después; lo que se anota es el siguiente, no se corrige el anterior.
 | `returned` | `Boolean` | `true` = se devolvió: el objeto sigue en el lanzador y ese día no puede relanzarlo. `false` = el portador pasó a ser el objetivo. |
 
 Índice `(awardId)`: los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`.
+
+## `Post`
+
+Una **noticia** del torneo (issue 229). La escribe el superadministrador desde
+`/admin/noticias` y se publica sin desplegar; la web pública la lee en `/noticias` y en
+`/noticias/<slug>`.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `slug` | `String` | Dirección de la noticia, única. Minúsculas, números y guiones simples; se normaliza al guardar. |
+| `title` | `String` | Titular, hasta 120 caracteres. |
+| `summary` | `String?` | Entradilla del listado. `null` = se recorta del cuerpo al pintarla. |
+| `body` | `String` | Cuerpo en **Markdown básico** (párrafos, `h2`/`h3`, negrita, cursiva, código, enlaces, listas y citas). Se pinta con `renderNewsBody()`, que escapa el texto. |
+| `publishedAt` | `DateTime?` | `null` = **borrador**: no sale en la web ni por URL directa. Es también el orden del listado. |
+| `authorEmail` | `String?` | Correo de quien la escribió. |
+| `createdAt`, `updatedAt` | `DateTime` | Alta y última edición. El panel ordena por esta última. |
+
+Índice `(publishedAt)`: el listado público (publicadas y por fecha descendente).
 
 ## Índices
 

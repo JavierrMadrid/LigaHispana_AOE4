@@ -82,12 +82,20 @@ export function SiteFooter({ name, emblemUrl }: SiteFooterProps) {
             clasificación se recalcula cada pocos minutos a medida que la API publica
             los resultados.
           </p>
-          <Link
-            href="/overlay"
-            className="text-xs text-muted transition-colors hover:text-accent"
-          >
-            Overlay para streamers
-          </Link>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <Link
+              href="/noticias"
+              className="text-xs text-muted transition-colors hover:text-accent"
+            >
+              Noticias
+            </Link>
+            <Link
+              href="/overlay"
+              className="text-xs text-muted transition-colors hover:text-accent"
+            >
+              Overlay para streamers
+            </Link>
+          </div>
         </div>
       </div>
     </footer>
