@@ -19,10 +19,10 @@ import { ObjectKind } from "@/generated/prisma/enums";
  * 2. El portador puede **lanzarlo a otro jugador una vez al día**. En el POC el
  *    lanzamiento se hace desde el panel de admin, no hay automatismo.
  * 3. Si el lanzamiento **se devuelve** (con la probabilidad de
- *    `returnProbability()`), el objeto sigue en el lanzador y ese día ya no puede
- *    volver a lanzarlo. Si no se devuelve, el portador pasa a ser el objetivo, con
- *    `heldSince` en el instante del lanzamiento y `exitedAt` cerrado para el
- *    portador anterior.
+ *    `returnProbability()`), la desventaja y el objeto siguen en el lanzador, que ha
+ *    gastado el turno del día: no puede volver a lanzarlo hasta el día UTC siguiente.
+ *    Si no se devuelve, el portador pasa a ser el objetivo, con `heldSince` en el
+ *    instante del lanzamiento y `exitedAt` cerrado para el portador anterior.
  * 4. Mientras un objeto está pendiente, **las partidas del portador no puntúan**
  *    (`isMatchBlocked()`): quedan fuera de la clasificación y de los objetivos. La
  *    desventaja se da por **cumplida** cuando el admin la marca sobre una partida
@@ -541,9 +541,10 @@ export type ObjectThrowRecord = {
  * el mismo día UTC.
  *
  * Cuenta el lanzamiento aunque se haya devuelto: el `ObjectThrow` ocurrió y lo que
- * la regla evita es insistir sobre la misma persona ese día. Con la mecánica
- * acordada (un lanzamiento por portador y día, y el objeto se queda donde está si
- * se devuelve) la diferencia es teórica, pero la regla queda cerrada.
+ * la regla evita es insistir sobre la misma persona ese día. Sigue haciendo falta
+ * aunque el turno del lanzador se gaste con la devolución, porque el objeto puede
+ * cambiar de manos ese mismo día y el portador nuevo no arrastra el lanzamiento del
+ * anterior.
  *
  * `throws` son los lanzamientos **de este objeto**; el día se compara normalizado
  * con `objectDay()`.
@@ -607,23 +608,22 @@ export function sameKindBlocked(
 /** Un lanzamiento con su lanzador, para la regla de uno por portador y día. */
 export type ObjectThrowWithThrower = ObjectThrowRecord & {
   fromId: string;
-  /** `true` = la tirada se devolvió: el intento falló y no gasta el turno del día. */
-  returned: boolean;
 };
 
 /**
- * La regla de **un lanzamiento que llegue por portador y día UTC**.
+ * La regla de **un lanzamiento por portador y día UTC, se devuelva o no**.
  *
- * Cuenta los lanzamientos que hizo el portador actual **y que no se devolvieron**: un
- * tiro devuelto es un intento fallido, la desventaja se le queda al portador y el
- * objeto sigue en su mano para volver a usarlo (issue 224), así que no gasta el turno
- * del día. Si el objeto cambia de manos sin devolverse, el portador nuevo sí puede
- * lanzarlo el mismo día, porque no ha lanzado nada; es lo que compara `fromId` y no el
- * `awardId`.
+ * Cuenta todos los lanzamientos que hizo el portador actual, también los que se
+ * devolvieron: si la tirada se devuelve, la desventaja y el objeto se quedan con el
+ * lanzador y el turno del día queda gastado (issue 224). No hay segunda tirada ni
+ * forma de reutilizar el objeto hasta el día UTC siguiente.
  *
- * La **regla Y** sí cuenta los devueltos: lo que limita es no insistir dos veces sobre
- * el mismo jugador el mismo día. Las dos reglas leen el mismo listado y cada una decide
- * qué hace con `returned`.
+ * Lo que sí permite lanzar el mismo día es **cambiar de manos sin devolución**: el
+ * portador nuevo no ha lanzado nada, así que su turno está entero. Es lo que compara
+ * `fromId` y no el `awardId`.
+ *
+ * La **regla Y** lee el mismo listado y también cuenta los devueltos: lo que limita es
+ * no insistir dos veces sobre el mismo jugador el mismo día.
  *
  * `throws` son los lanzamientos **de este objeto**; el día se normaliza con
  * `objectDay()` igual que en la regla Y.
@@ -636,7 +636,6 @@ export function sameThrowerBlocked(
   const targetDay = objectDay(day).getTime();
 
   return throws.some(
-    (item) =>
-      item.fromId === fromId && !item.returned && objectDay(item.at).getTime() === targetDay,
+    (item) => item.fromId === fromId && objectDay(item.at).getTime() === targetDay,
   );
 }

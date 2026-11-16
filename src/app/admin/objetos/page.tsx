@@ -275,10 +275,10 @@ function PendingAwardCard({
     fromId: item.from.playerId,
     toId: item.to.playerId,
     at: item.at,
-    returned: item.returned,
   }));
-  // Un lanzamiento devuelto no gasta el turno del día (issue 224): el objeto sigue en
-  // su mano y la desventaja también, así que puede volver a intentarlo con otro.
+  // Un lanzamiento devuelto también cuenta (issue 224): el objeto y la desventaja se
+  // quedan con el portador y su turno del día queda gastado, sin segunda tirada hasta
+  // el día UTC siguiente.
   const thrownToday =
     holder !== null && sameThrowerBlocked(throwsForRules, holder.playerId, now);
 
@@ -385,8 +385,9 @@ function PendingAwardCard({
             <h4 className="text-sm font-semibold text-foreground">Lanzar el objeto</h4>
             <p className="mt-1 max-w-[60ch] text-xs leading-relaxed text-muted">
               Una vez por portador y día UTC, y nunca a quien ya tenga uno de este tipo.
-              Si la tirada se devuelve, la desventaja se queda con el portador y el objeto
-              sigue en su mano: puede volver a lanzarlo, pero no al mismo jugador.
+              Si la tirada se devuelve, la desventaja y el objeto se quedan con el
+              portador y su turno del día queda gastado: no puede volver a lanzarlo
+              hasta el día UTC siguiente.
             </p>
 
             {holder === null ? (
@@ -397,9 +398,9 @@ function PendingAwardCard({
             ) : thrownToday ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
                 <span className="text-foreground">{playerName(holder)}</span> ya ha
-                colocado este objeto hoy. El límite es un lanzamiento aceptado por portador
-                y día UTC —los devueltos no cuentan—, así que la acción vuelve a estar
-                disponible a medianoche UTC.
+                lanzado este objeto hoy. El límite es un lanzamiento por portador y día
+                UTC, se devuelva o no, así que la acción vuelve a estar disponible a
+                medianoche UTC.
               </p>
             ) : available.length === 0 ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
