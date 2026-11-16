@@ -108,7 +108,7 @@ export const OBJECT_CATALOG: Record<ObjectKind, ObjectDefinition> = {
   [ObjectKind.MONUMENTO]: {
     kind: ObjectKind.MONUMENTO,
     name: "Monumento",
-    obtainedBy: "maravilla",
+    obtainedBy: "maravilla, o retirada del rival con 5 minutos o menos",
     penalties: [
       { id: "sin-fuertes", text: "No se pueden construir fuertes." },
       { id: "victoria-minuto-25", text: "Debes ganar la partida a partir del minuto 25." },
@@ -189,6 +189,16 @@ const SURRENDER_TOKENS: readonly string[] = ["surrender", "resign", "rendicion",
 const SURRENDER_SACRED_SECONDS = 3 * 60;
 
 /**
+ * Segundos de partida con los que una retirada del rival cuenta como victoria por
+ * maravilla (issue 227).
+ *
+ * Las dos reglas forman **bandas** y no se solapan: por debajo de los 3 minutos la
+ * retirada da la reliquia (sagrada), que es la condición más exigente; entre esos 3 y
+ * estos 5, el monumento. Una retirada por encima de los 5 minutos ya no da objeto.
+ */
+const SURRENDER_WONDER_SECONDS = 5 * 60;
+
+/**
  * Qué objeto se gana con un motivo de victoria, o `null` si no mapea.
  *
  * Se compara por **tokens** y sin distinguir mayúsculas ni acentos: el payload trae
@@ -197,9 +207,11 @@ const SURRENDER_SACRED_SECONDS = 3 * 60;
  * tolerante que exigir la cadena exacta y no puede confundir dos motivos entre sí
  * porque los tokens de los tres objetos no se solapan.
  *
- * Una **retirada** no da objeto por sí sola, pero sí cuenta como victoria sagrada si
- * fue muy temprana (issue 226): ver `SURRENDER_SACRED_SECONDS`. Para eso hace falta la
- * duración de la partida; sin ella (`null`) la retirada no mapea.
+ * Una **retirada** no da objeto por sí sola, pero sí cuenta como victoria si fue muy
+ * temprana, con dos bandas que no se solapan (issues 226 y 227): hasta 3 minutos, la
+ * reliquia; de 3 a 5, el monumento (`SURRENDER_SACRED_SECONDS` y
+ * `SURRENDER_WONDER_SECONDS`). Para eso hace falta la duración de la partida; sin ella
+ * (`null`) la retirada no mapea.
  *
  * `null` significa "no hay resumen, no traía motivo o la retirada no fue temprana", no
  * "sin motivo".
@@ -247,6 +259,10 @@ function surrenderObjectKind(
 
   if (durationSeconds <= SURRENDER_SACRED_SECONDS) {
     return ObjectKind.RELIQUIA;
+  }
+
+  if (durationSeconds <= SURRENDER_WONDER_SECONDS) {
+    return ObjectKind.MONUMENTO;
   }
 
   return null;

@@ -180,8 +180,19 @@ describe("objectKindForWinReason", () => {
     expect(objectKindForWinReason("retirada", 120)).toBe(ObjectKind.RELIQUIA);
   });
 
-  it("una retirada más tardía o sin duración no da objeto", () => {
-    expect(objectKindForWinReason("Surrender", 181)).toBeNull();
+  it("una retirada entre 3 y 5 minutos da el monumento", () => {
+    expect(objectKindForWinReason("Surrender", 181)).toBe(ObjectKind.MONUMENTO);
+    expect(objectKindForWinReason("Surrender", 300)).toBe(ObjectKind.MONUMENTO);
+    expect(objectKindForWinReason("Resign", 240)).toBe(ObjectKind.MONUMENTO);
+  });
+
+  it("las dos bandas no se solapan: hasta 3 minutos manda la reliquia", () => {
+    expect(objectKindForWinReason("Surrender", 180)).toBe(ObjectKind.RELIQUIA);
+    expect(objectKindForWinReason("Surrender", 181)).toBe(ObjectKind.MONUMENTO);
+  });
+
+  it("una retirada por encima de 5 minutos o sin duración no da objeto", () => {
+    expect(objectKindForWinReason("Surrender", 301)).toBeNull();
     expect(objectKindForWinReason("Surrender", null)).toBeNull();
     expect(objectKindForWinReason("Surrender")).toBeNull();
   });
@@ -205,6 +216,14 @@ describe("objectKindForWinReason", () => {
         heldSince: at("2026-11-04T10:00:00.000Z"),
       },
     ]);
+  });
+
+  it("una retirada de cuatro minutos reparte el monumento", () => {
+    const awards = pickDailyAwards([
+      match({ id: "m-cuatro", playerId: "lento", winReason: "Surrender", durationSeconds: 240 }),
+    ]);
+
+    expect(awards.map((award) => award.kind)).toEqual([ObjectKind.MONUMENTO]);
   });
 });
 

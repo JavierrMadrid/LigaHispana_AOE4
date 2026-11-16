@@ -45,7 +45,7 @@ servidor y las Server Actions.
 |---|---|---|
 | `RELIQUIA` | Reliquia pagana | victoria sagrada o religiosa, o retirada del rival con 3 minutos o menos |
 | `MONEDA` | Moneda del Rey falsificada | conquista |
-| `MONUMENTO` | Monumento | maravilla |
+| `MONUMENTO` | Monumento | maravilla, o retirada del rival con 5 minutos o menos |
 
 ### Desventajas
 
@@ -88,10 +88,12 @@ catálogo y una redacción nueva no reescribe el histórico.
   maravilla no están confirmados (sí los de `"Surrender"`, `"Conquest"` y
   `"Elimination"`). Una retirada normal no otorga objeto, y un motivo desconocido o
   `null` tampoco: no se crea nada.
-- **Retirada temprana (issue 226).** Una `"Surrender"` con **3 minutos o menos
-  jugados** cuenta como victoria sagrada para el objeto, aunque no haya reliquias de por
-  medio: el rival renunció a pelear esa partida. Se decide con `Match.durationSeconds`;
-  sin duración no se aplica y la retirada no da nada.
+- **Retirada temprana (issues 226 y 227).** Una `"Surrender"` reparte objeto según lo
+  que duró la partida, en dos bandas que **no se solapan**: con **3 minutos o menos**
+  cuenta como victoria sagrada (reliquia); **entre 3 y 5 minutos**, como victoria por
+  maravilla (monumento). Es una renuncia a pelear esa partida, aunque no haya reliquias
+  ni maravilla de por medio. Se decide con `Match.durationSeconds`; sin duración no se
+  aplica y la retirada no da nada.
 - **Un objeto por tipo y día.** El segundo ganador del día de un tipo ya otorgado no
   crea fila: la regla la sostiene el índice único `(kind, day)`.
 
