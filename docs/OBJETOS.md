@@ -29,6 +29,7 @@ El modo de objetos es un **ajuste de edición**, no del ruleset de puntos: vive 
 |---|---|
 | Por defecto | **Apagado**. Una edición sin configurar no crea premios ni bloquea partidas |
 | Quién lo cambia | **Solo el superadministrador**, desde Administración → Edición (`saveEditionConfig`) |
+| Cuándo se enciende | **Solo antes de que empiece la edición** (`window.from` del ruleset). Con la edición en curso el guardado se rechaza (`objectsModeActivationBlocked()`); el interruptor se enseña bloqueado con el motivo |
 | Al apagarlo | Efecto inmediato: `disableObjectsMode()` cierra los premios pendientes (`exitedAt` = ahora) y desbloquea **todas** las partidas marcadas (`excludedByAwardId` = `null`); si había partidas bloqueadas, se recalcula la clasificación. No se congela ni se reanuda nada |
 | Al encenderlo | **Sin efectos retroactivos**: empieza limpio, sin premios ni bloqueos anteriores. Un objeto que ya estaba cerrado no se reabre |
 | Mientras está apagado | El worker no crea premios (`syncDailyObjectAwards()` devuelve vacío) ni marca partidas (`applyObjectBlocks()` devuelve 0); lanzar y cumplir responden con error. El panel enseña un aviso y no ofrece ninguno de los dos formularios; el histórico se sigue viendo |
@@ -42,9 +43,9 @@ servidor y las Server Actions.
 
 | `kind` | Nombre | Se obtiene con la primera victoria del día por... |
 |---|---|---|
-| `RELIQUIA` | Reliquia pagana | victoria sagrada o religiosa |
+| `RELIQUIA` | Reliquia pagana | victoria sagrada o religiosa, o retirada del rival con 3 minutos o menos |
 | `MONEDA` | Moneda del Rey falsificada | conquista |
-| `MONUMENTO` | Monumento | maravilla |
+| `MONUMENTO` | Monumento | maravilla, o retirada del rival con 5 minutos o menos |
 
 ### Desventajas
 
@@ -85,15 +86,23 @@ catálogo y una redacción nueva no reescribe el histórico.
 
   El mapeo es deliberadamente **tolerante**: los literales de la victoria sagrada y la
   maravilla no están confirmados (sí los de `"Surrender"`, `"Conquest"` y
-  `"Elimination"`). `"Surrender"` no otorga objeto, y un motivo desconocido o `null`
-  tampoco: no se crea nada.
+  `"Elimination"`). Una retirada normal no otorga objeto, y un motivo desconocido o
+  `null` tampoco: no se crea nada.
+- **Retirada temprana (issues 226 y 227).** Una `"Surrender"` reparte objeto según lo
+  que duró la partida, en dos bandas que **no se solapan**: con **3 minutos o menos**
+  cuenta como victoria sagrada (reliquia); **entre 3 y 5 minutos**, como victoria por
+  maravilla (monumento). Es una renuncia a pelear esa partida, aunque no haya reliquias
+  ni maravilla de por medio. Se decide con `Match.durationSeconds`; sin duración no se
+  aplica y la retirada no da nada.
 - **Un objeto por tipo y día.** El segundo ganador del día de un tipo ya otorgado no
   crea fila: la regla la sostiene el índice único `(kind, day)`.
 
 ## Lanzamiento y devolución
 
 - El portador puede **lanzar el objeto a otro jugador una vez al día**. En el POC el
-  lanzamiento se hace desde el panel de admin, no hay automatismo ni bot.
+  lanzamiento se hace desde el panel de admin, no hay automatismo ni bot. El límite
+  cuenta los lanzamientos **aceptados**: los que se devuelven no gastan el turno
+  (`sameThrowerBlocked()`, issue 224).
 - **Probabilidad de devolución** (`returnProbability()`), con el puesto en la
   clasificación (`1` = primero) y el total de jugadores clasificados:
 
@@ -105,8 +114,10 @@ catálogo y una redacción nueva no reescribe el histórico.
   se devuelva; lanzar a alguien mejor la deja en el suelo. Nunca es `0` ni `1`: la
   tirada siempre existe. Con menos de un jugador clasificado no hay proporción que
   calcular y devuelve `0,01`.
-- Si **se devuelve**, el objeto sigue en el lanzador y ese día ya no puede volver a
-  lanzarlo.
+- Si **se devuelve**, la tirada sale mal y la desventaja se le queda al portador: el
+  objeto sigue en sus manos y sus partidas siguen sin puntuar, pero **puede volver a
+  lanzarlo** ese mismo día a otro jugador. El que ya lo recibió queda fuera por la
+  regla Y, así que cada intento fallido gasta un destino.
 - Si **no se devuelve**, el portador pasa a ser el objetivo, con `heldSince` en el
   instante del lanzamiento; las partidas de la ventana anterior ya quedaron marcadas
   y la ventana nueva queda abierta (ver [Estados de la ventana](#estados-de-la-ventana)).
@@ -115,7 +126,11 @@ catálogo y una redacción nueva no reescribe el histórico.
   cambie de manos después.
 - **Regla Y:** un mismo objetivo no puede recibir el mismo objeto dos veces en el
   mismo día UTC (`sameTargetBlocked()`). Cuenta cualquier lanzamiento anotado, se
-  devolviera o no.
+  devolviera o no: lo que evita es insistir sobre la misma persona, no el turno.
+- **Un objeto de cada tipo** (issue 225): nadie puede tener dos objetos del mismo
+  tipo aplicados. Se bloquea el lanzamiento si el objetivo ya lo tiene **pendiente** o
+  si ya le llegó uno del mismo tipo ese día UTC (`sameKindBlocked()`); los
+  lanzamientos devueltos no cuentan porque nunca llegaron al objetivo.
 
 ## Persistencia y worker
 
@@ -237,8 +252,8 @@ deja de estar pendiente y desaparece del listado. El error se queda bajo el bot�
 
 ### Avisos del bot
 
-Van al canal de avisos (`DISCORD_BOT_TOKEN` + `DISCORD_ANNOUNCE_CHANNEL_ID`, ver
-[`OPERACION.md`](./OPERACION.md)) desde
+Van al canal **`#objetos`** (`DISCORD_BOT_TOKEN` + `DISCORD_OBJECTS_CHANNEL_ID`, ver
+[`OPERACION.md`](./OPERACION.md)), no al de avisos generales, desde
 [`src/lib/object-announcements.ts`](../src/lib/object-announcements.ts).
 
 | Aviso | Lo lanza | Qué cuenta |

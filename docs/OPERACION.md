@@ -784,6 +784,7 @@ credenciales el paso no existe** (no falla): el formulario no pinta el botón y 
 | `DISCORD_CHECK_MAX_PER_RUN` | Tope de cuentas comprobadas por pasada (10) | No |
 | `DISCORD_ROSTER_MAX_PAGES`, `DISCORD_ROSTER_TTL_HOURS` | Páginas de la lista de miembros por refresco (20) y horas de caché (12) | No |
 | `DISCORD_ANNOUNCE_CHANNEL_ID` | Canal donde el bot avisa de los **hitos de la edición** (comienzo, final, recordatorios y cierre de inscripciones), de los **eventos puntuales** (recordatorios, inicio y fin) y manda el **informe diario de clasificación** | Sí, para avisar |
+| `DISCORD_OBJECTS_CHANNEL_ID` | Canal **`#objetos`**: premio nuevo, lanzamiento y cumplimiento de los objetos utilizables (issue 228). Sin él no se avisa de objetos; el resto de avisos no se toca | Sí, para avisar de objetos |
 | `DISCORD_PARTICIPANT_ROLE_ID` | Rol que el bot pone a los **participantes aprobados** y quita a quien deja de estarlo | Sí, para el rol |
 | `DISCORD_ROLE_MAX_PER_RUN` | Tope de operaciones con el rol por pasada (10) | No |
 
