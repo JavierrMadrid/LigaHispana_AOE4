@@ -27,7 +27,7 @@ describe("newObjectAwardAnnouncementText", () => {
         penaltyId: "sin-guarecer-reliquias",
       }),
     ).toBe(
-      "Objeto nuevo: «Reliquia pagana» para BeastWizard, por victoria sagrada o religiosa. Desventaja: No se pueden guarecer reliquias.",
+      "Objeto nuevo: «Reliquia pagana» para BeastWizard, por victoria sagrada o religiosa, o retirada del rival con 3 minutos o menos. Desventaja: No se pueden guarecer reliquias.",
     );
   });
 

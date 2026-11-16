@@ -85,7 +85,7 @@ export const OBJECT_CATALOG: Record<ObjectKind, ObjectDefinition> = {
   [ObjectKind.RELIQUIA]: {
     kind: ObjectKind.RELIQUIA,
     name: "Reliquia pagana",
-    obtainedBy: "victoria sagrada o religiosa",
+    obtainedBy: "victoria sagrada o religiosa, o retirada del rival con 3 minutos o menos",
     penalties: [
       { id: "sin-guarecer-reliquias", text: "No se pueden guarecer reliquias." },
       { id: "sin-unidades-monasterio", text: "No se pueden crear unidades del monasterio." },
@@ -173,6 +173,22 @@ const WIN_REASON_TOKENS: readonly (readonly [ObjectKind, readonly string[]])[] =
 ];
 
 /**
+ * Tokens de una **retirada**. `"Surrender"` es el literal que publica AoE4World y
+ * los demás están por si algún día llega traducido o como `"Resign"`.
+ */
+const SURRENDER_TOKENS: readonly string[] = ["surrender", "resign", "rendicion", "retirad"];
+
+/**
+ * Segundos de partida con los que una retirada del rival cuenta como victoria
+ * sagrada (issue 226).
+ *
+ * Rendirse antes del minuto 3 es una renuncia a pelear la partida religiosa: quien se
+ * retira con tres minutos o menos jugados le da al rival el objeto de la victoria
+ * sagrada sin que la partida haya llegado a tener reliquias en juego.
+ */
+const SURRENDER_SACRED_SECONDS = 3 * 60;
+
+/**
  * Qué objeto se gana con un motivo de victoria, o `null` si no mapea.
  *
  * Se compara por **tokens** y sin distinguir mayúsculas ni acentos: el payload trae
@@ -181,11 +197,17 @@ const WIN_REASON_TOKENS: readonly (readonly [ObjectKind, readonly string[]])[] =
  * tolerante que exigir la cadena exacta y no puede confundir dos motivos entre sí
  * porque los tokens de los tres objetos no se solapan.
  *
- * `"Surrender"` (el más habitual) no da objeto: rendirse no es ninguna de las tres
- * condiciones. `null` tampoco, y significa "no hay resumen o no traía motivo", no
+ * Una **retirada** no da objeto por sí sola, pero sí cuenta como victoria sagrada si
+ * fue muy temprana (issue 226): ver `SURRENDER_SACRED_SECONDS`. Para eso hace falta la
+ * duración de la partida; sin ella (`null`) la retirada no mapea.
+ *
+ * `null` significa "no hay resumen, no traía motivo o la retirada no fue temprana", no
  * "sin motivo".
  */
-export function objectKindForWinReason(winReason: string | null): ObjectKind | null {
+export function objectKindForWinReason(
+  winReason: string | null,
+  durationSeconds: number | null = null,
+): ObjectKind | null {
   if (winReason === null) {
     return null;
   }
@@ -200,7 +222,34 @@ export function objectKindForWinReason(winReason: string | null): ObjectKind | n
     tokens.some((token) => normalized.includes(token)),
   );
 
-  return match?.[0] ?? null;
+  if (match !== undefined) {
+    return match[0];
+  }
+
+  return surrenderObjectKind(normalized, durationSeconds);
+}
+
+/**
+ * Qué objeto da una retirada, según lo que duró la partida.
+ *
+ * Solo las retiradas muy tempranas reparten objeto: una retirada normal no da nada y
+ * `durationSeconds` en `null` no permite decidir, así que tampoco.
+ */
+function surrenderObjectKind(
+  normalizedWinReason: string,
+  durationSeconds: number | null,
+): ObjectKind | null {
+  const isSurrender = SURRENDER_TOKENS.some((token) => normalizedWinReason.includes(token));
+
+  if (!isSurrender || durationSeconds === null) {
+    return null;
+  }
+
+  if (durationSeconds <= SURRENDER_SACRED_SECONDS) {
+    return ObjectKind.RELIQUIA;
+  }
+
+  return null;
 }
 
 /**
@@ -225,6 +274,13 @@ export type AwardMatch = {
   startedAt: Date;
   /** Motivo de la victoria tal cual lo publica AoE4World. */
   winReason: string | null;
+  /**
+   * Duración de la partida en segundos, o `null` si no se conoce.
+   *
+   * Solo la usa la regla de la retirada temprana (issues 226 y 227): sin duración no
+   * se puede saber si el rival se rindió dentro del margen.
+   */
+  durationSeconds: number | null;
 };
 
 /** Un objeto que toca otorgar, con la partida que lo otorga. */
@@ -280,7 +336,7 @@ export function pickDailyAwards(
   const byKey = new Map<string, { kind: ObjectKind; day: Date; match: AwardMatch }>();
 
   for (const match of matches) {
-    const kind = objectKindForWinReason(match.winReason);
+    const kind = objectKindForWinReason(match.winReason, match.durationSeconds);
 
     if (kind === null) {
       continue;

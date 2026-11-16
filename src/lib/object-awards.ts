@@ -145,6 +145,7 @@ type AwardCandidateRow = {
   playerId: string;
   startedAtMs: number;
   winReason: string | null;
+  durationSeconds: number | null;
 };
 
 /**
@@ -170,7 +171,8 @@ function awardCandidatesQuery(
            m."gameId" as "gameId",
            p."id" as "playerId",
            (extract(epoch from m."startedAt" at time zone 'UTC') * 1000)::double precision as "startedAtMs",
-           m."winReason" as "winReason"
+           m."winReason" as "winReason",
+           m."durationSeconds" as "durationSeconds"
     from "Match" m
     join "Player" p on p."id" = m."playerId"
     where p."status" = 'APPROVED'
@@ -230,6 +232,7 @@ export async function syncDailyObjectAwards(
       playerId: row.playerId,
       startedAt: new Date(row.startedAtMs),
       winReason: row.winReason,
+      durationSeconds: row.durationSeconds,
     }));
 
   const planned = pickDailyAwards(candidates, { taken });

@@ -43,7 +43,7 @@ servidor y las Server Actions.
 
 | `kind` | Nombre | Se obtiene con la primera victoria del día por... |
 |---|---|---|
-| `RELIQUIA` | Reliquia pagana | victoria sagrada o religiosa |
+| `RELIQUIA` | Reliquia pagana | victoria sagrada o religiosa, o retirada del rival con 3 minutos o menos |
 | `MONEDA` | Moneda del Rey falsificada | conquista |
 | `MONUMENTO` | Monumento | maravilla |
 
@@ -86,8 +86,12 @@ catálogo y una redacción nueva no reescribe el histórico.
 
   El mapeo es deliberadamente **tolerante**: los literales de la victoria sagrada y la
   maravilla no están confirmados (sí los de `"Surrender"`, `"Conquest"` y
-  `"Elimination"`). `"Surrender"` no otorga objeto, y un motivo desconocido o `null`
-  tampoco: no se crea nada.
+  `"Elimination"`). Una retirada normal no otorga objeto, y un motivo desconocido o
+  `null` tampoco: no se crea nada.
+- **Retirada temprana (issue 226).** Una `"Surrender"` con **3 minutos o menos
+  jugados** cuenta como victoria sagrada para el objeto, aunque no haya reliquias de por
+  medio: el rival renunció a pelear esa partida. Se decide con `Match.durationSeconds`;
+  sin duración no se aplica y la retirada no da nada.
 - **Un objeto por tipo y día.** El segundo ganador del día de un tipo ya otorgado no
   crea fila: la regla la sostiene el índice único `(kind, day)`.
 

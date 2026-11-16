@@ -107,6 +107,7 @@ function match(overrides: Partial<AwardMatch> & { id: string }): AwardMatch {
     playerId: `p-${overrides.id}`,
     startedAt: at("2026-11-04T10:00:00.000Z"),
     winReason: "Conquest",
+    durationSeconds: null,
     ...overrides,
   };
 }
@@ -171,6 +172,39 @@ describe("objectKindForWinReason", () => {
     expect(objectKindForWinReason("")).toBeNull();
     expect(objectKindForWinReason("   ")).toBeNull();
     expect(objectKindForWinReason(null)).toBeNull();
+  });
+
+  it("una retirada del rival con 3 minutos o menos cuenta como victoria sagrada", () => {
+    expect(objectKindForWinReason("Surrender", 180)).toBe(ObjectKind.RELIQUIA);
+    expect(objectKindForWinReason("Surrender", 42)).toBe(ObjectKind.RELIQUIA);
+    expect(objectKindForWinReason("retirada", 120)).toBe(ObjectKind.RELIQUIA);
+  });
+
+  it("una retirada más tardía o sin duración no da objeto", () => {
+    expect(objectKindForWinReason("Surrender", 181)).toBeNull();
+    expect(objectKindForWinReason("Surrender", null)).toBeNull();
+    expect(objectKindForWinReason("Surrender")).toBeNull();
+  });
+
+  it("la duración no cambia lo que ya mapea por el motivo", () => {
+    expect(objectKindForWinReason("Conquest", 60)).toBe(ObjectKind.MONEDA);
+    expect(objectKindForWinReason("Wonder", 60)).toBe(ObjectKind.MONUMENTO);
+  });
+
+  it("una retirada temprana reparte el objeto de la victoria sagrada en el día", () => {
+    const awards = pickDailyAwards([
+      match({ id: "m-retirada", playerId: "rapido", winReason: "Surrender", durationSeconds: 90 }),
+    ]);
+
+    expect(awards).toEqual([
+      {
+        kind: ObjectKind.RELIQUIA,
+        day: at("2026-11-04T00:00:00.000Z"),
+        winnerId: "rapido",
+        winnerMatchId: "m-retirada",
+        heldSince: at("2026-11-04T10:00:00.000Z"),
+      },
+    ]);
   });
 });
 
