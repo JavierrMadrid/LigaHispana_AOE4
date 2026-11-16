@@ -157,7 +157,7 @@ La tabla siguiente es la de **producción**:
 | `SUPABASE_SERVICE_ROLE_KEY` | Sí (secreto) | Sí (por si un módulo de servidor la lee al importar) |
 
 - `NEXT_PUBLIC_SITE_URL = https://laligahispana.es`. Si cambia el dominio, se cambia en las dos listas.
-- `DISCORD_ANNOUNCE_CHANNEL_ID`, `DISCORD_PARTICIPANT_ROLE_ID` y `DISCORD_PUBLIC_KEY` son **ids y una
+- `DISCORD_ANNOUNCE_CHANNEL_ID`, `DISCORD_OBJECTS_CHANNEL_ID`, `DISCORD_PARTICIPANT_ROLE_ID` y `DISCORD_PUBLIC_KEY` son **ids y una
   clave pública, no secretos**: van en la lista del Worker como variables de **texto** (y por tanto
   solo sobreviven a un despliegue con `keep_vars`, ver abajo). Los demás `DISCORD_*` son secretos.
   `DISCORD_PUBLIC_KEY` es la clave Ed25519 (hex, 64 caracteres) con la que se verifica la firma de las

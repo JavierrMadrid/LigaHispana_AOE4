@@ -248,8 +248,8 @@ deja de estar pendiente y desaparece del listado. El error se queda bajo el bot√
 
 ### Avisos del bot
 
-Van al canal de avisos (`DISCORD_BOT_TOKEN` + `DISCORD_ANNOUNCE_CHANNEL_ID`, ver
-[`OPERACION.md`](./OPERACION.md)) desde
+Van al canal **`#objetos`** (`DISCORD_BOT_TOKEN` + `DISCORD_OBJECTS_CHANNEL_ID`, ver
+[`OPERACION.md`](./OPERACION.md)), no al de avisos generales, desde
 [`src/lib/object-announcements.ts`](../src/lib/object-announcements.ts).
 
 | Aviso | Lo lanza | Qu√© cuenta |

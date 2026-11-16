@@ -18,6 +18,7 @@ const CONFIG: DiscordConfig & { botToken: string; announceChannelId: string } = 
   botToken: "token-de-prueba",
   guildId: null,
   announceChannelId: "canal",
+  objectsChannelId: null,
   participantRoleId: null,
   clientId: null,
   clientSecret: null,
