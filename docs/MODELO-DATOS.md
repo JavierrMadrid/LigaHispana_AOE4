@@ -751,4 +751,13 @@ hace falta servir una tabla, sería con una vista `security_invoker = true` y un
   avisa de pérdida, hay que mirarlo.
 - **Después de cada `db:push` que añada tablas**: `npm run db:security -- --check` (una tabla nueva
   nace accesible para los roles de cliente). Si falla, `npm run db:security`.
+- **En producción no se lanza a mano**: el workflow `schema-prod.yml`
+  ([`DESPLIEGUE.md`](./DESPLIEGUE.md#github-actions)) aplica el esquema en cada push a `main` que
+  toque `prisma/schema.prisma`: `db:check`, `db:push` si hace falta, `db:security` para cerrar las
+  tablas nuevas y otra vez `db:check`. Necesita el secreto `PRODUCTION_DATABASE_URL` (Session pooler
+  de producción, puerto 5432) en el entorno `produccion-bd`. A mano solo si esa ejecución falla: se
+  repite con `workflow_dispatch`.
+- **El workflow no borra nada por su cuenta**: no lleva `--accept-data-loss`, así que un merge que
+  quite una columna o una tabla deja el job en rojo y el esquema de producción intacto. Ese cambio se
+  hace a mano, mirando el aviso de `db push`.
 - Los cambios de datos masivos (por ejemplo un *backfill*) se hacen con el worker parado.

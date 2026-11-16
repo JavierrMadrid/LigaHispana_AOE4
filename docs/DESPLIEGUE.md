@@ -13,6 +13,7 @@ está en [`docs/OPERACION.md`](./OPERACION.md).
 | Desarrollo | `npm run dev` en local | `next dev` | `http://localhost:3000` |
 | Manual | A mano, con el repositorio | `npm run deploy` / `npm run preview` | — |
 | CI | Pull request (GitHub Actions) | `npm run lint`, `npm run build`, `npm test` | — |
+| Esquema | Push a `main` que toque `prisma/schema.prisma` (GitHub Actions) | `npm run db:check`, `db:push` y `db:security` contra producción | — |
 
 Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `next dev` usan el proyecto de desarrollo; solo el Worker de producción usa el de producción. El detalle de variables y Hyperdrive está más abajo.
 
@@ -25,7 +26,7 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
 | Pieza | Qué hace |
 |---|---|
 | GitHub (repo y PRs) | Código, issues y pull requests. |
-| GitHub Actions | CI en cada PR (`ci.yml`) y respaldo del reloj (`cron-sync.yml`). |
+| GitHub Actions | CI en cada PR (`ci.yml`), respaldo del reloj (`cron-sync.yml`) y esquema de producción al mergear (`schema-prod.yml`). |
 | Workers Builds (Cloudflare) | Construye y despliega en cada push: `main` a producción, el resto a Preview. |
 | Worker `ligahispana-aoe4` | La web (Next.js empaquetado con OpenNext). |
 | Cloudflare Logs | Trazas del Worker (`observability` en `wrangler.jsonc`). |
@@ -86,6 +87,13 @@ Producción y desarrollo son **proyectos Supabase distintos**. Los Previews y `n
   repositorio, la variable `SITE_URL` y el secreto `CRON_SECRET`. El step falla si el JSON de respuesta
   trae `scoringError`: un 200 con la clasificación sin recalcular es una pasada a medias, no un éxito.
 - `cron-sync` es el **respaldo** del reloj. El reloj principal es Supabase Cron.
+- [`schema-prod.yml`](../.github/workflows/schema-prod.yml): en cada push a `main` que toque
+  `prisma/schema.prisma` (`workflow_dispatch` para repetirlo a mano). Aplica el esquema a
+  **producción**: `db:check`, `db:push` solo si hace falta, `db:security` para cerrar las tablas
+  nuevas y otra vez `db:check` para dejar el job en verde o en rojo. Necesita el secreto
+  `PRODUCTION_DATABASE_URL` y el entorno `produccion-bd`; las reglas del esquema están en
+  [`MODELO-DATOS.md`](./MODELO-DATOS.md#cambios-de-esquema). No lleva `--accept-data-loss`: si el merge quita una
+  columna o una tabla, el job falla y no borra nada.
 
 ## Configuración versionada
 
@@ -296,8 +304,11 @@ npm run countries:seed           # lista de países del formulario de inscripci�
 npm run db:window                # ventana de fechas del torneo (opcional, recomendado)
 ```
 
-En producción, los mismos comandos se ejecutan **de forma deliberada** con la URL de producción; no
-se heredan del entorno de desarrollo. `db:cron` es **solo de producción**.
+En producción, el `db:push` y el `db:security` **los ejecuta el workflow**
+`schema-prod.yml` al mergear un cambio de `prisma/schema.prisma` en `main` (ver
+[`MODELO-DATOS.md`](./MODELO-DATOS.md#cambios-de-esquema)); a mano solo hace falta si ese workflow falla o si
+una ejecución quedó a medias. La URL de producción no se hereda del entorno de desarrollo:
+vive en el secreto `PRODUCTION_DATABASE_URL`. `db:cron` es **solo de producción**.
 
 - Las actuaciones administrativas (`AdminAct` y `AdminActMatch`) son tablas nuevas: su primer
   `db:push` también exige `npm run db:security -- --check`, porque una tabla nace accesible para los
