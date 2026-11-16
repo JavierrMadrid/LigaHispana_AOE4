@@ -488,6 +488,50 @@ export function sameTargetBlocked(
   );
 }
 
+/**
+ * Un objeto aplicado a alguien: el que tiene en su poder o el que le llegó ese día.
+ *
+ * No es el `ObjectAward` ni el `ObjectThrow`, sino lo que la regla de "un objeto de
+ * cada tipo" necesita: el tipo, a quién afecta, cuándo y si sigue activo.
+ */
+export type KindApplication = {
+  kind: ObjectKind;
+  /** A quién se le aplicó: el portador del premio o el destino de un lanzamiento. */
+  holderId: string;
+  /** Cuándo se le aplicó: el `heldSince` del premio o el `at` del lanzamiento. */
+  at: Date;
+  /** `true` si sigue pendiente en ese portador; `false` si fue un lanzamiento aceptado. */
+  pending: boolean;
+};
+
+/**
+ * La regla de **un objeto de cada tipo aplicado a la vez y por día UTC** (issue 225).
+ *
+ * Hay un premio por tipo y día, pero un premio de un día anterior sigue pendiente y
+ * se puede lanzar al día siguiente: sin esta regla el mismo jugador podría acabar con
+ * dos objetos del mismo tipo encima. Se bloquea en los dos sentidos que tiene la
+ * frase: mientras uno siga **pendiente** en ese jugador, y si ya **le llegó hoy** uno
+ * del mismo tipo, aunque ya lo haya cumplido.
+ *
+ * Cuenta tanto el premio que tiene en su poder (`pending`) como el lanzamiento
+ * aceptado, y **no** cuenta los devueltos: un lanzamiento devuelto nunca llegó al
+ * objetivo.
+ */
+export function sameKindBlocked(
+  applications: readonly KindApplication[],
+  kind: ObjectKind,
+  toId: string,
+  day: Date,
+): boolean {
+  const targetDay = objectDay(day).getTime();
+
+  return applications.some(
+    (item) =>
+      item.kind === kind &&
+      item.holderId === toId &&
+      (item.pending || objectDay(item.at).getTime() === targetDay),
+  );
+}
 /** Un lanzamiento con su lanzador, para la regla de uno por portador y día. */
 export type ObjectThrowWithThrower = ObjectThrowRecord & { fromId: string };
 

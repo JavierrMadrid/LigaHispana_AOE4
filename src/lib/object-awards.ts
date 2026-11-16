@@ -12,10 +12,12 @@ import {
   objectDay,
   pickDailyAwards,
   pickPenalty,
+  sameKindBlocked,
   sameTargetBlocked,
   sameThrowerBlocked,
   throwReturnProbability,
   type AwardMatch,
+  type KindApplication,
 } from "@/lib/objects";
 import { rankedMatchSql } from "@/lib/ranked-match";
 import { readRuleset, type ScoringRuleset } from "@/lib/scoring";
@@ -405,8 +407,9 @@ export type ThrowObjectResult = {
  *
  * Valida, en este orden: que el premio exista, que tenga portador y siga pendiente,
  * que el objetivo no sea el portador, que ese objetivo no haya recibido ya el
- * objeto hoy (regla Y) y que el portador no haya lanzado ya hoy. Los errores son
- * `Error` con el texto en español que el panel enseñará tal cual.
+ * objeto hoy (regla Y), que el portador no haya lanzado ya hoy y que el objetivo no
+ * tenga ya un objeto de ese tipo (issue 225: ni pendiente ni recibido hoy). Los
+ * errores son `Error` con el texto en español que el panel enseñará tal cual.
  *
  * La probabilidad sale del puesto de los dos en `PlayerScore` del ruleset vigente.
  * Si falta la fila de alguno (un alta recién aprobada, un recálculo a medias) se
@@ -463,6 +466,37 @@ export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObj
 
   if (sameThrowerBlocked(throws, award.holderId, now)) {
     throw new Error("El portador ya ha lanzado este objeto hoy.");
+  }
+
+  // Regla de un objeto de cada tipo aplicado (issue 225): ni dos pendientes del mismo
+  // tipo sobre el mismo jugador, ni dos que le hayan llegado el mismo día UTC.
+  const [pendingSameKind, receivedToday] = await Promise.all([
+    client.objectAward.findMany({
+      where: { kind: award.kind, exitedAt: null, holderId: { not: null } },
+      select: { kind: true, holderId: true, heldSince: true },
+    }),
+    client.objectThrow.findMany({
+      where: { toId, returned: false, at: { gte: objectDay(now) }, award: { kind: award.kind } },
+      select: { toId: true, at: true, award: { select: { kind: true } } },
+    }),
+  ]);
+
+  const applications: KindApplication[] = [
+    ...pendingSameKind.flatMap((item) =>
+      item.holderId === null || item.heldSince === null
+        ? []
+        : [{ kind: item.kind, holderId: item.holderId, at: item.heldSince, pending: true }],
+    ),
+    ...receivedToday.map((item) => ({
+      kind: item.award.kind,
+      holderId: item.toId,
+      at: item.at,
+      pending: false,
+    })),
+  ];
+
+  if (sameKindBlocked(applications, award.kind, toId, now)) {
+    throw new Error("Ese jugador ya tiene un objeto de ese tipo hoy.");
   }
 
   const ruleset = await readRuleset(client);

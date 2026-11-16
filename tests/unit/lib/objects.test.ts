@@ -11,6 +11,7 @@ import {
   pickDailyAwards,
   pickPenalty,
   returnProbability,
+  sameKindBlocked,
   sameTargetBlocked,
   sameThrowerBlocked,
   throwReturnProbability,
@@ -52,6 +53,50 @@ describe("objectsModeActivationBlocked", () => {
     ).toBe(false);
     expect(
       objectsModeActivationBlocked({ actual: false, next: false, editionStarted: true }),
+    ).toBe(false);
+  });
+});
+
+describe("sameKindBlocked", () => {
+  const aplicado = (
+    kind: ObjectKind,
+    holderId: string,
+    iso: string,
+    pending: boolean,
+  ) => ({ kind, holderId, at: at(iso), pending });
+
+  it("bloquea si el objetivo ya tiene uno pendiente del mismo tipo, aunque sea de otro día", () => {
+    const aplicados = [aplicado(ObjectKind.RELIQUIA, "ana", "2026-11-03T22:00:00.000Z", true)];
+
+    expect(
+      sameKindBlocked(aplicados, ObjectKind.RELIQUIA, "ana", at("2026-11-04T10:00:00.000Z")),
+    ).toBe(true);
+  });
+
+  it("bloquea si ya le llegó hoy uno del mismo tipo, aunque ya lo haya cumplido", () => {
+    const aplicados = [aplicado(ObjectKind.MONEDA, "ana", "2026-11-04T09:00:00.000Z", false)];
+
+    expect(
+      sameKindBlocked(aplicados, ObjectKind.MONEDA, "ana", at("2026-11-04T18:00:00.000Z")),
+    ).toBe(true);
+  });
+
+  it("no bloquea si el objeto recibido es de otro día o de otro tipo", () => {
+    const aplicados = [
+      aplicado(ObjectKind.MONEDA, "ana", "2026-11-03T09:00:00.000Z", false),
+      aplicado(ObjectKind.RELIQUIA, "ana", "2026-11-04T09:00:00.000Z", false),
+    ];
+
+    expect(
+      sameKindBlocked(aplicados, ObjectKind.MONEDA, "ana", at("2026-11-04T18:00:00.000Z")),
+    ).toBe(false);
+  });
+
+  it("no bloquea a otro jugador ni cuenta lo que tiene otro tipo en su poder", () => {
+    const aplicados = [aplicado(ObjectKind.RELIQUIA, "bea", "2026-11-04T09:00:00.000Z", true)];
+
+    expect(
+      sameKindBlocked(aplicados, ObjectKind.RELIQUIA, "ana", at("2026-11-04T18:00:00.000Z")),
     ).toBe(false);
   });
 });

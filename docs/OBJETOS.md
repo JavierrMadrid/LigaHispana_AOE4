@@ -117,6 +117,10 @@ catálogo y una redacción nueva no reescribe el histórico.
 - **Regla Y:** un mismo objetivo no puede recibir el mismo objeto dos veces en el
   mismo día UTC (`sameTargetBlocked()`). Cuenta cualquier lanzamiento anotado, se
   devolviera o no.
+- **Un objeto de cada tipo** (issue 225): nadie puede tener dos objetos del mismo
+  tipo aplicados. Se bloquea el lanzamiento si el objetivo ya lo tiene **pendiente** o
+  si ya le llegó uno del mismo tipo ese día UTC (`sameKindBlocked()`); los
+  lanzamientos devueltos no cuentan porque nunca llegaron al objetivo.
 
 ## Persistencia y worker
 
