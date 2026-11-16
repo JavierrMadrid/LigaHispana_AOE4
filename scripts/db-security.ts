@@ -89,7 +89,9 @@ type GrantRow = { granted: boolean };
  * Lo mismo vale para `ObjectiveProgressEvent` y `ObjectiveProgressState`, que entran
  * con la API del overlay y no tienen nada que ver con lo público, y para
  * `ObjectAward`/`ObjectThrow`, el histórico del POC de objetos: son datos de panel y
- * no pueden nacer legibles con la clave publicable.
+ * no pueden nacer legibles con la clave publicable. `Post`, las noticias (issue 229),
+ * guarda también los **borradores**: sin la lista, la tabla nacería legible y una
+ * noticia sin publicar saldría por la Data API antes de que nadie la publique.
  */
 const TABLES = [
   "Player",
@@ -108,6 +110,7 @@ const TABLES = [
   "AdminActMatch",
   "ObjectAward",
   "ObjectThrow",
+  "Post",
 ] as const;
 
 const ROLES_CLIENTE = "anon, authenticated";

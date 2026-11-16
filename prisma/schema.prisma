@@ -1522,3 +1522,34 @@ model ObjectThrow {
   // Los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`.
   @@index([awardId])
 }
+
+/// Una **noticia** del torneo (issue 229): texto que publica el superadministrador en
+/// la web. El cuerpo se guarda en Markdown básico y se pinta saneado
+/// (`renderNewsBody()` en `src/lib/news.ts`).
+model Post {
+  id String @id @default(cuid())
+
+  // Dirección de la noticia en `/noticias/<slug>`. Es única porque es la URL, y se
+  // normaliza al guardar: minúsculas, números y guiones.
+  slug String @unique
+  title String
+  // Entradilla para los listados. `null` = se recorta del cuerpo al pintarla.
+  summary String?
+  // Markdown básico (párrafos, títulos, negrita, cursiva, enlaces, listas y citas).
+  body String
+
+  // `null` = **borrador**: no sale en la web pública ni por URL directa. La fecha es
+  // también el orden del listado, de la más nueva a la más vieja.
+  publishedAt DateTime?
+
+  // Correo de quien la escribió, para poder preguntarle por ella. `null` en las que
+  // se importen sin autor.
+  authorEmail String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // El listado público: publicadas y por fecha descendente.
+  @@index([publishedAt])
+}
+
