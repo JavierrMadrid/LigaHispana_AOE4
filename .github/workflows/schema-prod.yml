@@ -88,8 +88,9 @@ jobs:
         run: npm run db:push
 
       # Una tabla nueva nace legible para los roles de cliente: `--check` sale con 1
-      # cuando falta cerrarla, y entonces se aplica la postura. Si ya estaba bien, el
-      # `||` no se ejecuta y no se escribe nada.
+      # cuando falta cerrarla, y entonces se aplica la postura —la de por defecto,
+      # `cerrada`, la misma que documenta MODELO-DATOS—. Si ya estaba bien, el `||` no
+      # se ejecuta y no se escribe nada.
       - name: Cerrar las tablas nuevas
         if: steps.check.outputs.al-dia == 'false'
         run: npm run db:security -- --check || npm run db:security
