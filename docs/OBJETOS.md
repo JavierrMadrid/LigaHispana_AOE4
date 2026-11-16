@@ -29,6 +29,7 @@ El modo de objetos es un **ajuste de edición**, no del ruleset de puntos: vive 
 |---|---|
 | Por defecto | **Apagado**. Una edición sin configurar no crea premios ni bloquea partidas |
 | Quién lo cambia | **Solo el superadministrador**, desde Administración → Edición (`saveEditionConfig`) |
+| Cuándo se enciende | **Solo antes de que empiece la edición** (`window.from` del ruleset). Con la edición en curso el guardado se rechaza (`objectsModeActivationBlocked()`); el interruptor se enseña bloqueado con el motivo |
 | Al apagarlo | Efecto inmediato: `disableObjectsMode()` cierra los premios pendientes (`exitedAt` = ahora) y desbloquea **todas** las partidas marcadas (`excludedByAwardId` = `null`); si había partidas bloqueadas, se recalcula la clasificación. No se congela ni se reanuda nada |
 | Al encenderlo | **Sin efectos retroactivos**: empieza limpio, sin premios ni bloqueos anteriores. Un objeto que ya estaba cerrado no se reabre |
 | Mientras está apagado | El worker no crea premios (`syncDailyObjectAwards()` devuelve vacío) ni marca partidas (`applyObjectBlocks()` devuelve 0); lanzar y cumplir responden con error. El panel enseña un aviso y no ofrece ninguno de los dos formularios; el histórico se sigue viendo |

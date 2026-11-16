@@ -7,6 +7,7 @@ import {
   isMatchBlocked,
   objectDay,
   objectKindForWinReason,
+  objectsModeActivationBlocked,
   pickDailyAwards,
   pickPenalty,
   returnProbability,
@@ -28,6 +29,32 @@ import {
 function at(iso: string): Date {
   return new Date(iso);
 }
+
+describe("objectsModeActivationBlocked", () => {
+  it("rechaza encender el modo con la edición ya empezada", () => {
+    expect(
+      objectsModeActivationBlocked({ actual: false, next: true, editionStarted: true }),
+    ).toBe(true);
+  });
+
+  it("deja encenderlo antes de que la edición empiece", () => {
+    expect(
+      objectsModeActivationBlocked({ actual: false, next: true, editionStarted: false }),
+    ).toBe(false);
+  });
+
+  it("nunca bloquea apagarlo, ni reescribir el valor que ya hay", () => {
+    expect(
+      objectsModeActivationBlocked({ actual: true, next: false, editionStarted: true }),
+    ).toBe(false);
+    expect(
+      objectsModeActivationBlocked({ actual: true, next: true, editionStarted: true }),
+    ).toBe(false);
+    expect(
+      objectsModeActivationBlocked({ actual: false, next: false, editionStarted: true }),
+    ).toBe(false);
+  });
+});
 
 function match(overrides: Partial<AwardMatch> & { id: string }): AwardMatch {
   return {

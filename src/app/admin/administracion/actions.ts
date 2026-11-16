@@ -33,6 +33,7 @@ import { campoSiCambia } from "@/lib/player-fields";
 import { parseEmail } from "@/lib/player-input";
 import { VICTORIAS_ID } from "@/lib/objectives";
 import { disableObjectsMode } from "@/lib/object-awards";
+import { objectsModeActivationBlocked } from "@/lib/objects";
 import { editionEnded, editionStarted, parseMadridLocalInstant } from "@/lib/ranked-match";
 import {
   lockedRulesetChanges,
@@ -228,6 +229,16 @@ const PRIZE_INVALID_ERROR =
 const EMBLEM_INVALID_ERROR =
   "El emblema tiene que ser una dirección que empiece por http:// o https://, o una ruta del propio sitio que empiece por /.";
 
+/**
+ * El único guardado del modo de objetos que se rechaza (issue 223).
+ *
+ * El modo se enciende antes de que la edición empiece: con partidas ya jugadas, el
+ * worker empezaría a excluirlas y el portador cargaría con una desventaja que no
+ * estaba en las reglas cuando se jugó. Apagarlo no se bloquea nunca.
+ */
+const OBJECTS_ACTIVATION_CLOSED_ERROR =
+  "El modo de objetos solo se puede activar antes de que empiece la edición. Con la edición en curso, apagado o encendido, no se puede cambiar.";
+
 const ACCENT_INVALID_ERROR =
   "El color de acento se escribe como #rrggbb, por ejemplo #e2b714. Déjalo vacío para usar el del sitio.";
 
@@ -393,6 +404,32 @@ export async function saveEditionConfig(
   }
 
   const despues = merged.config;
+
+  // Encender el modo con la edición ya empezada se rechaza (issue 223). La ventana es
+  // la del ruleset, la misma que decide desde cuándo puntúan las partidas: antes de
+  // `window.to` no hay nada que hacer, y después la edición ya se jugó.
+  if (despues.objectsEnabled && !actual.objectsEnabled) {
+    let ruleset: ScoringRuleset;
+
+    try {
+      ruleset = await readRuleset();
+    } catch (error) {
+      logDatabaseFailure("admin/saveEditionConfig/objetos-reglas", error);
+
+      return { status: "error", message: CONFIG_SAVE_FAILED_MESSAGE };
+    }
+
+    if (
+      objectsModeActivationBlocked({
+        actual: actual.objectsEnabled,
+        next: despues.objectsEnabled,
+        editionStarted: editionStarted(ruleset.window, new Date()),
+      })
+    ) {
+      return { status: "error", message: OBJECTS_ACTIVATION_CLOSED_ERROR };
+    }
+  }
+
   const cambios = [
     ...campoSiCambia(actual.name, despues.name, "name", "nombre de la edición"),
     ...campoSiCambia(

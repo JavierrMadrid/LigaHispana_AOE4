@@ -121,6 +121,37 @@ export const OBJECT_CATALOG: Record<ObjectKind, ObjectDefinition> = {
 };
 
 /**
+ * Lo que decide si el guardado de la configuración puede encender el modo de objetos
+ * (issue 223).
+ *
+ * La edición se considera empezada en `window.from` del ruleset, que es el mismo
+ * instante desde el que puntúan las partidas (`editionStarted()` en
+ * `ranked-match.ts`). Encenderlo con partidas ya jugadas dejaría a los portadores con
+ * una desventaja que nadie pactó al empezar, y el worker la aplicaría sobre partidas
+ * de la edición en curso.
+ */
+export type ObjectsModeChange = {
+  /** Estado guardado antes de este guardado. */
+  actual: boolean;
+  /** Estado que se va a guardar. */
+  next: boolean;
+  /** ¿La edición ya ha empezado? Sale de `editionStarted()` con la ventana del ruleset. */
+  editionStarted: boolean;
+};
+
+/**
+ * Si el guardado debe rechazarse por encender el modo con la edición ya en marcha.
+ *
+ * Solo se cierra el **encendido**: apagarlo sigue permitido en cualquier momento, que
+ * es la vía para levantar las exclusiones, y reescribir el mismo valor tampoco se
+ * rechaza porque el formulario es una foto completa y guardar sin tocar el interruptor
+ * es lo normal.
+ */
+export function objectsModeActivationBlocked(change: ObjectsModeChange): boolean {
+  return change.next && !change.actual && change.editionStarted;
+}
+
+/**
  * La **medianoche UTC** del día de `at`: el día con el que se agrupa un objeto.
  *
  * Se normaliza aquí y no al leer porque es la clave de `@@unique([kind, day])`: dos
