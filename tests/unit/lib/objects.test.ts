@@ -487,32 +487,24 @@ describe("sameTargetBlocked", () => {
 describe("sameThrowerBlocked", () => {
   const day = at("2026-11-04T12:00:00.000Z");
 
-  const lanzado = (fromId: string, toId: string, iso: string, returned = false) => ({
+  const lanzado = (fromId: string, toId: string, iso: string) => ({
     fromId,
     toId,
     at: at(iso),
-    returned,
   });
 
-  it("el portador que ya colocó el objeto ese día UTC no puede repetir", () => {
+  it("el portador que ya lanzó el objeto ese día UTC no puede repetir", () => {
     const throws = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
 
     expect(sameThrowerBlocked(throws, "p-1", day)).toBe(true);
   });
 
-  it("un lanzamiento devuelto no gasta el turno del día (issue 224)", () => {
-    const devuelto = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z", true)];
+  it("un lanzamiento devuelto sí gasta el turno del día (issue 224)", () => {
+    // La tirada se devolvió, pero el lanzador se queda con la desventaja y con el
+    // objeto: el turno está gastado hasta el día UTC siguiente.
+    const devuelto = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
 
-    expect(sameThrowerBlocked(devuelto, "p-1", day)).toBe(false);
-  });
-
-  it("un devuelto no deja colar un lanzamiento aceptado el mismo día", () => {
-    const throws = [
-      lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z", true),
-      lanzado("p-1", "p-3", "2026-11-04T09:00:00.000Z", false),
-    ];
-
-    expect(sameThrowerBlocked(throws, "p-1", day)).toBe(true);
+    expect(sameThrowerBlocked(devuelto, "p-1", day)).toBe(true);
   });
 
   it("cuenta solo el día UTC: el de ayer no bloquea", () => {

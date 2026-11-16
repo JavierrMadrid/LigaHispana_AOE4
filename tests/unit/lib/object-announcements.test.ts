@@ -66,7 +66,7 @@ describe("objectThrowAnnouncementText", () => {
         penaltyId: "sin-guarecer-reliquias",
       }),
     ).toBe(
-      "Objeto lanzado: «Reliquia pagana» de BeastWizard a Rival, con un 12 % de probabilidad de devolución. Se ha devuelto: la desventaja se queda con BeastWizard, que sigue pudiendo lanzarlo a otro jugador. Desventaja: No se pueden guarecer reliquias.",
+      "Objeto lanzado: «Reliquia pagana» de BeastWizard a Rival, con un 12 % de probabilidad de devolución. Se ha devuelto: la desventaja se queda con BeastWizard y el objeto sigue en su mano, pero hoy ya no puede volver a lanzarlo. Desventaja: No se pueden guarecer reliquias.",
     );
   });
 
