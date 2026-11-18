@@ -48,6 +48,9 @@ mismo y quién está en directo.
 | **Reglas** (`/reglas`) | Las normas del torneo: formato, participación, eventos puntuales con su calendario y su multiplicador, normas de obligado cumplimiento y organización. La retransmisión en directo se lista solo cuando la edición la exige, y la sección de organización anuncia el premio base y las donaciones cuando están publicados. |
 | **Participar** (`/participar`) | La inscripción pública al torneo. |
 
+La portada ofrece hasta cinco directos de Twitch debajo de las partidas en juego, con miniatura,
+nombre y audiencia cuando está disponible. YouTube y Kick mantienen sus enlaces de emisión.
+
 Además, cuando la organización tiene publicada una campaña, todas las páginas públicas muestran arriba
 un **banner de donaciones** con el enlace a Matcherino. Mientras un **evento puntual** está en curso, su
 banner aparece por encima de ese aviso, con el multiplicador, las fechas y el requisito de Discord, y

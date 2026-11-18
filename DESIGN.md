@@ -25,7 +25,9 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Sin avatares, banderas de fondo, placas de puesto, halo del puntero ni observadores que oculten filas. La bandera pequeña junto al nombre se conserva.
 - Identidad de una línea: nombre truncable con nombre completo accesible, bandera, punto de partida y canales que emiten. Alias y canales registrados completos en el detalle.
 - Elo: emblema de 22×26px junto a la cifra; sin nombre de división visible. Una clasificación ausente se muestra con `—`.
-- Actividad: hasta tres jugadores emitiendo, con sus enlaces de Twitch, YouTube o Kick; no depende de los filtros de tabla. Se omite la sección de streams si está vacía. Partidas distingue cero de información no disponible.
+- Actividad: «Partidas en juego» primero, seguido de hasta cinco tarjetas de Twitch con miniatura, nombre del streamer y espectadores cuando hay datos reales. Si la audiencia es desconocida se omite esa línea, sin mensaje ni cero inventado. No depende de los filtros de tabla.
+- YouTube y Kick conservan enlaces en «Otros canales en directo», sin repetir enlaces de Twitch. Los vacíos y fallos de actividad se distinguen de una cifra cero confirmada.
+- Las miniaturas se cargan bajo demanda en el navegador, sin tokens ni sondeo adicional; si fallan conservan una reserva, el nombre y el enlace. La previsualización de desarrollo usa arte local y no consulta canales ficticios.
 - Objetivo de revisión, con zoom 100%, filtros cerrados y filas plegadas: al menos ocho filas a 1440×900, seis a 1366×768 y cuatro a 390×844.
 
 ## Filtros y navegación de resultados

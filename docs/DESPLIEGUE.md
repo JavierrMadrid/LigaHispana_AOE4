@@ -154,6 +154,7 @@ La tabla siguiente es la de **producción**:
 | `DATABASE_URL` | Sí (respaldo si no hay binding de Hyperdrive) | — |
 | `CRON_SECRET`, `RATE_LIMIT_SALT`, `TURNSTILE_SECRET_KEY`, `YOUTUBE_API_KEY`, `DISCORD_*` | Sí (secretos) | Sí (por si un módulo de servidor las lee al importar) |
 | `SUPERADMIN_EMAIL` | Sí (texto) | — |
+| `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` | Opcionales: id de aplicación y secreto de Twitch | — (lectura solo en runtime) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Sí (secreto) | Sí (por si un módulo de servidor la lee al importar) |
 
 - `NEXT_PUBLIC_SITE_URL = https://laligahispana.es`. Si cambia el dominio, se cambia en las dos listas.
@@ -172,6 +173,13 @@ La tabla siguiente es la de **producción**:
   un mensaje engañoso que habla de *developing locally*; mientras tanto, producción se queda en la versión anterior.
 
 ### Previews Base (desarrollo)
+
+Para mostrar espectadores reales en las tarjetas de Twitch, registrar una aplicación en
+[Twitch Developers](https://dev.twitch.tv/console/apps) y guardar `TWITCH_CLIENT_ID` y
+`TWITCH_CLIENT_SECRET` en runtime del Worker; en local, en `.env.local` y reiniciar `npm run dev`.
+No usar `NEXT_PUBLIC_*` ni subir las credenciales al repositorio. La ausencia de estas variables
+mantiene las miniaturas y deja los espectadores sin confirmar. Cadencia y límites en
+[`OPERACION.md`](./OPERACION.md#tarjetas-de-twitch-en-la-portada).
 
 | Variable | Dónde | Valor |
 |---|---|---|
