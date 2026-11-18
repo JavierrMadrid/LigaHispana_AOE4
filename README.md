@@ -49,6 +49,9 @@ mismo y quién está en directo.
 | **Participar** (`/participar`) | La inscripción pública al torneo. |
 | **Noticias** (`/noticias`) | Las noticias del torneo que publica el superadministrador desde el panel: listado de las publicadas y página propia por dirección (`/noticias/<slug>`). El cuerpo se escribe en Markdown básico y se pinta saneado. |
 
+La portada ofrece hasta cinco directos de Twitch debajo de las partidas en juego, con miniatura,
+nombre y audiencia cuando está disponible. YouTube y Kick mantienen sus enlaces de emisión.
+
 Además, cuando la organización tiene publicada una campaña, todas las páginas públicas muestran arriba
 un **banner de donaciones** con el enlace a Matcherino. Mientras un **evento puntual** está en curso, su
 banner aparece por encima de ese aviso, con el multiplicador, las fechas y el requisito de Discord, y
