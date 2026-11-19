@@ -111,7 +111,7 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `ladderLastGameAt` | `DateTime?` | `last_game_at` de la ladder. Va por delante de lo que importamos: solo sirve para la alerta `MISSING_LADDER_MATCHES`. |
 | `ladderUpdatedAt` | `DateTime?` | Última lectura de la ladder. Distingue "sin ladder" de "sin sync". |
 | `twitchIsLive`, `youtubeIsLive`, `kickIsLive` | `Boolean` | `false` = "no comprobado o no en directo". Los tres son degradables. |
-| `avatarUrl` | `String?` | `avatars.full` de AoE4World; `null` dibuja monograma. |
+| `avatarUrl` | `String?` | `avatars.full` de AoE4World; `null` indica que no hay avatar disponible. |
 | `profileCheckedAt` | `DateTime?` | Sello de la caché de perfil: cuándo se refrescaron el nombre oficial y el avatar. `null` = sin comprobar. Lo escriben la ladder y `GET /players/:profile_id`; con menos de 1 h no se pide el perfil. |
 | `historyPublic` | `Boolean?` | Historial de partidas público. `null` = sin comprobar (un fallo no escribe "cerrado"). |
 | `historyCheckedAt` | `DateTime?` | Caché de la comprobación de historial (12 h). |
