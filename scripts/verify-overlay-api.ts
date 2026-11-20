@@ -16,14 +16,20 @@ import { objectiveMaxProgress } from "@/lib/objective-progress";
 import {
   loadOverlayClassification,
   loadOverlayEvents,
+  loadOverlayObjectEvents,
   loadOverlayObjectives,
   loadOverlayParticipants,
   overlayEventoObjetivoListado,
   overlayEventosObjetivos,
+  overlayObjetoEventos,
   type OverlayClasificacion,
   type OverlayEventoObjetivo,
+  type OverlayObjetoEvento,
+  type OverlayObjectAwardSource,
+  type OverlayObjectThrowSource,
   type OverlayProgressEventSource,
 } from "@/lib/overlay-api";
+import { OBJECT_CATALOG } from "@/lib/objects";
 import { resolveStandingsVersion } from "@/lib/public";
 import { windowBounds } from "@/lib/ranked-match";
 import { RULESET_VERSION, compareStandings, readRuleset, type ScoringRuleset } from "@/lib/scoring";
@@ -38,7 +44,8 @@ import { readMapPool } from "@/lib/settings";
  * —los mismos que sirven `/api/v0`— con lo que hay en la base, para detectar que
  * el contrato publicado y los datos no se han separado: vecinos que no son los
  * inmediatos, un reparto de puntos que no suma el total, un feed que no coincide
- * con `ObjectiveProgressEvent`, un estado sin su evento o un `PERDIDO` en un logro.
+ * con `ObjectiveProgressEvent`, un estado sin su evento, un `PERDIDO` en un logro
+ * o un feed de objetos que publica lo que no le pasó al jugador.
  *
  * No sustituye a los tests: `tests/unit/lib/overlay-api.test.ts` comprueba la
  * parte pura sin base de datos, y esto comprueba lo que solo se puede saber con
@@ -711,6 +718,294 @@ async function checkProgreso(contexto: Contexto): Promise<{ eventos: number; est
 }
 
 /* -------------------------------------------------------------------------- */
+/* Feed de objetos                                                             */
+/* -------------------------------------------------------------------------- */
+
+/** Un premio de la edición, con el jugador que lo ganó. */
+type PremioEnBase = OverlayObjectAwardSource & { winnerId: string };
+
+/** Un lanzamiento de la edición, tal y como lo lee el feed. */
+type LanzamientoEnBase = OverlayObjectThrowSource;
+
+/** Un jugador de la base, con lo que necesitan el feed y sus contrarios. */
+type JugadorEnBase = {
+  id: string;
+  profileId: number;
+  status: PlayerStatus;
+  name: string;
+  country: string | null;
+};
+
+/** Lo que publica el feed de objetos de un jugador, agrupado por origen. */
+type ObjetosPorJugador = {
+  premios: PremioEnBase[];
+  lanzamientos: LanzamientoEnBase[];
+};
+
+/** Un grupo vacío del mapa de objetos por jugador. */
+function emptyObjetosPorJugador(): ObjetosPorJugador {
+  return { premios: [], lanzamientos: [] };
+}
+
+/**
+ * Comprueba la forma de un evento de objetos publicado.
+ *
+ * Es lo que el contrato promete y no depende de la base: el prefijo del id, el
+ * tipo, la fecha ISO, el objeto resuelto contra el catálogo y la desventaja. Los
+ * eventos de lanzamiento se cruzan además con su fila para verificar que el tipo
+ * corresponde a la dirección y a la devolución, que un lanzamiento devuelto al
+ * objetivo no se publica como recibido y que el contrario es el de la base.
+ */
+function assertEventoObjetoValido(
+  jugador: JugadorEnBase,
+  evento: OverlayObjetoEvento,
+  lanzamientos: readonly LanzamientoEnBase[],
+  jugadores: ReadonlyMap<string, JugadorEnBase>,
+): void {
+  assert.match(
+    evento.id,
+    /^(?:award|throw):[A-Za-z0-9]+$/,
+    `el id del evento de objeto no lleva prefijo de origen: ${evento.id}`,
+  );
+  assert.ok(
+    evento.tipo === "recibido" || evento.tipo === "lanzado" || evento.tipo === "devuelto",
+    `el evento ${evento.id} tiene un tipo desconocido: ${String(evento.tipo)}`,
+  );
+  assert.deepEqual(
+    Object.keys(evento).sort(),
+    ["contrario", "desventaja", "fechahora", "id", "objeto", "tipo"],
+    `el evento ${evento.id} publica campos que no son del contrato`,
+  );
+
+  const fecha = new Date(evento.fechahora);
+
+  assert.ok(
+    !Number.isNaN(fecha.getTime()) && fecha.toISOString() === evento.fechahora,
+    `la fechahora de ${evento.id} no es ISO 8601 con zona: ${evento.fechahora}`,
+  );
+
+  const definicion = Object.values(OBJECT_CATALOG).find(
+    (candidato) => candidato.name === evento.objeto.nombre,
+  );
+
+  assert.ok(
+    definicion !== undefined,
+    `el objeto de ${evento.id} no está en el catálogo: ${evento.objeto.nombre}`,
+  );
+  assert.equal(
+    evento.objeto.id,
+    definicion.kind.toLowerCase(),
+    `el id del objeto de ${evento.id} no es el enum en minúsculas`,
+  );
+
+  const textos = definicion.penalties.map((penalty) => penalty.text);
+
+  assert.ok(
+    evento.desventaja === "" || textos.includes(evento.desventaja),
+    `la desventaja de ${evento.id} no es del catálogo: ${evento.desventaja}`,
+  );
+
+  if (!evento.id.startsWith("throw:")) {
+    assert.equal(evento.tipo, "recibido", `el premio ${evento.id} no se publica como recibido`);
+    assert.equal(evento.contrario, null, `el premio ${evento.id} no puede tener contrario`);
+
+    return;
+  }
+
+  const fila = lanzamientos.find((item) => item.id === evento.id.slice("throw:".length));
+
+  assert.ok(fila !== undefined, `el lanzamiento ${evento.id} no está en la base`);
+
+  let otroId: string;
+
+  if (fila.fromId === jugador.id) {
+    assert.equal(
+      evento.tipo,
+      fila.returned ? "devuelto" : "lanzado",
+      `el lanzamiento ${evento.id} no publica el tipo que le toca`,
+    );
+    otroId = fila.toId;
+  } else {
+    assert.equal(fila.toId, jugador.id, `el lanzamiento ${evento.id} no es de ${jugador.id}`);
+    assert.equal(
+      fila.returned,
+      false,
+      `el lanzamiento devuelto ${evento.id} no debería publicarse al objetivo`,
+    );
+    assert.equal(evento.tipo, "recibido", `el lanzamiento ${evento.id} no se publica como recibido`);
+    otroId = fila.fromId;
+  }
+
+  const otro = jugadores.get(otroId);
+
+  if (otro === undefined) {
+    // Los ids de `ObjectThrow` son cadenas sueltas: la fila del jugador puede no
+    // existir y el contrato publica `null` en vez de inventarse el alias.
+    assert.equal(
+      evento.contrario,
+      null,
+      `el contrario de ${evento.id} debería ser null: su fila no existe`,
+    );
+
+    return;
+  }
+
+  assert.deepEqual(
+    evento.contrario,
+    { alias: otro.name, pais: otro.country },
+    `el contrario de ${evento.id} no es el de la base`,
+  );
+}
+
+/**
+ * El feed de `/objetos`: los premios y lanzamientos de la edición, por jugador.
+ *
+ * Se compara lo que devuelve `loadOverlayObjectEvents()` con lo que sale de la
+ * base pasando por el mismo mapeador puro que usa la ruta, que es lo que
+ * comprueba el filtro de la edición, el orden y el recorte a los últimos eventos.
+ * Además se verifica la forma de cada evento contra su fila y el límite 1.
+ *
+ * Los jugadores con objetos que no están aprobados no se publican: el feed
+ * devuelve `null`, igual que un id que no existe.
+ */
+async function checkObjetos(contexto: Contexto): Promise<number> {
+  const [premios, lanzamientos] = await Promise.all([
+    db.objectAward.findMany({
+      where: { createdAt: { gte: contexto.editionFrom } },
+      select: { id: true, winnerId: true, kind: true, penaltyId: true, createdAt: true },
+    }),
+    db.objectThrow.findMany({
+      where: { at: { gte: contexto.editionFrom } },
+      select: {
+        id: true,
+        fromId: true,
+        toId: true,
+        at: true,
+        returned: true,
+        award: { select: { kind: true, penaltyId: true } },
+      },
+    }),
+  ]);
+
+  const porJugador = new Map<string, ObjetosPorJugador>();
+  const grupo = (playerId: string): ObjetosPorJugador => {
+    const actual = porJugador.get(playerId);
+
+    if (actual !== undefined) {
+      return actual;
+    }
+
+    const nuevo = emptyObjetosPorJugador();
+
+    porJugador.set(playerId, nuevo);
+
+    return nuevo;
+  };
+
+  for (const premio of premios) {
+    grupo(premio.winnerId).premios.push(premio);
+  }
+
+  for (const lanzamiento of lanzamientos) {
+    grupo(lanzamiento.fromId).lanzamientos.push(lanzamiento);
+
+    if (lanzamiento.toId !== lanzamiento.fromId) {
+      grupo(lanzamiento.toId).lanzamientos.push(lanzamiento);
+    }
+  }
+
+  const jugadores =
+    porJugador.size === 0
+      ? []
+      : await db.player.findMany({
+          where: { id: { in: [...porJugador.keys()] } },
+          select: { id: true, profileId: true, status: true, name: true, country: true },
+        });
+
+  const jugadoresById = new Map(jugadores.map((fila) => [fila.id, fila]));
+  const contrarios = new Map(
+    jugadores.map((fila) => [fila.id, { id: fila.id, name: fila.name, country: fila.country }]),
+  );
+
+  let comprobados = 0;
+  let limites = 0;
+
+  for (const [playerId, objetos] of porJugador) {
+    const jugador = jugadoresById.get(playerId);
+
+    assert.ok(jugador !== undefined, `el jugador ${playerId} de los objetos no está en Player`);
+
+    if (jugador.status !== PlayerStatus.APPROVED) {
+      assert.equal(
+        await loadOverlayObjectEvents(jugador.profileId, 20),
+        null,
+        `el feed de objetos de ${jugador.profileId} debería ser null: no está aprobado`,
+      );
+
+      continue;
+    }
+
+    const esperado = overlayObjetoEventos(
+      jugador.id,
+      objetos.premios,
+      objetos.lanzamientos,
+      contrarios,
+    ).slice(-20);
+    const respuesta = await loadOverlayObjectEvents(jugador.profileId, 20);
+
+    assert.ok(
+      respuesta !== null,
+      `el feed de objetos de ${jugador.profileId} devuelve null y está aprobado`,
+    );
+    assert.ok(respuesta.length <= 20, `el feed de objetos de ${jugador.profileId} pasa de 20 eventos`);
+    assert.deepEqual(
+      respuesta,
+      esperado,
+      `el feed de objetos de ${jugador.profileId} no coincide con los premios y lanzamientos de la base`,
+    );
+
+    for (let indice = 0; indice < respuesta.length; indice += 1) {
+      assertEventoObjetoValido(jugador, respuesta[indice], objetos.lanzamientos, jugadoresById);
+
+      if (indice === 0) {
+        continue;
+      }
+
+      const anterior = respuesta[indice - 1];
+      const actual = respuesta[indice];
+      const diferencia = Date.parse(actual.fechahora) - Date.parse(anterior.fechahora);
+
+      assert.ok(
+        diferencia > 0 || (diferencia === 0 && anterior.id < actual.id),
+        `el feed de objetos de ${jugador.profileId} no va en orden ascendente`,
+      );
+    }
+
+    if (esperado.length >= 2 && limites < 2) {
+      assert.deepEqual(
+        await loadOverlayObjectEvents(jugador.profileId, 1),
+        esperado.slice(-1),
+        `el límite 1 de ${jugador.profileId} no devuelve solo su último evento de objetos`,
+      );
+      limites += 1;
+    }
+
+    comprobados += 1;
+  }
+
+  const maximo = await db.player.aggregate({ _max: { profileId: true } });
+  const inventado = (maximo._max.profileId ?? 0) + 1;
+
+  assert.equal(
+    await loadOverlayObjectEvents(inventado, 10),
+    null,
+    `el profileId inventado ${inventado} debería devolver null en el feed de objetos`,
+  );
+
+  return comprobados;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Contexto y arranque                                                         */
 /* -------------------------------------------------------------------------- */
 
@@ -783,6 +1078,7 @@ async function main(): Promise<void> {
   let objetivos = 0;
   let clasificaciones = 0;
   let feeds = 0;
+  let feedsObjetos = 0;
 
   await check("participantes", async () => {
     participantes = await checkParticipantes();
@@ -799,6 +1095,10 @@ async function main(): Promise<void> {
     feeds = await checkEventos(contexto, orden);
   });
 
+  await check("feed de objetos", async () => {
+    feedsObjetos = await checkObjetos(contexto);
+  });
+
   let progreso = { eventos: contexto.eventos.length, estados: 0 };
 
   await check("estado y eventos de progreso", async () => {
@@ -811,6 +1111,7 @@ async function main(): Promise<void> {
   console.log(`Objetivos activos: ${objetivos}`);
   console.log(`Clasificaciones comprobadas: ${clasificaciones}`);
   console.log(`Feeds de eventos comprobados: ${feeds}`);
+  console.log(`Feeds de objetos comprobados: ${feedsObjetos}`);
   console.log(`Eventos de la edición: ${progreso.eventos}`);
   console.log(`Estados de la edición: ${progreso.estados}`);
   console.log("");

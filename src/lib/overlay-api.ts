@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
-import { ObjectiveProgressKind, PlayerStatus } from "@/generated/prisma/enums";
+import { ObjectKind, ObjectiveProgressKind, PlayerStatus } from "@/generated/prisma/enums";
 import { CIVILIZATION_DIRECTORY, civilizationFile, objectiveCivilization } from "@/lib/civs";
 import { db } from "@/lib/db";
 import { divisionFromRankLevel, subdivisionNumber } from "@/lib/divisions";
@@ -13,6 +13,7 @@ import {
   objectiveRepeatable,
   type ObjectiveDefinition,
 } from "@/lib/objectives";
+import { OBJECT_CATALOG } from "@/lib/objects";
 import {
   objectiveLookup,
   resolveStandingsVersion,
@@ -201,6 +202,47 @@ export type OverlayEventoObjetivoListado = OverlayEventoObjetivo & {
 };
 
 /**
+ * Un evento del feed de objetos de `/objetos`.
+ *
+ * Es lo que la tarjeta del overlay anima: recibir un objeto, lanzarlo para que se
+ * aplique al rival y lanzarlo para que se devuelva. El `id` prefija el origen
+ * (`award:` o `throw:`) para que un premio y un lanzamiento no puedan chocar
+ * aunque compartan instante, y el `contrario` viaja ya resuelto para que el
+ * overlay no tenga que cruzar ids.
+ */
+export type OverlayObjetoEvento = {
+  /** `award:<ObjectAward.id>` o `throw:<ObjectThrow.id>`. */
+  id: string;
+  /** `recibido`, `lanzado` o `devuelto`. */
+  tipo: OverlayObjetoEventoTipo;
+  /** Instante del evento, en ISO 8601 con zona. */
+  fechahora: string;
+  /** El objeto del evento: el enum del schema en minúsculas y su nombre de catálogo. */
+  objeto: { id: string; nombre: string };
+  /**
+   * Texto de la desventaja que le tocó al objeto, o cadena vacía si el
+   * `penaltyId` guardado ya no está en el catálogo.
+   *
+   * Vacío y no `null` porque la tarjeta pinta la línea tal cual: un `null` la
+   * obligaría a decidir entre no enseñarla o enseñar un id.
+   */
+  desventaja: string;
+  /**
+   * El otro jugador del evento, o `null`.
+   *
+   * Es el lanzador en un `recibido` por lanzamiento y el objetivo en un
+   * `lanzado` o un `devuelto`; en el premio del día no hay contrario y vale
+   * `null`. También vale `null` si la fila del jugador ya no existe: los ids de
+   * `ObjectAward` y `ObjectThrow` son cadenas sueltas y sobreviven al borrado
+   * del participante.
+   */
+  contrario: { alias: string; pais: string | null } | null;
+};
+
+/** Los tres sentidos de un evento de objeto. */
+export type OverlayObjetoEventoTipo = "recibido" | "lanzado" | "devuelto";
+
+/**
  * Una fila de la clasificación del overlay.
  *
  * `eventos_objetivos` solo viaja en el participante solicitado: los vecinos son
@@ -242,6 +284,34 @@ export type OverlayProgressEventSource = {
   ownValue: number;
   otherValue: number | null;
   repetition: number | null;
+};
+
+/** Una fila de `ObjectAward` en lo que publica el feed de objetos (el premio del día). */
+export type OverlayObjectAwardSource = {
+  id: string;
+  kind: ObjectKind;
+  penaltyId: string;
+  createdAt: Date;
+};
+
+/** Una fila de `ObjectThrow` con el objeto que se lanzó, en lo que publica el feed. */
+export type OverlayObjectThrowSource = {
+  id: string;
+  /** `Player.id` del lanzador: el portador en el momento del lanzamiento. */
+  fromId: string;
+  /** `Player.id` del objetivo del lanzamiento. */
+  toId: string;
+  at: Date;
+  returned: boolean;
+  /** El objeto lanzado: de él salen el nombre y la desventaja. */
+  award: { kind: ObjectKind; penaltyId: string };
+};
+
+/** Un jugador contrario, ya resuelto contra `Player`. */
+export type OverlayObjectOpponent = {
+  id: string;
+  name: string;
+  country: string | null;
 };
 
 /** Cuerpo de una respuesta de error, con un código estable para el overlay. */
@@ -339,12 +409,13 @@ export function readOverlayProfileId(value: string | null): OverlayProfileIdPara
 }
 
 /**
- * El `?limite=` de `/eventos`, ya interpretado.
+ * El `?limite=` de los feeds con recorte (`/eventos` y `/objetos`), ya
+ * interpretado.
  *
- * Mismos tres estados que el resto de parámetros: sin parámetro se publican 3
- * eventos (el valor por defecto del contrato), un valor ilegible responde 400 y
- * uno válido acota la respuesta. La forma canónica es un entero de 1 a 20 sin
- * ceros a la izquierda: `01` no es "casi 1", es otra cadena.
+ * Mismos tres estados que el resto de parámetros: sin parámetro se aplica el
+ * valor por defecto de cada ruta (3 en `/eventos`, 10 en `/objetos`), un valor
+ * ilegible responde 400 y uno válido acota la respuesta. La forma canónica es un
+ * entero de 1 a 20 sin ceros a la izquierda: `01` no es "casi 1", es otra cadena.
  */
 export type OverlayLimitParam =
   | { status: "absent" }
@@ -354,6 +425,15 @@ export type OverlayLimitParam =
 /** Límite por defecto y máximo del feed de eventos. */
 export const OVERLAY_EVENTS_DEFAULT_LIMIT = 3;
 export const OVERLAY_EVENTS_MAX_LIMIT = 20;
+
+/**
+ * Límite por defecto del feed de objetos.
+ *
+ * Es 10 y no 3 porque la tarjeta anima la secuencia, no el último hito: con tres
+ * eventos se queda sin arco. El máximo es el mismo de toda la API
+ * (`OVERLAY_EVENTS_MAX_LIMIT`), que es el que acota `readOverlayLimit()`.
+ */
+export const OVERLAY_OBJECTS_DEFAULT_LIMIT = 10;
 
 /** Forma canónica del límite: `1`–`9`, `10`–`20`, sin ceros a la izquierda. */
 const OVERLAY_LIMIT_PATTERN = /^(?:[1-9]|1\d|20)$/;
@@ -674,6 +754,158 @@ function compareProgressEvents(
   }
 
   return a.objectiveId < b.objectiveId ? -1 : 1;
+}
+
+/** Un evento de objeto antes de resolver el objeto y el contrario. */
+type OverlayObjetoEventoBase = {
+  id: string;
+  tipo: OverlayObjetoEventoTipo;
+  at: Date;
+  kind: ObjectKind;
+  penaltyId: string;
+  /** `Player.id` del contrario, o `null` si el evento no tiene. */
+  otherId: string | null;
+};
+
+/** El id del objeto en el contrato: el enum del schema, en minúsculas. */
+const OVERLAY_OBJETO_ID: Record<ObjectKind, string> = {
+  RELIQUIA: "reliquia",
+  MONEDA: "moneda",
+  MONUMENTO: "monumento",
+};
+
+/**
+ * Premios y lanzamientos de un jugador → el feed de objetos de `/objetos`.
+ *
+ * Puro y aparte del lector para poder probarlo sin base de datos: recibe las filas
+ * ya filtradas por la edición y decide **qué se publica, con qué tipo y con qué
+ * contrario**.
+ *
+ * | Fila | Condición | `tipo` | `contrario` |
+ * |---|---|---|---|
+ * | `ObjectThrow` | `toId = jugador` y `returned = false` | `recibido` | el lanzador |
+ * | `ObjectThrow` | `toId = jugador` y `returned = true` | **no se publica** | — |
+ * | `ObjectThrow` | `fromId = jugador` y `returned = false` | `lanzado` | el objetivo |
+ * | `ObjectThrow` | `fromId = jugador` y `returned = true` | `devuelto` | el objetivo |
+ * | `ObjectAward` | `winnerId = jugador` | `recibido` | `null` |
+ *
+ * Un lanzamiento que le llegó y se le devolvió **no se publica**: el objeto nunca
+ * llegó a afectarle y quien vivió el intento fue el lanzador, que lo ve como
+ * `devuelto`. El premio del día sí se publica aunque el objeto ya haya viajado: es
+ * lo que ganó, y el feed es la historia de lo que le pasó a ese jugador.
+ *
+ * La fecha de un premio es su `createdAt` y no su `heldSince` a propósito:
+ * `heldSince` es el `startedAt` de la partida que lo otorga, así que el premio se
+ * fecharía en el pasado y el feed podría enseñarlo antes del evento que lo produce.
+ *
+ * El orden es **ascendente** por instante y, a igualdad, por `id`; se compara con
+ * `<`/`>` y no con `localeCompare` para no depender del idioma del runtime. El
+ * recorte a los últimos `limite` lo hace el lector, que es quien lo conoce.
+ */
+export function overlayObjetoEventos(
+  playerId: string,
+  awards: readonly OverlayObjectAwardSource[],
+  throws: readonly OverlayObjectThrowSource[],
+  opponents: ReadonlyMap<string, OverlayObjectOpponent>,
+): OverlayObjetoEvento[] {
+  const eventos: OverlayObjetoEventoBase[] = [];
+
+  for (const award of awards) {
+    eventos.push({
+      id: `award:${award.id}`,
+      tipo: "recibido",
+      at: award.createdAt,
+      kind: award.kind,
+      penaltyId: award.penaltyId,
+      otherId: null,
+    });
+  }
+
+  for (const item of throws) {
+    if (item.fromId === playerId) {
+      eventos.push({
+        id: `throw:${item.id}`,
+        tipo: item.returned ? "devuelto" : "lanzado",
+        at: item.at,
+        kind: item.award.kind,
+        penaltyId: item.award.penaltyId,
+        otherId: item.toId,
+      });
+      continue;
+    }
+
+    // Un lanzamiento ajeno que se devolvió nunca llegó al jugador: la fila existe
+    // porque la consulta trae los dos sentidos, pero no es un evento suyo.
+    if (item.toId !== playerId || item.returned) {
+      continue;
+    }
+
+    eventos.push({
+      id: `throw:${item.id}`,
+      tipo: "recibido",
+      at: item.at,
+      kind: item.award.kind,
+      penaltyId: item.award.penaltyId,
+      otherId: item.fromId,
+    });
+  }
+
+  return eventos.sort(compareObjectEvents).map((evento) => ({
+    id: evento.id,
+    tipo: evento.tipo,
+    fechahora: evento.at.toISOString(),
+    objeto: {
+      id: OVERLAY_OBJETO_ID[evento.kind],
+      nombre: OBJECT_CATALOG[evento.kind].name,
+    },
+    desventaja: objectPenaltyText(evento.kind, evento.penaltyId),
+    contrario: objectOpponent(opponents, evento.otherId),
+  }));
+}
+
+/** Orden del feed de objetos: por instante y, a igualdad, por id. */
+function compareObjectEvents(a: OverlayObjetoEventoBase, b: OverlayObjetoEventoBase): number {
+  const at = a.at.getTime() - b.at.getTime();
+
+  if (at !== 0) {
+    return at;
+  }
+
+  if (a.id === b.id) {
+    return 0;
+  }
+
+  return a.id < b.id ? -1 : 1;
+}
+
+/**
+ * Texto de la desventaja del catálogo, o cadena vacía si el id ya no está.
+ *
+ * La desventaja se guarda como id (`ObjectAward.penaltyId`) y se resuelve al
+ * leer, como los objetivos: retocar una redacción no reescribe el histórico. Un id
+ * que el catálogo ya no tiene no se inventa.
+ */
+function objectPenaltyText(kind: ObjectKind, penaltyId: string): string {
+  return OBJECT_CATALOG[kind].penalties.find((penalty) => penalty.id === penaltyId)?.text ?? "";
+}
+
+/**
+ * El contrario resuelto, o `null` sin contrario o si su fila ya no existe.
+ *
+ * Se publica `alias` y `pais` con los nombres del contrato, los mismos de
+ * `/participantes`; nada más del jugador.
+ */
+function objectOpponent(
+  opponents: ReadonlyMap<string, OverlayObjectOpponent>,
+  playerId: string | null,
+): OverlayObjetoEvento["contrario"] {
+  if (playerId === null) {
+    return null;
+  }
+
+  const row = opponents.get(playerId);
+
+  return row === undefined ? null : { alias: row.name, pais: row.country };
 }
 
 /**
@@ -1014,4 +1246,87 @@ export async function loadOverlayEvents(
   });
 
   return events.map(overlayEventoObjetivoListado);
+}
+
+/**
+ * Los últimos eventos de objetos de un participante, o `null` si no existe o no
+ * está aprobado.
+ *
+ * Los dos orígenes son `ObjectAward` (el premio del día, por `winnerId`) y
+ * `ObjectThrow` (por `fromId` y por `toId`, que es lo que permite tener los tres
+ * tipos en una sola lista). Los dos se filtran por la **edición activa** con
+ * `windowBounds`: los premios por `createdAt` y los lanzamientos por `at`, que es
+ * la misma frontera desde la que puntúan las partidas.
+ *
+ * El alias y el país de los contrarios se resuelven en una **segunda consulta** y
+ * no con una relación de Prisma: `ObjectThrow` guarda `Player.id` como cadena
+ * suelta, igual que `AdminAction.targetId`, para que el histórico del objeto
+ * sobreviva al borrado de un participante. Solo se piden los jugadores que salen
+ * en la lista, y solo para los lanzamientos que se publican.
+ *
+ * El recorte se hace **después** de ordenar, con `slice(-limite)`, para devolver
+ * los últimos eventos y no los primeros: la tarjeta anima de más antiguo a más
+ * reciente y lo que acaba de pasar es lo que interesa. Con menos eventos que
+ * `limite` devuelve la lista entera.
+ */
+export async function loadOverlayObjectEvents(
+  profileId: number,
+  limite: number,
+): Promise<OverlayObjetoEvento[] | null> {
+  const [ruleset, player] = await Promise.all([
+    readRuleset(),
+    db.player.findFirst({
+      where: { profileId, status: PlayerStatus.APPROVED },
+      select: { id: true },
+    }),
+  ]);
+
+  if (player === null) {
+    return null;
+  }
+
+  const editionFrom = windowBounds(ruleset.window).from;
+
+  const [awards, throws] = await Promise.all([
+    db.objectAward.findMany({
+      where: { winnerId: player.id, createdAt: { gte: editionFrom } },
+      select: { id: true, kind: true, penaltyId: true, createdAt: true },
+    }),
+    db.objectThrow.findMany({
+      where: {
+        at: { gte: editionFrom },
+        OR: [{ fromId: player.id }, { toId: player.id }],
+      },
+      select: {
+        id: true,
+        fromId: true,
+        toId: true,
+        at: true,
+        returned: true,
+        award: { select: { kind: true, penaltyId: true } },
+      },
+    }),
+  ]);
+
+  const opponentIds = new Set<string>();
+
+  for (const item of throws) {
+    if (item.fromId === player.id) {
+      opponentIds.add(item.toId);
+    } else if (item.toId === player.id && !item.returned) {
+      opponentIds.add(item.fromId);
+    }
+  }
+
+  const opponents =
+    opponentIds.size === 0
+      ? []
+      : await db.player.findMany({
+          where: { id: { in: [...opponentIds] } },
+          select: { id: true, name: true, country: true },
+        });
+
+  const opponentsById = new Map(opponents.map((row) => [row.id, row]));
+
+  return overlayObjetoEventos(player.id, awards, throws, opponentsById).slice(-limite);
 }

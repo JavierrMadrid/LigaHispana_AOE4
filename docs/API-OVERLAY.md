@@ -1,7 +1,7 @@
 # API para el overlay
 
 Contrato de lectura que consume el overlay del stream. El esquema formal, para generadores y
-validadores, está en [`openapi-overlay.yaml`](./openapi-overlay.yaml) (OpenAPI 3.2.1, versión 1.3.0).
+validadores, está en [`openapi-overlay.yaml`](./openapi-overlay.yaml) (OpenAPI 3.2.1, versión 1.4.0).
 Este documento es la versión humana: qué hay, qué significa cada campo y qué se puede esperar.
 
 ## Base
@@ -26,6 +26,7 @@ sesión: no están en el `matcher` del Proxy.
 | [`GET /participantes`](#participantes) | Los participantes aprobados: `id`, `alias`, país y avatar. |
 | [`GET /clasificacion`](#clasificacion) | La fila de un participante y hasta dos vecinos, con su feed de objetivos. |
 | [`GET /eventos`](#eventos) | Los últimos objetivos cumplidos o progresados de un participante. |
+| [`GET /objetos`](#objetos) | Los últimos eventos de objetos de un participante: recibidos, lanzados y devueltos. |
 | [`GET /objetivos`](#objetivos) | El catálogo de objetivos activos con sus puntos, su métrica y su icono. |
 
 ## `/participantes`
@@ -241,6 +242,72 @@ queda con el más reciente de cada uno.
     "tipo": "cumplido",
     "fechahora": "2026-10-24T14:20:00.000Z",
     "progreso": { "propio": 14 }
+  }
+]
+```
+
+## `/objetos`
+
+| Aspecto | Comportamiento |
+|---|---|
+| `id` | **Obligatorio**. 400 si falta o no es válido. |
+| `limite` | Opcional, entero de **1 a 20**. Por defecto 10. 400 si no es válido. |
+| 200 | Eventos de objetos del participante, en orden **ascendente** por `fechahora` (desempate por `id`). Vacía si no hay. |
+| 404 | El participante no existe o no está aprobado. |
+| 503 | La base de datos no responde. |
+
+Los tres tipos son lo que la tarjeta anima: recibir un objeto, lanzarlo para que se aplique al
+rival y lanzarlo para que se devuelva.
+
+| `tipo` | Cuándo | `contrario` |
+|---|---|---|
+| `recibido` | Le llegó: se lo lanzó otro jugador y no se devolvió, o ganó el premio del día. | El lanzador; `null` en el premio del día. |
+| `lanzado` | Lo lanzó y no se devolvió: el objeto pasó al objetivo. | El objetivo. |
+| `devuelto` | Lo lanzó y se le devolvió: el objeto sigue en él. | El objetivo. |
+
+| Campo | Origen | Nota |
+|---|---|---|
+| `id` | `ObjectAward.id` / `ObjectThrow.id` | Prefijo estable: `award:<id>` o `throw:<id>`. |
+| `tipo` | Regla de arriba | `recibido`, `lanzado` o `devuelto`. |
+| `fechahora` | `createdAt` / `at` | ISO 8601 con zona. En un premio es el alta de la fila, **no** `heldSince`. |
+| `objeto.id` | `ObjectKind` | `reliquia`, `moneda` o `monumento`. |
+| `objeto.nombre` | Catálogo | `Reliquia pagana`, `Moneda del Rey falsificada` o `Monumento`. |
+| `desventaja` | Catálogo | Texto de la desventaja del objeto. `""` si el id guardado ya no está en el catálogo. |
+| `contrario.alias` | `Player.name` | Alias del otro jugador del evento. |
+| `contrario.pais` | `Player.country` | Rótulo canónico del país, o `null` si no consta. No es un código ISO. |
+
+Notas:
+
+- Se filtra por la **edición activa**: los premios por `createdAt` y los lanzamientos por `at`.
+- Devuelve los **últimos** `limite` eventos y en orden ascendente: la tarjeta reproduce la secuencia
+  de más antiguo a más reciente, y con menos eventos que `limite` devuelve la lista entera.
+- Un lanzamiento que le llegó y se devolvió **no se publica**: el objeto nunca llegó a afectarle.
+  Quien lo vivió es el lanzador, que lo ve como `devuelto`.
+- El **premio del día** se publica como `recibido` aunque después el objeto haya viajado: es lo que
+  ganó, y su fecha es la del alta de la fila.
+- `contrario` vale `null` en el premio del día y también si la fila del jugador ya no existe: los
+  ids de `ObjectAward` y `ObjectThrow` son cadenas sueltas y sobreviven al borrado del participante.
+- No se publican ni la tirada (`roll`), ni la probabilidad de devolución, ni datos de contacto.
+- El catálogo y la mecánica están en [`OBJETOS.md`](./OBJETOS.md); las tablas, en
+  [`MODELO-DATOS.md`](./MODELO-DATOS.md).
+
+```json
+[
+  {
+    "id": "award:cm9k2a",
+    "tipo": "recibido",
+    "fechahora": "2026-11-20T08:05:00.000Z",
+    "objeto": { "id": "moneda", "nombre": "Moneda del Rey falsificada" },
+    "desventaja": "No se pueden construir unidades militares los 5 primeros minutos.",
+    "contrario": null
+  },
+  {
+    "id": "throw:cm9k2x",
+    "tipo": "devuelto",
+    "fechahora": "2026-11-20T09:12:00.000Z",
+    "objeto": { "id": "moneda", "nombre": "Moneda del Rey falsificada" },
+    "desventaja": "No se pueden construir unidades militares los 5 primeros minutos.",
+    "contrario": { "alias": "Vortix", "pais": "España" }
   }
 ]
 ```

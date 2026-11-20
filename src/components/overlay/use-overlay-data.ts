@@ -7,17 +7,21 @@ import type {
   OverlayEventoObjetivo,
   OverlayEventoObjetivoListado,
   OverlayObjetivo,
+  OverlayObjetoEvento,
   OverlayParticipante,
 } from "@/lib/overlay-api";
 import {
   overlayEventKey,
   overlayEventView,
+  overlayFocusBatch,
   overlayMergeEvents,
   overlayNewEventViews,
+  overlayNewObjetoEventos,
   overlayPollSince,
   overlayRecentCombined,
   overlayReconnectDelay,
   type OverlayEventView,
+  type OverlayFocus,
 } from "@/lib/overlay-view";
 
 /**
@@ -25,9 +29,10 @@ import {
  *
  * Este hook no pinta nada; expone un contrato tipado para que la interfaz de
  * `/overlay` lo consuma sin saber cómo se refresca. Las reglas que ya son puras
- * viven en `@/lib/overlay-view` (ranking, vistas de evento, `desde`, backoff);
- * aquí solo queda el ciclo de vida: la carga inicial, el sondeo cada 30 s, la
- * pausa cuando la pestaña no se ve y el reintento con espera creciente.
+ * viven en `@/lib/overlay-view` (ranking, vistas de evento y de objeto, la cola,
+ * `desde`, backoff); aquí solo queda el ciclo de vida: las dos cargas iniciales,
+ * el sondeo cada 30 s, la pausa cuando la pestaña no se ve y el reintento con
+ * espera creciente.
  *
  * ## Contrato
  *
@@ -44,18 +49,20 @@ import {
  * | `objectives` | `ReadonlyMap<string, OverlayObjetivo>` | Catálogo por id. Si `/objetivos` falla, mapa vacío. |
  * | `events` | `Record<string, OverlayEventoObjetivo>` | Último evento por objetivo, fusionado con cada sondeo. |
  * | `recentEvents` | `OverlayEventView[]` | Hasta 3 hitos positivos, del más reciente al más antiguo; combina el feed inicial con lo nuevo. |
- * | `queue` | `OverlayEventView[]` | Animaciones pendientes, en orden de llegada. |
- * | `currentEvent` | `OverlayEventView \| null` | `queue[0]`, o `null`. |
+ * | `queue` | `OverlayFocus[]` | Animaciones pendientes de las dos fuentes, en orden cronológico. |
+ * | `currentFocus` | `OverlayFocus \| null` | `queue[0]`, o `null`. |
  * | `advanceQueue` | `() => void` | Desplaza la cola cuando termina la animación. |
  * | `retry` | `() => void` | Vuelve a empezar la carga tras `unavailable`. |
- * | `enqueueDemo` | `(objetivoId, evento) => void` | Encola una vista de demostración con clave única; la usa el botón «Probar animación». |
+ * | `enqueueDemo` | `(objetivoId, evento) => void` | Encola un objetivo de demostración con clave única; lo usa «Probar…». |
+ * | `enqueueObjetoDemo` | `(evento) => void` | Encola un objeto de demostración con clave única. |
  * | `reconnecting` | `boolean` | Hay un fallo de sondeo y se está reintentando con backoff. |
  * | `lastUpdatedAt` | `number \| null` | Epoch en ms de la última respuesta buena, para «actualizado hace…». |
  *
- * `participants`, `objectives` y `events` son tolerantes a fallo: si sus rutas
- * fallan, el overlay sigue con lo que tenga y `recentEvents` cae al mapa de
- * `eventos_objetivos` de la clasificación. `classification` no lo es: sin ella el
- * estado pasa a `not-found` o `unavailable`.
+ * `participants`, `objectives`, `events` y el feed de objetos son tolerantes a
+ * fallo: si sus rutas fallan, el overlay sigue con lo que tenga, `recentEvents`
+ * cae al mapa de `eventos_objetivos` de la clasificación y simplemente no hay
+ * eventos de objeto nuevos. `classification` no lo es: sin ella el estado pasa a
+ * `not-found` o `unavailable`.
  */
 
 /** Cada cuánto se sondea la clasificación. */
@@ -64,6 +71,13 @@ const POLL_INTERVAL_MS = 30_000;
 const CATALOG_REFRESH_POLLS = 20;
 /** Eventos que se piden en la carga inicial del feed. */
 const INITIAL_EVENT_LIMIT = 12;
+/**
+ * Ventana del feed de objetos, en la carga inicial y en cada sondeo.
+ *
+ * Es el máximo del contrato y solo se usa para **sembrar** los ids vistos: la
+ * primera carga no anima nada y los sondeos descartan por `id` lo que ya salió.
+ */
+const OBJECT_EVENT_LIMIT = 20;
 /**
  * Tope de la cola de animación.
  *
@@ -86,11 +100,12 @@ export type OverlayData = {
   objectives: ReadonlyMap<string, OverlayObjetivo>;
   events: Record<string, OverlayEventoObjetivo>;
   recentEvents: OverlayEventView[];
-  queue: OverlayEventView[];
-  currentEvent: OverlayEventView | null;
+  queue: OverlayFocus[];
+  currentFocus: OverlayFocus | null;
   advanceQueue: () => void;
   retry: () => void;
   enqueueDemo: (objetivoId: string, evento: OverlayEventoObjetivo) => void;
+  enqueueObjetoDemo: (evento: OverlayObjetoEvento) => void;
   reconnecting: boolean;
   lastUpdatedAt: number | null;
 };
@@ -161,7 +176,7 @@ export function useOverlayData(profileId: string): OverlayData {
   const [objectives, setObjectives] = useState<ReadonlyMap<string, OverlayObjetivo>>(new Map());
   const [events, setEvents] = useState<Record<string, OverlayEventoObjetivo>>({});
   const [feed, setFeed] = useState<OverlayEventoObjetivoListado[]>([]);
-  const [queue, setQueue] = useState<OverlayEventView[]>([]);
+  const [queue, setQueue] = useState<OverlayFocus[]>([]);
   const [reconnecting, setReconnecting] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -170,6 +185,7 @@ export function useOverlayData(profileId: string): OverlayData {
     const controller = new AbortController();
     const localObjectives = new Map<string, OverlayObjetivo>();
     const seenKeys = new Set<string>();
+    const seenObjetos = new Set<string>();
     let disposed = false;
     let ready = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -192,6 +208,27 @@ export function useOverlayData(profileId: string): OverlayData {
         timer = null;
         void runPoll();
       }, delay);
+    }
+
+    /** La ventana del feed de objetos; `[]` si la ruta falla o no responde. */
+    async function fetchObjetos(): Promise<OverlayObjetoEvento[]> {
+      try {
+        const response = await fetch(
+          `/api/v0/objetos?id=${encodeURIComponent(profileId)}&limite=${OBJECT_EVENT_LIMIT}`,
+          { cache: "no-store", signal: controller.signal },
+        );
+
+        if (!response.ok) {
+          return [];
+        }
+
+        const data: unknown = await response.json();
+
+        return Array.isArray(data) ? (data as OverlayObjetoEvento[]) : [];
+      } catch {
+        // Los objetos no son críticos: sin feed no hay novedades, y ya está.
+        return [];
+      }
     }
 
     async function refreshCatalog(): Promise<void> {
@@ -239,10 +276,13 @@ export function useOverlayData(profileId: string): OverlayData {
           query.set("desde", lastSeenAt);
         }
 
-        const response = await fetch(`/api/v0/clasificacion?${query.toString()}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
+        const [response, objetosFeed] = await Promise.all([
+          fetch(`/api/v0/clasificacion?${query.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+          fetchObjetos(),
+        ]);
 
         // Un 404 en un sondeo ya no es un fallo de red: el participante ha
         // dejado de estar aprobado. Se corta el polling y se dice, en vez de
@@ -270,6 +310,12 @@ export function useOverlayData(profileId: string): OverlayData {
           seenKeys.add(overlayEventKey(objetivoId, event));
         }
 
+        const newObjetos = overlayNewObjetoEventos(seenObjetos, objetosFeed);
+
+        for (const evento of newObjetos) {
+          seenObjetos.add(evento.id);
+        }
+
         lastSeenAt = overlayPollSince(lastSeenAt, incoming, response.headers.get("date"));
         currentEvents = overlayMergeEvents(currentEvents, incoming);
 
@@ -277,8 +323,10 @@ export function useOverlayData(profileId: string): OverlayData {
         setClassification(rows);
         setLastUpdatedAt(Date.now());
 
-        if (newViews.length > 0) {
-          setQueue((previous) => [...previous, ...newViews].slice(0, QUEUE_LIMIT));
+        if (newViews.length > 0 || newObjetos.length > 0) {
+          const lote = overlayFocusBatch(newViews, newObjetos);
+
+          setQueue((previous) => [...previous, ...lote].slice(0, QUEUE_LIMIT));
         }
 
         failures = 0;
@@ -324,23 +372,29 @@ export function useOverlayData(profileId: string): OverlayData {
     async function loadInitial(): Promise<void> {
       try {
         const id = encodeURIComponent(profileId);
-        const [classificationResponse, participantsResponse, objectivesResponse, feedResponse] =
-          await Promise.all([
-            fetch(`/api/v0/clasificacion?id=${id}`, {
-              cache: "no-store",
-              signal: controller.signal,
-            }),
-            fetch("/api/v0/participantes", { cache: "no-store", signal: controller.signal }).catch(
-              () => null,
-            ),
-            fetch("/api/v0/objetivos", { cache: "no-store", signal: controller.signal }).catch(
-              () => null,
-            ),
-            fetch(`/api/v0/eventos?id=${id}&limite=${INITIAL_EVENT_LIMIT}`, {
-              cache: "no-store",
-              signal: controller.signal,
-            }).catch(() => null),
-          ]);
+        const [
+          classificationResponse,
+          participantsResponse,
+          objectivesResponse,
+          feedResponse,
+          objetosFeed,
+        ] = await Promise.all([
+          fetch(`/api/v0/clasificacion?id=${id}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+          fetch("/api/v0/participantes", { cache: "no-store", signal: controller.signal }).catch(
+            () => null,
+          ),
+          fetch("/api/v0/objetivos", { cache: "no-store", signal: controller.signal }).catch(
+            () => null,
+          ),
+          fetch(`/api/v0/eventos?id=${id}&limite=${INITIAL_EVENT_LIMIT}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }).catch(() => null),
+          fetchObjetos(),
+        ]);
 
         if (disposed) {
           return;
@@ -382,6 +436,11 @@ export function useOverlayData(profileId: string): OverlayData {
 
         for (const [objetivoId, event] of Object.entries(seedEvents)) {
           seenKeys.add(overlayEventKey(objetivoId, event));
+        }
+
+        // La primera carga siembra los objetos vistos: lo que ya pasó no se anima.
+        for (const evento of objetosFeed) {
+          seenObjetos.add(evento.id);
         }
 
         currentEvents = seedEvents;
@@ -440,12 +499,24 @@ export function useOverlayData(profileId: string): OverlayData {
   const enqueueDemo = useCallback(
     (objetivoId: string, evento: OverlayEventoObjetivo) => {
       const view = overlayEventView(objetivoId, evento, objectives.get(objetivoId));
-      const demo: OverlayEventView = { ...view, key: `demo:${Date.now()}` };
+      const demo: OverlayFocus = {
+        clase: "objetivo",
+        vista: { ...view, key: `demo:${Date.now()}` },
+      };
 
       setQueue((previous) => [...previous, demo]);
     },
     [objectives],
   );
+
+  const enqueueObjetoDemo = useCallback((evento: OverlayObjetoEvento) => {
+    const demo: OverlayFocus = {
+      clase: "objeto",
+      vista: { ...evento, id: `demo:${Date.now()}` },
+    };
+
+    setQueue((previous) => [...previous, demo]);
+  }, []);
 
   const recentEvents = useMemo(
     () => overlayRecentCombined(feed, events, objectives, RECENT_LIMIT),
@@ -461,10 +532,11 @@ export function useOverlayData(profileId: string): OverlayData {
     events,
     recentEvents,
     queue,
-    currentEvent: queue[0] ?? null,
+    currentFocus: queue[0] ?? null,
     advanceQueue,
     retry,
     enqueueDemo,
+    enqueueObjetoDemo,
     reconnecting,
     lastUpdatedAt,
   };

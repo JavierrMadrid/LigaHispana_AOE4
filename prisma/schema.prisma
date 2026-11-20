@@ -1521,6 +1521,12 @@ model ObjectThrow {
 
   // Los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`.
   @@index([awardId])
+  // El feed de objetos del overlay (`/api/v0/objetos`): los lanzamientos de un
+  // jugador y los que recibió, los dos recortados por `at` a la edición activa.
+  // El orden de columnas es el de la consulta: igualdad por jugador y rango por
+  // fecha, que es lo que hace que el índice sirva para el filtro y para el corte.
+  @@index([fromId, at])
+  @@index([toId, at])
 }
 
 /// Una **noticia** del torneo (issue 229): texto que publica el superadministrador en

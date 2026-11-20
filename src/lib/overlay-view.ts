@@ -3,18 +3,21 @@ import type {
   OverlayEventoObjetivo,
   OverlayEventoObjetivoListado,
   OverlayObjetivo,
+  OverlayObjetoEvento,
+  OverlayObjetoEventoTipo,
   OverlayParticipante,
 } from "@/lib/overlay-api";
 
 /**
  * La vista del overlay: todo lo que se decide **sin** base de datos ni DOM.
  *
- * El overlay pinta con tres piezas que llegan de la API —las filas de la
- * clasificación, el catálogo de objetivos y el feed de eventos— y aquí se
- * resuelven las preguntas de presentación que no dependen de React: cuántos
- * puntos lleva una fila, qué alias y país toca a cada vecino, qué eventos son
- * "recientes" y positivos, cómo se compone la unidad de un progreso o cuánto se
- * espera tras un fallo de red.
+ * El overlay pinta con cuatro piezas que llegan de la API —las filas de la
+ * clasificación, el catálogo de objetivos, el feed de eventos y el de objetos— y
+ * aquí se resuelven las preguntas de presentación que no dependen de React:
+ * cuántos puntos lleva una fila, qué alias y país toca a cada vecino, qué
+ * eventos son "recientes" y positivos, cómo se compone la unidad de un progreso,
+ * qué texto pide la tarjeta de un objeto y cuánto se espera tras un fallo de
+ * red.
  *
  * Es un módulo **puro** a propósito: no importa valores de `@/lib/overlay-api`
  * (solo tipos), no lee el reloj, ni `localStorage`, ni la red. Así se puede
@@ -64,6 +67,25 @@ export type OverlayEventView = {
   /** Lo que paga por unidad un repetible (`victorias`, `imparable`); `null` si no. */
   puntosPorUnidad: number | null;
 };
+
+/**
+ * Lo que ocupa la ventana de animación de la tarjeta.
+ *
+ * La cola es una sola: un evento de objetivo y uno de objeto comparten turno y
+ * se reproducen en orden cronológico, así que la interfaz solo necesita saber de
+ * qué clase es el que le toca.
+ */
+export type OverlayFocus =
+  | { clase: "objetivo"; vista: OverlayEventView }
+  | { clase: "objeto"; vista: OverlayObjetoEvento };
+
+/**
+ * Los tres eventos de ejemplo del configurador, uno por sentido.
+ *
+ * Se construyen en el servidor desde `OBJECT_CATALOG` para que el cliente no
+ * repita los textos del catálogo ni invente participantes.
+ */
+export type OverlayObjetoDemo = Readonly<Record<OverlayObjetoEventoTipo, OverlayObjetoEvento>>;
 
 /** Un participante del selector de `/overlay` (el configurador), no del ranking. */
 export type OverlayConfiguratorParticipant = {
@@ -643,6 +665,140 @@ export function overlayAnimates(view: OverlayEventView): boolean {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Objetos                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** El antetítulo de la ficha: qué le ha pasado al jugador con el objeto. */
+export function overlayObjetoAntetitulo(tipo: OverlayObjetoEventoTipo): string {
+  switch (tipo) {
+    case "recibido":
+      return "Has recibido";
+    case "lanzado":
+      return "Has lanzado";
+    case "devuelto":
+      return "Se ha devuelto";
+  }
+}
+
+/**
+ * La línea de la desventaja, o `null` cuando el catálogo ya no la conoce.
+ *
+ * El contrato manda cadena vacía en ese caso: pintar «Desventaja:» sin texto
+ * sería peor que omitir la línea entera, que es lo que decide este `null`.
+ */
+export function overlayObjetoDesventaja(desventaja: string): string | null {
+  const texto = desventaja.trim();
+
+  return texto === "" ? null : `Desventaja: ${texto}`;
+}
+
+/**
+ * La línea del contrario: quién se lo mandó, a quién se lo lanzó o a quién iba.
+ *
+ * Un `recibido` sin contrario es el premio del día y se dice tal cual. En un
+ * lanzamiento cuyo contrario ya no existe (el jugador se borró) no hay frase
+ * honesta que poner, así que se omite la línea en vez de inventar un alias.
+ */
+export function overlayObjetoContrario(
+  evento: Pick<OverlayObjetoEvento, "tipo" | "contrario">,
+): string | null {
+  const alias = evento.contrario?.alias ?? null;
+
+  if (evento.tipo === "recibido") {
+    return alias === null ? "Premio del día" : `De ${alias}`;
+  }
+
+  if (alias === null) {
+    return null;
+  }
+
+  return evento.tipo === "lanzado" ? `Se aplica a ${alias}` : `Iba para ${alias}`;
+}
+
+/** La consecuencia del evento: qué cambia para el jugador a partir de ahora. */
+export function overlayObjetoConsecuencia(tipo: OverlayObjetoEventoTipo): string {
+  switch (tipo) {
+    case "recibido":
+      return "Tus partidas no puntúan hasta que la cumplas.";
+    case "lanzado":
+      return "Ya no lo tienes: tus próximas partidas vuelven a puntuar.";
+    case "devuelto":
+      return "La desventaja se queda contigo.";
+  }
+}
+
+/** ¿El evento le quita una carga al jugador? Solo lanzarlo sin devolución. */
+export function overlayObjetoAlivio(tipo: OverlayObjetoEventoTipo): boolean {
+  return tipo === "lanzado";
+}
+
+/**
+ * El contrario de una demo: el primer participante que no se retransmite.
+ *
+ * El configurador no sabe a quién va a probar cuando el servidor arma el
+ * ejemplo, así que el contrario se resuelve al pulsar; si solo hay un
+ * participante, la demo se queda sin contrario y la ficha dice «Premio del día».
+ */
+export function overlayDemoContrario(
+  participants: readonly { id: string; alias: string; pais: string | null }[],
+  selectedId: string,
+): { alias: string; pais: string | null } | null {
+  const other = participants.find((participant) => participant.id !== selectedId);
+
+  return other === undefined ? null : { alias: other.alias, pais: other.pais };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Cola de animación                                                           */
+/* -------------------------------------------------------------------------- */
+
+/** La clave con la que React y la cola distinguen un foco. */
+export function overlayFocusKey(focus: OverlayFocus): string {
+  return focus.clase === "objetivo" ? focus.vista.key : focus.vista.id;
+}
+
+/**
+ * Los eventos nuevos de las dos fuentes → un solo lote en orden cronológico.
+ *
+ * El sondeo trae objetivos y objetos a la vez y cada uno llega ordenado por su
+ * cuenta; aquí se funden para que la tarjeta los reproduzca en el orden en que
+ * pasaron. A igualdad de instante desempata la clave, que es estable.
+ */
+export function overlayFocusBatch(
+  objetivos: readonly OverlayEventView[],
+  objetos: readonly OverlayObjetoEvento[],
+): OverlayFocus[] {
+  const lote: OverlayFocus[] = [
+    ...objetivos.map((vista): OverlayFocus => ({ clase: "objetivo", vista })),
+    ...objetos.map((vista): OverlayFocus => ({ clase: "objeto", vista })),
+  ];
+
+  return lote.sort(compareFocus);
+}
+
+/**
+ * Los eventos del feed de objetos que aún no se habían visto, ascendentes.
+ *
+ * El feed repite entre sondeos los últimos eventos —el contrato devuelve una
+ * ventana, no lo que ha pasado desde una marca—, así que el filtro es por `id`
+ * y la deduplicación también, igual que la siembra de la primera carga.
+ */
+export function overlayNewObjetoEventos(
+  seenIds: ReadonlySet<string>,
+  feed: readonly OverlayObjetoEvento[],
+): OverlayObjetoEvento[] {
+  const nuevos = new Map<string, OverlayObjetoEvento>();
+
+  for (const evento of feed) {
+    if (!seenIds.has(evento.id)) {
+      nuevos.set(evento.id, evento);
+    }
+  }
+
+  return [...nuevos.values()].sort(compareObjetos);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Internos                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -726,6 +882,19 @@ function recentPositiveViews(
   }
 
   return [...latest.values()].sort(compareViewsDesc).slice(0, limit);
+}
+
+/** Orden ascendente de la cola: instante y, a igualdad, clave. */
+function compareFocus(a: OverlayFocus, b: OverlayFocus): number {
+  return (
+    compareInstant(a.vista.fechahora, b.vista.fechahora) ||
+    compareIds(overlayFocusKey(a), overlayFocusKey(b))
+  );
+}
+
+/** Orden ascendente de un feed de objetos: instante y, a igualdad, id. */
+function compareObjetos(a: OverlayObjetoEvento, b: OverlayObjetoEvento): number {
+  return compareInstant(a.fechahora, b.fechahora) || compareIds(a.id, b.id);
 }
 
 /** Orden ascendente por instante y, a igualdad, por objetivo. */

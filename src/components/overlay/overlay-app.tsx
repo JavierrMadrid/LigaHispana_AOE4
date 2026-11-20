@@ -3,9 +3,12 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check } from "@phosphor-icons/react/dist/csr/Check";
+import { Coin } from "@phosphor-icons/react/dist/csr/Coin";
+import { Columns } from "@phosphor-icons/react/dist/csr/Columns";
+import { Diamond } from "@phosphor-icons/react/dist/csr/Diamond";
 import { X } from "@phosphor-icons/react/dist/csr/X";
 
-import type { OverlayEventoObjetivo } from "@/lib/overlay-api";
+import type { OverlayEventoObjetivo, OverlayObjetoEvento } from "@/lib/overlay-api";
 import { countryFlagUrl } from "@/lib/flag";
 import {
   overlayEventCompleted,
@@ -13,6 +16,12 @@ import {
   overlayEventLoss,
   overlayEventProgress,
   overlayEventReward,
+  overlayFocusKey,
+  overlayObjetoAlivio,
+  overlayObjetoAntetitulo,
+  overlayObjetoConsecuencia,
+  overlayObjetoContrario,
+  overlayObjetoDesventaja,
   overlayRankingRows,
   type OverlayConfig,
   type OverlayEventView,
@@ -24,14 +33,21 @@ import { OverlayCard, OverlayCardHeader } from "@/components/overlay/overlay-car
 import { OverlayObjectiveIcon } from "@/components/overlay/overlay-objective-icon";
 import { useOverlayData } from "@/components/overlay/use-overlay-data";
 
-/** Los dos pasos de la animación de un evento. */
-type FocusPhase = "objetivo" | "recompensa";
+/** Los dos pasos de la animación de un evento: la ficha y lo que deja. */
+type FocusStep = "ficha" | "consecuencia";
 
-/** Lo que dura la ficha del objetivo antes de pasar a la recompensa. */
-const EVENT_DURATION_MS = 4_000;
+/** Lo que dura la ficha del evento antes de pasar a la consecuencia. */
+const FICHA_DURATION_MS = 4_000;
 
-/** Lo que dura la tarjeta de recompensa antes de volver a la vista fija. */
-const REWARD_DURATION_MS = 3_000;
+/** Lo que dura la consecuencia antes de volver a la vista fija. */
+const CONSECUENCIA_DURATION_MS = 3_000;
+
+/** El glifo de cada objeto; el contrato publica los tres ids en minúsculas. */
+const OBJETO_GLYPH: Readonly<Record<string, typeof Diamond>> = {
+  reliquia: Diamond,
+  moneda: Coin,
+  monumento: Columns,
+};
 
 /** Emblema de la casa, para cuando la edición no publica uno. */
 const HOUSE_EMBLEM = "/imagenes/marca/emblema-256.png";
@@ -65,13 +81,13 @@ const CARD_SCALE: Readonly<Record<OverlaySize, number>> = {
  * La página que la monta solo aporta la marca de la edición y la configuración
  * que viaja en la URL; todo lo demás sale de `useOverlayData`, que es quien
  * habla con `/api/v0`. Aquí se decide la vista: ranking con los vecinos del
- * jugador, tarjeta de foco mientras hay una animación en cola, y los últimos
- * objetivos debajo. El estado de carga y los errores son parte del diseño, no un
- * añadido.
+ * jugador, tarjeta de foco mientras hay una animación en cola —un objetivo o un
+ * objeto— y los últimos objetivos debajo. El estado de carga y los errores son
+ * parte del diseño, no un añadido.
  *
  * La rotación de la cola la gobierna este componente: cada evento se queda
- * `EVENT_DURATION_MS` y después llama a `advanceQueue()`. Cuando la cola se vacía,
- * vuelve el ranking. Con `prefers-reduced-motion` no hay desplazamiento, pero la
+ * `FICHA_DURATION_MS` en la ficha, `CONSECUENCIA_DURATION_MS` en el cierre y
+ * después llama a `advanceQueue()`. Cuando la cola se vacía, vuelve el ranking. Con `prefers-reduced-motion` no hay desplazamiento, pero la
  * rotación sigue: ocultar la información no es una preferencia de movimiento. Si
  * la URL desactiva las animaciones, no hay evento activo y la cola no se pinta ni
  * avanza; el ranking se queda fijo.
@@ -96,15 +112,16 @@ export function OverlayApp({
     participants,
     recentEvents,
     queue,
-    currentEvent,
+    currentFocus,
     advanceQueue,
     retry,
     enqueueDemo,
+    enqueueObjetoDemo,
     reconnecting,
   } = useOverlayData(profileId);
 
-  const activeEvent = config.animaciones ? currentEvent : null;
-  const activeKey = activeEvent?.key ?? null;
+  const activeFocus = config.animaciones ? currentFocus : null;
+  const activeKey = activeFocus === null ? null : overlayFocusKey(activeFocus);
   const showRanking = config.secciones !== "objetivos";
   const showObjectives = config.secciones !== "ranking";
   // Con las dos secciones se reserva la altura de la ventana de animación, para
@@ -112,12 +129,11 @@ export function OverlayApp({
   // el contenido y la tarjeta solo crece mientras dura el evento.
   const reserveBodyHeight = showRanking && showObjectives;
 
-  // La animación de un evento tiene dos pasos: la ficha del objetivo y la
-  // recompensa. La fase se guarda con la clave del evento para que un evento
-  // nuevo empiece siempre por la ficha, sin un efecto que la reinicie.
-  const [phase, setPhase] = useState<{ key: string; step: FocusPhase } | null>(null);
-  const step: FocusPhase =
-    phase !== null && phase.key === activeKey ? phase.step : "objetivo";
+  // La animación de un evento tiene dos pasos: la ficha y la consecuencia. La
+  // fase se guarda con la clave del evento para que uno nuevo empiece siempre
+  // por la ficha, sin un efecto que la reinicie.
+  const [phase, setPhase] = useState<{ key: string; step: FocusStep } | null>(null);
+  const step: FocusStep = phase !== null && phase.key === activeKey ? phase.step : "ficha";
 
   useEffect(() => {
     if (activeKey === null) {
@@ -125,14 +141,14 @@ export function OverlayApp({
     }
 
     const timer = setTimeout(() => {
-      if (step === "objetivo") {
-        setPhase({ key: activeKey, step: "recompensa" });
+      if (step === "ficha") {
+        setPhase({ key: activeKey, step: "consecuencia" });
         return;
       }
 
       setPhase(null);
       advanceQueue();
-    }, step === "objetivo" ? EVENT_DURATION_MS : REWARD_DURATION_MS);
+    }, step === "ficha" ? FICHA_DURATION_MS : CONSECUENCIA_DURATION_MS);
 
     return () => clearTimeout(timer);
   }, [activeKey, step, advanceQueue]);
@@ -147,13 +163,20 @@ export function OverlayApp({
 
       if (demo !== null) {
         enqueueDemo(demo.objetivoId, demo.evento);
+        return;
+      }
+
+      const objetoDemo = readObjetoDemoMessage(event.data);
+
+      if (objetoDemo !== null) {
+        enqueueObjetoDemo(objetoDemo);
       }
     }
 
     window.addEventListener("message", onMessage);
 
     return () => window.removeEventListener("message", onMessage);
-  }, [enqueueDemo]);
+  }, [enqueueDemo, enqueueObjetoDemo]);
 
   const rows = useMemo(
     () =>
@@ -170,8 +193,10 @@ export function OverlayApp({
         ? "No disponible"
         : status === "unavailable"
           ? "Sin conexión"
-          : activeEvent !== null
-            ? "Objetivo"
+          : activeFocus !== null
+            ? activeFocus.clase === "objeto"
+              ? "Objeto"
+              : "Objetivo"
             : reconnecting
               ? "Reconectando"
               : showRanking
@@ -215,19 +240,25 @@ export function OverlayApp({
         {status === "ready" ? (
           <div className={reserveBodyHeight ? "h-[13rem]" : undefined}>
             <AnimatePresence mode="wait" initial={false}>
-              {activeEvent !== null ? (
+              {activeFocus !== null ? (
                 <motion.div
-                  key={`${activeEvent.key}:${step}`}
+                  key={`${activeKey}:${step}`}
                   className="h-full"
                   initial={reduceMotion ? false : { opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6 }}
                   transition={{ duration: reduceMotion ? 0.12 : 0.28, ease: "easeOut" }}
                 >
-                  {step === "objetivo" ? (
-                    <EventFocus view={activeEvent} pending={queue.length} />
+                  {step === "ficha" ? (
+                    activeFocus.clase === "objetivo" ? (
+                      <EventFocus view={activeFocus.vista} pending={queue.length} />
+                    ) : (
+                      <ObjetoFocus view={activeFocus.vista} pending={queue.length} />
+                    )
+                  ) : activeFocus.clase === "objetivo" ? (
+                    <RewardFocus view={activeFocus.vista} />
                   ) : (
-                    <RewardFocus view={activeEvent} />
+                    <ObjetoConsecuencia view={activeFocus.vista} />
                   )}
                 </motion.div>
               ) : (
@@ -505,19 +536,26 @@ function EventFocus({ view, pending }: { view: OverlayEventView; pending: number
         </p>
       ) : null}
 
-      {pending > 1 ? (
-        <span aria-hidden="true" className="mt-0.5 flex items-center gap-1">
-          {Array.from({ length: Math.min(pending, 5) }, (_, index) => (
-            <span
-              key={index}
-              className={`size-1 rounded-full ${
-                index === 0 ? "bg-accent" : "bg-line-strong"
-              }`}
-            />
-          ))}
-        </span>
-      ) : null}
+      <PendingDots count={pending} />
     </div>
+  );
+}
+
+/** Los puntos de cola: el evento en curso y hasta cuatro esperas detrás. */
+function PendingDots({ count }: { count: number }) {
+  if (count <= 1) {
+    return null;
+  }
+
+  return (
+    <span aria-hidden="true" className="mt-0.5 flex items-center gap-1">
+      {Array.from({ length: Math.min(count, 5) }, (_, index) => (
+        <span
+          key={index}
+          className={`size-1 rounded-full ${index === 0 ? "bg-accent" : "bg-line-strong"}`}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -565,6 +603,79 @@ function RewardFocus({ view }: { view: OverlayEventView }) {
           Temporales: se pierden si dejas de ser 1º.
         </p>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * La ficha del objeto, el primer paso de su animación.
+ *
+ * Dice de un vistazo qué le ha pasado al jugador: el antetítulo lleva el
+ * sentido del evento, el glifo y el nombre identifican el objeto, la desventaja
+ * explica lo que arrastra y la última línea nombra al contrario o el premio del
+ * día. La línea de la desventaja se omite si el catálogo ya no la conoce, y la
+ * del contrario, si no hay a quién nombrar: la ficha nunca inventa un alias.
+ */
+function ObjetoFocus({ view, pending }: { view: OverlayObjetoEvento; pending: number }) {
+  const Glifo = OBJETO_GLYPH[view.objeto.id] ?? Diamond;
+  const contrario = overlayObjetoContrario(view);
+  const desventaja = overlayObjetoDesventaja(view.desventaja);
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-1 px-3 py-3 text-center">
+      <p className="text-[9px] font-medium uppercase tracking-[0.22em] text-accent">
+        {overlayObjetoAntetitulo(view.tipo)}
+      </p>
+
+      <span className="flex size-14 items-center justify-center rounded-md border border-accent/30 bg-surface-raised/60 text-accent">
+        <Glifo size={36} aria-hidden="true" />
+      </span>
+
+      <p className="font-display text-[15px] font-semibold leading-tight text-foreground">
+        {view.objeto.nombre}
+      </p>
+
+      {desventaja !== null ? (
+        <p className="line-clamp-2 max-w-[30ch] text-[11px] leading-relaxed text-muted">
+          {desventaja}
+        </p>
+      ) : null}
+
+      {contrario !== null ? (
+        <p className="max-w-[30ch] truncate text-[10px] font-medium uppercase tracking-[0.16em] text-foreground/80">
+          {contrario}
+        </p>
+      ) : null}
+
+      <PendingDots count={pending} />
+    </div>
+  );
+}
+
+/**
+ * La consecuencia, el segundo paso de un evento de objeto.
+ *
+ * Cierra la tarjeta con la frase que resume qué cambia a partir de ahora y no
+ * con una cifra: un objeto no da puntos, da una carga, se la quita o se la
+ * devuelve. El color marca la polaridad (alivio al lanzarlo, carga al recibirlo
+ * o al recuperarlo) y el glifo mantiene la continuidad con la ficha.
+ */
+function ObjetoConsecuencia({ view }: { view: OverlayObjetoEvento }) {
+  const alivio = overlayObjetoAlivio(view.tipo);
+  const Glifo = OBJETO_GLYPH[view.objeto.id] ?? Diamond;
+  const tono = alivio ? "text-accent" : "text-loss";
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center px-3 py-4 text-center">
+      <p className={`text-[10px] font-medium uppercase tracking-[0.24em] ${tono}`}>
+        Consecuencia:
+      </p>
+
+      <Glifo size={22} aria-hidden="true" className={`mt-3 ${tono}`} />
+
+      <p className="mt-2 max-w-[26ch] text-[12px] leading-relaxed text-foreground/90">
+        {overlayObjetoConsecuencia(view.tipo)}
+      </p>
     </div>
   );
 }
@@ -637,4 +748,93 @@ function readDemoMessage(
   }
 
   return { objetivoId: data.objetivoId, evento: result };
+}
+
+/**
+ * Valida el `postMessage` de un objeto de demostración.
+ *
+ * Misma regla que el de objetivos: llega del mismo origen, pero no deja de ser
+ * una entrada externa. Se exige la forma mínima que pinta la tarjeta —tipo,
+ * fecha, objeto con nombre y desventaja—; el contrario es opcional y, si viene,
+ * tiene que ser un jugador con alias.
+ */
+function readObjetoDemoMessage(value: unknown): OverlayObjetoEvento | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const data = value as Record<string, unknown>;
+
+  if (data.type !== "overlay:demo-objeto") {
+    return null;
+  }
+
+  const raw = data.evento;
+
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+
+  const evento = raw as Record<string, unknown>;
+  const tipo = evento.tipo;
+
+  if (tipo !== "recibido" && tipo !== "lanzado" && tipo !== "devuelto") {
+    return null;
+  }
+
+  if (typeof evento.fechahora !== "string" || typeof evento.desventaja !== "string") {
+    return null;
+  }
+
+  const objeto = evento.objeto;
+
+  if (typeof objeto !== "object" || objeto === null) {
+    return null;
+  }
+
+  const { id, nombre } = objeto as Record<string, unknown>;
+
+  if (typeof id !== "string" || id === "" || typeof nombre !== "string" || nombre === "") {
+    return null;
+  }
+
+  const contrario = readObjetoContrario(evento.contrario);
+
+  if (contrario === undefined) {
+    return null;
+  }
+
+  return {
+    id: typeof evento.id === "string" && evento.id !== "" ? evento.id : `demo:${Date.now()}`,
+    tipo,
+    fechahora: evento.fechahora,
+    objeto: { id, nombre },
+    desventaja: evento.desventaja,
+    contrario,
+  };
+}
+
+/** El contrario de un mensaje de demo: `undefined` si no tiene la forma esperada. */
+function readObjetoContrario(
+  value: unknown,
+): { alias: string; pais: string | null } | null | undefined {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value !== "object") {
+    return undefined;
+  }
+
+  const raw = value as Record<string, unknown>;
+
+  if (typeof raw.alias !== "string" || raw.alias === "") {
+    return undefined;
+  }
+
+  if (raw.pais === null || raw.pais === undefined) {
+    return { alias: raw.alias, pais: null };
+  }
+
+  return typeof raw.pais === "string" ? { alias: raw.alias, pais: raw.pais } : undefined;
 }

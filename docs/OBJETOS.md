@@ -272,6 +272,21 @@ Van al canal **`#objetos`** (`DISCORD_BOT_TOKEN` + `DISCORD_OBJECTS_CHANNEL_ID`,
   `objectFulfillmentAnnouncementText()`) y se prueban sin base en
   `tests/unit/lib/object-announcements.test.ts`.
 
+## El overlay del directo
+
+La tarjeta de `/overlay/<profileId>` anima lo que le pasa al jugador con los objetos, en dos pasos y
+en la **misma cola** que los objetivos: la ficha (objeto, desventaja y contrario) y la consecuencia
+de recibirlo, lanzarlo o recuperarlo. Los textos, los glifos y los tiempos están en
+[`OVERLAY.md`](./OVERLAY.md#qué-muestra).
+
+- Lo lee de [`GET /api/v0/objetos`](./API-OVERLAY.md#objetos), que devuelve los últimos eventos del
+  participante en orden ascendente. El overlay pide ese feed en la carga y en cada sondeo de 30 s.
+- La primera carga **siembra** los eventos vistos: no anima lo que ya había pasado.
+- El feed es **opcional**: si falla, la tarjeta sigue con la clasificación y los objetivos y
+  simplemente no hay novedades de objetos.
+- En el configurador, «Probar objeto recibido», «Probar objeto lanzado» y «Probar objeto devuelto»
+  reproducen los tres casos en la vista previa, sin tocar el torneo.
+
 ## Exclusión de partidas
 
 Mientras un objeto está pendiente, las partidas del portador **no puntúan** ni dan
