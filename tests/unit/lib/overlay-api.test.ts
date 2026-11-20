@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { ObjectKind } from "@/generated/prisma/enums";
 import {
   OBJECTIVE_DEFINITIONS,
   type ObjectiveDefinition,
@@ -7,6 +8,7 @@ import {
 import {
   OVERLAY_EVENTS_DEFAULT_LIMIT,
   OVERLAY_EVENTS_MAX_LIMIT,
+  OVERLAY_OBJECTS_DEFAULT_LIMIT,
   overlayError,
   overlayEventoObjetivo,
   overlayEventoObjetivoListado,
@@ -14,6 +16,7 @@ import {
   overlayJson,
   overlayNeighborhood,
   overlayObjectives,
+  overlayObjetoEventos,
   overlayParticipants,
   overlayPreflight,
   overlayStanding,
@@ -23,6 +26,9 @@ import {
   type OverlayClasificacion,
   type OverlayEventoObjetivo,
   type OverlayObjetivo,
+  type OverlayObjectAwardSource,
+  type OverlayObjectOpponent,
+  type OverlayObjectThrowSource,
   type OverlayProgressEventSource,
   type OverlayStandingSource,
 } from "@/lib/overlay-api";
@@ -34,9 +40,10 @@ import { DEFAULT_RULESET, type ScoringRuleset } from "@/lib/scoring";
  * de los parámetros, los mapeadores del contrato y la forma de las respuestas.
  *
  * Los lectores (`loadOverlayParticipants`, `loadOverlayObjectives`,
- * `loadOverlayClassification`, `loadOverlayEvents`) no se prueban aquí: necesitan
- * base de datos, y los comprueba la API en marcha. Lo que sí se prueba es todo lo
- * que hay entre la consulta y el JSON, que es donde se decide qué se publica.
+ * `loadOverlayClassification`, `loadOverlayEvents`, `loadOverlayObjectEvents`) no
+ * se prueban aquí: necesitan base de datos, y los comprueba la API en marcha. Lo
+ * que sí se prueba es todo lo que hay entre la consulta y el JSON, que es donde se
+ * decide qué se publica.
  */
 
 const ORIGEN = "https://liga.example";
@@ -492,6 +499,229 @@ describe("overlayEventosObjetivos", () => {
 
   it("sin eventos, mapa vacío", () => {
     expect(overlayEventosObjetivos([], ACTIVOS)).toEqual({});
+  });
+});
+
+/** Un premio del día tal y como lo devuelve la consulta. */
+function premio(
+  id: string,
+  createdAt: string,
+  overrides: Partial<Pick<OverlayObjectAwardSource, "kind" | "penaltyId">> = {},
+): OverlayObjectAwardSource {
+  return {
+    id,
+    kind: ObjectKind.MONEDA,
+    penaltyId: "sin-militares-5min",
+    createdAt: new Date(createdAt),
+    ...overrides,
+  };
+}
+
+/** Un lanzamiento tal y como lo devuelve la consulta. */
+function lanzamiento(
+  id: string,
+  fromId: string,
+  toId: string,
+  at: string,
+  returned: boolean,
+  overrides: Partial<Pick<OverlayObjectThrowSource, "award">> = {},
+): OverlayObjectThrowSource {
+  return {
+    id,
+    fromId,
+    toId,
+    at: new Date(at),
+    returned,
+    award: { kind: ObjectKind.MONEDA, penaltyId: "sin-militares-5min" },
+    ...overrides,
+  };
+}
+
+/** Los contrarios resueltos, por `Player.id`. */
+const CONTRARIOS = new Map<string, OverlayObjectOpponent>([
+  ["p-vortix", { id: "p-vortix", name: "Vortix", country: "España" }],
+  ["p-sinnombre", { id: "p-sinnombre", name: "Sin pais", country: null }],
+]);
+
+const JUGADOR = "p-jugador";
+
+describe("overlayObjetoEventos", () => {
+  it("un premio del día es un recibido fechado por el alta y sin contrario", () => {
+    const [evento] = overlayObjetoEventos(
+      JUGADOR,
+      [premio("a1", "2026-11-20T08:05:00Z")],
+      [],
+      CONTRARIOS,
+    );
+
+    expect(evento).toEqual({
+      id: "award:a1",
+      tipo: "recibido",
+      fechahora: "2026-11-20T08:05:00.000Z",
+      objeto: { id: "moneda", nombre: "Moneda del Rey falsificada" },
+      desventaja: "No se pueden construir unidades militares los 5 primeros minutos.",
+      contrario: null,
+    });
+  });
+
+  it("un lanzamiento que le llegó es un recibido con el lanzador de contrario", () => {
+    const [evento] = overlayObjetoEventos(
+      JUGADOR,
+      [],
+      [lanzamiento("t1", "p-vortix", JUGADOR, "2026-11-20T09:00:00Z", false)],
+      CONTRARIOS,
+    );
+
+    expect(evento).toMatchObject({
+      id: "throw:t1",
+      tipo: "recibido",
+      fechahora: "2026-11-20T09:00:00.000Z",
+      contrario: { alias: "Vortix", pais: "España" },
+    });
+  });
+
+  it("un lanzamiento del jugador que no se devuelve es un lanzado con el objetivo", () => {
+    const [evento] = overlayObjetoEventos(
+      JUGADOR,
+      [],
+      [lanzamiento("t2", JUGADOR, "p-vortix", "2026-11-20T09:10:00Z", false)],
+      CONTRARIOS,
+    );
+
+    expect(evento).toMatchObject({
+      id: "throw:t2",
+      tipo: "lanzado",
+      contrario: { alias: "Vortix", pais: "España" },
+    });
+  });
+
+  it("un lanzamiento del jugador devuelto es un devuelto con el objetivo", () => {
+    const [evento] = overlayObjetoEventos(
+      JUGADOR,
+      [],
+      [lanzamiento("t3", JUGADOR, "p-vortix", "2026-11-20T09:12:00Z", true)],
+      CONTRARIOS,
+    );
+
+    expect(evento).toMatchObject({
+      id: "throw:t3",
+      tipo: "devuelto",
+      contrario: { alias: "Vortix", pais: "España" },
+    });
+  });
+
+  it("un lanzamiento que le llegó y se devolvió no se publica", () => {
+    expect(
+      overlayObjetoEventos(
+        JUGADOR,
+        [],
+        [lanzamiento("t4", "p-vortix", JUGADOR, "2026-11-20T09:00:00Z", true)],
+        CONTRARIOS,
+      ),
+    ).toEqual([]);
+  });
+
+  it("ordena de más antiguo a más reciente y desempata por id", () => {
+    const eventos = overlayObjetoEventos(
+      JUGADOR,
+      [premio("b", "2026-11-20T09:00:00Z"), premio("a", "2026-11-20T09:00:00Z")],
+      [lanzamiento("t1", JUGADOR, "p-vortix", "2026-11-19T22:00:00Z", false)],
+      CONTRARIOS,
+    );
+
+    expect(eventos.map((evento) => evento.id)).toEqual([
+      "throw:t1",
+      "award:a",
+      "award:b",
+    ]);
+  });
+
+  it("una desventaja que ya no está en el catálogo viaja como cadena vacía", () => {
+    const [evento] = overlayObjetoEventos(
+      JUGADOR,
+      [premio("a1", "2026-11-20T08:05:00Z", { penaltyId: "ya-no-existe" })],
+      [],
+      CONTRARIOS,
+    );
+
+    expect(evento?.desventaja).toBe("");
+  });
+
+  it("resuelve el objeto de cada tipo con el nombre del catálogo", () => {
+    const eventos = overlayObjetoEventos(
+      JUGADOR,
+      [
+        premio("a1", "2026-11-18T08:00:00Z", {
+          kind: ObjectKind.RELIQUIA,
+          penaltyId: "sin-guarecer-reliquias",
+        }),
+        premio("a2", "2026-11-19T08:00:00Z", {
+          kind: ObjectKind.MONUMENTO,
+          penaltyId: "sin-fuertes",
+        }),
+      ],
+      [],
+      CONTRARIOS,
+    );
+
+    expect(eventos.map((evento) => evento.objeto)).toEqual([
+      { id: "reliquia", nombre: "Reliquia pagana" },
+      { id: "monumento", nombre: "Monumento" },
+    ]);
+    expect(eventos.map((evento) => evento.desventaja)).toEqual([
+      "No se pueden guarecer reliquias.",
+      "No se pueden construir fuertes.",
+    ]);
+  });
+
+  it("sin fila del contrario el evento se publica igual, con contrario nulo", () => {
+    const [evento] = overlayObjetoEventos(
+      JUGADOR,
+      [],
+      [lanzamiento("t1", "p-borrado", JUGADOR, "2026-11-20T09:00:00Z", false)],
+      CONTRARIOS,
+    );
+
+    expect(evento).toMatchObject({ tipo: "recibido", contrario: null });
+  });
+
+  it("publica país nulo sin inventarlo", () => {
+    const [evento] = overlayObjetoEventos(
+      JUGADOR,
+      [],
+      [lanzamiento("t1", JUGADOR, "p-sinnombre", "2026-11-20T09:00:00Z", false)],
+      CONTRARIOS,
+    );
+
+    expect(evento?.contrario).toEqual({ alias: "Sin pais", pais: null });
+  });
+
+  it("no publica la tirada, la probabilidad ni datos de contacto", () => {
+    const [evento] = overlayObjetoEventos(
+      JUGADOR,
+      [premio("a1", "2026-11-20T08:05:00Z")],
+      [],
+      CONTRARIOS,
+    );
+
+    expect(Object.keys(evento ?? {}).sort()).toEqual([
+      "contrario",
+      "desventaja",
+      "fechahora",
+      "id",
+      "objeto",
+      "tipo",
+    ]);
+    expect(evento).not.toHaveProperty("roll");
+    expect(evento).not.toHaveProperty("probability");
+  });
+
+  it("sin filas, lista vacía", () => {
+    expect(overlayObjetoEventos(JUGADOR, [], [], CONTRARIOS)).toEqual([]);
+  });
+
+  it("el límite por defecto del feed es 10", () => {
+    expect(OVERLAY_OBJECTS_DEFAULT_LIMIT).toBe(10);
   });
 });
 
