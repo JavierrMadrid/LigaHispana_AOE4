@@ -945,7 +945,9 @@ describe("tarjeta de objeto", () => {
     expect(overlayObjetoConsecuencia("lanzado")).toBe(
       "Ya no lo tienes: tus próximas partidas vuelven a puntuar.",
     );
-    expect(overlayObjetoConsecuencia("devuelto")).toBe("La desventaja se queda contigo.");
+    expect(overlayObjetoConsecuencia("devuelto")).toBe(
+      "Sigue siendo tuyo y hoy no puedes volver a lanzarlo.",
+    );
   });
 
   it("solo lanzar el objeto le quita la carga al jugador", () => {
