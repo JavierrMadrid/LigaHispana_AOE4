@@ -40,21 +40,31 @@ demás se pueden escribir a mano para OBS. Un valor desconocido cae al defecto e
 |---|---|
 | Ranking | El puesto, el nombre y los puntos del jugador y de sus vecinos: uno por arriba y otro por abajo; en un extremo, los dos del lado disponible. La fila propia va con filete y sombreado. |
 | Últimos objetivos | Hasta tres hitos recientes (solo `cumplido` y `progresado`, sin repetir objetivo). Los cumplidos llevan un tick; el progreso numérico (`2/3`, `8/8`) se mantiene en ambos casos. No hay etiquetas de «Cumplido» ni «Progreso». |
-| Animación | Cada evento que cobra (o deja de cobrar) tiene dos pasos: la ficha del objetivo y su recompensa. La ficha lleva icono, tick, nombre y descripción; las metas añaden el progreso (`3/3`) y los lideratos, «1º» («2º» si se pierde). La recompensa cambia la ventana a «Recompensa:» con lo que da el evento (+2 por una victoria, el premio de una meta); en un liderato avisa de que son temporales. Un liderato perdido cambia el tick por una X roja y la recompensa por «Pérdida:» con el importe en negativo y en rojo. El avance parcial de una meta no interrumpe. El cuerpo tiene altura fija, así que la ventana no cambia de tamaño entre pasos. |
+| Animación | Cada evento que cobra (o deja de cobrar) tiene dos pasos: la ficha del objetivo y su recompensa. La ficha lleva icono, tick, nombre y descripción; las metas añaden el progreso (`3/3`) y los lideratos, «1º» («2º» si se pierde). La recompensa cambia la ventana a «Recompensa:» con lo que da el evento (+2 por una victoria, el premio de una meta); en un liderato avisa de que son temporales. Un liderato perdido cambia el tick por una X roja y la recompensa por «Pérdida:» con el importe en negativo y en rojo. El avance parcial de una meta no interrumpe. Con las dos secciones el cuerpo reserva 13 rem, así que la ventana no cambia de tamaño entre pasos; con una sola, la tarjeta se ajusta a su contenido y solo crece mientras dura el evento. |
+| Animación de objeto | Recibir, lanzar o recuperar un objeto también se anima en dos pasos. La ficha lleva el antetítulo del sentido («Has recibido», «Has lanzado», «Se ha devuelto»), el glifo del objeto, su nombre, «Desventaja: …» (se omite si el catálogo ya no la conoce) y la línea del contrario («De Vortix», «Se aplica a Vortix», «Iba para Vortix»; «Premio del día» en un recibido sin contrario). La consecuencia cierra con una frase: las partidas no puntúan hasta cumplirla, ya no lo tiene y vuelven a puntuar, o se queda con él y hoy no puede volver a lanzarlo. Comparte la ventana de 13 rem y el mismo comportamiento al crecer con una sola sección. |
 
 Los objetivos se celebran según su reparto: los **directos** (`victorias`, `imparable`, los
 `maestro-<civ>`) en cada avance, porque cobran por unidad; las **metas** (`imbatible`,
 `lider-<civ>`, las hazañas) al completarlas; y los **lideratos** (las competiciones) al ponerse
 primero o al dejar de estarlo.
 
-En el configurador, «Probar puntos», «Probar meta», «Probar 1º» y «Probar pérdida» reproducen cada
-animación; ninguno cambia nada del torneo.
+Los objetos se animan con los tres eventos que publica [`/api/v0/objetos`](./API-OVERLAY.md#objetos)
+para el jugador retransmitido: que lo recibe (se lo lanzan o gana el premio del día), que lo lanza y
+se aplica al rival, y que lo lanza y se le devuelve. Comparten la cola con los objetivos y se
+reproducen en orden cronológico, con los mismos tiempos: 4 s de ficha y 3 s de consecuencia. El feed
+se pide en cada sondeo, en paralelo con la clasificación, y es tolerante a fallo: si no responde, no
+hay eventos nuevos y nada más de la tarjeta cambia.
 
-La primera carga **no anima**: siembra el estado y solo anima lo que llegue después. Las
-animaciones salen en el primer sondeo que ve un evento nuevo, es decir, hasta 30 s después de la
-pasada del sincronizador que lo anotó (una cada 1-3 minutos). La marca de la tarjeta es el emblema
-y el nombre de la edición activa; si la configuración no se puede leer, usa el emblema y el oro de
-la casa.
+En el configurador, «Probar puntos», «Probar meta», «Probar 1º» y «Probar pérdida» reproducen cada
+animación de objetivo, y «Probar objeto recibido», «Probar objeto lanzado» y «Probar objeto devuelto»
+las de objeto (cada una con un objeto distinto, para ver los tres glifos); ninguna cambia nada del
+torneo.
+
+La primera carga **no anima**: siembra el estado —objetivos y objetos— y solo anima lo que llegue
+después. Las animaciones salen en el primer sondeo que ve un evento nuevo, es decir, hasta 30 s
+después de la pasada del sincronizador que lo anotó (una cada 1-3 minutos). La marca de la tarjeta
+es el emblema y el nombre de la edición activa; si la configuración no se puede leer, usa el emblema
+y el oro de la casa.
 
 ## Añadirlo en OBS
 
@@ -85,6 +95,7 @@ esquinas. En OBS se puede mover o recortar como cualquier fuente.
 | Pestaña oculta | El sondeo se pausa y se reanuda al volver a la escena. |
 | Primera carga | Se siembra sin animar. |
 | Fallo de red | Reintento con espera creciente (30, 60 y 120 s) conservando los últimos datos. |
+| Feed de objetos | Se pide en cada sondeo, en paralelo con la clasificación. Si falla, no hay eventos de objeto nuevos y el resto de la tarjeta no cambia. |
 
 ## Estados y errores
 

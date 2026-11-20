@@ -80,8 +80,15 @@ info:
     secuencia, no un mapa); el overlay deduplica por objetivo cuando pinta «los últimos». El
     límite es de 1 a 20 y vale 3 por defecto.
 
+    `/objetos` devuelve los últimos eventos de objetos de un participante —recibir un objeto,
+    lanzarlo para que se aplique al rival y lanzarlo para que se devuelva— en orden ascendente por
+    instante y recortados a los últimos `limite` (10 por defecto, 20 como máximo). Cada evento
+    lleva el objeto con su nombre de catálogo, el texto de la desventaja y el contrario ya resuelto
+    (alias y país), o `null` en el premio del día. Un lanzamiento que le llegó y se devolvió no se
+    publica: el objeto nunca llegó a afectarle.
+
     Todas las respuestas, también las de error, llevan `Cache-Control: no-store`.
-  version: 1.3.0
+  version: 1.4.0
   contact:
     name: Equipo de la Liga Hispana
 servers:
@@ -97,6 +104,8 @@ tags:
     description: Objetivos del torneo
   - name: Eventos
     description: Últimos hitos de un participante
+  - name: Objetos
+    description: Eventos de objetos de un participante
 paths:
   /participantes:
     options:
@@ -351,6 +360,84 @@ paths:
                   derrotas: 1
                   racha: -1
                   eventos_objetivos: {}
+
+  /objetos:
+    options:
+      summary: Preflight de CORS
+      operationId: objetosPreflight
+      responses:
+        '204':
+          $ref: '#/components/responses/OpcionesCORS'
+    get:
+      tags:
+        - Objetos
+      summary: Últimos eventos de objetos
+      operationId: objetos
+      parameters:
+        - name: id
+          in: query
+          description: |
+            Identificador del participante (`profileId`). Es obligatorio: sin él se devuelve 400, y
+            si no es un entero positivo también. Un id que no existe o no está aprobado da 404.
+          required: true
+          schema:
+            type: string
+          example: '6946414'
+        - name: limite
+          in: query
+          description: |
+            Cuántos eventos se devuelven, de 1 a 20. Por defecto 10. Un valor fuera de rango, con
+            ceros a la izquierda o no entero da 400.
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 10
+          example: 10
+      responses:
+        '400':
+          $ref: '#/components/responses/ParametroInvalido'
+        '404':
+          $ref: '#/components/responses/ParticipanteNoEncontrado'
+        '503':
+          $ref: '#/components/responses/ServicioNoDisponible'
+        '200':
+          description: |
+            Eventos de objetos de la edición activa, en orden ascendente por instante y con desempate
+            por id. Son los últimos `limite` del participante. La lista puede estar vacía.
+          headers:
+            Cache-Control:
+              description: El feed no se sirve desde caché para el polling del overlay.
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 20
+                items:
+                  $ref: '#/components/schemas/EventoObjeto'
+              example:
+                - id: 'award:cm9k2a'
+                  tipo: recibido
+                  fechahora: '2026-11-20T08:05:00.000Z'
+                  objeto:
+                    id: moneda
+                    nombre: Moneda del Rey falsificada
+                  desventaja: No se pueden construir unidades militares los 5 primeros minutos.
+                  contrario: null
+                - id: 'throw:cm9k2x'
+                  tipo: devuelto
+                  fechahora: '2026-11-20T09:12:00.000Z'
+                  objeto:
+                    id: moneda
+                    nombre: Moneda del Rey falsificada
+                  desventaja: No se pueden construir unidades militares los 5 primeros minutos.
+                  contrario:
+                    alias: Vortix
+                    pais: España
 
   /objetivos:
     options:
@@ -729,6 +816,100 @@ components:
           description: |
             Valor del nuevo poseedor; mayor o igual que 1. Se omite si no hay nuevo poseedor.
           example: 29
+      additionalProperties: false
+
+    EventoObjeto:
+      type: object
+      description: |
+        Un evento del feed de `/objetos`: el premio del día o un lanzamiento en cualquiera de sus
+        dos sentidos. Es lo que la tarjeta del overlay anima.
+      required:
+        - id
+        - tipo
+        - fechahora
+        - objeto
+        - desventaja
+        - contrario
+      properties:
+        id:
+          type: string
+          description: |
+            Identificador estable del evento, con el origen delante:
+            `award:<ObjectAward.id>` o `throw:<ObjectThrow.id>`.
+          example: 'throw:cm9k2x'
+        tipo:
+          type: string
+          enum:
+            - recibido
+            - lanzado
+            - devuelto
+          description: |
+            `recibido` = le llegó (se lo lanzaron sin devolución, o ganó el premio del día);
+            `lanzado` = lo lanzó y no se devolvió; `devuelto` = lo lanzó y se le devolvió.
+          example: devuelto
+        fechahora:
+          type: string
+          format: date-time
+          description: |
+            Instante del evento. En un premio del día es el alta de la fila (`createdAt`), no el
+            inicio de la partida que lo otorgó.
+          example: '2026-11-20T09:12:00.000Z'
+        objeto:
+          $ref: '#/components/schemas/ObjetoEvento'
+        desventaja:
+          type: string
+          description: |
+            Texto de la desventaja que le tocó al objeto, resuelto contra el catálogo. Cadena vacía
+            si el id guardado ya no está en el catálogo.
+          example: No se pueden construir unidades militares los 5 primeros minutos.
+        contrario:
+          oneOf:
+            - $ref: '#/components/schemas/ContrarioEvento'
+            - type: 'null'
+          description: |
+            El otro jugador del evento: el lanzador en un `recibido` por lanzamiento y el objetivo
+            en un `lanzado` o un `devuelto`. `null` en el premio del día y si la fila del jugador
+            ya no existe.
+      additionalProperties: false
+
+    ObjetoEvento:
+      type: object
+      required:
+        - id
+        - nombre
+      properties:
+        id:
+          type: string
+          enum:
+            - reliquia
+            - moneda
+            - monumento
+          description: El `ObjectKind` del schema en minúsculas.
+          example: moneda
+        nombre:
+          type: string
+          description: Nombre del objeto en el catálogo.
+          example: Moneda del Rey falsificada
+      additionalProperties: false
+
+    ContrarioEvento:
+      type: object
+      required:
+        - alias
+        - pais
+      properties:
+        alias:
+          type: string
+          description: Nombre del jugador contrario (`Player.name`).
+          example: Vortix
+        pais:
+          type:
+            - string
+            - 'null'
+          description: |
+            País con el rótulo canónico del torneo (`Player.country`), o `null` si no consta. No es
+            un código ISO.
+          example: España
       additionalProperties: false
 
     Error:
