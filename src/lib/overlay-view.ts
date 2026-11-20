@@ -723,7 +723,7 @@ export function overlayObjetoConsecuencia(tipo: OverlayObjetoEventoTipo): string
     case "lanzado":
       return "Ya no lo tienes: tus próximas partidas vuelven a puntuar.";
     case "devuelto":
-      return "La desventaja se queda contigo.";
+      return "Sigue siendo tuyo y hoy no puedes volver a lanzarlo.";
   }
 }
 
