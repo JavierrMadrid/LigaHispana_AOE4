@@ -646,7 +646,11 @@ después; lo que se anota es el siguiente, no se corrige el anterior.
 | `roll` | `Float` | Tirada de la devolución (0-1), tal cual la consumió `returnProbability()`. Se guarda para poder auditar el resultado. |
 | `returned` | `Boolean` | `true` = se devolvió: el objeto sigue en el lanzador y ese día no puede relanzarlo. `false` = el portador pasó a ser el objetivo. |
 
-Índice `(awardId)`: los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`.
+Índices: `(awardId)`, los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`; y
+`(fromId, at)` y `(toId, at)`, el feed de objetos de la API del overlay (`/api/v0/objetos`): los
+lanzamientos que hizo un jugador y los que recibió, filtrados por `at` desde el inicio de la
+edición. La igualdad por jugador va delante del rango por fecha, que es el orden en que se
+consultan.
 
 ## `Post`
 
@@ -694,7 +698,7 @@ aparece en una consulta, no se crea.**
 | `AdminAct` | `createdAt`, `(kind, createdAt)`, `(playerId, createdAt)`, `(revertedAt, kind)`, `(reversedByActId)` | Listado y filtros por tipo, jugador y estado; autorrelación de la reversión. |
 | `AdminActMatch` | pk `(actId, matchId)`, `(matchId)` | Vínculos de una anulación; cascada desde `Match`. |
 | `ObjectAward` | único `(kind, day)`, `(holderId)` | Un objeto de cada tipo por día UTC; objetos de un portador (exclusión y panel). |
-| `ObjectThrow` | `(awardId)` | Lanzamientos de un objeto y cascada desde `ObjectAward`. |
+| `ObjectThrow` | `(awardId)`, `(fromId, at)`, `(toId, at)` | Lanzamientos de un objeto y cascada desde `ObjectAward`; feed de objetos del overlay: los que hizo un jugador y los que recibió, recortados por fecha. |
 | `Admin` | `email` (único), `authUserId` (único) | Acceso al panel por correo y vínculo con Auth. |
 | `RateLimitCounter` | `key` (pk) | El `INSERT ... ON CONFLICT`. |
 

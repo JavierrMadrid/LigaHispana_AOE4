@@ -5,12 +5,14 @@ import type {
   OverlayEventoObjetivo,
   OverlayEventoObjetivoListado,
   OverlayObjetivo,
+  OverlayObjetoEvento,
   OverlayParticipante,
 } from "@/lib/overlay-api";
 import {
   DEFAULT_OVERLAY_CONFIG,
   overlayConfigQuery,
   overlayConfiguratorParticipants,
+  overlayDemoContrario,
   overlayAnimates,
   overlayEventBadge,
   overlayEventCompleted,
@@ -21,10 +23,18 @@ import {
   overlayEventReward,
   overlayEventView,
   overlayEventViews,
+  overlayFocusBatch,
+  overlayFocusKey,
   overlayMaxEventTime,
   overlayMergeEvents,
   overlayMetricUnit,
   overlayNewEventViews,
+  overlayNewObjetoEventos,
+  overlayObjetoAlivio,
+  overlayObjetoAntetitulo,
+  overlayObjetoConsecuencia,
+  overlayObjetoContrario,
+  overlayObjetoDesventaja,
   overlayPollSince,
   overlayPreviewUrl,
   overlayRankingRows,
@@ -114,6 +124,18 @@ function listado(
   extra: Partial<OverlayEventoObjetivo> = {},
 ): OverlayEventoObjetivoListado {
   return { objetivo_id, ...evento(tipo, fechahora, extra) };
+}
+
+function objetoEvento(overrides: Partial<OverlayObjetoEvento> = {}): OverlayObjetoEvento {
+  return {
+    id: "award:cm9k2a",
+    tipo: "recibido",
+    fechahora: "2026-11-20T08:05:00.000Z",
+    objeto: { id: "moneda", nombre: "Moneda del Rey falsificada" },
+    desventaja: "No se pueden construir unidades militares los 5 primeros minutos.",
+    contrario: null,
+    ...overrides,
+  };
 }
 
 function fila(id: string, posicion: number, volatiles: number, permanentes: number): OverlayClasificacion {
@@ -880,5 +902,158 @@ describe("overlayEventCompleted", () => {
     );
 
     expect(overlayEventCompleted(competencia)).toBe(true);
+  });
+});
+
+describe("tarjeta de objeto", () => {
+  it("el antetítulo dice qué le ha pasado al jugador", () => {
+    expect(overlayObjetoAntetitulo("recibido")).toBe("Has recibido");
+    expect(overlayObjetoAntetitulo("lanzado")).toBe("Has lanzado");
+    expect(overlayObjetoAntetitulo("devuelto")).toBe("Se ha devuelto");
+  });
+
+  it("la desventaja lleva su etiqueta y se omite si el catálogo no la conoce", () => {
+    expect(overlayObjetoDesventaja("No se puede hacer 2TC.")).toBe(
+      "Desventaja: No se puede hacer 2TC.",
+    );
+    expect(overlayObjetoDesventaja("")).toBeNull();
+    expect(overlayObjetoDesventaja("   ")).toBeNull();
+  });
+
+  it("la línea del contrario nombra a quién y de dónde", () => {
+    const vortix = { alias: "Vortix", pais: "España" };
+
+    expect(overlayObjetoContrario({ tipo: "recibido", contrario: vortix })).toBe("De Vortix");
+    expect(overlayObjetoContrario({ tipo: "lanzado", contrario: vortix })).toBe(
+      "Se aplica a Vortix",
+    );
+    expect(overlayObjetoContrario({ tipo: "devuelto", contrario: vortix })).toBe(
+      "Iba para Vortix",
+    );
+    expect(overlayObjetoContrario({ tipo: "recibido", contrario: null })).toBe("Premio del día");
+  });
+
+  it("no inventa un alias cuando el contrario ya no existe", () => {
+    expect(overlayObjetoContrario({ tipo: "lanzado", contrario: null })).toBeNull();
+    expect(overlayObjetoContrario({ tipo: "devuelto", contrario: null })).toBeNull();
+  });
+
+  it("la consecuencia dice qué cambia en cada sentido", () => {
+    expect(overlayObjetoConsecuencia("recibido")).toBe(
+      "Tus partidas no puntúan hasta que la cumplas.",
+    );
+    expect(overlayObjetoConsecuencia("lanzado")).toBe(
+      "Ya no lo tienes: tus próximas partidas vuelven a puntuar.",
+    );
+    expect(overlayObjetoConsecuencia("devuelto")).toBe(
+      "Sigue siendo tuyo y hoy no puedes volver a lanzarlo.",
+    );
+  });
+
+  it("solo lanzar el objeto le quita la carga al jugador", () => {
+    expect(overlayObjetoAlivio("lanzado")).toBe(true);
+    expect(overlayObjetoAlivio("recibido")).toBe(false);
+    expect(overlayObjetoAlivio("devuelto")).toBe(false);
+  });
+});
+
+describe("overlayNewObjetoEventos", () => {
+  it("descarta lo ya visto y ordena lo nuevo por instante", () => {
+    const feed = [
+      objetoEvento({ id: "throw:b", tipo: "devuelto", fechahora: "2026-11-20T09:12:00.000Z" }),
+      objetoEvento({ id: "award:a", fechahora: "2026-11-20T08:05:00.000Z" }),
+      objetoEvento({ id: "award:visto", fechahora: "2026-11-20T07:00:00.000Z" }),
+    ];
+
+    expect(
+      overlayNewObjetoEventos(new Set(["award:visto"]), feed).map((evento) => evento.id),
+    ).toEqual(["award:a", "throw:b"]);
+  });
+
+  it("no repite un id que venga dos veces en el mismo feed", () => {
+    const feed = [objetoEvento({ id: "throw:uno" }), objetoEvento({ id: "throw:uno" })];
+
+    expect(overlayNewObjetoEventos(new Set(), feed)).toHaveLength(1);
+  });
+});
+
+describe("overlayFocusBatch", () => {
+  it("funde objetivos y objetos en una sola cola cronológica", () => {
+    const objetivo = overlayEventView(
+      "victorias",
+      evento("progresado", "2026-11-20T09:20:00.000Z", {
+        progreso: { propio: 6 },
+        repeticion: 6,
+      }),
+      OBJETIVOS.get("victorias"),
+    );
+    const lote = overlayFocusBatch(
+      [objetivo],
+      [
+        objetoEvento({ id: "throw:b", tipo: "devuelto", fechahora: "2026-11-20T09:12:00.000Z" }),
+        objetoEvento({ id: "award:a", fechahora: "2026-11-20T09:05:00.000Z" }),
+      ],
+    );
+
+    expect(lote.map(overlayFocusKey)).toEqual([
+      "award:a",
+      "throw:b",
+      "victorias@2026-11-20T09:20:00.000Z",
+    ]);
+    expect(lote.map((focus) => focus.clase)).toEqual(["objeto", "objeto", "objetivo"]);
+  });
+
+  it("desempata por clave cuando comparten instante", () => {
+    const objetivo = overlayEventView(
+      "victorias",
+      evento("progresado", "2026-11-20T09:00:00.000Z"),
+      OBJETIVOS.get("victorias"),
+    );
+    const lote = overlayFocusBatch(
+      [objetivo],
+      [objetoEvento({ id: "award:a", fechahora: "2026-11-20T09:00:00.000Z" })],
+    );
+
+    expect(lote.map(overlayFocusKey)).toEqual([
+      "award:a",
+      "victorias@2026-11-20T09:00:00.000Z",
+    ]);
+  });
+});
+
+describe("overlayFocusKey", () => {
+  it("usa la clave del evento de objetivo y el id del de objeto", () => {
+    const vista = overlayEventView(
+      "victorias",
+      evento("progresado", "2026-11-20T09:00:00.000Z"),
+      OBJETIVOS.get("victorias"),
+    );
+
+    expect(overlayFocusKey({ clase: "objetivo", vista })).toBe(
+      "victorias@2026-11-20T09:00:00.000Z",
+    );
+    expect(overlayFocusKey({ clase: "objeto", vista: objetoEvento({ id: "throw:uno" }) })).toBe(
+      "throw:uno",
+    );
+  });
+});
+
+describe("overlayDemoContrario", () => {
+  it("elige el primer participante distinto del retransmitido", () => {
+    expect(
+      overlayDemoContrario(
+        [
+          { id: "1", alias: "Miguel", pais: "España" },
+          { id: "2", alias: "Mecroid", pais: null },
+        ],
+        "1",
+      ),
+    ).toEqual({ alias: "Mecroid", pais: null });
+  });
+
+  it("sin otro participante, la demo se queda sin contrario", () => {
+    expect(
+      overlayDemoContrario([{ id: "1", alias: "Miguel", pais: "España" }], "1"),
+    ).toBeNull();
   });
 });

@@ -3,7 +3,14 @@ import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
 import { OverlayConfigurator } from "@/components/overlay/overlay-configurator";
 import { PageHead } from "@/components/page-head";
-import { overlayConfiguratorParticipants } from "@/lib/overlay-view";
+import { ObjectKind } from "@/generated/prisma/enums";
+import { OBJECT_CATALOG } from "@/lib/objects";
+import type { OverlayObjetoEvento, OverlayObjetoEventoTipo } from "@/lib/overlay-api";
+import {
+  overlayConfiguratorParticipants,
+  type OverlayConfiguratorParticipant,
+  type OverlayObjetoDemo,
+} from "@/lib/overlay-view";
 import { getStandings } from "@/lib/public";
 import { readPublicOrigin } from "@/lib/site-url";
 
@@ -17,12 +24,68 @@ export const metadata: Metadata = {
 // recalcula cada pocos minutos.
 export const dynamic = "force-dynamic";
 
+/** El objeto de cada demo, para que las tres tarjetas enseñen los tres glifos. */
+const DEMO_OBJECT_KIND: Readonly<Record<OverlayObjetoEventoTipo, ObjectKind>> = {
+  recibido: ObjectKind.MONEDA,
+  lanzado: ObjectKind.RELIQUIA,
+  devuelto: ObjectKind.MONUMENTO,
+};
+
+/**
+ * Un evento de objeto de ejemplo, armado desde el catálogo real.
+ *
+ * El cliente no repite nombres ni desventajas: recibe el evento ya resuelto con
+ * la misma forma que publica `/api/v0/objetos`, así que la demo pasa por el
+ * mismo camino de validación que un mensaje cualquiera del configurador.
+ */
+function demoObjeto(
+  tipo: OverlayObjetoEventoTipo,
+  contrario: OverlayObjetoEvento["contrario"],
+  fechahora: string,
+): OverlayObjetoEvento {
+  const definition = OBJECT_CATALOG[DEMO_OBJECT_KIND[tipo]];
+
+  return {
+    id: `demo:${tipo}`,
+    tipo,
+    fechahora,
+    // El contrato publica el enum del schema en minúsculas.
+    objeto: { id: definition.kind.toLowerCase(), nombre: definition.name },
+    desventaja: definition.penalties[0]?.text ?? "",
+    contrario,
+  };
+}
+
+/**
+ * Los tres eventos de ejemplo del configurador.
+ *
+ * El contrario es el primer participante de la lista —un alias real, nunca
+ * inventado— y el configurador lo cambia al pulsar si coincidiera con el jugador
+ * retransmitido. Sin participantes se queda en `null` y el `recibido` se lee
+ * como el premio del día.
+ */
+function overlayObjetoDemos(
+  participants: readonly OverlayConfiguratorParticipant[],
+): OverlayObjetoDemo {
+  const first = participants[0];
+  const contrario =
+    first === undefined ? null : { alias: first.alias, pais: first.pais };
+  const fechahora = new Date().toISOString();
+
+  return {
+    recibido: demoObjeto("recibido", contrario, fechahora),
+    lanzado: demoObjeto("lanzado", contrario, fechahora),
+    devuelto: demoObjeto("devuelto", contrario, fechahora),
+  };
+}
+
 export default async function OverlayConfiguratorPage() {
   const read = await getStandings();
   const standings = read.status === "ok" ? read.data : null;
   const siteOrigin = readPublicOrigin();
   const participants =
     standings === null ? [] : overlayConfiguratorParticipants(standings.rows);
+  const objetosDemo = overlayObjetoDemos(participants);
 
   return (
     <div className="flex flex-col gap-8">
@@ -55,6 +118,7 @@ export default async function OverlayConfiguratorPage() {
           <OverlayConfigurator
             participants={participants}
             siteOrigin={siteOrigin}
+            objetosDemo={objetosDemo}
           />
         </>
       )}

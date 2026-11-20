@@ -100,7 +100,8 @@ export function ThrowForm({
         </select>
         <p id={hintId} className="max-w-[60ch] text-xs leading-relaxed text-muted">
           La tirada decide si se devuelve: cuanto peor clasificado esté el destino
-          respecto a {holderName}, más probable es que el objeto vuelva.
+          respecto a {holderName}, más probable es que el objeto vuelva. Si vuelve, la
+          desventaja se queda en {holderName} y el turno del día queda gastado.
         </p>
       </div>
 
