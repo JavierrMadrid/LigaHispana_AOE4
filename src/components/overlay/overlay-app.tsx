@@ -107,6 +107,10 @@ export function OverlayApp({
   const activeKey = activeEvent?.key ?? null;
   const showRanking = config.secciones !== "objetivos";
   const showObjectives = config.secciones !== "ranking";
+  // Con las dos secciones se reserva la altura de la ventana de animación, para
+  // que la tarjeta no cambie de tamaño entre pasos. Con una sola, el alto lo pone
+  // el contenido y la tarjeta solo crece mientras dura el evento.
+  const reserveBodyHeight = showRanking && showObjectives;
 
   // La animación de un evento tiene dos pasos: la ficha del objetivo y la
   // recompensa. La fase se guarda con la clave del evento para que un evento
@@ -209,7 +213,7 @@ export function OverlayApp({
         ) : null}
 
         {status === "ready" ? (
-          <div className="h-[13rem]">
+          <div className={reserveBodyHeight ? "h-[13rem]" : undefined}>
             <AnimatePresence mode="wait" initial={false}>
               {activeEvent !== null ? (
                 <motion.div
