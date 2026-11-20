@@ -1079,8 +1079,9 @@ de cada bloque.
 La detección de YouTube y Kick **cuelga del worker**, no de la web: se ejecuta como mucho **una vez
 cada 10 minutos** (`STREAMS_MIN_INTERVAL_MINUTES`), para los aprobados con canal, aunque el sync de
 partidas corra cada 1-3 minutos. Preguntar a dos plataformas en cada visita gastaría la cuota de
-YouTube y ataría la web a dos APIs externas. El DAL solo lee lo que el worker escribió. Twitch no se
-comprueba: su `twitchIsLive` sale de la ladder.
+YouTube y ataría la web a dos APIs externas. El DAL solo lee lo que el worker escribió.
+`twitchIsLive` sigue saliendo de la ladder; las tarjetas de la portada añaden una consulta opcional
+de audiencia, descrita abajo, sin modificar ese campo.
 
 | Variable | Uso |
 |---|---|
@@ -1110,6 +1111,28 @@ comprueba: su `twitchIsLive` sale de la ladder.
   endpoint con el límite por minuto más estricto). Un documento de la versión anterior, sin la playlist,
   se vuelve a resolver una sola vez.
 - Un fallo **no** mueve `lastSuccessAt`; sale en `streamsError`.
+
+### Tarjetas de Twitch en la portada
+
+- Hasta **5 canales únicos** de participantes que la clasificación marca en directo. Sin
+  credenciales, miniatura pública del CDN de Twitch, usuario canónico y espectadores desconocidos.
+- Con `TWITCH_CLIENT_ID` y `TWITCH_CLIENT_SECRET`, se consulta
+  [Helix Get Streams](https://dev.twitch.tv/docs/api/reference/streams) para los primeros **100**
+  canales candidatos, en un lote. Se conservan solo los canales de la liga que Twitch devuelve
+  como `live`, ordenados por espectadores. Una respuesta vacía correcta retira la señal antigua.
+- Solo se publica `viewer_count` si es un entero no negativo; `null` nunca se convierte en cero.
+  El nombre y la miniatura enriquecidos salen de Twitch. No se extrae HTML de AoE4World.
+- Caché de resultados y fallos: **60 s** por lista de canales e instancia, hasta 20 listas por
+  credencial y dos credenciales por instancia. Tiempo máximo conjunto: **3 s**. Sin promesas de
+  red compartidas entre invocaciones del Worker ni persistencia de tokens en la base de datos.
+- Token de aplicación por [client credentials](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#client-credentials-grant-flow),
+  con validación al crearlo y al reutilizarlo tras 55 minutos. Un `401` permite una sola renovación;
+  errores, cuota o timeout conservan las miniaturas de la liga con espectadores desconocidos.
+- `unavailable` señala que la audiencia no pudo verificarse, aunque haya tarjetas; `ok` con lista
+  vacía significa que no hay canales candidatos o Twitch no devuelve ninguno en directo.
+- La caché es local al proceso/isolate; un arranque en frío vuelve a consultar. Las miniaturas
+  pueden tener la antigüedad propia del CDN de Twitch. Configuración en
+  [`DESPLIEGUE.md`](./DESPLIEGUE.md#previews-base-desarrollo).
 
 ## Pool de mapas
 
