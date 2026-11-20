@@ -281,7 +281,9 @@ function HolderSummary({ option }: { option: ObjectiveOption }) {
 
   return (
     <div className="flex items-center gap-3 rounded-md border border-accent/25 bg-accent/5 p-3">
-      <PlayerAvatar name={option.holder.name} avatarUrl={option.holder.avatarUrl} className="size-10 text-xs" />
+      {option.holder.avatarUrl ? (
+        <PlayerAvatar name={option.holder.name} avatarUrl={option.holder.avatarUrl} className="size-10 text-xs" />
+      ) : null}
       <div className="min-w-0 flex-1">
         <ContenderName
           contender={option.holder}
@@ -357,7 +359,9 @@ function RankingRow({
         ) : null}
 
         <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">{rank}</span>
-        <PlayerAvatar name={contender.name} avatarUrl={contender.avatarUrl} className="size-8 text-xs" />
+        {contender.avatarUrl ? (
+          <PlayerAvatar name={contender.name} avatarUrl={contender.avatarUrl} className="size-8 text-xs" />
+        ) : null}
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <ContenderName

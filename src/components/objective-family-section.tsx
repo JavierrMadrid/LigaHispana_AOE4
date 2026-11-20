@@ -135,6 +135,8 @@ function familyExtraNote(
 }
 
 type ObjectiveFamilySectionProps = {
+  allSubobjectives?: ObjectiveOption[];
+  catalog?: boolean;
   /** El logro global, cabeza de la familia. */
   head: ObjectiveOption;
   /** Sus subobjetivos, en el orden del catálogo. */
@@ -161,20 +163,23 @@ export function ObjectiveFamilySection({
   subobjectives,
   standings,
   mapPool = [],
+  catalog = false,
+  allSubobjectives = subobjectives,
 }: ObjectiveFamilySectionProps) {
-  const civFamily = isCivFamily(subobjectives);
+  const civFamily = isCivFamily(allSubobjectives);
 
   return (
-    <section className="flex flex-col gap-4">
+    <section className="objective-family-section flex flex-col gap-4">
       <ObjectiveDialogCard
+        catalog={catalog}
         option={head}
         standings={standings}
         mapPool={mapPool}
         actionLabel="Ver completados"
         note={
           civFamily
-            ? familyScoringNote(head, subobjectives)
-            : familyExtraNote(head, subobjectives)
+            ? familyScoringNote(head, allSubobjectives)
+            : familyExtraNote(head, allSubobjectives)
         }
       />
 
@@ -183,6 +188,7 @@ export function ObjectiveFamilySection({
           items={subobjectives}
           renderCard={(child) => (
             <ObjectiveDialogCard
+              catalog={catalog}
               option={child}
               standings={standings}
               actionLabel="Ver clasificación"
@@ -193,6 +199,7 @@ export function ObjectiveFamilySection({
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {subobjectives.map((child) => (
             <ObjectiveDialogCard
+              catalog={catalog}
               key={child.id}
               option={child}
               standings={standings}
@@ -207,6 +214,7 @@ export function ObjectiveFamilySection({
 }
 
 type ObjectiveMasterizandoSectionProps = {
+  catalog?: boolean;
   /** Las competiciones `masterizando-<civ>`, una por civilización, en orden. */
   subobjectives: ObjectiveOption[];
   standings: ObjectiveStandingPlayer[] | null;
@@ -224,9 +232,10 @@ type ObjectiveMasterizandoSectionProps = {
 export function ObjectiveMasterizandoSection({
   subobjectives,
   standings,
+  catalog = false,
 }: ObjectiveMasterizandoSectionProps) {
   return (
-    <section className="flex flex-col gap-4">
+    <section className="objective-masterizando-section flex flex-col gap-4">
       <div className="flex flex-col gap-1 border-b border-line pb-2">
         <h3 className="font-display text-base font-semibold text-foreground">
           Masterizando
@@ -243,6 +252,7 @@ export function ObjectiveMasterizandoSection({
         flagsLabel="Civilizaciones con competición"
         renderCard={(child) => (
           <ObjectiveDialogCard
+            catalog={catalog}
             option={child}
             standings={standings}
             actionLabel="Ver clasificación"
