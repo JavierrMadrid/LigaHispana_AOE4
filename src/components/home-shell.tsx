@@ -34,12 +34,13 @@ export function HomeShell({
   sponsorCredit: ReactNode;
 }) {
   const pathname = usePathname();
-  if (pathname !== "/" && pathname !== "/partidas") return legacy;
+  const isScoring = pathname === "/puntuacion";
+  if (pathname !== "/" && pathname !== "/partidas" && !isScoring) return legacy;
 
   return (
     <div
       className={`league-home ${
-        pathname === "/partidas" ? "league-matches" : ""
+        pathname === "/partidas" ? "league-matches" : isScoring ? "league-scoring" : ""
       } ${fonts}`}
       style={accentStyle}
     >
@@ -115,6 +116,16 @@ export function HomeShell({
             <Link target="_blank" rel="noopener noreferrer" href="/puntuacion">
               Cómo se puntúa
             </Link>
+            {isScoring ? (
+              <>
+                <Link target="_blank" rel="noopener noreferrer" href="/noticias">
+                  Noticias
+                </Link>
+                <Link target="_blank" rel="noopener noreferrer" href="/overlay">
+                  Overlay para streamers
+                </Link>
+              </>
+            ) : null}
             <Link target="_blank" rel="noopener noreferrer" href="/login">
               Acceso de la organización
               <ArrowUpRight size={14} aria-hidden="true" />

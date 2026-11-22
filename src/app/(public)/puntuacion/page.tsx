@@ -1,16 +1,24 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PageHead } from "@/components/page-head";
+import { ArrowRight } from "@phosphor-icons/react/dist/ssr/ArrowRight";
+import { CalendarBlank } from "@phosphor-icons/react/dist/ssr/CalendarBlank";
+import { Check } from "@phosphor-icons/react/dist/ssr/Check";
+import { ListChecks } from "@phosphor-icons/react/dist/ssr/ListChecks";
+import { Scales } from "@phosphor-icons/react/dist/ssr/Scales";
+import { Sword } from "@phosphor-icons/react/dist/ssr/Sword";
+import { Target } from "@phosphor-icons/react/dist/ssr/Target";
+import { Trophy } from "@phosphor-icons/react/dist/ssr/Trophy";
+import type { ReactNode } from "react";
 import { RankedModesTable } from "@/components/ranked-modes-table";
 import {
   MobileSectionIndex,
-  SectionHeading,
   SectionIndexAside,
   type DocSection,
 } from "@/components/section-index";
 import { formatTournamentWindow } from "@/lib/format";
 import { hasNoCap } from "@/lib/objective-format";
 import { getEditionConfig, getObjectives, getTournamentWindow } from "@/lib/public";
+import "./scoring.css";
 
 export const metadata: Metadata = {
   title: "Puntuación",
@@ -38,6 +46,15 @@ export const dynamic = "force-dynamic";
  * entero y solo los millones llevan punto.
  */
 const countFormat = new Intl.NumberFormat("es-ES");
+
+function ScoringHeading({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <h2 className="scoring-heading">
+      <span aria-hidden="true">{icon}</span>
+      {children}
+    </h2>
+  );
+}
 
 export default async function ScoringPage() {
   const [windowRead, objectivesRead, editionRead] = await Promise.all([
@@ -71,74 +88,50 @@ export default async function ScoringPage() {
   const prize = edition !== null && edition.prize.amount !== null ? edition.prize : null;
 
   return (
-    // Estas dos páginas de contenido conservan el ancho anterior (`max-w-6xl`):
-    // el contenedor público se ensanchó a `max-w-[80rem]` para la clasificación,
-    // pero el bloque de lectura no gana nada con estirarse.
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-10">
-      <PageHead title="Puntuación" />
+    <div className="scoring-page">
+      <header className="scoring-intro">
+        <h1>Puntuación</h1>
+        <p>
+          Cómo se reparten los puntos del torneo. Las normas están en{" "}
+          <Link href="/reglas">Reglas</Link>.
+        </p>
+      </header>
 
-      <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">
-        Cómo se reparten los puntos del torneo. Las normas están en{" "}
-        <Link
-          href="/reglas"
-          className="text-accent underline underline-offset-4 hover:text-accent-strong"
-        >
-          Reglas
-        </Link>
-        .
-      </p>
-
-      {/* Banda de resumen: las cifras que resumen el sistema antes del texto
-          normativo. Es el mismo cromo que la banda del torneo de la portada
-          (`thread-top`, `rounded-lg`, `border-line`, `bg-surface`) y se ciñe a
-          la medida de lectura con el mismo `max-w-[68ch] text-[15px]` que los
-          párrafos, para que su borde derecho case con el del texto. Los tres
-          datos van en una sola línea, anclados a los bordes de la banda
-          (`justify-between`); si el ancho no da, envuelven a la línea siguiente.
-          Solo las victorias van en el oro del acento; el cero y las cifras de
-          objetivos se quedan en el texto. Sin la lectura del ruleset no se pinta:
-          los números no se inventan. */}
       {pointsPerWin !== null && objectiveCount !== null && objectivePoints !== null ? (
-        <section
-          aria-label="Resumen de la puntuación"
-          className="thread-top relative max-w-[68ch] overflow-hidden rounded-lg border border-line bg-surface px-5 py-4 text-[15px]"
-        >
-          <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3">
-            <div className="flex items-baseline gap-2">
-              <dd className="font-display text-2xl font-semibold tabular-nums text-accent">
-                {pointsPerWin}
-              </dd>
-              <dt className="text-sm text-muted">puntos por victoria, sin tope</dt>
+        <section aria-label="Resumen de la puntuación" className="scoring-summary">
+          <dl>
+            <div className="scoring-summary-win">
+              <dt>{pointsPerWin === 1 ? "Punto" : "Puntos"} por victoria</dt>
+              <dd>{pointsPerWin}</dd>
+              <dd className="scoring-summary-note">Sin tope</dd>
             </div>
-            <div className="flex items-baseline gap-2">
-              <dd className="font-display text-2xl font-semibold tabular-nums text-muted">
-                0
-              </dd>
-              <dt className="text-sm text-muted">por derrota</dt>
+            <div>
+              <dt>Puntos por derrota</dt>
+              <dd>0</dd>
             </div>
-            <div className="flex items-baseline gap-2">
-              <dd className="font-display text-2xl font-semibold tabular-nums text-foreground">
-                {objectiveCount}
+            <div>
+              <dt>Objetivos</dt>
+              <dd>{objectiveCount}</dd>
+              <dd className="scoring-summary-note">
+                {countFormat.format(objectivePoints)} puntos de premio fijo
               </dd>
-              <dt className="text-sm text-muted">
-                objetivos, con {countFormat.format(objectivePoints)} puntos de premio
-                fijo
-              </dt>
             </div>
           </dl>
         </section>
       ) : null}
 
-      <MobileSectionIndex
-        sections={SECTIONS}
-        ariaLabel="Secciones de la puntuación"
-      />
+      <div className="scoring-guide">
+        <div className="scoring-index">
+          <MobileSectionIndex sections={SECTIONS} ariaLabel="Secciones de la puntuación" />
+          <SectionIndexAside sections={SECTIONS} ariaLabel="Secciones de la puntuación" />
+        </div>
 
-      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_13rem] lg:gap-14">
-        <div className="flex min-w-0 flex-col gap-16">
-          <section id="periodo" className="scroll-mt-24">
-            <SectionHeading title="Periodo del torneo" />
-            <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
+        <div className="scoring-sections">
+          <section id="periodo">
+            <ScoringHeading icon={<CalendarBlank size={19} />}>
+              Periodo del torneo
+            </ScoringHeading>
+            <p>
               {tournamentWindow !== null ? (
                 <>
                   {formatTournamentWindow(tournamentWindow)}. Solo cuentan las
@@ -150,51 +143,38 @@ export default async function ScoringPage() {
             </p>
           </section>
 
-          <section id="como-se-puntua" className="scroll-mt-24">
-            <SectionHeading title="Cómo se puntúa" />
-            <ul className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold tabular-nums text-accent"
-                >
-                  {pointsPerWin ?? "-"}
+          <section id="como-se-puntua">
+            <ScoringHeading icon={<Sword size={19} />}>
+              Cómo se puntúa
+            </ScoringHeading>
+            <ul className="scoring-outcomes" role="list">
+              <li>
+                <span aria-hidden="true" className="scoring-outcome-value">
+                  {pointsPerWin ?? <Check size={16} />}
                 </span>
                 <span>
                   {pointsPerWin !== null ? (
                     <>
                       Cada victoria en una partida clasificatoria vale{" "}
-                      <strong className="font-semibold text-foreground">
+                      <strong>
                         {pointsPerWin} {pointsPerWin === 1 ? "punto" : "puntos"}
                       </strong>
-                      , que paga el objetivo{" "}
-                      <Link
-                        href="/objetivos"
-                        className="text-accent underline underline-offset-4 hover:text-accent-strong"
-                      >
-                        Victorias
-                      </Link>
-                      : sin umbral ni tope, suma con cada partida ganada.
+                      . Los paga el objetivo <Link href="/objetivos">Victorias</Link>,
+                      sin umbral ni tope.
                     </>
                   ) : (
                     "Cada victoria en una partida clasificatoria suma puntos."
                   )}
                 </span>
               </li>
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold tabular-nums text-muted/70"
-                >
+              <li>
+                <span aria-hidden="true" className="scoring-outcome-value">
                   0
                 </span>
                 <span>Las derrotas no suman ni restan.</span>
               </li>
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold tabular-nums text-muted/70"
-                >
+              <li>
+                <span aria-hidden="true" className="scoring-outcome-value">
                   0
                 </span>
                 <span>
@@ -202,38 +182,26 @@ export default async function ScoringPage() {
                 </span>
               </li>
             </ul>
-            <div className="mt-5 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
-              <p>
+            <div>
+              <p className="scoring-note">
                 Durante un evento puntual, esa victoria multiplica sus puntos por el
                 multiplicador del evento. El multiplicador solo afecta a los puntos por
-                victoria: el calendario y los requisitos de cada evento están en{" "}
-                <Link
-                  href="/reglas#eventos"
-                  className="text-accent underline underline-offset-4 hover:text-accent-strong"
-                >
-                  Reglas
-                </Link>
-                .
+                victoria. El calendario y los requisitos de cada evento están en{" "}
+                <Link href="/reglas#eventos">Reglas</Link>.
               </p>
               <p>
                 Una victoria vale lo mismo en 1vs1 que en partidas por equipos.
               </p>
               <p>
-                El total de un jugador suma tres partes: los{" "}
-                <strong className="font-semibold text-foreground">permanentes</strong>{" "}
+                El total de un jugador suma los{" "}
+                <strong>permanentes</strong>{" "}
                 (los logros que ya ha conseguido, con Victorias dentro), los{" "}
-                <strong className="font-semibold text-foreground">temporales</strong>{" "}
+                <strong>temporales</strong>{" "}
                 (las competiciones, que se deciden al cierre) y el bono de los
                 eventos puntuales, que va con los permanentes.
               </p>
               <p>
-                El{" "}
-                <Link
-                  href="/historial"
-                  className="text-accent underline underline-offset-4 hover:text-accent-strong"
-                >
-                  historial de puntos
-                </Link>{" "}
+                El <Link href="/historial">historial de puntos</Link>{" "}
                 enseña qué ha sumado cada victoria clasificatoria y cada objetivo
                 cumplido, de lo más reciente a lo más antiguo, con filtros por
                 participante y por fechas. El bono de los eventos puntuales no aparece
@@ -243,170 +211,138 @@ export default async function ScoringPage() {
             </div>
           </section>
 
-          <section id="clasificatorias" className="scroll-mt-24">
-            <SectionHeading title="Qué cuenta como partida clasificatoria" />
-            <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
-              Una partida puntúa si cumple todo esto:
-            </p>
-            <ul className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold text-accent"
-                >
-                  -
-                </span>
+          <section id="clasificatorias">
+            <ScoringHeading icon={<ListChecks size={19} />}>
+              Qué cuenta como partida clasificatoria
+            </ScoringHeading>
+            <p>Para puntuar, una partida debe cumplir todas estas condiciones.</p>
+            <ul className="scoring-conditions" role="list">
+              <li>
+                <Check size={16} aria-hidden="true" />
                 <span>
-                  Es de la ladder <em>ranked</em>: 1vs1 o por equipos. Quick
+                  Es de la ladder <em>ranked</em> 1vs1 o por equipos. Quick
                   match y personalizadas no cuentan.
                 </span>
               </li>
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold text-accent"
-                >
-                  -
-                </span>
+              <li>
+                <Check size={16} aria-hidden="true" />
                 <span>Está terminada, con resultado.</span>
               </li>
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold text-accent"
-                >
-                  -
-                </span>
+              <li>
+                <Check size={16} aria-hidden="true" />
                 <span>Se jugó dentro de las fechas del torneo.</span>
               </li>
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold text-accent"
-                >
-                  -
-                </span>
+              <li>
+                <Check size={16} aria-hidden="true" />
                 <span>Es posterior a la inscripción del jugador.</span>
               </li>
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold text-accent"
-                >
-                  -
-                </span>
+              <li>
+                <Check size={16} aria-hidden="true" />
                 <span>No está revertida por la organización.</span>
               </li>
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold text-accent"
-                >
-                  -
-                </span>
+              <li>
+                <Check size={16} aria-hidden="true" />
                 <span>
                   En las partidas por equipos, ningún compañero está a dos
                   escalones o más de división del jugador.
                 </span>
               </li>
-              <li className="flex gap-3">
-                <span
-                  aria-hidden="true"
-                  className="font-display font-semibold text-accent"
-                >
-                  -
-                </span>
+              <li>
+                <Check size={16} aria-hidden="true" />
                 <span>El jugador está aprobado.</span>
               </li>
             </ul>
 
-            <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
+            <p>
               El escalón es la división (bronce, plata, oro, platino, diamante o
               conquistador), sin el subrango I/II/III. Así, un jugador en oro
               cuenta con compañeros en plata, oro o platino, y no con uno en
               bronce ni con uno en diamante.
             </p>
 
-            <div className="mt-6">
+            <div className="scoring-modes">
               <RankedModesTable />
             </div>
           </section>
 
-          <section id="objetivos" className="scroll-mt-24">
-            <SectionHeading title="Objetivos especiales" />
-            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
+          <section id="objetivos">
+            <ScoringHeading icon={<Target size={19} />}>
+              Objetivos especiales
+            </ScoringHeading>
+            <div>
               <p>
                 El torneo reparte puntos extra entre{" "}
                 {objectiveCount !== null ? (
-                  <strong className="font-semibold text-foreground">
-                    {objectiveCount} objetivos
-                  </strong>
+                  <strong>{objectiveCount} objetivos</strong>
                 ) : (
                   "los objetivos especiales"
                 )}
-                . Uno de ellos es{" "}
-                <strong className="font-semibold text-foreground">Victorias</strong>:
-                el que paga cada victoria clasificatoria, sin umbral ni tope.
+                . El objetivo <strong>Victorias</strong> paga cada victoria
+                clasificatoria, sin umbral ni tope.
               </p>
               <p>
-                Hay dos formas de cobrarlos: las{" "}
-                <strong className="font-semibold text-foreground">competiciones</strong> las gana
-                una sola persona, la que va primera; los{" "}
-                <strong className="font-semibold text-foreground">logros</strong> los cobra todo el
-                que cumple la condición, y pueden ser varios.
+                Las <strong>competiciones</strong> las gana una sola persona, la
+                que va primera. Los <strong>logros</strong> los cobra cada
+                participante que cumple la condición.
               </p>
               <p>
                 Se calculan sobre las mismas partidas clasificatorias, así que
                 también respetan la fecha de inscripción.
               </p>
               <p>
-                Casi todos los logros tienen su umbral fijo: 3 victorias o partidas
-                con una civilización, 3 partidas cortas o largas, una racha de 5
-                victorias, etc. Los repetibles —Victorias, Imparable— suman una vez
-                por unidad: por victoria y por día.
+                Casi todos los logros tienen un umbral fijo. Algunos ejemplos son
+                3 victorias o partidas con una civilización, 3 partidas cortas o
+                largas o una racha de 5 victorias. Los repetibles suman por
+                victoria en Victorias y por día en Imparable.
               </p>
               <p>
                 Todos se resuelven en cada recálculo, así que quién los cobra puede
                 cambiar de una jornada a otra.
               </p>
               <p>
-                <Link
-                  href="/objetivos"
-                  className="text-accent underline underline-offset-4 hover:text-accent-strong"
-                >
+                <Link href="/objetivos" className="scoring-next">
                   {objectiveCount !== null
                     ? `Ver los ${objectiveCount} objetivos y quién los cobra`
                     : "Ver los objetivos y quién los cobra"}
+                  <ArrowRight size={16} aria-hidden="true" />
                 </Link>
               </p>
             </div>
           </section>
 
-          <section id="desempates" className="scroll-mt-24">
-            <SectionHeading title="Desempates" />
-            <p className="mt-4 max-w-[68ch] text-[15px] leading-relaxed text-muted">
-              Si dos jugadores empatan a puntos, se desempata, por este orden,
-              por la tasa de victorias (victorias entre partidas jugadas), por
-              las partidas ganadas y por las partidas jugadas. Si el empate
-              persiste, comparten posición (por ejemplo, 1, 2, 2, 4) y, si hay
-              premios, se reparten a partes iguales.
+          <section id="desempates">
+            <ScoringHeading icon={<Scales size={19} />}>
+              Desempates
+            </ScoringHeading>
+            <p>
+              Si dos jugadores empatan a puntos, se aplican estos criterios en orden.
+            </p>
+            <ol className="scoring-tiebreaks">
+              <li>
+                <strong>Tasa de victorias</strong> (victorias entre partidas jugadas).
+              </li>
+              <li>
+                <strong>Partidas ganadas.</strong>
+              </li>
+              <li>
+                <strong>Partidas jugadas.</strong>
+              </li>
+            </ol>
+            <p>
+              Si el empate persiste, comparten posición (por ejemplo, 1, 2, 2, 4)
+              y, si hay premios, se reparten a partes iguales.
             </p>
             {prize !== null ? (
-              <p className="mt-3 max-w-[68ch] text-[15px] leading-relaxed text-muted">
-                El premio base de esta edición es de{" "}
-                <strong className="font-semibold text-foreground">
-                  {prize.amount} €
-                </strong>
-                {prize.note !== null ? `, ${prize.note}` : ""}.
+              <p className="scoring-note scoring-prize">
+                <Trophy size={18} aria-hidden="true" />
+                <span>
+                  El premio base de esta edición es de <strong>{prize.amount} €</strong>
+                  {prize.note !== null ? `, ${prize.note}` : ""}.
+                </span>
               </p>
             ) : null}
           </section>
         </div>
-
-        <SectionIndexAside
-          sections={SECTIONS}
-          ariaLabel="Secciones de la puntuación"
-        />
       </div>
     </div>
   );
