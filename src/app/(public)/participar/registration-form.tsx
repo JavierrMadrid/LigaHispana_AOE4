@@ -134,39 +134,47 @@ export function RegistrationForm({
   const isClosed = !registrationOpen;
 
   return (
-    <section className="mx-auto w-full max-w-2xl rounded-lg border border-line bg-surface p-6 sm:p-8">
+    <section className="registration-surface">
       <h2 className="border-b border-line pb-3 font-display text-xl font-semibold text-foreground">
         Inscripción
       </h2>
-      <p className="mt-4 max-w-[58ch] text-sm leading-relaxed text-muted">
-        Necesitas tu identificador de perfil de AoE4World. El nombre, el correo, el
-        país y el Discord son obligatorios; los canales de directo (Twitch, YouTube
-        y Kick) son opcionales y solo sirven para señalar tu emisión cuando juegas
-        partidas de la liga.
-      </p>
-      {/* Requisito de participación (F11): se explica aquí, no como un campo
-          aparte. No hay casilla de confirmación a propósito: no se pide un
-          compromiso, se informa de una condición para poder inscribirse. */}
-      <p className="mt-3 max-w-[58ch] text-sm leading-relaxed text-muted">
-        Tu perfil de AoE4World tiene que tener el historial de partidas en público.
-        La organización lo consulta para poder revisar las partidas del torneo, así
-        que es un requisito de participación. Está detallado en{" "}
-        <Link
-          href="/reglas#historial"
-          className="text-accent underline underline-offset-4 hover:text-accent-strong"
-        >
-          las reglas
-        </Link>
-        .
-      </p>
-      {/* La edición nueva deja inactivas las fichas de la anterior (issue 183). Se
-          dice aquí, junto a lo que hace falta para entrar, y no en un aviso aparte:
-          la acción ya responde lo mismo al enviar y no hay nada que prometer de más. */}
-      <p className="mt-3 max-w-[58ch] text-sm leading-relaxed text-muted">
-        Quien participó en la edición anterior y quedó inactivo puede volver a
-        inscribirse con el mismo Profile ID: la solicitud entra otra vez en la cola de
-        revisión.
-      </p>
+      {isClosed ? (
+        <p id="registration-closed-note" className="registration-closed" role="status">
+          {closedMessage}
+        </p>
+      ) : null}
+      <div className="registration-requirements">
+        <p className="mt-4 max-w-[58ch] text-sm leading-relaxed text-muted">
+          Necesitas tu identificador de perfil de AoE4World. El nombre, el correo, el
+          país y el Discord son obligatorios; los canales de directo (Twitch, YouTube
+          y Kick) son opcionales y solo sirven para señalar tu emisión cuando juegas
+          partidas de la liga.
+        </p>
+        {/* Requisito de participación (F11): se explica aquí, no como un campo
+            aparte. No hay casilla de confirmación a propósito: no se pide un
+            compromiso, se informa de una condición para poder inscribirse. */}
+        <p className="mt-3 max-w-[58ch] text-sm leading-relaxed text-muted">
+          Tu perfil de AoE4World tiene que tener el historial de partidas en público.
+          La organización lo consulta para poder revisar las partidas del torneo, así
+          que es un requisito de participación. Está detallado en{" "}
+          <Link
+            href="/reglas#historial"
+            className="text-accent underline underline-offset-4 hover:text-accent-strong"
+          >
+            las reglas
+          </Link>
+          .
+        </p>
+        {/* La edición nueva deja inactivas las fichas de la anterior (issue 183). Se
+            dice aquí, junto a lo que hace falta para entrar, y no en un aviso aparte:
+            la acción ya responde lo mismo al enviar y no hay nada que prometer de más. */}
+        <p className="mt-3 max-w-[58ch] text-sm leading-relaxed text-muted">
+          Quien participó en la edición anterior y quedó inactivo puede volver a
+          inscribirse con el mismo Profile ID: la solicitud entra otra vez en la cola de
+          revisión.
+        </p>
+
+      </div>
 
       {discord.configured ? (
         <DiscordStepPanel step={discord} error={fieldErrors.discord} />
@@ -186,7 +194,7 @@ export function RegistrationForm({
 
         <fieldset className="min-w-0">
           <FieldLegend badge="Obligatorio">Datos del jugador</FieldLegend>
-          <div className="flex flex-col gap-5">
+          <div className="registration-fields">
             <TextField
               id="profileId"
               name="profileId"
@@ -246,7 +254,7 @@ export function RegistrationForm({
 
         <fieldset className="min-w-0">
           <FieldLegend badge="Opcional">Canales de directo</FieldLegend>
-          <div className="flex flex-col gap-5">
+          <div className="registration-fields">
             <TextField
               id="twitchChannel"
               name="twitchChannel"
@@ -333,18 +341,7 @@ export function RegistrationForm({
           >
             {pending ? "Enviando…" : "Enviar solicitud"}
           </button>
-          {isClosed ? (
-            // Aviso, no error: se queda en `muted` para no competir con el rojo
-            // que este formulario reserva a los fallos. El texto lo elige la
-            // página entre los compartidos con el servidor, para que la cara
-            // visible y el rechazo digan lo mismo.
-            <p
-              id="registration-closed-note"
-              className="max-w-[42ch] text-sm leading-relaxed text-muted"
-            >
-              {closedMessage}
-            </p>
-          ) : null}
+
         </div>
       </form>
     </section>
@@ -411,7 +408,7 @@ function DiscordStepPanel({ step, error }: { step: DiscordStep; error?: string }
     <div
       role="group"
       aria-labelledby={titleId}
-      className={`mt-6 flex flex-col gap-3 rounded-lg border bg-background p-4 ${
+      className={`registration-discord mt-6 flex flex-col gap-3 rounded-lg border bg-background p-4 ${
         dentro ? "border-line" : "border-accent/40"
       }`}
     >
@@ -645,7 +642,7 @@ function SelectField({
 /** Confirmación: ocupa el lugar del formulario cuando la solicitud ya está registrada. */
 function RegistrationConfirmation({ message }: { message: string | null }) {
   return (
-    <section className="thread-top relative mx-auto w-full max-w-2xl overflow-hidden rounded-lg border border-accent/30 bg-surface p-6 sm:p-8">
+    <section className="registration-surface registration-confirmation">
       <div className="flex items-center gap-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-full border border-accent/40 text-accent">
           <CheckIcon className="size-5" />

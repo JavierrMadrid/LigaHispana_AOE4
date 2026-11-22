@@ -4,7 +4,7 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 | Elemento                     | Regla                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| Ámbito                       | `/` y `/partidas`, incluida cabecera y pie; otras rutas conservan su diseño                  |
+| Ámbito                       | `/`, `/partidas` y `/participar`, incluida cabecera y pie; otras rutas conservan su diseño                  |
 | Fondo / panel / borde        | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D`                        |
 | Texto principal / secundario | `#EDF1F8` / `#B6C3D6`                                                                       |
 | Acento                       | Oro `#D6B568` para inscripción, selección, foco y primer puesto; rojo para emisión          |
@@ -77,3 +77,10 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Solo aparecen canales comprobados en directo. El pie de una ficha existe únicamente si ofrece el visor multi-stream; no añade mensajes repetidos sin acción.
 - Enlaces de las fichas y acciones de contenido en pestaña nueva. Foco visible, selector nativo y divisiones con checkbox; Escape y clic exterior cierran el panel. Sin entradas decorativas de tarjetas; movimiento reducido estático.
 - Vacío real, fallo, sin resultados y carga conservan estructura y distinción de datos desconocidos. Previews de desarrollo: ver [OPERACION.md](docs/OPERACION.md#previews-de-partidas).
+
+## Inscripción (`/participar`)
+
+- Comparte navegación, panorama y pie de portada; ámbito exclusivo `.league-participate`. Identidad y enlaces de apoyo laterales desde 1024px; formulario único, una columna en móvil.
+- Evita tarjetas dentro de tarjetas en todo el sitio. Usa una sola superficie por bloque y organiza su contenido con títulos, espaciado, filas o separadores. Reserva el tratamiento de tarjeta para bloques independientes.
+- Discord, requisitos y grupos de campos se separan con espacio y líneas, sin paneles anidados. Controles de 44px, etiqueta visible, ayuda y error enlazados; estados OAuth, captcha, pendiente, éxito y cierre conservados.
+- El cierre aparece antes de los campos, mantiene el identificador accesible del envío desactivado y permite consultar los requisitos. Acciones y validación de servidor sin cambios.
