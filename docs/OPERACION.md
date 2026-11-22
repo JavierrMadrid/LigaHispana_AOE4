@@ -1441,6 +1441,27 @@ recálculo de la clasificación).
 
 ## Simulaciones
 
+### Previsualización de `/objetivos` sin base de datos
+
+Con `npm run dev`, estas rutas sustituyen las lecturas de objetivos y clasificación por datos locales:
+
+| Ruta | Estado de muestra |
+|---|---|
+| `/objetivos?preview=live` | Catálogo vigente, 18 participantes ficticios, líderes, empates y progreso parcial. |
+| `/objetivos?preview=zero` | Catálogo completo y participantes que todavía no han jugado. |
+| `/objetivos?preview=empty` | Sin objetivos activos ni participantes. |
+| `/objetivos?preview=missing` | Objetivos disponibles y clasificación no disponible. |
+| `/objetivos?preview=unavailable` | Lectura de objetivos no disponible. |
+| `/objetivos?preview=loading` | Estado visual de carga. |
+
+- Solo en `NODE_ENV=development`; en producción se ignora `preview`.
+- `src/lib/objectives-preview.ts` genera históricos deterministas desde la fecha recibida y usa
+  las funciones existentes de clasificación y objetivos: incluye la condición de equipos, familias,
+  hazañas, cobros por unidad, mapas pendientes, derrotas sin victorias y datos de summary ausentes.
+- No consulta la red, no escribe en la base ni modifica las reglas de producción. Es una revisión
+  de presentación; no mide el rendimiento del DAL o del worker. Para revisar búsquedas sin
+  resultados, buscar un término inexistente en la vista `live`.
+
 ### Previsualización de `/partidas` sin base de datos
 
 Con `npm run dev`, el parámetro `preview` permite revisar la interfaz sin consultar partidas:
