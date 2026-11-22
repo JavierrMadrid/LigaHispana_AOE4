@@ -129,11 +129,13 @@ export function ObjectiveStatus({ option }: { option: ObjectiveOption }) {
         <p className="mt-1 truncate text-sm text-muted">Sin poseedor todavía</p>
       ) : (
         <div className="mt-1 flex items-center gap-2">
-          <PlayerAvatar
-            name={option.holder.name}
-            avatarUrl={option.holder.avatarUrl}
-            className="size-6 shrink-0 text-xs"
-          />
+          {option.holder.avatarUrl ? (
+            <PlayerAvatar
+              name={option.holder.name}
+              avatarUrl={option.holder.avatarUrl}
+              className="size-6 shrink-0 text-xs"
+            />
+          ) : null}
           {/* Sin enlace a propósito: la tarjeta cerrada entera es un botón que
               abre la clasificación, y un enlace por debajo quedaría tapado. El
               perfil se alcanza desde la lista que aparece al voltear. */}

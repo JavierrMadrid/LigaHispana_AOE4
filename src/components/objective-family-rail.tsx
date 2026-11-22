@@ -327,12 +327,12 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
 
   return (
     <>
-      <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4">
+      <div className="objective-family-controls flex flex-col gap-3 rounded-lg border border-line bg-surface p-4">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <p className="text-xs font-semibold text-muted">{filterLabel}</p>
           <div className="flex items-center gap-3">
             <p className="text-xs tabular-nums text-muted">
-              {items.length} {itemsLabel}
+              {items.length} {items.length === 1 ? (itemsLabel === "competiciones" ? "competición" : itemsLabel === "subobjetivos" ? "subobjetivo" : itemsLabel) : itemsLabel}
             </p>
             <div className="flex items-center gap-1">
               <RailArrow
@@ -361,7 +361,7 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
                 onClick={() => jumpTo(civ)}
                 aria-pressed={activeCiv === civ}
                 title={item.label}
-                className={`flex size-11 items-center justify-center rounded-md border transition-colors ${
+                className={`objective-family-civ flex size-11 items-center justify-center rounded-md border transition-colors ${
                   activeCiv === civ
                     ? "border-accent bg-accent/10"
                     : "border-line bg-surface-raised hover:border-line-strong"
@@ -380,7 +380,7 @@ export function ObjectiveFamilyRail<T extends { id: string; label: string }>({
       <ul
         ref={railRef}
         onScroll={updateScrollState}
-        className="-m-3 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-3 p-3"
+        className="objective-family-track -m-3 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-3 p-3"
       >
         {items.map((item) => {
           const civ = familyCivId(item.id);

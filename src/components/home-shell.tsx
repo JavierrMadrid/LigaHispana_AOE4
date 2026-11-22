@@ -9,6 +9,7 @@ import { PUBLIC_NAVIGATION } from "@/lib/public-navigation";
 import { HomeObjectiveHelpProvider } from "@/components/home-objective-help";
 import "./home.css";
 import "./matches.css";
+import "./objectives.css";
 
 export function HomeShell({
   legacy,
@@ -35,12 +36,12 @@ export function HomeShell({
 }) {
   const pathname = usePathname();
   const isScoring = pathname === "/puntuacion";
-  if (pathname !== "/" && pathname !== "/partidas" && !isScoring) return legacy;
+  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && !isScoring) return legacy;
 
   return (
     <div
       className={`league-home ${
-        pathname === "/partidas" ? "league-matches" : isScoring ? "league-scoring" : ""
+        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : isScoring ? "league-scoring" : ""
       } ${fonts}`}
       style={accentStyle}
     >

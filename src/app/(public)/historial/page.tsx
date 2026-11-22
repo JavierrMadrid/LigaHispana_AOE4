@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
+import { HistoryTabs } from "@/components/history-tabs";
 import { PageHead } from "@/components/page-head";
 import { PageSizeSelect } from "@/components/page-size-select";
 import { Pagination } from "@/components/pagination";
-import { PointHistoryFilters } from "@/components/point-history-filters";
+import { HistoryFilters } from "@/components/history-filters";
 import { PointHistoryList } from "@/components/point-history-row";
 import { getPointHistory, getStandings } from "@/lib/public";
 
@@ -79,6 +80,8 @@ export default async function PointHistoryPage({ searchParams }: PageProps<"/his
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
       <PageHead title="Historial de puntos" />
 
+      <HistoryTabs />
+
       <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">
         Las ganancias de puntos del torneo, de lo más reciente a lo más antiguo: cada
         victoria clasificatoria, cada logro cumplido y cada cambio de poseedor de las
@@ -118,7 +121,7 @@ export default async function PointHistoryPage({ searchParams }: PageProps<"/his
         />
       ) : (
         <div className="flex flex-col gap-4">
-          <PointHistoryFilters basePath="/historial" players={players} />
+          <HistoryFilters basePath="/historial" players={players} />
 
           {historyRead.data.rows.length === 0 ? (
             <EmptyState
