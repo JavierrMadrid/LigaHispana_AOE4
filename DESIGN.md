@@ -4,7 +4,7 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 | Elemento                     | Regla                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| Ámbito                       | `/`, `/partidas` y `/objetivos`, incluida cabecera y pie; otras rutas conservan su diseño                  |
+| Ámbito                       | `/`, `/partidas`, `/objetivos` y `/reglas`, incluida cabecera y pie; otras rutas conservan su diseño                  |
 | Fondo / panel / borde        | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D`                        |
 | Texto principal / secundario | `#EDF1F8` / `#B6C3D6`                                                                       |
 | Acento                       | Oro `#D6B568` para inscripción, selección, foco y primer puesto; rojo para emisión          |
@@ -15,6 +15,8 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 | Modo                         | Operate: resultados visibles desde el primer render, sin entradas animadas de filas         |
 
 ## Composición y densidad
+
+- Evita tarjetas dentro de tarjetas en todo el sitio. Usa una sola superficie por bloque y organiza su contenido con títulos, espaciado, filas o separadores. Reserva el tratamiento de tarjeta para bloques independientes.
 
 - Desde 1440px: orientación a la izquierda (192px), clasificación central y actividad a la derecha (208px). Identidad con escudo transparente; panorama adaptado del Sacro Imperio Romano debajo de la navegación y detrás del comienzo del contenido, sin duplicarlo dentro de la identidad.
 - De 1100 a 1439px: identidad y estado compactos sobre la tabla; actividad a la derecha; ayuda de puntuación debajo.
@@ -87,3 +89,10 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - El contador indica coincidencias con los filtros y el total del catálogo, nunca objetivos alcanzados. Sin resumen de contadores duplicado. Las tarjetas y clasificaciones de objetivos omiten las iniciales de reserva cuando no hay avatar.
 - Familias, rieles, Masterizando y ventanas volteables conservan puntos, clasificación y progreso. Tarjetas azul tinta con halo dorado local discreto, foco visible y movimiento reducido.
 - Presentación optativa `catalog` y CSS bajo `.league-objectives`: no modifica el detalle de participante. Carga, vacío, búsqueda sin resultados, fallo y participantes no disponibles son estados distintos. Previews de desarrollo en `docs/OPERACION.md`.
+
+## Reglamento (`/reglas`)
+
+- Modo Read: título Cinzel compacto, prosa Inter de 15px, interlineado 1,8 y ancho máximo 72ch. Una superficie continua de lectura, separadores entre secciones; sin escudo ni hero añadido.
+- Índice lateral sticky desde 1024px, con sección activa y anclas existentes; en pantallas menores, índice desplegable nativo antes del documento. Foco visible y anclas separadas de la cabecera sticky.
+- Calendario en filas dentro de la superficie de lectura, con separadores y multiplicador destacado. Los estados vacíos y de indisponibilidad se muestran en línea.
+- Estilos bajo `.league-rules`; navegación, panorama y pie compartidos sin modificar otras rutas.

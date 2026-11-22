@@ -10,6 +10,7 @@ import { HomeObjectiveHelpProvider } from "@/components/home-objective-help";
 import "./home.css";
 import "./matches.css";
 import "./objectives.css";
+import "./rules.css";
 
 export function HomeShell({
   legacy,
@@ -35,12 +36,12 @@ export function HomeShell({
   sponsorCredit: ReactNode;
 }) {
   const pathname = usePathname();
-  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos") return legacy;
+  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && pathname !== "/reglas") return legacy;
 
   return (
     <div
       className={`league-home ${
-        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : ""
+        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : pathname === "/reglas" ? "league-rules" : ""
       } ${fonts}`}
       style={accentStyle}
     >

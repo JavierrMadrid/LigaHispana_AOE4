@@ -1,0 +1,183 @@
+.league-rules .rules-document {
+  max-width: 1120px;
+  margin-inline: auto;
+}
+.league-rules .rules-heading {
+  max-width: 74ch;
+  margin-bottom: 28px;
+}
+.league-rules .rules-heading h1 {
+  margin: 0 0 12px;
+  font: 600 30px/1.25 var(--font-cinzel), serif;
+}
+.league-rules .rules-heading p {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.8;
+}
+.league-rules .rules-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 208px;
+  align-items: start;
+  gap: 32px;
+}
+.league-rules .rules-reading {
+  min-width: 0;
+  padding: 28px 32px;
+  background: #101c30;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.league-rules .rules-reading > section {
+  scroll-margin-top: 100px;
+}
+.league-rules .rules-reading > section + section {
+  margin-top: 32px;
+  padding-top: 32px;
+  border-top: 1px solid var(--line);
+}
+.league-rules .rules-reading h2 {
+  padding: 0;
+  border: 0;
+  font: 600 21px/1.4 var(--font-home-inter), sans-serif;
+}
+.league-rules .rules-reading h3 {
+  font-family: var(--font-home-inter), sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+}
+.league-rules .rules-reading p,
+.league-rules .rules-reading li {
+  overflow-wrap: anywhere;
+}
+.league-rules .rules-reading > section > div,
+.league-rules .rules-reading > section > p,
+.league-rules .rules-reading > section > ul,
+.league-rules .rules-reading > section > ol {
+  max-width: 72ch;
+  line-height: 1.8;
+}
+.league-rules .rules-reading > section > div,
+.league-rules .rules-reading > section > ul {
+  gap: 14px;
+}
+.league-rules #participacion > ul,
+.league-rules #organizacion > ul {
+  padding-left: 18px;
+  list-style: disc;
+}
+.league-rules #participacion > ul > li::marker,
+.league-rules #organizacion > ul > li::marker {
+  color: #8195b2;
+}
+.league-rules #normas > ol {
+  margin-top: 20px;
+  padding-left: 24px;
+}
+.league-rules #normas > ol > li {
+  padding-left: 6px;
+}
+.league-rules #normas > ol > li + li {
+  margin-top: 18px;
+}
+.league-rules #normas > ol > li::marker {
+  font-family: var(--font-home-inter), sans-serif;
+  font-size: 14px;
+}
+.league-rules #historial {
+  scroll-margin-top: 100px;
+}
+.league-rules #eventos > ul > li > div > p {
+  font: 600 24px/1 var(--font-home-inter), sans-serif;
+}
+.league-rules #eventos > p,
+.league-rules #normas > p:last-child {
+  font-size: 14px;
+  line-height: 1.8;
+}
+.league-rules .rules-index {
+  position: sticky;
+  top: 100px;
+  padding-block: 4px;
+}
+.league-rules .rules-index nav > div {
+  position: static;
+}
+.league-rules .rules-index nav > div > p {
+  color: #c4cfdf;
+  font-size: 12px;
+  font-weight: 600;
+}
+.league-rules .rules-index ul {
+  margin-top: 16px;
+  gap: 4px;
+}
+.league-rules .rules-index a {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  font-size: 14px;
+}
+.league-rules .rules-index a[aria-current] {
+  color: var(--accent-strong);
+  background: #14243d;
+}
+.league-rules .rules-mobile-index {
+  display: none;
+}
+.league-rules .rules-document a:focus-visible,
+.league-rules .rules-document summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+@media (max-width: 1023px) {
+  .league-rules .rules-layout {
+    display: block;
+  }
+  .league-rules .rules-index {
+    display: none;
+  }
+  .league-rules .rules-mobile-index {
+    display: block;
+    margin-bottom: 20px;
+  }
+  .league-rules .rules-mobile-index details {
+    background: #122039;
+    border-radius: 6px;
+  }
+  .league-rules .rules-mobile-index summary,
+  .league-rules .rules-mobile-index a {
+    min-height: 44px;
+  }
+  .league-rules .rules-mobile-index a[aria-current] {
+    color: var(--accent-strong);
+    background: #192b43;
+  }
+  .league-rules .rules-reading {
+    padding: 24px 28px;
+  }
+}
+@media (max-width: 600px) {
+  .league-rules .rules-heading {
+    margin-bottom: 20px;
+  }
+  .league-rules .rules-heading h1 {
+    font-size: 26px;
+  }
+  .league-rules .rules-heading p {
+    font-size: 14px;
+    line-height: 1.75;
+  }
+  .league-rules .rules-reading {
+    padding: 22px 18px;
+  }
+  .league-rules .rules-reading h2 {
+    font-size: 19px;
+  }
+  .league-rules .rules-reading > section + section {
+    margin-top: 28px;
+    padding-top: 28px;
+  }
+}
