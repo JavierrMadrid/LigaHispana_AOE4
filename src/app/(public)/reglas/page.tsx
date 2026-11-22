@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PageHead } from "@/components/page-head";
 import {
   MobileSectionIndex,
   SectionHeading,
@@ -61,31 +60,31 @@ export default async function RulesPage() {
       : [];
 
   return (
-    // Conserva el ancho anterior (`max-w-6xl`): el contenedor público subió a
-    // `max-w-[80rem]` para la clasificación, pero el bloque de lectura no gana
-    // nada con estirarse.
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-10">
-      <PageHead title="Reglas" />
+    <div className="rules-document">
+      <header className="rules-heading">
+        <h1>Reglas</h1>
+        <p>
+          Las normas del torneo. Cuánto vale cada victoria, qué cuenta como partida
+          clasificatoria y cómo funcionan los objetivos está en{" "}
+          <Link
+            href="/puntuacion"
+            className="text-accent underline underline-offset-4 hover:text-accent-strong"
+          >
+            Puntuación
+          </Link>
+          .
+        </p>
+      </header>
 
-      <p className="max-w-[68ch] text-[15px] leading-relaxed text-muted">
-        Las normas del torneo. Cuánto vale cada victoria, qué cuenta como partida
-        clasificatoria y cómo funcionan los objetivos está en{" "}
-        <Link
-          href="/puntuacion"
-          className="text-accent underline underline-offset-4 hover:text-accent-strong"
-        >
-          Puntuación
-        </Link>
-        .
-      </p>
+      <div className="rules-mobile-index">
+        <MobileSectionIndex
+          sections={SECTIONS}
+          ariaLabel="Secciones de las reglas"
+        />
+      </div>
 
-      <MobileSectionIndex
-        sections={SECTIONS}
-        ariaLabel="Secciones de las reglas"
-      />
-
-      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_13rem] lg:gap-14">
-        <div className="flex min-w-0 flex-col gap-16">
+      <div className="rules-layout">
+        <article className="rules-reading" aria-label="Reglamento del torneo">
           <section id="formato" className="scroll-mt-24">
             <SectionHeading title="Formato" />
             <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
@@ -197,23 +196,23 @@ export default async function RulesPage() {
             </div>
 
             {eventsRead.status !== "ok" ? (
-              <p className="mt-5 max-w-[68ch] rounded-lg border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-muted">
+              <p className="mt-5 max-w-[68ch] border-t border-line pt-4 text-sm leading-relaxed text-muted">
                 No se han podido leer los eventos de esta edición. Vuelve a intentarlo
                 en unos minutos.
               </p>
             ) : events.length === 0 ? (
-              <p className="mt-5 max-w-[68ch] rounded-lg border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-muted">
+              <p className="mt-5 max-w-[68ch] border-t border-line pt-4 text-sm leading-relaxed text-muted">
                 Esta edición no tiene eventos puntuales programados.
               </p>
             ) : (
-              <ul className="mt-5 flex max-w-[68ch] flex-col gap-3">
+              <ul className="mt-5 max-w-[68ch] divide-y divide-line border-t border-line">
                 {events.map((event) => {
                   const windowText = formatEventWindow(event);
 
                   return (
                     <li
                       key={event.id}
-                      className="rounded-lg border border-line bg-surface p-4 sm:p-5"
+                      className="py-4 last:pb-0"
                     >
                       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                         <h3 className="font-display text-lg font-semibold text-foreground">
@@ -369,12 +368,14 @@ export default async function RulesPage() {
               ) : null}
             </ul>
           </section>
-        </div>
+        </article>
 
-        <SectionIndexAside
-          sections={SECTIONS}
-          ariaLabel="Secciones de las reglas"
-        />
+        <aside className="rules-index">
+          <SectionIndexAside
+            sections={SECTIONS}
+            ariaLabel="Secciones de las reglas"
+          />
+        </aside>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ import { PUBLIC_NAVIGATION } from "@/lib/public-navigation";
 import { HomeObjectiveHelpProvider } from "@/components/home-objective-help";
 import "./home.css";
 import "./matches.css";
+import "./rules.css";
 
 export function HomeShell({
   legacy,
@@ -34,12 +35,12 @@ export function HomeShell({
   sponsorCredit: ReactNode;
 }) {
   const pathname = usePathname();
-  if (pathname !== "/" && pathname !== "/partidas") return legacy;
+  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/reglas") return legacy;
 
   return (
     <div
       className={`league-home ${
-        pathname === "/partidas" ? "league-matches" : ""
+        pathname === "/partidas" ? "league-matches" : pathname === "/reglas" ? "league-rules" : ""
       } ${fonts}`}
       style={accentStyle}
     >

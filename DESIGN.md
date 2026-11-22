@@ -4,7 +4,7 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 | Elemento                     | Regla                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| Ámbito                       | `/` y `/partidas`, incluida cabecera y pie; otras rutas conservan su diseño                  |
+| Ámbito                       | `/`, `/partidas` y `/reglas`, incluida cabecera y pie; otras rutas conservan su diseño                  |
 | Fondo / panel / borde        | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D`                        |
 | Texto principal / secundario | `#EDF1F8` / `#B6C3D6`                                                                       |
 | Acento                       | Oro `#D6B568` para inscripción, selección, foco y primer puesto; rojo para emisión          |
@@ -15,6 +15,8 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 | Modo                         | Operate: resultados visibles desde el primer render, sin entradas animadas de filas         |
 
 ## Composición y densidad
+
+- Evita tarjetas dentro de tarjetas en todo el sitio. Usa una sola superficie por bloque y organiza su contenido con títulos, espaciado, filas o separadores. Reserva el tratamiento de tarjeta para bloques independientes.
 
 - Desde 1440px: orientación a la izquierda (192px), clasificación central y actividad a la derecha (208px). Identidad con escudo transparente; panorama adaptado del Sacro Imperio Romano debajo de la navegación y detrás del comienzo del contenido, sin duplicarlo dentro de la identidad.
 - De 1100 a 1439px: identidad y estado compactos sobre la tabla; actividad a la derecha; ayuda de puntuación debajo.
@@ -77,3 +79,10 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Solo aparecen canales comprobados en directo. El pie de una ficha existe únicamente si ofrece el visor multi-stream; no añade mensajes repetidos sin acción.
 - Enlaces de las fichas y acciones de contenido en pestaña nueva. Foco visible, selector nativo y divisiones con checkbox; Escape y clic exterior cierran el panel. Sin entradas decorativas de tarjetas; movimiento reducido estático.
 - Vacío real, fallo, sin resultados y carga conservan estructura y distinción de datos desconocidos. Previews de desarrollo: ver [OPERACION.md](docs/OPERACION.md#previews-de-partidas).
+
+## Reglamento (`/reglas`)
+
+- Modo Read: título Cinzel compacto, prosa Inter de 15px, interlineado 1,8 y ancho máximo 72ch. Una superficie continua de lectura, separadores entre secciones; sin escudo ni hero añadido.
+- Índice lateral sticky desde 1024px, con sección activa y anclas existentes; en pantallas menores, índice desplegable nativo antes del documento. Foco visible y anclas separadas de la cabecera sticky.
+- Calendario en filas dentro de la superficie de lectura, con separadores y multiplicador destacado. Los estados vacíos y de indisponibilidad se muestran en línea.
+- Estilos bajo `.league-rules`; navegación, panorama y pie compartidos sin modificar otras rutas.
