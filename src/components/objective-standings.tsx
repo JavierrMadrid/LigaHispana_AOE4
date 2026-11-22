@@ -182,7 +182,9 @@ function StandingRow({
         <span className="w-6 shrink-0 text-right text-sm tabular-nums text-muted">
           {position === null ? null : position}
         </span>
-        <PlayerAvatar name={player.name} avatarUrl={player.avatarUrl} className="size-8 text-xs" />
+        {player.avatarUrl ? (
+          <PlayerAvatar name={player.name} avatarUrl={player.avatarUrl} className="size-8 text-xs" />
+        ) : null}
         <span className="min-w-0 flex-1 truncate text-sm text-foreground/90">
           {/* Solo el nombre es enlace: el hueco de la columna no debe navegar. */}
           <a

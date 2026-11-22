@@ -8,7 +8,8 @@ funciones puras en [`src/lib/objects.ts`](../src/lib/objects.ts), la persistenci
 las operaciones en [`src/lib/object-awards.ts`](../src/lib/object-awards.ts), las
 acciones del panel en
 [`src/app/admin/objetos/actions.ts`](../src/app/admin/objetos/actions.ts), los avisos
-en [`src/lib/object-announcements.ts`](../src/lib/object-announcements.ts) y las
+en [`src/lib/object-announcements.ts`](../src/lib/object-announcements.ts), el feed
+público en [`src/lib/object-history.ts`](../src/lib/object-history.ts) y las
 tablas en [`MODELO-DATOS.md`](./MODELO-DATOS.md#objectaward).
 
 ## Qué es
@@ -288,6 +289,39 @@ de recibirlo, lanzarlo o recuperarlo. Los textos, los glifos y los tiempos está
 - En el configurador, «Probar objeto recibido», «Probar objeto lanzado» y «Probar objeto devuelto»
   reproducen los tres casos en la vista previa, sin tocar el torneo.
 
+## Historial público
+
+La página **`/historial-objetos`** publica los objetos de la edición activa como un **feed de
+eventos**, no como tarjetas por objeto: premios, lanzamientos, devoluciones y desventajas
+cumplidas, mezclados de lo más reciente a lo más antiguo. Es el mismo lenguaje que el historial
+de puntos (`/historial`): filtro por participante, rango de fechas con el día final completo y
+paginación en servidor. La lectura vive en
+[`src/lib/object-history.ts`](../src/lib/object-history.ts) (`getObjectHistory()`).
+
+| `kind` | Cuándo existe | `at` | `player` | `opponent` |
+|---|---|---|---|---|
+| `AWARD` | Se creó el `ObjectAward` | `winnerMatch.startedAt` (respaldo: `award.day`) | ganador | `null` |
+| `THROW` | Lanzamiento con `returned = false` | `throw.at` | lanzador | objetivo |
+| `RETURN` | Lanzamiento con `returned = true` | `throw.at` | lanzador | objetivo |
+| `FULFILL` | El premio tiene `satisfiedByMatchId` | `satisfiedByMatch.startedAt` (respaldo: `exitedAt`) | portador (respaldo: ganador) | `null` |
+
+- **Un premio cumplido genera dos eventos**: su `AWARD` y su `FULFILL`. Una **retirada**
+  (`exitedAt` informado y `satisfiedByMatchId` nulo, al apagar el modo) solo genera `AWARD`.
+- **Clave estable**: `award:<id>`, `throw:<id>` o `fulfill:<awardId>`. No se publican los ids
+  internos, ni la tirada (`roll`), ni las probabilidades, ni `Match.id` ni `Player.id`.
+- **Alcance**: la **edición activa** (`windowBounds(ruleset.window).from`, igual que el feed de
+  objetos del overlay; si no hay suelo, no se acota) y solo participantes **aprobados**. El
+  sujeto tiene que estar aprobado; si el contrario no existe o no lo está, el evento se conserva
+  con `opponent: null`.
+- **Filtros**: `jugador` es el `profileId` público (`readProfileIdFilter`), y `from`/`to` usan
+  `dateRangeWhere` (el `to` incluye el día entero). El filtro de participante encuentra también
+  los lanzamientos **recibidos**.
+- **Paginación**: `page` y `pageSize` con `DEFAULT_PAGE_SIZE`/`MAX_PAGE_SIZE`, página acotada a
+  la última con filas y `pageCount` a `0` si no hay ninguna. Un corte de base devuelve
+  `{ status: "degraded", data: null }`, que la página distingue de una lista vacía.
+- **Navegación**: `/historial` y `/historial-objetos` comparten un selector local «Puntos / Objetos»;
+  el historial de objetos no es una sexta entrada de la navegación principal.
+
 ## Exclusión de partidas
 
 Mientras un objeto está pendiente, las partidas del portador **no puntúan** ni dan
@@ -335,6 +369,10 @@ exigiría guardar el histórico de ventanas que este diseño evita a propósito.
   tests/unit/lib/object-awards.test.ts`. Cubren los textos de los tres avisos, el
   formato de la probabilidad y el orden por puesto de los destinos de lanzamiento,
   sin base ni red.
+- **Historial público:** `npx vitest run tests/unit/lib/object-history.test.ts`. Cubre el
+  mapeo de los cuatro tipos, las fechas de respaldo, la retirada sin `FULFILL`, la regla de
+  aprobados, el orden total, los filtros inclusivos (también los lanzamientos recibidos) y
+  la paginación acotada, sin base ni red.
 - **Catálogo:** comparar la tabla de [Desventajas](#desventajas) con
   `OBJECT_CATALOG` (`src/lib/objects.ts`). Los ids son la clave que se guarda.
 - **Esquema:** `npx prisma validate` y `npx prisma generate`. Las tablas **no** están

@@ -1,6 +1,13 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { MagnifyingGlass } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
+import { Target } from "@phosphor-icons/react/dist/csr/Target";
+import { Trophy } from "@phosphor-icons/react/dist/csr/Trophy";
+import { ArrowUpRight } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
+import { X } from "@phosphor-icons/react/dist/csr/X";
+import { CaretDown } from "@phosphor-icons/react/dist/csr/CaretDown";
 import type { ObjectiveGroup, ObjectiveOption } from "@/lib/public";
 import { ObjectiveDialogCard } from "@/components/objective-dialog-card";
 import {
@@ -10,242 +17,294 @@ import {
 import { isMasterizandoId } from "@/components/objective-family-rail";
 import type { ObjectiveStandingPlayer } from "@/components/objective-standings";
 
-type ObjectivesBrowserProps = {
+type Props = {
   options: ObjectiveOption[];
-  /** Rótulos de grupo del catálogo, para no duplicarlos en el cliente. */
   groupLabels: Record<ObjectiveGroup, string>;
-  /** Clasificación del torneo, para el check de "Ver completados". */
   standings: ObjectiveStandingPlayer[] | null;
-  /** Pool de mapas activo, solo para explicar `por-tierra-y-agua`. */
   mapPool: readonly string[];
 };
-
-type GroupSection = {
+type Section = {
   id: ObjectiveGroup;
   label: string;
-  /** Objetivos sin familia: tarjetas individuales. */
   standalone: ObjectiveOption[];
-  /** Competiciones `masterizando-<civ>`: no son familia, pero van en riel. */
   masterizando: ObjectiveOption[];
-  /** Familias: cabeza + subobjetivos, en tarjeta agrupada. */
   families: { head: ObjectiveOption; children: ObjectiveOption[] }[];
-  totals: { count: number; points: number; holders: number };
+  count: number;
 };
 
-/**
- * Los objetivos especiales, agrupados por tipo.
- *
- * El servidor entrega los objetivos ya resueltos y aquí se agrupan por tipo y se
- * separan las familias (un logro cabeza con sus subobjetivos por civilización) de
- * los objetivos sueltos. Además de las familias, las competiciones
- * `masterizando-<civ>` —que no tienen cabeza— se leen en su propio riel bajo el
- * titular `Masterizando`, no en la rejilla. Los sueltos son tarjetas que abren su
- * clasificación en una tarjeta volteable; una familia se lee como un bloque: la
- * cabeza arriba, el filtro de banderas y un riel con una tarjeta por civilización.
- * La clasificación no se pinta en la rejilla: se enseña al abrir cada tarjeta.
- */
 export function ObjectivesBrowser({
   options,
   groupLabels,
   standings,
   mapPool,
-}: ObjectivesBrowserProps) {
+}: Props) {
   const [group, setGroup] = useState<ObjectiveGroup | null>(null);
-
-  const groups = useMemo(() => {
-    const order: ObjectiveGroup[] = [];
-
-    for (const option of options) {
-      if (!order.includes(option.group)) {
-        order.push(option.group);
-      }
-    }
-
-    return order;
-  }, [options]);
-
-  // Una cabeza de familia es un objetivo que no cuelga de nadie pero del que
-  // cuelga alguien. Se resuelve con `parent`, sin mirar ids.
-  const heads = useMemo(() => {
-    const parents = new Set(
-      options.map((option) => option.parent).filter((id): id is string => id !== null),
+  const [kind, setKind] = useState<"all" | ObjectiveOption["kind"]>("all");
+  const [query, setQuery] = useState("");
+  const groups = useMemo(
+    () => [...new Set(options.map((option) => option.group))],
+    [options]
+  );
+  const heads = useMemo(
+    () =>
+      new Set(
+        options.flatMap((option) => (option.parent ? [option.parent] : []))
+      ),
+    [options]
+  );
+  const eligible = useMemo(() => {
+    const needle = normalize(query.trim());
+    const matchesKind = (option: ObjectiveOption) =>
+      kind === "all" || option.kind === kind;
+    const matchesText = (option: ObjectiveOption) =>
+      !needle ||
+      normalize(
+        `${option.label} ${option.description} ${groupLabels[option.group]}`
+      ).includes(needle);
+    const visible = new Set(
+      options
+        .filter((option) => matchesKind(option) && matchesText(option))
+        .map((option) => option.id)
     );
-
-    return new Set(options.filter((option) => parents.has(option.id)).map((option) => option.id));
-  }, [options]);
-
-  const sections = useMemo<GroupSection[]>(
+    // Buscar una familia conserva sus civilizaciones; buscar un hijo conserva su cabeza como contexto.
+    for (const head of options)
+      if (needle && heads.has(head.id) && matchesText(head))
+        for (const child of options)
+          if (child.parent === head.id && matchesKind(child))
+            visible.add(child.id);
+    return visible;
+  }, [options, query, kind, heads, groupLabels]);
+  const sections = useMemo(
     () =>
       groups
-        .filter((item) => group === null || item === group)
-        .map((item) => {
-          const groupOptions = options.filter((option) => option.group === item);
+        .filter((id) => group === null || id === group)
+        .map<Section>((id) => {
+          const items = options.filter((option) => option.group === id);
           const standalone: ObjectiveOption[] = [];
           const masterizando: ObjectiveOption[] = [];
-          const families: { head: ObjectiveOption; children: ObjectiveOption[] }[] = [];
-
-          for (const option of groupOptions) {
+          const families: Section["families"] = [];
+          for (const option of items) {
             if (heads.has(option.id)) {
-              families.push({
-                head: option,
-                children: groupOptions.filter((child) => child.parent === option.id),
-              });
-              continue;
-            }
-
-            if (option.parent === null) {
-              if (isMasterizandoId(option.id)) {
-                masterizando.push(option);
-              } else {
-                standalone.push(option);
-              }
+              const children = items.filter(
+                (child) => child.parent === option.id && eligible.has(child.id)
+              );
+              if (eligible.has(option.id) || children.length)
+                families.push({ head: option, children });
+            } else if (option.parent === null && eligible.has(option.id)) {
+              if (isMasterizandoId(option.id)) masterizando.push(option);
+              else standalone.push(option);
             }
           }
-
           return {
-            id: item,
-            label: groupLabels[item],
+            id,
+            label: groupLabels[id],
             standalone,
             masterizando,
             families,
-            totals: {
-              count: groupOptions.length,
-              points: groupOptions.reduce((total, option) => total + option.points, 0),
-              holders: groupOptions.filter(
-                (option) => option.holder !== null || option.beneficiaries.length > 0,
-              ).length,
-            },
+            count: items.filter((option) => eligible.has(option.id)).length,
           };
-        }),
-    [groups, group, options, groupLabels, heads],
+        })
+        .filter((section) => section.count > 0),
+    [groups, group, options, heads, eligible, groupLabels]
   );
-
-  const visibleCount = useMemo(
-    () => (group === null ? options.length : options.filter((option) => option.group === group).length),
-    [options, group],
-  );
+  const visibleCount = options.filter(
+    (option) =>
+      eligible.has(option.id) && (group === null || option.group === group)
+  ).length;
+  const active = group !== null || kind !== "all" || query.trim() !== "";
+  function reset() {
+    setGroup(null);
+    setKind("all");
+    setQuery("");
+  }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="rounded-lg border border-line bg-surface p-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-          <span id="filtro-tipos" className="shrink-0 text-xs font-semibold text-muted sm:w-20">
-            Tipos
-          </span>
-          <div role="group" aria-labelledby="filtro-tipos" className="flex flex-wrap items-center gap-2">
-            <FilterPill active={group === null} onClick={() => setGroup(null)}>
-              Todos
-              <Count value={options.length} />
-            </FilterPill>
-            {groups.map((item) => (
-              <FilterPill
-                key={item}
-                active={group === item}
-                onClick={() => setGroup(group === item ? null : item)}
-              >
-                {groupLabels[item]}
-                <Count value={options.filter((option) => option.group === item).length} />
-              </FilterPill>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {visibleCount === 0 ? (
-        <div className="rounded-lg border border-line bg-surface px-6 py-12 text-center">
-          <p className="font-display text-lg font-semibold text-foreground">
-            No hay objetivos en este tipo
-          </p>
-          <p className="mt-2 text-sm text-muted">
-            Elige otro tipo de objetivo para ver su clasificación.
-          </p>
-          <button
-            type="button"
-            onClick={() => setGroup(null)}
-            className="mt-5 inline-flex h-10 items-center rounded-md bg-accent px-4 text-sm font-semibold text-accent-ink transition-colors hover:bg-accent-strong active:translate-y-px"
-          >
-            Ver todos los objetivos
+    <div className="catalog-layout">
+      <aside className="catalog-context" aria-labelledby="catalog-title">
+        <h1 id="catalog-title">Objetivos</h1>
+        <p>Logros para completar y competiciones para liderar.</p>
+        <nav className="catalog-index" aria-label="Grupos de objetivos">
+          <button aria-pressed={group === null} onClick={() => setGroup(null)}>
+            <Target size={16} aria-hidden="true" />
+            <span>Todos los objetivos</span>
+            <span>{options.length}</span>
           </button>
+          {groups.map((id) => (
+            <button
+              key={id}
+              aria-pressed={group === id}
+              onClick={() => setGroup(group === id ? null : id)}
+            >
+              <span>{groupLabels[id]}</span>
+              <span>
+                {options.filter((option) => option.group === id).length}
+              </span>
+            </button>
+          ))}
+        </nav>
+        <div className="catalog-guide">
+          <h2>Cómo consultarlos</h2>
+          <p>
+            Abre un objetivo para ver quién lo disputa y cuánto ha avanzado.
+            Gira la tarjeta para consultar su regla.
+          </p>
+          <Link href="/puntuacion" target="_blank" rel="noopener noreferrer">
+            Cómo se puntúa
+            <ArrowUpRight size={14} aria-hidden="true" />
+          </Link>
         </div>
-      ) : (
-        <div className="flex flex-col gap-12">
-          {sections.map((section) => (
-            <section key={section.id} id={`grupo-${section.id}`} className="scroll-mt-24">
-              <h2 className="flex flex-col gap-1 border-b border-line pb-3 sm:flex-row sm:flex-wrap sm:items-baseline sm:justify-between sm:gap-x-4">
-                <span className="font-display text-xl font-semibold text-foreground">
-                  {section.label}
-                </span>
-                <span className="text-xs tabular-nums text-muted">
-                  {section.totals.count} {section.totals.count === 1 ? "objetivo" : "objetivos"} ·{" "}
-                  {section.totals.points} puntos · {section.totals.holders} con poseedor o
-                  completados
-                </span>
-              </h2>
-
-              <div className="mt-5 flex flex-col gap-10">
-                {section.masterizando.length > 0 ? (
-                  <ObjectiveMasterizandoSection
-                    subobjectives={section.masterizando}
-                    standings={standings}
-                  />
-                ) : null}
-
-                {section.families.map((family) => (
-                  <ObjectiveFamilySection
-                    key={family.head.id}
-                    head={family.head}
-                    subobjectives={family.children}
-                    standings={standings}
-                    mapPool={mapPool}
-                  />
-                ))}
-
-                {section.standalone.length > 0 ? (
-                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                    {section.standalone.map((option) => (
-                      <ObjectiveDialogCard
-                        key={option.id}
-                        option={option}
+      </aside>
+      <div className="catalog-main">
+        <section
+          className="catalog-toolbar"
+          aria-label="Buscar y filtrar objetivos"
+        >
+          <label className="catalog-search">
+            <MagnifyingGlass size={18} aria-hidden="true" />
+            <span className="sr-only">Buscar objetivo o civilización</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Buscar objetivo o civilización…"
+            />
+          </label>
+          <label className="catalog-kind">
+            <span className="sr-only">Clase de objetivo</span>
+            <select
+              value={kind}
+              onChange={(event) => setKind(event.target.value as typeof kind)}
+            >
+              <option value="all">Logros y competiciones</option>
+              <option value="achievement">Solo logros</option>
+              <option value="competition">Solo competiciones</option>
+            </select>
+            <CaretDown size={14} aria-hidden="true" />
+          </label>
+        </section>
+        <div className="catalog-result-count">
+          <p role="status">
+            {active
+              ? `${visibleCount} ${visibleCount === 1 ? "objetivo coincide" : "objetivos coinciden"} con los filtros · ${options.length} en el catálogo`
+              : `${options.length} objetivos en el catálogo`}
+          </p>
+          {active ? (
+            <button onClick={reset}>
+              Limpiar filtros
+              <X size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        {standings === null && options.length > 0 ? (
+          <p className="catalog-read-notice">
+            El catálogo está disponible, pero no se ha podido cargar la lista de
+            participantes para consultar los completados.
+          </p>
+        ) : null}
+        {visibleCount === 0 ? (
+          <section className="catalog-empty">
+            <Trophy size={30} aria-hidden="true" />
+            <h2>
+              {options.length
+                ? "No hay objetivos que coincidan"
+                : "No hay objetivos activos"}
+            </h2>
+            <p>
+              {options.length
+                ? "Prueba otro nombre, otra civilización o quita los filtros."
+                : "Los objetivos aparecerán cuando la organización publique el catálogo de esta edición."}
+            </p>
+            {options.length ? (
+              <button className="home-primary" onClick={reset}>
+                Ver todos los objetivos
+              </button>
+            ) : (
+              <Link
+                href="/puntuacion"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Consultar la puntuación
+                <ArrowUpRight size={14} aria-hidden="true" />
+              </Link>
+            )}
+          </section>
+        ) : (
+          <div className="catalog-sections">
+            {sections.map((section) => (
+              <section
+                key={section.id}
+                id={`grupo-${section.id}`}
+                className="catalog-group"
+              >
+                <header className="catalog-group-heading">
+                  <h2>{section.label}</h2>
+                  <span>
+                    {section.count}{" "}
+                    {section.count === 1 ? "objetivo" : "objetivos"}
+                  </span>
+                </header>
+                <div className="catalog-group-content">
+                  {section.masterizando.length ? (
+                    <div className="catalog-family-block">
+                      <ObjectiveMasterizandoSection
+                        catalog
+                        subobjectives={section.masterizando}
+                        standings={standings}
+                      />
+                    </div>
+                  ) : null}
+                  {section.families.map((family) => (
+                    <div key={family.head.id} className="catalog-family-block">
+                      <ObjectiveFamilySection
+                        catalog
+                        head={family.head}
+                        subobjectives={family.children}
+                        allSubobjectives={options.filter(
+                          (option) => option.parent === family.head.id
+                        )}
                         standings={standings}
                         mapPool={mapPool}
                       />
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
+                    </div>
+                  ))}
+                  {section.standalone.length ? (
+                    <div className="catalog-grid">
+                      {section.standalone.map((option) => (
+                        <ObjectiveDialogCard
+                          catalog
+                          key={option.id}
+                          option={option}
+                          standings={standings}
+                          mapPool={mapPool}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function FilterPill({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
+function normalize(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+export function ObjectivesReload() {
   return (
     <button
       type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={`inline-flex h-10 items-center gap-2 rounded-full border px-3 text-xs font-semibold active:translate-y-px transition-colors ${
-        active
-          ? "border-accent bg-accent text-accent-ink"
-          : "border-line bg-surface text-muted hover:bg-surface-raised hover:text-foreground"
-      }`}
+      className="home-primary"
+      onClick={() => window.location.reload()}
     >
-      {children}
+      Volver a cargar
     </button>
   );
-}
-
-function Count({ value }: { value: number }) {
-  return <span className="tabular-nums opacity-70">{value}</span>;
 }
