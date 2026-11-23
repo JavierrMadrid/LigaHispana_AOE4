@@ -10,6 +10,7 @@ import { HomeObjectiveHelpProvider } from "@/components/home-objective-help";
 import "./home.css";
 import "./matches.css";
 import "./objectives.css";
+import "./rules.css";
 import "./participate.css";
 
 export function HomeShell({
@@ -36,12 +37,14 @@ export function HomeShell({
   sponsorCredit: ReactNode;
 }) {
   const pathname = usePathname();
-  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && pathname !== "/participar") return legacy;
+  const isScoring = pathname === "/puntuacion";
+  const isParticipating = pathname === "/participar";
+  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && pathname !== "/reglas" && !isScoring && !isParticipating) return legacy;
 
   return (
     <div
       className={`league-home ${
-        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : pathname === "/participar" ? "league-participate" : ""
+        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : pathname === "/reglas" ? "league-rules" : isScoring ? "league-scoring" : isParticipating ? "league-participate" : ""
       } ${fonts}`}
       style={accentStyle}
     >
@@ -117,6 +120,16 @@ export function HomeShell({
             <Link target="_blank" rel="noopener noreferrer" href="/puntuacion">
               Cómo se puntúa
             </Link>
+            {isScoring ? (
+              <>
+                <Link target="_blank" rel="noopener noreferrer" href="/noticias">
+                  Noticias
+                </Link>
+                <Link target="_blank" rel="noopener noreferrer" href="/overlay">
+                  Overlay para streamers
+                </Link>
+              </>
+            ) : null}
             <Link target="_blank" rel="noopener noreferrer" href="/login">
               Acceso de la organización
               <ArrowUpRight size={14} aria-hidden="true" />
