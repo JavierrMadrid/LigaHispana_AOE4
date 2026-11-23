@@ -4,7 +4,7 @@ import type { PrismaClient } from "@/generated/prisma/client";
 import type { ObjectKind } from "@/generated/prisma/enums";
 import { db } from "@/lib/db";
 import { postChannelMessage } from "@/lib/discord/channel";
-import { getDiscordConfig, isDiscordAnnounceConfigured, type DiscordConfig } from "@/lib/discord/env";
+import { getDiscordConfig, isDiscordObjectsConfigured, type DiscordConfig } from "@/lib/discord/env";
 import { createDiscordHttpClient } from "@/lib/discord/http";
 import { OBJECT_CATALOG } from "@/lib/objects";
 
@@ -17,9 +17,15 @@ import { OBJECT_CATALOG } from "@/lib/objects";
  * `objectThrowAnnouncementText()`, `objectFulfillmentAnnouncementText()`) para poder
  * probarlo sin base ni red; aquí solo quedan la lectura de nombres y el envío.
  *
+ * ## Canal propio (issue 228)
+ *
+ * Los avisos van al canal `#objetos` (`DISCORD_OBJECTS_CHANNEL_ID`) y no al de avisos
+ * generales: son ruido para quien no juega la edición. Por eso la puerta es
+ * `isDiscordObjectsConfigured()` y no la de los avisos del torneo.
+ *
  * ## Degradación
  *
- * Sin `DISCORD_BOT_TOKEN` o sin `DISCORD_ANNOUNCE_CHANNEL_ID` no se manda nada y no
+ * Sin `DISCORD_BOT_TOKEN` o sin `DISCORD_OBJECTS_CHANNEL_ID` no se manda nada y no
  * falla: es el mismo criterio que el resto de avisos del torneo. Tampoco falla si la
  * base o Discord contestan mal: cada función pública envuelve todo en `try`/`catch` y
  * deja el motivo en `console.warn`. Un aviso no puede tumbar la acción del panel ni
@@ -127,7 +133,7 @@ export type ObjectThrowAnnouncement = {
   fromName: string | null;
   /** Nombre del jugador que recibe el lanzamiento, o `null` si su fila ya no existe. */
   toName: string | null;
-  /** `true` = se devolvió y el objeto sigue en el lanzador. */
+  /** `true` = se devolvió: el objeto sigue en el lanzador y su turno del día queda gastado. */
   returned: boolean;
   /** Probabilidad de devolución que se aplicó. */
   probability: number;
@@ -142,7 +148,9 @@ export type ObjectThrowAnnouncement = {
  * La probabilidad se enseña siempre, se devuelva o no: es lo que explica por qué el
  * objeto se ha quedado o ha viajado, y el panel no tiene que repetir esa frase. La
  * desventaja se recuerda porque el portador cambia y quien lee tiene que saber qué
- * carga le acaba de llegar.
+ * carga le acaba de llegar. Cuando se devuelve, el aviso dice que el portador conserva
+ * la carga y el objeto pero **ha gastado el turno del día**: no puede volver a lanzarlo
+ * hasta el día siguiente (issue 224).
  */
 export function objectThrowAnnouncementText(input: ObjectThrowAnnouncement): string {
   const definition = OBJECT_CATALOG[input.kind];
@@ -150,7 +158,7 @@ export function objectThrowAnnouncementText(input: ObjectThrowAnnouncement): str
   const to = playerLabel(input.toName);
   const penalty = objectPenaltyText(input.kind, input.penaltyId) ?? UNKNOWN_PENALTY_TEXT;
   const outcome = input.returned
-    ? `Se ha devuelto: el objeto sigue en manos de ${from}.`
+    ? `Se ha devuelto: la desventaja se queda con ${from} y el objeto sigue en su mano, pero hoy ya no puede volver a lanzarlo.`
     : `No se ha devuelto: el objeto pasa a manos de ${to}.`;
 
   return `Objeto lanzado: «${definition.name}» de ${from} a ${to}, con un ${formatReturnProbability(input.probability)} de probabilidad de devolución. ${outcome} Desventaja: ${penalty}`;
@@ -215,15 +223,18 @@ async function readPlayerNames(
  * Manda un mensaje al canal, sin menciones.
  *
  * Quien llama ya ha comprobado que el canal está configurado y ha estrechado el tipo
- * con `isDiscordAnnounceConfigured()`.
+ * con `isDiscordObjectsConfigured()`.
  */
 async function postAnnouncement(
-  config: DiscordConfig & { botToken: string; announceChannelId: string },
+  config: DiscordConfig & { botToken: string; objectsChannelId: string },
   content: string,
 ): Promise<void> {
   const client = createDiscordHttpClient(config);
 
-  await postChannelMessage(client, config, content, { suppressMentions: true });
+  await postChannelMessage(client, config, content, {
+    suppressMentions: true,
+    channelId: config.objectsChannelId,
+  });
 }
 
 /**
@@ -244,7 +255,7 @@ export async function announceNewObjectAwards(
   try {
     const config = options.config ?? getDiscordConfig();
 
-    if (!isDiscordAnnounceConfigured(config)) {
+    if (!isDiscordObjectsConfigured(config)) {
       return;
     }
 
@@ -282,7 +293,7 @@ export async function announceObjectThrow(
   try {
     const config = options.config ?? getDiscordConfig();
 
-    if (!isDiscordAnnounceConfigured(config)) {
+    if (!isDiscordObjectsConfigured(config)) {
       return;
     }
 
@@ -332,7 +343,7 @@ export async function announceObjectFulfillment(
   try {
     const config = options.config ?? getDiscordConfig();
 
-    if (!isDiscordAnnounceConfigured(config)) {
+    if (!isDiscordObjectsConfigured(config)) {
       return;
     }
 

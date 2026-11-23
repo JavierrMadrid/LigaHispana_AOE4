@@ -62,6 +62,7 @@ const CONFIG_DISCORD: DiscordConfig = {
   botToken: "token",
   guildId: "servidor",
   announceChannelId: null,
+  objectsChannelId: null,
   participantRoleId: null,
   clientId: "aplicacion",
   clientSecret: "secreto",

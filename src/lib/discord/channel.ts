@@ -37,6 +37,11 @@ export type ChannelMessageOptions = {
   mentionRoleIds?: readonly string[];
   /** Prohíbe toda mención en el texto, aunque el mensaje no mencione a ningún rol. */
   suppressMentions?: boolean;
+  /**
+   * Canal al que va el mensaje. Por defecto, el de avisos (`announceChannelId`); los
+   * objetos utilizables tienen el suyo (`DISCORD_OBJECTS_CHANNEL_ID`, issue 228).
+   */
+  channelId?: string;
 };
 
 /**
@@ -49,10 +54,16 @@ export type ChannelMessageOptions = {
  */
 export async function postChannelMessage(
   client: DiscordHttpClient,
-  config: DiscordConfig & { botToken: string; announceChannelId: string },
+  config: DiscordConfig & { botToken: string },
   content: string,
   options: ChannelMessageOptions = {},
 ): Promise<void> {
+  const channelId = options.channelId ?? config.announceChannelId;
+
+  if (channelId === null) {
+    throw new Error("No hay ningún canal de Discord configurado para este aviso.");
+  }
+
   const json: Record<string, unknown> = { content };
   const roles = options.mentionRoleIds ?? [];
 
@@ -60,7 +71,7 @@ export async function postChannelMessage(
     json.allowed_mentions = { parse: [], roles: [...roles] };
   }
 
-  await client.request("POST", `/channels/${config.announceChannelId}/messages`, {
+  await client.request("POST", `/channels/${channelId}/messages`, {
     authorization: `Bot ${config.botToken}`,
     json,
   });

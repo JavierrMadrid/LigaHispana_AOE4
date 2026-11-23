@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PageHead } from "@/components/page-head";
 import { DEFAULT_COUNTRIES, readCountries } from "@/lib/countries";
 import { readDiscordStep } from "@/lib/discord/session";
 import {
@@ -55,49 +54,45 @@ export default async function ParticipatePage({ searchParams }: PageProps<"/part
   const notice = readDiscordNotice(params.discord);
 
   return (
-    // La página es una sola columna centrada: el formulario marca el ancho
-    // (2xl) y la intro y la nota adoptan ese mismo ancho para que sus bordes
-    // caigan sobre los de la tarjeta y el conjunto no descuadre.
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-8">
-      <PageHead title="Participa" />
+    <div className="participate-layout">
+      <header className="participate-intro">
+        <h1>Participa</h1>
+        <p className="text-[15px] leading-relaxed text-muted">
+          Inscríbete con tu cuenta de AoE4World. Cada solicitud la revisa la
+          organización antes de aprobarse, así que no aparecerás en la clasificación
+          hasta entonces. No hay equipos: cada persona compite por su cuenta.
+        </p>
 
-      {/* El resultado del OAuth vuelve en `?discord=` (canceló, falló o el paso
-          no está configurado). Va arriba del todo para que quien vuelve de
-          Discord lo vea sin buscarlo; con `ok` no se pinta nada porque el propio
-          paso ya muestra la cuenta conectada. */}
-      {notice !== null ? <DiscordOAuthNotice notice={notice} /> : null}
+        <p className="border-t border-line pt-6 text-sm leading-relaxed text-muted">
+          Las{" "}
+          <Link
+            href="/reglas"
+            className="text-accent underline underline-offset-4 hover:text-accent-strong"
+          >
+            reglas
+          </Link>{" "}
+          explican cómo participar y las normas del torneo. En{" "}
+          <Link
+            href="/puntuacion"
+            className="text-accent underline underline-offset-4 hover:text-accent-strong"
+          >
+            Puntuación
+          </Link>{" "}
+          se detalla qué cuenta como partida clasificatoria y cómo se reparten los
+          puntos.
+        </p>
+      </header>
+      <div className="participate-main">
+        {/* El aviso vuelve de Discord y precede al formulario. */}
+        {notice !== null ? <DiscordOAuthNotice notice={notice} /> : null}
+        <RegistrationForm
+          countries={countries}
+          registrationOpen={registration?.open ?? DEFAULT_REGISTRATION_OPEN}
+          closedMessage={closedMessage}
+          discord={discord}
+        />
 
-      <p className="text-[15px] leading-relaxed text-muted">
-        Inscríbete con tu cuenta de AoE4World. Cada solicitud la revisa la
-        organización antes de aprobarse, así que no aparecerás en la clasificación
-        hasta entonces. No hay equipos: cada persona compite por su cuenta.
-      </p>
-
-      <RegistrationForm
-        countries={countries}
-        registrationOpen={registration?.open ?? DEFAULT_REGISTRATION_OPEN}
-        closedMessage={closedMessage}
-        discord={discord}
-      />
-
-      <p className="border-t border-line pt-6 text-sm leading-relaxed text-muted">
-        Las{" "}
-        <Link
-          href="/reglas"
-          className="text-accent underline underline-offset-4 hover:text-accent-strong"
-        >
-          reglas
-        </Link>{" "}
-        explican cómo participar y las normas del torneo. En{" "}
-        <Link
-          href="/puntuacion"
-          className="text-accent underline underline-offset-4 hover:text-accent-strong"
-        >
-          Puntuación
-        </Link>{" "}
-        se detalla qué cuenta como partida clasificatoria y cómo se reparten los
-        puntos.
-      </p>
+      </div>
     </div>
   );
 }

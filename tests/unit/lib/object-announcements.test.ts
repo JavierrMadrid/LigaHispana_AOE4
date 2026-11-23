@@ -27,7 +27,7 @@ describe("newObjectAwardAnnouncementText", () => {
         penaltyId: "sin-guarecer-reliquias",
       }),
     ).toBe(
-      "Objeto nuevo: «Reliquia pagana» para BeastWizard, por victoria sagrada o religiosa. Desventaja: No se pueden guarecer reliquias.",
+      "Objeto nuevo: «Reliquia pagana» para BeastWizard, por victoria sagrada o religiosa, o retirada del rival con 3 minutos o menos. Desventaja: No se pueden guarecer reliquias.",
     );
   });
 
@@ -66,7 +66,7 @@ describe("objectThrowAnnouncementText", () => {
         penaltyId: "sin-guarecer-reliquias",
       }),
     ).toBe(
-      "Objeto lanzado: «Reliquia pagana» de BeastWizard a Rival, con un 12 % de probabilidad de devolución. Se ha devuelto: el objeto sigue en manos de BeastWizard. Desventaja: No se pueden guarecer reliquias.",
+      "Objeto lanzado: «Reliquia pagana» de BeastWizard a Rival, con un 12 % de probabilidad de devolución. Se ha devuelto: la desventaja se queda con BeastWizard y el objeto sigue en su mano, pero hoy ya no puede volver a lanzarlo. Desventaja: No se pueden guarecer reliquias.",
     );
   });
 

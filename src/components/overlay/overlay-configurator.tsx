@@ -14,16 +14,20 @@ import type {
   OverlayClasificacion,
   OverlayEventoObjetivo,
   OverlayObjetivo,
+  OverlayObjetoEvento,
+  OverlayObjetoEventoTipo,
 } from "@/lib/overlay-api";
 import {
   DEFAULT_OVERLAY_CONFIG,
   overlayAnimates,
+  overlayDemoContrario,
   overlayEventKind,
   overlayEventView,
   overlayPreviewUrl,
   type OverlayConfig,
   type OverlayConfiguratorParticipant,
   type OverlayEventKind,
+  type OverlayObjetoDemo,
   type OverlayPosition,
   type OverlaySize,
 } from "@/lib/overlay-view";
@@ -59,6 +63,14 @@ const SECTION_OPTIONS: ReadonlyArray<{ value: OverlayConfig["secciones"]; label:
   { value: "ranking", label: "Clasificación" },
   { value: "objetivos", label: "Objetivos" },
 ];
+
+/** El aspecto de un botón de prueba, igual que el de las acciones secundarias. */
+const DEMO_BUTTON =
+  "inline-flex min-h-9 items-center justify-center rounded-md border border-accent/50 bg-accent/10 px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted";
+
+/** La prueba de una pérdida es la única que va en rojo. */
+const DEMO_LOSS_BUTTON =
+  "inline-flex min-h-9 items-center justify-center rounded-md border border-loss/50 bg-loss/10 px-3 text-sm font-semibold text-loss transition-colors hover:bg-loss/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted";
 
 /** El aspecto de un botón de opción, encendido o apagado. */
 function optionClass(active: boolean): string {
@@ -112,19 +124,26 @@ async function loadClassification(id: string): Promise<OverlayClasificacion | nu
 
 /**
  * El configurador del overlay: elegir participante, ajustar la tarjeta, copiar
- * la URL y probar la animación, con la vista previa al lado y los pasos de OBS.
+ * la URL y probar las animaciones, con la vista previa al lado y los pasos de
+ * OBS.
  *
  * La lista y la vista previa van en dos columnas en escritorio y apiladas en
  * móvil. La selección es estado local; la URL se construye con el origen público
- * si lo hay y, si no, con el de la ventana. El botón de prueba lanza un
- * `postMessage` solo al iframe de la vista previa: no toca el torneo.
+ * si lo hay y, si no, con el de la ventana. Los botones de prueba lanzan un
+ * `postMessage` solo al iframe de la vista previa: no tocan el torneo.
+ *
+ * Los ejemplos de objeto llegan hechos del servidor (`objetosDemo`), desde el
+ * catálogo real; aquí solo se les cambia el contrario por uno que no sea el
+ * jugador retransmitido, para que la ficha no se dedique a sí misma.
  */
 export function OverlayConfigurator({
   participants,
   siteOrigin,
+  objetosDemo,
 }: {
   participants: OverlayConfiguratorParticipant[];
   siteOrigin: string | null;
+  objetosDemo: OverlayObjetoDemo;
 }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(participants[0]?.id ?? "");
@@ -180,6 +199,10 @@ export function OverlayConfigurator({
     selected === null ? "about:blank" : overlayPreviewUrl(null, selected.id, config);
   const publicUrl =
     selected === null ? "" : overlayPreviewUrl(origin, selected.id, config);
+
+  // Las pruebas comparten regla: sin animaciones, sin iframe cargado o sin
+  // participante no hay a quién enseñarle la demo.
+  const demoDisabled = !config.animaciones || !iframeLoaded || selected === null;
 
   if (participants.length === 0) {
     return null;
@@ -302,6 +325,27 @@ export function OverlayConfigurator({
 
     setDemoNotice(null);
     postDemo(source.objetivoId, source.evento);
+  }
+
+  function testObjeto(tipo: OverlayObjetoEventoTipo) {
+    const target = selected;
+
+    if (target === null || !config.animaciones || !iframeLoaded) {
+      return;
+    }
+
+    const evento: OverlayObjetoEvento = {
+      ...objetosDemo[tipo],
+      id: `demo:${tipo}:${Date.now()}`,
+      fechahora: new Date().toISOString(),
+      contrario: overlayDemoContrario(participants, target.id),
+    };
+
+    setDemoNotice(null);
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "overlay:demo-objeto", evento },
+      window.location.origin,
+    );
   }
 
   async function testLossAnimation() {
@@ -514,41 +558,81 @@ export function OverlayConfigurator({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex flex-col gap-2">
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => void testAnimation("directo")}
-                disabled={!config.animaciones || !iframeLoaded || selected === null}
-                className="inline-flex min-h-9 items-center justify-center rounded-md border border-accent/50 bg-accent/10 px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+                disabled={demoDisabled}
+                className={DEMO_BUTTON}
               >
                 Probar puntos
               </button>
               <button
                 type="button"
                 onClick={() => void testAnimation("meta")}
-                disabled={!config.animaciones || !iframeLoaded || selected === null}
-                className="inline-flex min-h-9 items-center justify-center rounded-md border border-accent/50 bg-accent/10 px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+                disabled={demoDisabled}
+                className={DEMO_BUTTON}
               >
                 Probar meta
               </button>
               <button
                 type="button"
                 onClick={() => void testAnimation("liderato")}
-                disabled={!config.animaciones || !iframeLoaded || selected === null}
-                className="inline-flex min-h-9 items-center justify-center rounded-md border border-accent/50 bg-accent/10 px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+                disabled={demoDisabled}
+                className={DEMO_BUTTON}
               >
                 Probar 1º
               </button>
               <button
                 type="button"
                 onClick={() => void testLossAnimation()}
-                disabled={!config.animaciones || !iframeLoaded || selected === null}
-                className="inline-flex min-h-9 items-center justify-center rounded-md border border-loss/50 bg-loss/10 px-3 text-sm font-semibold text-loss transition-colors hover:bg-loss/20 disabled:cursor-default disabled:border-line disabled:bg-transparent disabled:text-muted"
+                disabled={demoDisabled}
+                className={DEMO_LOSS_BUTTON}
               >
                 Probar pérdida
               </button>
             </div>
+
+            <div
+              role="group"
+              aria-label="Probar objetos"
+              className="flex flex-wrap items-center gap-x-2.5 gap-y-2"
+            >
+              <span
+                aria-hidden="true"
+                className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted"
+              >
+                Objetos
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => testObjeto("recibido")}
+                  disabled={demoDisabled}
+                  className={DEMO_BUTTON}
+                >
+                  Probar objeto recibido
+                </button>
+                <button
+                  type="button"
+                  onClick={() => testObjeto("lanzado")}
+                  disabled={demoDisabled}
+                  className={DEMO_BUTTON}
+                >
+                  Probar objeto lanzado
+                </button>
+                <button
+                  type="button"
+                  onClick={() => testObjeto("devuelto")}
+                  disabled={demoDisabled}
+                  className={DEMO_BUTTON}
+                >
+                  Probar objeto devuelto
+                </button>
+              </div>
+            </div>
+
             <p className="text-xs text-muted">
               {config.animaciones
                 ? (demoNotice ??

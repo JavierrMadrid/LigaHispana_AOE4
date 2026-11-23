@@ -13,6 +13,7 @@ import {
 } from "@/components/objective-standings";
 
 type ObjectiveDialogCardProps = {
+  catalog?: boolean;
   option: ObjectiveOption;
   /** Clasificación del torneo para el check; `null` si no se ha podido leer. */
   standings: ObjectiveStandingPlayer[] | null;
@@ -51,12 +52,16 @@ export function ObjectiveDialogCard({
   heightClass = "h-full",
   highlightProfileId = null,
   note,
+  catalog = false,
 }: ObjectiveDialogCardProps) {
   const [open, setOpen] = useState(false);
 
   return (
     <>
-      <BorderGlow className={heightClass}>
+      <BorderGlow
+        className={`${heightClass}${catalog ? " catalog-objective-card" : ""}`}
+        {...(catalog ? { backgroundColor: "#122039", borderRadius: 6, glowRadius: 6, fillOpacity: 0.16, glowIntensity: 0.45 } : {})}
+      >
         <ObjectiveSummary
           option={option}
           mapPool={mapPool}

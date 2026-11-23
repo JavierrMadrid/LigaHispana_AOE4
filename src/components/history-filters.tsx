@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { PlayerCombobox, type ComboboxOption } from "@/components/player-combobox";
 
-type PointHistoryFiltersProps = {
+type HistoryFiltersProps = {
   /** Ruta a la que vuelven los filtros: el historial global o el de un jugador. */
   basePath: string;
   /**
@@ -15,16 +15,15 @@ type PointHistoryFiltersProps = {
 };
 
 /**
- * Filtros del historial público de puntos: participante y rango de fechas.
+ * Filtros de los historiales públicos: participante y rango de fechas.
  *
  * La fuente de verdad es la URL (el servidor filtra y pagina con `searchParams`),
  * así que cada control navega al cambiar en lugar de guardar estado propio: la
  * página se puede recargar y compartir y enseña lo mismo. Al tocar cualquier filtro
  * se quita `page`, porque la página 5 de un filtro nuevo no significa nada.
  *
- * Son **dos** ejes y no tres: aquí solo entran las ganancias, así que lo que se
- * elige es de quién y de cuándo, no qué pasó (el filtro de resultado es del panel,
- * que lista el recorrido entero). Los dos se combinan solos porque el servidor los
+ * Son **dos** ejes y no tres: lo que se elige es de quién y de cuándo, no qué pasó;
+ * el qué lo decide cada feed. Los dos se combinan solos porque el servidor los
  * conjuga en un único `where`: en cuanto uno cambia, solo se reescribe su parámetro
  * y el resto se conserva.
  *
@@ -34,12 +33,12 @@ type PointHistoryFiltersProps = {
  * verdad —el mismo id público del detalle del participante, no el id interno del
  * panel—.
  *
- * La barra la montan dos pantallas con el mismo eje: el historial global
- * (`/historial`, con su selector) y la pestaña de historial de un participante
- * (solo fechas, porque allí el jugador es la ruta). Por eso vive en
+ * La barra la montan tres pantallas con el mismo eje: el historial de puntos
+ * (`/historial`), el de objetos (`/historial-objetos`) y la pestaña de historial de
+ * un participante (solo fechas, porque allí el jugador es la ruta). Por eso vive en
  * `src/components/` y la ruta entra por `basePath`.
  */
-export function PointHistoryFilters({ basePath, players }: PointHistoryFiltersProps) {
+export function HistoryFilters({ basePath, players }: HistoryFiltersProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
 

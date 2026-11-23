@@ -22,7 +22,7 @@ import {
   type ObjectAwardPlayerView,
   type ObjectThrowTargetView,
 } from "@/lib/object-awards";
-import { sameTargetBlocked, sameThrowerBlocked } from "@/lib/objects";
+import { sameKindBlocked, sameTargetBlocked, sameThrowerBlocked } from "@/lib/objects";
 import { FulfillForm, type FulfillMatchOption } from "./fulfill-form";
 import { ThrowForm, type ThrowTargetOption } from "./throw-form";
 
@@ -224,6 +224,7 @@ function PendingSection({
             <PendingAwardCard
               key={award.id}
               award={award}
+              allAwards={awards}
               targets={targets}
               matches={matchesByAward.get(award.id) ?? []}
               now={now}
@@ -252,12 +253,15 @@ function PendingSection({
  */
 function PendingAwardCard({
   award,
+  allAwards,
   targets,
   matches,
   now,
   actionsEnabled,
 }: {
   award: ObjectAwardAdminView;
+  /** Todos los premios de la ventana: la regla de un objeto de cada tipo los mira. */
+  allAwards: ObjectAwardAdminView[];
   targets: ObjectThrowTargetView[];
   matches: ObjectAwardMatchView[];
   now: Date;
@@ -272,8 +276,28 @@ function PendingAwardCard({
     toId: item.to.playerId,
     at: item.at,
   }));
+  // Un lanzamiento devuelto también cuenta (issue 224): el objeto y la desventaja se
+  // quedan con el portador y su turno del día queda gastado, sin segunda tirada hasta
+  // el día UTC siguiente.
   const thrownToday =
     holder !== null && sameThrowerBlocked(throwsForRules, holder.playerId, now);
+
+  // La regla de un objeto de cada tipo (issue 225) se lee de los premios que ya tiene
+  // la página: uno pendiente en el jugador o uno que le llegó hoy. El servicio la
+  // vuelve a aplicar con su propia consulta; aquí solo se evita ofrecer un destino que
+  // va a responder con error.
+  const kindApplications = allAwards.flatMap((item) =>
+    item.holder === null
+      ? []
+      : [
+          {
+            kind: item.kind,
+            holderId: item.holder.playerId,
+            at: item.heldSince ?? item.day,
+            pending: item.pending,
+          },
+        ],
+  );
 
   const available: ThrowTargetOption[] = [];
   const blockedNames: string[] = [];
@@ -283,7 +307,10 @@ function PendingAwardCard({
       continue;
     }
 
-    if (sameTargetBlocked(throwsForRules, target.playerId, now)) {
+    if (
+      sameTargetBlocked(throwsForRules, target.playerId, now) ||
+      sameKindBlocked(kindApplications, award.kind, target.playerId, now)
+    ) {
       blockedNames.push(target.name);
     } else {
       available.push({
@@ -357,8 +384,10 @@ function PendingAwardCard({
           <div className="px-5 py-4 lg:border-r lg:border-line">
             <h4 className="text-sm font-semibold text-foreground">Lanzar el objeto</h4>
             <p className="mt-1 max-w-[60ch] text-xs leading-relaxed text-muted">
-              Una vez por portador y día UTC. Si la tirada se devuelve, el objeto se
-              queda donde está y ese portador ya no puede relanzarlo hoy.
+              Una vez por portador y día UTC, y nunca a quien ya tenga uno de este tipo.
+              Si la tirada se devuelve, la desventaja y el objeto se quedan con el
+              portador y su turno del día queda gastado: no puede volver a lanzarlo
+              hasta el día UTC siguiente.
             </p>
 
             {holder === null ? (
@@ -369,8 +398,9 @@ function PendingAwardCard({
             ) : thrownToday ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
                 <span className="text-foreground">{playerName(holder)}</span> ya ha
-                lanzado este objeto hoy. El límite es una vez por portador y día UTC, así
-                que la acción vuelve a estar disponible a medianoche UTC.
+                lanzado este objeto hoy. El límite es un lanzamiento por portador y día
+                UTC, se devuelva o no, así que la acción vuelve a estar disponible a
+                medianoche UTC.
               </p>
             ) : available.length === 0 ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
@@ -379,8 +409,8 @@ function PendingAwardCard({
                 ) : (
                   <>
                     No queda ningún destino disponible hoy: {blockedNames.join(", ")}{" "}
-                    ya lo recibieron. El lanzamiento vuelve a estar disponible cuando
-                    cambie el día UTC.
+                    ya lo recibieron o ya tienen un objeto de este tipo. El lanzamiento
+                    vuelve a estar disponible cuando cambie el día UTC.
                   </>
                 )}
               </p>

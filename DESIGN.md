@@ -4,7 +4,7 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 | Elemento                     | Regla                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| Ámbito                       | `/` y `/partidas`, incluida cabecera y pie; otras rutas conservan su diseño                  |
+| Ámbito                       | `/`, `/partidas`, `/objetivos`, `/reglas`, `/puntuacion` y `/participar`, incluida cabecera y pie; otras rutas conservan su diseño                  |
 | Fondo / panel / borde        | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D`                        |
 | Texto principal / secundario | `#EDF1F8` / `#B6C3D6`                                                                       |
 | Acento                       | Oro `#D6B568` para inscripción, selección, foco y primer puesto; rojo para emisión          |
@@ -16,6 +16,8 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 ## Composición y densidad
 
+- Evita tarjetas dentro de tarjetas en todo el sitio. Usa una sola superficie por bloque y organiza su contenido con títulos, espaciado, filas o separadores. Reserva el tratamiento de tarjeta para bloques independientes.
+
 - Desde 1440px: orientación a la izquierda (192px), clasificación central y actividad a la derecha (208px). Identidad con escudo transparente; panorama adaptado del Sacro Imperio Romano debajo de la navegación y detrás del comienzo del contenido, sin duplicarlo dentro de la identidad.
 - De 1100 a 1439px: identidad y estado compactos sobre la tabla; actividad a la derecha; ayuda de puntuación debajo.
 - Por debajo de 1100px: una columna; identidad breve, clasificación, actividad y ayuda. El orden del DOM mantiene primero la tabla y después los enlaces de apoyo.
@@ -25,7 +27,9 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Sin avatares, banderas de fondo, placas de puesto, halo del puntero ni observadores que oculten filas. La bandera pequeña junto al nombre se conserva.
 - Identidad de una línea: nombre truncable con nombre completo accesible, bandera, punto de partida y canales que emiten. Alias y canales registrados completos en el detalle.
 - Elo: emblema de 22×26px junto a la cifra; sin nombre de división visible. Una clasificación ausente se muestra con `—`.
-- Actividad: hasta tres jugadores emitiendo, con sus enlaces de Twitch, YouTube o Kick; no depende de los filtros de tabla. Se omite la sección de streams si está vacía. Partidas distingue cero de información no disponible.
+- Actividad: «Partidas en juego» primero, seguido de hasta cinco tarjetas de Twitch con miniatura, nombre del streamer y espectadores cuando hay datos reales. Si la audiencia es desconocida se omite esa línea, sin mensaje ni cero inventado. No depende de los filtros de tabla.
+- YouTube y Kick conservan enlaces en «Otros canales en directo», sin repetir enlaces de Twitch. Los vacíos y fallos de actividad se distinguen de una cifra cero confirmada.
+- Las miniaturas se cargan bajo demanda en el navegador, sin tokens ni sondeo adicional; si fallan conservan una reserva, el nombre y el enlace. La previsualización de desarrollo usa arte local y no consulta canales ficticios.
 - Objetivo de revisión, con zoom 100%, filtros cerrados y filas plegadas: al menos ocho filas a 1440×900, seis a 1366×768 y cuatro a 390×844.
 
 ## Filtros y navegación de resultados
@@ -77,3 +81,24 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Solo aparecen canales comprobados en directo. El pie de una ficha existe únicamente si ofrece el visor multi-stream; no añade mensajes repetidos sin acción.
 - Enlaces de las fichas y acciones de contenido en pestaña nueva. Foco visible, selector nativo y divisiones con checkbox; Escape y clic exterior cierran el panel. Sin entradas decorativas de tarjetas; movimiento reducido estático.
 - Vacío real, fallo, sin resultados y carga conservan estructura y distinción de datos desconocidos. Previews de desarrollo: ver [OPERACION.md](docs/OPERACION.md#previews-de-partidas).
+
+## Catálogo de objetivos
+
+- `/objetivos` comparte navegación y paleta con la portada, sin escudo decorativo ni hero. Índice lateral en escritorio; controles compactos y rejilla de una columna en móvil.
+- Búsqueda por nombre, descripción o civilización combinada con grupo y clase. Buscar un hijo conserva su cabeza como contexto; las reglas de familia siempre usan el catálogo completo, independientemente del filtro.
+- El contador indica coincidencias con los filtros y el total del catálogo, nunca objetivos alcanzados. Sin resumen de contadores duplicado. Las tarjetas y clasificaciones de objetivos omiten las iniciales de reserva cuando no hay avatar.
+- Familias, rieles, Masterizando y ventanas volteables conservan puntos, clasificación y progreso. Tarjetas azul tinta con halo dorado local discreto, foco visible y movimiento reducido.
+- Presentación optativa `catalog` y CSS bajo `.league-objectives`: no modifica el detalle de participante. Carga, vacío, búsqueda sin resultados, fallo y participantes no disponibles son estados distintos. Previews de desarrollo en `docs/OPERACION.md`.
+
+## Reglamento (`/reglas`)
+
+- Modo Read: título Cinzel compacto, prosa Inter de 15px, interlineado 1,8 y ancho máximo 72ch. Una superficie continua de lectura, separadores entre secciones; sin escudo ni hero añadido.
+- Índice lateral sticky desde 1024px, con sección activa y anclas existentes; en pantallas menores, índice desplegable nativo antes del documento. Foco visible y anclas separadas de la cabecera sticky.
+- Calendario en filas dentro de la superficie de lectura, con separadores y multiplicador destacado. Los estados vacíos y de indisponibilidad se muestran en línea.
+- Estilos bajo `.league-rules`; navegación, panorama y pie compartidos sin modificar otras rutas.
+
+## Inscripción (`/participar`)
+
+- Comparte navegación, panorama y pie de portada; ámbito exclusivo `.league-participate`. Identidad y enlaces de apoyo laterales desde 1024px; formulario único, una columna en móvil.
+- Discord, requisitos y grupos de campos se separan con espacio y líneas, sin paneles anidados. Controles de 44px, etiqueta visible, ayuda y error enlazados; estados OAuth, captcha, pendiente, éxito y cierre conservados.
+- El cierre aparece antes de los campos, mantiene el identificador accesible del envío desactivado y permite consultar los requisitos. Acciones y validación de servidor sin cambios.

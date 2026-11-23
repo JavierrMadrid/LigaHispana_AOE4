@@ -8,7 +8,8 @@ funciones puras en [`src/lib/objects.ts`](../src/lib/objects.ts), la persistenci
 las operaciones en [`src/lib/object-awards.ts`](../src/lib/object-awards.ts), las
 acciones del panel en
 [`src/app/admin/objetos/actions.ts`](../src/app/admin/objetos/actions.ts), los avisos
-en [`src/lib/object-announcements.ts`](../src/lib/object-announcements.ts) y las
+en [`src/lib/object-announcements.ts`](../src/lib/object-announcements.ts), el feed
+público en [`src/lib/object-history.ts`](../src/lib/object-history.ts) y las
 tablas en [`MODELO-DATOS.md`](./MODELO-DATOS.md#objectaward).
 
 ## Qué es
@@ -29,6 +30,7 @@ El modo de objetos es un **ajuste de edición**, no del ruleset de puntos: vive 
 |---|---|
 | Por defecto | **Apagado**. Una edición sin configurar no crea premios ni bloquea partidas |
 | Quién lo cambia | **Solo el superadministrador**, desde Administración → Edición (`saveEditionConfig`) |
+| Cuándo se enciende | **Solo antes de que empiece la edición** (`window.from` del ruleset). Con la edición en curso el guardado se rechaza (`objectsModeActivationBlocked()`); el interruptor se enseña bloqueado con el motivo |
 | Al apagarlo | Efecto inmediato: `disableObjectsMode()` cierra los premios pendientes (`exitedAt` = ahora) y desbloquea **todas** las partidas marcadas (`excludedByAwardId` = `null`); si había partidas bloqueadas, se recalcula la clasificación. No se congela ni se reanuda nada |
 | Al encenderlo | **Sin efectos retroactivos**: empieza limpio, sin premios ni bloqueos anteriores. Un objeto que ya estaba cerrado no se reabre |
 | Mientras está apagado | El worker no crea premios (`syncDailyObjectAwards()` devuelve vacío) ni marca partidas (`applyObjectBlocks()` devuelve 0); lanzar y cumplir responden con error. El panel enseña un aviso y no ofrece ninguno de los dos formularios; el histórico se sigue viendo |
@@ -42,9 +44,9 @@ servidor y las Server Actions.
 
 | `kind` | Nombre | Se obtiene con la primera victoria del día por... |
 |---|---|---|
-| `RELIQUIA` | Reliquia pagana | victoria sagrada o religiosa |
+| `RELIQUIA` | Reliquia pagana | victoria sagrada o religiosa, o retirada del rival con 3 minutos o menos |
 | `MONEDA` | Moneda del Rey falsificada | conquista |
-| `MONUMENTO` | Monumento | maravilla |
+| `MONUMENTO` | Monumento | maravilla, o retirada del rival con 5 minutos o menos |
 
 ### Desventajas
 
@@ -85,15 +87,23 @@ catálogo y una redacción nueva no reescribe el histórico.
 
   El mapeo es deliberadamente **tolerante**: los literales de la victoria sagrada y la
   maravilla no están confirmados (sí los de `"Surrender"`, `"Conquest"` y
-  `"Elimination"`). `"Surrender"` no otorga objeto, y un motivo desconocido o `null`
-  tampoco: no se crea nada.
+  `"Elimination"`). Una retirada normal no otorga objeto, y un motivo desconocido o
+  `null` tampoco: no se crea nada.
+- **Retirada temprana (issues 226 y 227).** Una `"Surrender"` reparte objeto según lo
+  que duró la partida, en dos bandas que **no se solapan**: con **3 minutos o menos**
+  cuenta como victoria sagrada (reliquia); **entre 3 y 5 minutos**, como victoria por
+  maravilla (monumento). Es una renuncia a pelear esa partida, aunque no haya reliquias
+  ni maravilla de por medio. Se decide con `Match.durationSeconds`; sin duración no se
+  aplica y la retirada no da nada.
 - **Un objeto por tipo y día.** El segundo ganador del día de un tipo ya otorgado no
   crea fila: la regla la sostiene el índice único `(kind, day)`.
 
 ## Lanzamiento y devolución
 
 - El portador puede **lanzar el objeto a otro jugador una vez al día**. En el POC el
-  lanzamiento se hace desde el panel de admin, no hay automatismo ni bot.
+  lanzamiento se hace desde el panel de admin, no hay automatismo ni bot. El límite es
+  **un lanzamiento por portador y día UTC, se devuelva o no** (`sameThrowerBlocked()`,
+  issue 224).
 - **Probabilidad de devolución** (`returnProbability()`), con el puesto en la
   clasificación (`1` = primero) y el total de jugadores clasificados:
 
@@ -105,8 +115,9 @@ catálogo y una redacción nueva no reescribe el histórico.
   se devuelva; lanzar a alguien mejor la deja en el suelo. Nunca es `0` ni `1`: la
   tirada siempre existe. Con menos de un jugador clasificado no hay proporción que
   calcular y devuelve `0,01`.
-- Si **se devuelve**, el objeto sigue en el lanzador y ese día ya no puede volver a
-  lanzarlo.
+- Si **se devuelve**, la tirada sale mal y la desventaja y el objeto se quedan con el
+  portador: sus partidas siguen sin puntuar y **el turno del día queda gastado**. No
+  puede volver a lanzarlo hasta el día UTC siguiente, aunque siga siendo el portador.
 - Si **no se devuelve**, el portador pasa a ser el objetivo, con `heldSince` en el
   instante del lanzamiento; las partidas de la ventana anterior ya quedaron marcadas
   y la ventana nueva queda abierta (ver [Estados de la ventana](#estados-de-la-ventana)).
@@ -115,7 +126,12 @@ catálogo y una redacción nueva no reescribe el histórico.
   cambie de manos después.
 - **Regla Y:** un mismo objetivo no puede recibir el mismo objeto dos veces en el
   mismo día UTC (`sameTargetBlocked()`). Cuenta cualquier lanzamiento anotado, se
-  devolviera o no.
+  devolviera o no: lo que evita es insistir sobre la misma persona; el turno del
+  portador lo controla `sameThrowerBlocked()`.
+- **Un objeto de cada tipo** (issue 225): nadie puede tener dos objetos del mismo
+  tipo aplicados. Se bloquea el lanzamiento si el objetivo ya lo tiene **pendiente** o
+  si ya le llegó uno del mismo tipo ese día UTC (`sameKindBlocked()`); los
+  lanzamientos devueltos no cuentan porque nunca llegaron al objetivo.
 
 ## Persistencia y worker
 
@@ -138,8 +154,9 @@ en [`src/lib/objects.ts`](../src/lib/objects.ts).
 - **Una sola ventana por objeto.** `ObjectAward.heldSince` y `exitedAt` describen la
   ventana **actual**, no un histórico de tramos. Al lanzar sin devolución, la
   ventana anterior se consolida en las partidas ya marcadas y la fila se reabre con
-  el objetivo (por eso `exitedAt` vuelve a `null`). Al devolverse, no se toca: solo
-  se anota el lanzamiento.
+  el objetivo (por eso `exitedAt` vuelve a `null`). Al devolverse, la ventana no se
+  toca —la desventaja sigue en el lanzador— y solo se anota el lanzamiento, que gasta
+  su turno del día.
 - **El premio del día.** `syncDailyObjectAwards()` hace **una** consulta cruda sobre
   `Match` unida a `Player` con `rankedMatchSql()` —la misma regla que puntúa— más
   `result = 'WIN'` y `winReason` informado. Los pares `(kind, day)` ya existentes se
@@ -237,8 +254,8 @@ deja de estar pendiente y desaparece del listado. El error se queda bajo el bot�
 
 ### Avisos del bot
 
-Van al canal de avisos (`DISCORD_BOT_TOKEN` + `DISCORD_ANNOUNCE_CHANNEL_ID`, ver
-[`OPERACION.md`](./OPERACION.md)) desde
+Van al canal **`#objetos`** (`DISCORD_BOT_TOKEN` + `DISCORD_OBJECTS_CHANNEL_ID`, ver
+[`OPERACION.md`](./OPERACION.md)), no al de avisos generales, desde
 [`src/lib/object-announcements.ts`](../src/lib/object-announcements.ts).
 
 | Aviso | Lo lanza | Qué cuenta |
@@ -256,6 +273,54 @@ Van al canal de avisos (`DISCORD_BOT_TOKEN` + `DISCORD_ANNOUNCE_CHANNEL_ID`, ver
   (`newObjectAwardAnnouncementText()`, `objectThrowAnnouncementText()`,
   `objectFulfillmentAnnouncementText()`) y se prueban sin base en
   `tests/unit/lib/object-announcements.test.ts`.
+
+## El overlay del directo
+
+La tarjeta de `/overlay/<profileId>` anima lo que le pasa al jugador con los objetos, en dos pasos y
+en la **misma cola** que los objetivos: la ficha (objeto, desventaja y contrario) y la consecuencia
+de recibirlo, lanzarlo o recuperarlo. Los textos, los glifos y los tiempos están en
+[`OVERLAY.md`](./OVERLAY.md#qué-muestra).
+
+- Lo lee de [`GET /api/v0/objetos`](./API-OVERLAY.md#objetos), que devuelve los últimos eventos del
+  participante en orden ascendente. El overlay pide ese feed en la carga y en cada sondeo de 30 s.
+- La primera carga **siembra** los eventos vistos: no anima lo que ya había pasado.
+- El feed es **opcional**: si falla, la tarjeta sigue con la clasificación y los objetivos y
+  simplemente no hay novedades de objetos.
+- En el configurador, «Probar objeto recibido», «Probar objeto lanzado» y «Probar objeto devuelto»
+  reproducen los tres casos en la vista previa, sin tocar el torneo.
+
+## Historial público
+
+La página **`/historial-objetos`** publica los objetos de la edición activa como un **feed de
+eventos**, no como tarjetas por objeto: premios, lanzamientos, devoluciones y desventajas
+cumplidas, mezclados de lo más reciente a lo más antiguo. Es el mismo lenguaje que el historial
+de puntos (`/historial`): filtro por participante, rango de fechas con el día final completo y
+paginación en servidor. La lectura vive en
+[`src/lib/object-history.ts`](../src/lib/object-history.ts) (`getObjectHistory()`).
+
+| `kind` | Cuándo existe | `at` | `player` | `opponent` |
+|---|---|---|---|---|
+| `AWARD` | Se creó el `ObjectAward` | `winnerMatch.startedAt` (respaldo: `award.day`) | ganador | `null` |
+| `THROW` | Lanzamiento con `returned = false` | `throw.at` | lanzador | objetivo |
+| `RETURN` | Lanzamiento con `returned = true` | `throw.at` | lanzador | objetivo |
+| `FULFILL` | El premio tiene `satisfiedByMatchId` | `satisfiedByMatch.startedAt` (respaldo: `exitedAt`) | portador (respaldo: ganador) | `null` |
+
+- **Un premio cumplido genera dos eventos**: su `AWARD` y su `FULFILL`. Una **retirada**
+  (`exitedAt` informado y `satisfiedByMatchId` nulo, al apagar el modo) solo genera `AWARD`.
+- **Clave estable**: `award:<id>`, `throw:<id>` o `fulfill:<awardId>`. No se publican los ids
+  internos, ni la tirada (`roll`), ni las probabilidades, ni `Match.id` ni `Player.id`.
+- **Alcance**: la **edición activa** (`windowBounds(ruleset.window).from`, igual que el feed de
+  objetos del overlay; si no hay suelo, no se acota) y solo participantes **aprobados**. El
+  sujeto tiene que estar aprobado; si el contrario no existe o no lo está, el evento se conserva
+  con `opponent: null`.
+- **Filtros**: `jugador` es el `profileId` público (`readProfileIdFilter`), y `from`/`to` usan
+  `dateRangeWhere` (el `to` incluye el día entero). El filtro de participante encuentra también
+  los lanzamientos **recibidos**.
+- **Paginación**: `page` y `pageSize` con `DEFAULT_PAGE_SIZE`/`MAX_PAGE_SIZE`, página acotada a
+  la última con filas y `pageCount` a `0` si no hay ninguna. Un corte de base devuelve
+  `{ status: "degraded", data: null }`, que la página distingue de una lista vacía.
+- **Navegación**: `/historial` y `/historial-objetos` comparten un selector local «Puntos / Objetos»;
+  el historial de objetos no es una sexta entrada de la navegación principal.
 
 ## Exclusión de partidas
 
@@ -304,6 +369,10 @@ exigiría guardar el histórico de ventanas que este diseño evita a propósito.
   tests/unit/lib/object-awards.test.ts`. Cubren los textos de los tres avisos, el
   formato de la probabilidad y el orden por puesto de los destinos de lanzamiento,
   sin base ni red.
+- **Historial público:** `npx vitest run tests/unit/lib/object-history.test.ts`. Cubre el
+  mapeo de los cuatro tipos, las fechas de respaldo, la retirada sin `FULFILL`, la regla de
+  aprobados, el orden total, los filtros inclusivos (también los lanzamientos recibidos) y
+  la paginación acotada, sin base ni red.
 - **Catálogo:** comparar la tabla de [Desventajas](#desventajas) con
   `OBJECT_CATALOG` (`src/lib/objects.ts`). Los ids son la clave que se guarda.
 - **Esquema:** `npx prisma validate` y `npx prisma generate`. Las tablas **no** están

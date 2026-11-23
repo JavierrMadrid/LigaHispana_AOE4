@@ -19,10 +19,10 @@ import { ObjectKind } from "@/generated/prisma/enums";
  * 2. El portador puede **lanzarlo a otro jugador una vez al día**. En el POC el
  *    lanzamiento se hace desde el panel de admin, no hay automatismo.
  * 3. Si el lanzamiento **se devuelve** (con la probabilidad de
- *    `returnProbability()`), el objeto sigue en el lanzador y ese día ya no puede
- *    volver a lanzarlo. Si no se devuelve, el portador pasa a ser el objetivo, con
- *    `heldSince` en el instante del lanzamiento y `exitedAt` cerrado para el
- *    portador anterior.
+ *    `returnProbability()`), la desventaja y el objeto siguen en el lanzador, que ha
+ *    gastado el turno del día: no puede volver a lanzarlo hasta el día UTC siguiente.
+ *    Si no se devuelve, el portador pasa a ser el objetivo, con `heldSince` en el
+ *    instante del lanzamiento y `exitedAt` cerrado para el portador anterior.
  * 4. Mientras un objeto está pendiente, **las partidas del portador no puntúan**
  *    (`isMatchBlocked()`): quedan fuera de la clasificación y de los objetivos. La
  *    desventaja se da por **cumplida** cuando el admin la marca sobre una partida
@@ -85,7 +85,7 @@ export const OBJECT_CATALOG: Record<ObjectKind, ObjectDefinition> = {
   [ObjectKind.RELIQUIA]: {
     kind: ObjectKind.RELIQUIA,
     name: "Reliquia pagana",
-    obtainedBy: "victoria sagrada o religiosa",
+    obtainedBy: "victoria sagrada o religiosa, o retirada del rival con 3 minutos o menos",
     penalties: [
       { id: "sin-guarecer-reliquias", text: "No se pueden guarecer reliquias." },
       { id: "sin-unidades-monasterio", text: "No se pueden crear unidades del monasterio." },
@@ -108,7 +108,7 @@ export const OBJECT_CATALOG: Record<ObjectKind, ObjectDefinition> = {
   [ObjectKind.MONUMENTO]: {
     kind: ObjectKind.MONUMENTO,
     name: "Monumento",
-    obtainedBy: "maravilla",
+    obtainedBy: "maravilla, o retirada del rival con 5 minutos o menos",
     penalties: [
       { id: "sin-fuertes", text: "No se pueden construir fuertes." },
       { id: "victoria-minuto-25", text: "Debes ganar la partida a partir del minuto 25." },
@@ -119,6 +119,37 @@ export const OBJECT_CATALOG: Record<ObjectKind, ObjectDefinition> = {
     ],
   },
 };
+
+/**
+ * Lo que decide si el guardado de la configuración puede encender el modo de objetos
+ * (issue 223).
+ *
+ * La edición se considera empezada en `window.from` del ruleset, que es el mismo
+ * instante desde el que puntúan las partidas (`editionStarted()` en
+ * `ranked-match.ts`). Encenderlo con partidas ya jugadas dejaría a los portadores con
+ * una desventaja que nadie pactó al empezar, y el worker la aplicaría sobre partidas
+ * de la edición en curso.
+ */
+export type ObjectsModeChange = {
+  /** Estado guardado antes de este guardado. */
+  actual: boolean;
+  /** Estado que se va a guardar. */
+  next: boolean;
+  /** ¿La edición ya ha empezado? Sale de `editionStarted()` con la ventana del ruleset. */
+  editionStarted: boolean;
+};
+
+/**
+ * Si el guardado debe rechazarse por encender el modo con la edición ya en marcha.
+ *
+ * Solo se cierra el **encendido**: apagarlo sigue permitido en cualquier momento, que
+ * es la vía para levantar las exclusiones, y reescribir el mismo valor tampoco se
+ * rechaza porque el formulario es una foto completa y guardar sin tocar el interruptor
+ * es lo normal.
+ */
+export function objectsModeActivationBlocked(change: ObjectsModeChange): boolean {
+  return change.next && !change.actual && change.editionStarted;
+}
 
 /**
  * La **medianoche UTC** del día de `at`: el día con el que se agrupa un objeto.
@@ -142,6 +173,32 @@ const WIN_REASON_TOKENS: readonly (readonly [ObjectKind, readonly string[]])[] =
 ];
 
 /**
+ * Tokens de una **retirada**. `"Surrender"` es el literal que publica AoE4World y
+ * los demás están por si algún día llega traducido o como `"Resign"`.
+ */
+const SURRENDER_TOKENS: readonly string[] = ["surrender", "resign", "rendicion", "retirad"];
+
+/**
+ * Segundos de partida con los que una retirada del rival cuenta como victoria
+ * sagrada (issue 226).
+ *
+ * Rendirse antes del minuto 3 es una renuncia a pelear la partida religiosa: quien se
+ * retira con tres minutos o menos jugados le da al rival el objeto de la victoria
+ * sagrada sin que la partida haya llegado a tener reliquias en juego.
+ */
+const SURRENDER_SACRED_SECONDS = 3 * 60;
+
+/**
+ * Segundos de partida con los que una retirada del rival cuenta como victoria por
+ * maravilla (issue 227).
+ *
+ * Las dos reglas forman **bandas** y no se solapan: por debajo de los 3 minutos la
+ * retirada da la reliquia (sagrada), que es la condición más exigente; entre esos 3 y
+ * estos 5, el monumento. Una retirada por encima de los 5 minutos ya no da objeto.
+ */
+const SURRENDER_WONDER_SECONDS = 5 * 60;
+
+/**
  * Qué objeto se gana con un motivo de victoria, o `null` si no mapea.
  *
  * Se compara por **tokens** y sin distinguir mayúsculas ni acentos: el payload trae
@@ -150,11 +207,19 @@ const WIN_REASON_TOKENS: readonly (readonly [ObjectKind, readonly string[]])[] =
  * tolerante que exigir la cadena exacta y no puede confundir dos motivos entre sí
  * porque los tokens de los tres objetos no se solapan.
  *
- * `"Surrender"` (el más habitual) no da objeto: rendirse no es ninguna de las tres
- * condiciones. `null` tampoco, y significa "no hay resumen o no traía motivo", no
+ * Una **retirada** no da objeto por sí sola, pero sí cuenta como victoria si fue muy
+ * temprana, con dos bandas que no se solapan (issues 226 y 227): hasta 3 minutos, la
+ * reliquia; de 3 a 5, el monumento (`SURRENDER_SACRED_SECONDS` y
+ * `SURRENDER_WONDER_SECONDS`). Para eso hace falta la duración de la partida; sin ella
+ * (`null`) la retirada no mapea.
+ *
+ * `null` significa "no hay resumen, no traía motivo o la retirada no fue temprana", no
  * "sin motivo".
  */
-export function objectKindForWinReason(winReason: string | null): ObjectKind | null {
+export function objectKindForWinReason(
+  winReason: string | null,
+  durationSeconds: number | null = null,
+): ObjectKind | null {
   if (winReason === null) {
     return null;
   }
@@ -169,7 +234,38 @@ export function objectKindForWinReason(winReason: string | null): ObjectKind | n
     tokens.some((token) => normalized.includes(token)),
   );
 
-  return match?.[0] ?? null;
+  if (match !== undefined) {
+    return match[0];
+  }
+
+  return surrenderObjectKind(normalized, durationSeconds);
+}
+
+/**
+ * Qué objeto da una retirada, según lo que duró la partida.
+ *
+ * Solo las retiradas muy tempranas reparten objeto: una retirada normal no da nada y
+ * `durationSeconds` en `null` no permite decidir, así que tampoco.
+ */
+function surrenderObjectKind(
+  normalizedWinReason: string,
+  durationSeconds: number | null,
+): ObjectKind | null {
+  const isSurrender = SURRENDER_TOKENS.some((token) => normalizedWinReason.includes(token));
+
+  if (!isSurrender || durationSeconds === null) {
+    return null;
+  }
+
+  if (durationSeconds <= SURRENDER_SACRED_SECONDS) {
+    return ObjectKind.RELIQUIA;
+  }
+
+  if (durationSeconds <= SURRENDER_WONDER_SECONDS) {
+    return ObjectKind.MONUMENTO;
+  }
+
+  return null;
 }
 
 /**
@@ -194,6 +290,13 @@ export type AwardMatch = {
   startedAt: Date;
   /** Motivo de la victoria tal cual lo publica AoE4World. */
   winReason: string | null;
+  /**
+   * Duración de la partida en segundos, o `null` si no se conoce.
+   *
+   * Solo la usa la regla de la retirada temprana (issues 226 y 227): sin duración no
+   * se puede saber si el rival se rindió dentro del margen.
+   */
+  durationSeconds: number | null;
 };
 
 /** Un objeto que toca otorgar, con la partida que lo otorga. */
@@ -249,7 +352,7 @@ export function pickDailyAwards(
   const byKey = new Map<string, { kind: ObjectKind; day: Date; match: AwardMatch }>();
 
   for (const match of matches) {
-    const kind = objectKindForWinReason(match.winReason);
+    const kind = objectKindForWinReason(match.winReason, match.durationSeconds);
 
     if (kind === null) {
       continue;
@@ -438,9 +541,10 @@ export type ObjectThrowRecord = {
  * el mismo día UTC.
  *
  * Cuenta el lanzamiento aunque se haya devuelto: el `ObjectThrow` ocurrió y lo que
- * la regla evita es insistir sobre la misma persona ese día. Con la mecánica
- * acordada (un lanzamiento por portador y día, y el objeto se queda donde está si
- * se devuelve) la diferencia es teórica, pero la regla queda cerrada.
+ * la regla evita es insistir sobre la misma persona ese día. Sigue haciendo falta
+ * aunque el turno del lanzador se gaste con la devolución, porque el objeto puede
+ * cambiar de manos ese mismo día y el portador nuevo no arrastra el lanzamiento del
+ * anterior.
  *
  * `throws` son los lanzamientos **de este objeto**; el día se compara normalizado
  * con `objectDay()`.
@@ -457,16 +561,69 @@ export function sameTargetBlocked(
   );
 }
 
-/** Un lanzamiento con su lanzador, para la regla de uno por portador y día. */
-export type ObjectThrowWithThrower = ObjectThrowRecord & { fromId: string };
+/**
+ * Un objeto aplicado a alguien: el que tiene en su poder o el que le llegó ese día.
+ *
+ * No es el `ObjectAward` ni el `ObjectThrow`, sino lo que la regla de "un objeto de
+ * cada tipo" necesita: el tipo, a quién afecta, cuándo y si sigue activo.
+ */
+export type KindApplication = {
+  kind: ObjectKind;
+  /** A quién se le aplicó: el portador del premio o el destino de un lanzamiento. */
+  holderId: string;
+  /** Cuándo se le aplicó: el `heldSince` del premio o el `at` del lanzamiento. */
+  at: Date;
+  /** `true` si sigue pendiente en ese portador; `false` si fue un lanzamiento aceptado. */
+  pending: boolean;
+};
 
 /**
- * La regla de **un lanzamiento por portador y día UTC**.
+ * La regla de **un objeto de cada tipo aplicado a la vez y por día UTC** (issue 225).
  *
- * Cuenta los lanzamientos que hizo el portador actual, se devolvieran o no: el
- * límite es por persona y día, no por objeto. Si el objeto cambia de manos sin
- * devolverse, el portador nuevo sí puede lanzarlo el mismo día, porque no ha
- * lanzado nada; es lo que compara `fromId` y no el `awardId`.
+ * Hay un premio por tipo y día, pero un premio de un día anterior sigue pendiente y
+ * se puede lanzar al día siguiente: sin esta regla el mismo jugador podría acabar con
+ * dos objetos del mismo tipo encima. Se bloquea en los dos sentidos que tiene la
+ * frase: mientras uno siga **pendiente** en ese jugador, y si ya **le llegó hoy** uno
+ * del mismo tipo, aunque ya lo haya cumplido.
+ *
+ * Cuenta tanto el premio que tiene en su poder (`pending`) como el lanzamiento
+ * aceptado, y **no** cuenta los devueltos: un lanzamiento devuelto nunca llegó al
+ * objetivo.
+ */
+export function sameKindBlocked(
+  applications: readonly KindApplication[],
+  kind: ObjectKind,
+  toId: string,
+  day: Date,
+): boolean {
+  const targetDay = objectDay(day).getTime();
+
+  return applications.some(
+    (item) =>
+      item.kind === kind &&
+      item.holderId === toId &&
+      (item.pending || objectDay(item.at).getTime() === targetDay),
+  );
+}
+/** Un lanzamiento con su lanzador, para la regla de uno por portador y día. */
+export type ObjectThrowWithThrower = ObjectThrowRecord & {
+  fromId: string;
+};
+
+/**
+ * La regla de **un lanzamiento por portador y día UTC, se devuelva o no**.
+ *
+ * Cuenta todos los lanzamientos que hizo el portador actual, también los que se
+ * devolvieron: si la tirada se devuelve, la desventaja y el objeto se quedan con el
+ * lanzador y el turno del día queda gastado (issue 224). No hay segunda tirada ni
+ * forma de reutilizar el objeto hasta el día UTC siguiente.
+ *
+ * Lo que sí permite lanzar el mismo día es **cambiar de manos sin devolución**: el
+ * portador nuevo no ha lanzado nada, así que su turno está entero. Es lo que compara
+ * `fromId` y no el `awardId`.
+ *
+ * La **regla Y** lee el mismo listado y también cuenta los devueltos: lo que limita es
+ * no insistir dos veces sobre el mismo jugador el mismo día.
  *
  * `throws` son los lanzamientos **de este objeto**; el día se normaliza con
  * `objectDay()` igual que en la regla Y.

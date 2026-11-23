@@ -5,7 +5,7 @@ import { EmptyState } from "@/components/empty-state";
 import { PageHead } from "@/components/page-head";
 import { PageSizeSelect } from "@/components/page-size-select";
 import { Pagination } from "@/components/pagination";
-import { PointHistoryFilters } from "@/components/point-history-filters";
+import { HistoryFilters } from "@/components/history-filters";
 import { PointHistoryList } from "@/components/point-history-row";
 import { getPointHistory } from "@/lib/public";
 import { readSingleParam } from "@/lib/query-params";
@@ -149,7 +149,7 @@ export default async function ParticipantPointHistoryTab({
         />
       ) : (
         <div className="flex flex-col gap-4">
-          <PointHistoryFilters basePath={basePath} />
+          <HistoryFilters basePath={basePath} />
 
           {historyRead.data.rows.length === 0 ? (
             <EmptyState

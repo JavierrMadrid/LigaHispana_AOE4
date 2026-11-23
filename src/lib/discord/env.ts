@@ -169,6 +169,15 @@ export type DiscordConfig = {
    */
   announceChannelId: string | null;
   /**
+   * Canal donde el bot avisa de los **objetos utilizables** (issue 228).
+   *
+   * Es un canal propio y no el de avisos generales: los objetos son ruido para quien
+   * no juega la edición y la regla del torneo es que se anuncien en `#objetos`. `null`
+   * = sin canal, y entonces no se avisa de ningún objeto: el aviso se pierde en vez de
+   * caer en el canal equivocado, que es peor (el resto de avisos sigue igual).
+   */
+  objectsChannelId: string | null;
+  /**
    * Id del rol de **participante** que el bot pone y quita en el servidor (issue 56).
    *
    * `null` = sin rol configurado, y entonces el paso no existe: no se lee ni una fila
@@ -318,6 +327,7 @@ export function getDiscordConfig(): DiscordConfig {
     botToken: readString("DISCORD_BOT_TOKEN"),
     guildId: readString("DISCORD_GUILD_ID"),
     announceChannelId: readString("DISCORD_ANNOUNCE_CHANNEL_ID"),
+    objectsChannelId: readString("DISCORD_OBJECTS_CHANNEL_ID"),
     participantRoleId: readString("DISCORD_PARTICIPANT_ROLE_ID"),
     clientId: readString("DISCORD_CLIENT_ID"),
     clientSecret: readString("DISCORD_CLIENT_SECRET"),
@@ -452,6 +462,20 @@ export function isDiscordAnnounceConfigured(
   config: DiscordConfig = getDiscordConfig(),
 ): config is DiscordConfig & { botToken: string; announceChannelId: string } {
   return config.botToken !== null && config.announceChannelId !== null;
+}
+
+/**
+ * ¿Se pueden anunciar los **objetos utilizables** en su canal (issue 228)?
+ *
+ * Pide el token del bot y el canal `#objetos`, y **no** el canal de avisos: los
+ * objetos van a un canal propio y, sin él, no se avisa de nada. Es un guard de tipo
+ * como los demás, para que quien compone la petición no repita la condición ni
+ * escriba un valor de relleno.
+ */
+export function isDiscordObjectsConfigured(
+  config: DiscordConfig = getDiscordConfig(),
+): config is DiscordConfig & { botToken: string; objectsChannelId: string } {
+  return config.botToken !== null && config.objectsChannelId !== null;
 }
 
 /**

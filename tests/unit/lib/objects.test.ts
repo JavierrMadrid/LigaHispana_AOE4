@@ -7,9 +7,11 @@ import {
   isMatchBlocked,
   objectDay,
   objectKindForWinReason,
+  objectsModeActivationBlocked,
   pickDailyAwards,
   pickPenalty,
   returnProbability,
+  sameKindBlocked,
   sameTargetBlocked,
   sameThrowerBlocked,
   throwReturnProbability,
@@ -29,12 +31,83 @@ function at(iso: string): Date {
   return new Date(iso);
 }
 
+describe("objectsModeActivationBlocked", () => {
+  it("rechaza encender el modo con la edición ya empezada", () => {
+    expect(
+      objectsModeActivationBlocked({ actual: false, next: true, editionStarted: true }),
+    ).toBe(true);
+  });
+
+  it("deja encenderlo antes de que la edición empiece", () => {
+    expect(
+      objectsModeActivationBlocked({ actual: false, next: true, editionStarted: false }),
+    ).toBe(false);
+  });
+
+  it("nunca bloquea apagarlo, ni reescribir el valor que ya hay", () => {
+    expect(
+      objectsModeActivationBlocked({ actual: true, next: false, editionStarted: true }),
+    ).toBe(false);
+    expect(
+      objectsModeActivationBlocked({ actual: true, next: true, editionStarted: true }),
+    ).toBe(false);
+    expect(
+      objectsModeActivationBlocked({ actual: false, next: false, editionStarted: true }),
+    ).toBe(false);
+  });
+});
+
+describe("sameKindBlocked", () => {
+  const aplicado = (
+    kind: ObjectKind,
+    holderId: string,
+    iso: string,
+    pending: boolean,
+  ) => ({ kind, holderId, at: at(iso), pending });
+
+  it("bloquea si el objetivo ya tiene uno pendiente del mismo tipo, aunque sea de otro día", () => {
+    const aplicados = [aplicado(ObjectKind.RELIQUIA, "ana", "2026-11-03T22:00:00.000Z", true)];
+
+    expect(
+      sameKindBlocked(aplicados, ObjectKind.RELIQUIA, "ana", at("2026-11-04T10:00:00.000Z")),
+    ).toBe(true);
+  });
+
+  it("bloquea si ya le llegó hoy uno del mismo tipo, aunque ya lo haya cumplido", () => {
+    const aplicados = [aplicado(ObjectKind.MONEDA, "ana", "2026-11-04T09:00:00.000Z", false)];
+
+    expect(
+      sameKindBlocked(aplicados, ObjectKind.MONEDA, "ana", at("2026-11-04T18:00:00.000Z")),
+    ).toBe(true);
+  });
+
+  it("no bloquea si el objeto recibido es de otro día o de otro tipo", () => {
+    const aplicados = [
+      aplicado(ObjectKind.MONEDA, "ana", "2026-11-03T09:00:00.000Z", false),
+      aplicado(ObjectKind.RELIQUIA, "ana", "2026-11-04T09:00:00.000Z", false),
+    ];
+
+    expect(
+      sameKindBlocked(aplicados, ObjectKind.MONEDA, "ana", at("2026-11-04T18:00:00.000Z")),
+    ).toBe(false);
+  });
+
+  it("no bloquea a otro jugador ni cuenta lo que tiene otro tipo en su poder", () => {
+    const aplicados = [aplicado(ObjectKind.RELIQUIA, "bea", "2026-11-04T09:00:00.000Z", true)];
+
+    expect(
+      sameKindBlocked(aplicados, ObjectKind.RELIQUIA, "ana", at("2026-11-04T18:00:00.000Z")),
+    ).toBe(false);
+  });
+});
+
 function match(overrides: Partial<AwardMatch> & { id: string }): AwardMatch {
   return {
     gameId: overrides.id,
     playerId: `p-${overrides.id}`,
     startedAt: at("2026-11-04T10:00:00.000Z"),
     winReason: "Conquest",
+    durationSeconds: null,
     ...overrides,
   };
 }
@@ -99,6 +172,58 @@ describe("objectKindForWinReason", () => {
     expect(objectKindForWinReason("")).toBeNull();
     expect(objectKindForWinReason("   ")).toBeNull();
     expect(objectKindForWinReason(null)).toBeNull();
+  });
+
+  it("una retirada del rival con 3 minutos o menos cuenta como victoria sagrada", () => {
+    expect(objectKindForWinReason("Surrender", 180)).toBe(ObjectKind.RELIQUIA);
+    expect(objectKindForWinReason("Surrender", 42)).toBe(ObjectKind.RELIQUIA);
+    expect(objectKindForWinReason("retirada", 120)).toBe(ObjectKind.RELIQUIA);
+  });
+
+  it("una retirada entre 3 y 5 minutos da el monumento", () => {
+    expect(objectKindForWinReason("Surrender", 181)).toBe(ObjectKind.MONUMENTO);
+    expect(objectKindForWinReason("Surrender", 300)).toBe(ObjectKind.MONUMENTO);
+    expect(objectKindForWinReason("Resign", 240)).toBe(ObjectKind.MONUMENTO);
+  });
+
+  it("las dos bandas no se solapan: hasta 3 minutos manda la reliquia", () => {
+    expect(objectKindForWinReason("Surrender", 180)).toBe(ObjectKind.RELIQUIA);
+    expect(objectKindForWinReason("Surrender", 181)).toBe(ObjectKind.MONUMENTO);
+  });
+
+  it("una retirada por encima de 5 minutos o sin duración no da objeto", () => {
+    expect(objectKindForWinReason("Surrender", 301)).toBeNull();
+    expect(objectKindForWinReason("Surrender", null)).toBeNull();
+    expect(objectKindForWinReason("Surrender")).toBeNull();
+  });
+
+  it("la duración no cambia lo que ya mapea por el motivo", () => {
+    expect(objectKindForWinReason("Conquest", 60)).toBe(ObjectKind.MONEDA);
+    expect(objectKindForWinReason("Wonder", 60)).toBe(ObjectKind.MONUMENTO);
+  });
+
+  it("una retirada temprana reparte el objeto de la victoria sagrada en el día", () => {
+    const awards = pickDailyAwards([
+      match({ id: "m-retirada", playerId: "rapido", winReason: "Surrender", durationSeconds: 90 }),
+    ]);
+
+    expect(awards).toEqual([
+      {
+        kind: ObjectKind.RELIQUIA,
+        day: at("2026-11-04T00:00:00.000Z"),
+        winnerId: "rapido",
+        winnerMatchId: "m-retirada",
+        heldSince: at("2026-11-04T10:00:00.000Z"),
+      },
+    ]);
+  });
+
+  it("una retirada de cuatro minutos reparte el monumento", () => {
+    const awards = pickDailyAwards([
+      match({ id: "m-cuatro", playerId: "lento", winReason: "Surrender", durationSeconds: 240 }),
+    ]);
+
+    expect(awards.map((award) => award.kind)).toEqual([ObjectKind.MONUMENTO]);
   });
 });
 
@@ -362,22 +487,36 @@ describe("sameTargetBlocked", () => {
 describe("sameThrowerBlocked", () => {
   const day = at("2026-11-04T12:00:00.000Z");
 
-  it("el portador que ya lanzó ese día UTC no puede repetir", () => {
-    const throws = [{ fromId: "p-1", toId: "p-2", at: at("2026-11-04T08:00:00.000Z") }];
+  const lanzado = (fromId: string, toId: string, iso: string) => ({
+    fromId,
+    toId,
+    at: at(iso),
+  });
+
+  it("el portador que ya lanzó el objeto ese día UTC no puede repetir", () => {
+    const throws = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
 
     expect(sameThrowerBlocked(throws, "p-1", day)).toBe(true);
   });
 
-  it("cuenta el lanzamiento se devolviera o no: el límite es por persona y día", () => {
+  it("un lanzamiento devuelto sí gasta el turno del día (issue 224)", () => {
+    // La tirada se devolvió, pero el lanzador se queda con la desventaja y con el
+    // objeto: el turno está gastado hasta el día UTC siguiente.
+    const devuelto = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
+
+    expect(sameThrowerBlocked(devuelto, "p-1", day)).toBe(true);
+  });
+
+  it("cuenta solo el día UTC: el de ayer no bloquea", () => {
     // El portador que lanzó ayer sí puede lanzar hoy; otro portador, no.
-    const ayer = [{ fromId: "p-1", toId: "p-2", at: at("2026-11-03T23:59:59.999Z") }];
+    const ayer = [lanzado("p-1", "p-2", "2026-11-03T23:59:59.999Z")];
 
     expect(sameThrowerBlocked(ayer, "p-1", day)).toBe(false);
     expect(sameThrowerBlocked(ayer, "p-9", day)).toBe(false);
   });
 
   it("un objeto que cambió de manos deja lanzar al portador nuevo", () => {
-    const throws = [{ fromId: "p-1", toId: "p-2", at: at("2026-11-04T08:00:00.000Z") }];
+    const throws = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
 
     expect(sameThrowerBlocked(throws, "p-2", day)).toBe(false);
   });

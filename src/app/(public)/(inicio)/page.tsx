@@ -4,6 +4,11 @@ import Image from "next/image";
 import { ArrowUpRight } from "@phosphor-icons/react/dist/ssr/ArrowUpRight";
 import { Users } from "@phosphor-icons/react/dist/ssr/Users";
 import { LiveDot } from "@/components/live-dot";
+import { HomeTwitchStreams } from "@/components/home-twitch-streams";
+import {
+  fallbackLeagueTwitchStreams,
+  getLeagueTwitchStreams,
+} from "@/lib/streams/twitch";
 import {
   HomeStandings,
   HomeReload,
@@ -96,11 +101,16 @@ export default async function StandingsPage({
   const streaming = rows
     .filter(
       (row) =>
-        (row.twitchChannel && row.twitchIsLive) ||
         (row.youtubeChannel && row.youtubeIsLive) ||
-        (row.kickChannel && row.kickIsLive),
+        (row.kickChannel && row.kickIsLive)
     )
-    .slice(0, 3);
+    .slice(0, 3)
+    .map((row) => ({ ...row, twitchChannel: null, twitchIsLive: false }));
+  const twitchRead = degraded
+    ? { status: "unavailable" as const, streams: [] }
+    : mocked
+    ? fallbackLeagueTwitchStreams(rows)
+    : await getLeagueTwitchStreams(rows);
   const phase = !statusWindow
     ? null
     : nowMs < new Date(statusWindow.from).getTime()
@@ -155,32 +165,6 @@ export default async function StandingsPage({
         />
       )}
       <aside className="home-activity" aria-label="Actividad del torneo">
-        {!degraded && streaming.length ? (
-          <section
-            className="home-streams"
-            aria-labelledby="home-streams-heading"
-          >
-            <h2 id="home-streams-heading">
-              <LiveDot />
-              En directo ahora
-            </h2>
-            <ul>
-              {streaming.map((row) => (
-                <li key={row.profileId}>
-                  <a
-                    href={row.profileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={row.name}
-                  >
-                    {row.name}
-                  </a>
-                  <HomePlayerChannels row={row} liveOnly />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
         <section
           className="home-live-games"
           aria-labelledby="home-games-heading"
@@ -205,6 +189,30 @@ export default async function StandingsPage({
             <ArrowUpRight size={14} aria-hidden="true" />
           </Link>
         </section>
+        <HomeTwitchStreams read={twitchRead} preview={mocked} />
+        {!degraded && streaming.length ? (
+          <section
+            className="home-streams"
+            aria-labelledby="home-streams-heading"
+          >
+            <h2 id="home-streams-heading">Otros canales en directo</h2>
+            <ul>
+              {streaming.map((row) => (
+                <li key={row.profileId}>
+                  <a
+                    href={row.profileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={row.name}
+                  >
+                    {row.name}
+                  </a>
+                  <HomePlayerChannels row={row} liveOnly />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
       </aside>
       <div className="home-tournament-timing">
         {statusWindow ? (

@@ -28,6 +28,7 @@ publicable, y las tablas no son accesibles desde la Data API ([RLS](#rls-y-privi
 | `Setting` | Configuración y memoria de los procesos. | `key` |
 | `ObjectAward` | Un objeto utilizable del POC de la issue 134: tipo, día, portador y si sigue pendiente. | `id`; único `(kind, day)` |
 | `ObjectThrow` | Un lanzamiento de un objeto y si se devolvió (append-only). | `id` |
+| `Post` | Una **noticia** del torneo (issue 229): titular, cuerpo en Markdown básico y fecha de publicación. | `id`; `slug` único |
 
 Relaciones: `Match`, `PlayerScore`, `ObjectiveEvent`, `ObjectiveLeadEvent`,
 `ObjectiveProgressEvent`, `ObjectiveProgressState` y `Alert` apuntan a `Player` con
@@ -110,7 +111,7 @@ Un participante. `status` decide quién puntúa: solo `APPROVED` entra en la cla
 | `ladderLastGameAt` | `DateTime?` | `last_game_at` de la ladder. Va por delante de lo que importamos: solo sirve para la alerta `MISSING_LADDER_MATCHES`. |
 | `ladderUpdatedAt` | `DateTime?` | Última lectura de la ladder. Distingue "sin ladder" de "sin sync". |
 | `twitchIsLive`, `youtubeIsLive`, `kickIsLive` | `Boolean` | `false` = "no comprobado o no en directo". Los tres son degradables. |
-| `avatarUrl` | `String?` | `avatars.full` de AoE4World; `null` dibuja monograma. |
+| `avatarUrl` | `String?` | `avatars.full` de AoE4World; `null` indica que no hay avatar disponible. |
 | `profileCheckedAt` | `DateTime?` | Sello de la caché de perfil: cuándo se refrescaron el nombre oficial y el avatar. `null` = sin comprobar. Lo escriben la ladder y `GET /players/:profile_id`; con menos de 1 h no se pide el perfil. |
 | `historyPublic` | `Boolean?` | Historial de partidas público. `null` = sin comprobar (un fallo no escribe "cerrado"). |
 | `historyCheckedAt` | `DateTime?` | Caché de la comprobación de historial (12 h). |
@@ -645,7 +646,30 @@ después; lo que se anota es el siguiente, no se corrige el anterior.
 | `roll` | `Float` | Tirada de la devolución (0-1), tal cual la consumió `returnProbability()`. Se guarda para poder auditar el resultado. |
 | `returned` | `Boolean` | `true` = se devolvió: el objeto sigue en el lanzador y ese día no puede relanzarlo. `false` = el portador pasó a ser el objetivo. |
 
-Índice `(awardId)`: los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`.
+Índices: `(awardId)`, los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`; y
+`(fromId, at)` y `(toId, at)`, el feed de objetos de la API del overlay (`/api/v0/objetos`): los
+lanzamientos que hizo un jugador y los que recibió, filtrados por `at` desde el inicio de la
+edición. La igualdad por jugador va delante del rango por fecha, que es el orden en que se
+consultan.
+
+## `Post`
+
+Una **noticia** del torneo (issue 229). La escribe el superadministrador desde
+`/admin/noticias` y se publica sin desplegar; la web pública la lee en `/noticias` y en
+`/noticias/<slug>`.
+
+| Campo | Tipo | Nota |
+|---|---|---|
+| `id` | `String` (cuid) | |
+| `slug` | `String` | Dirección de la noticia, única. Minúsculas, números y guiones simples; se normaliza al guardar. |
+| `title` | `String` | Titular, hasta 120 caracteres. |
+| `summary` | `String?` | Entradilla del listado. `null` = se recorta del cuerpo al pintarla. |
+| `body` | `String` | Cuerpo en **Markdown básico** (párrafos, `h2`/`h3`, negrita, cursiva, código, enlaces, listas y citas). Se pinta con `renderNewsBody()`, que escapa el texto. |
+| `publishedAt` | `DateTime?` | `null` = **borrador**: no sale en la web ni por URL directa. Es también el orden del listado. |
+| `authorEmail` | `String?` | Correo de quien la escribió. |
+| `createdAt`, `updatedAt` | `DateTime` | Alta y última edición. El panel ordena por esta última. |
+
+Índice `(publishedAt)`: el listado público (publicadas y por fecha descendente).
 
 ## Índices
 
@@ -674,7 +698,7 @@ aparece en una consulta, no se crea.**
 | `AdminAct` | `createdAt`, `(kind, createdAt)`, `(playerId, createdAt)`, `(revertedAt, kind)`, `(reversedByActId)` | Listado y filtros por tipo, jugador y estado; autorrelación de la reversión. |
 | `AdminActMatch` | pk `(actId, matchId)`, `(matchId)` | Vínculos de una anulación; cascada desde `Match`. |
 | `ObjectAward` | único `(kind, day)`, `(holderId)` | Un objeto de cada tipo por día UTC; objetos de un portador (exclusión y panel). |
-| `ObjectThrow` | `(awardId)` | Lanzamientos de un objeto y cascada desde `ObjectAward`. |
+| `ObjectThrow` | `(awardId)`, `(fromId, at)`, `(toId, at)` | Lanzamientos de un objeto y cascada desde `ObjectAward`; feed de objetos del overlay: los que hizo un jugador y los que recibió, recortados por fecha. |
 | `Admin` | `email` (único), `authUserId` (único) | Acceso al panel por correo y vínculo con Auth. |
 | `RateLimitCounter` | `key` (pk) | El `INSERT ... ON CONFLICT`. |
 

@@ -9,6 +9,12 @@ type SwitchFieldProps = {
   hint?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  /**
+   * El ajuste no se puede mover en este momento (el encendido del modo de objetos
+   * con la edición ya empezada). El campo oculto sigue viajando con su valor: la
+   * acción vuelve a comprobarlo en el servidor.
+   */
+  disabled?: boolean;
 };
 
 /**
@@ -25,7 +31,14 @@ type SwitchFieldProps = {
  * los dos tienen que verse y comportarse igual. El nombre accesible lo da la
  * etiqueta visible enlazada con `aria-labelledby`, no un `aria-label` suelto.
  */
-export function SwitchField({ name, label, hint, checked, onChange }: SwitchFieldProps) {
+export function SwitchField({
+  name,
+  label,
+  hint,
+  checked,
+  onChange,
+  disabled = false,
+}: SwitchFieldProps) {
   const labelId = useId();
   const hintId = hint !== undefined ? `${labelId}-hint` : undefined;
 
@@ -48,10 +61,11 @@ export function SwitchField({ name, label, hint, checked, onChange }: SwitchFiel
         aria-checked={checked}
         aria-labelledby={labelId}
         aria-describedby={hintId}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
-          checked ? "border-accent/60 bg-accent/25" : "border-line-strong bg-surface-raised"
-        }`}
+          disabled ? "cursor-not-allowed opacity-60" : ""
+        } ${checked ? "border-accent/60 bg-accent/25" : "border-line-strong bg-surface-raised"}`}
       >
         <span
           aria-hidden="true"
