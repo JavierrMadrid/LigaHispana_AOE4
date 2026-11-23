@@ -4,7 +4,7 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 | Elemento                     | Regla                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| Ámbito                       | `/`, `/partidas`, `/objetivos` y `/reglas`, incluida cabecera y pie; otras rutas conservan su diseño                  |
+| Ámbito                       | `/`, `/partidas`, `/objetivos`, `/reglas`, `/puntuacion` y `/participar`, incluida cabecera y pie; otras rutas conservan su diseño                  |
 | Fondo / panel / borde        | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D`                        |
 | Texto principal / secundario | `#EDF1F8` / `#B6C3D6`                                                                       |
 | Acento                       | Oro `#D6B568` para inscripción, selección, foco y primer puesto; rojo para emisión          |
@@ -96,3 +96,9 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Índice lateral sticky desde 1024px, con sección activa y anclas existentes; en pantallas menores, índice desplegable nativo antes del documento. Foco visible y anclas separadas de la cabecera sticky.
 - Calendario en filas dentro de la superficie de lectura, con separadores y multiplicador destacado. Los estados vacíos y de indisponibilidad se muestran en línea.
 - Estilos bajo `.league-rules`; navegación, panorama y pie compartidos sin modificar otras rutas.
+
+## Inscripción (`/participar`)
+
+- Comparte navegación, panorama y pie de portada; ámbito exclusivo `.league-participate`. Identidad y enlaces de apoyo laterales desde 1024px; formulario único, una columna en móvil.
+- Discord, requisitos y grupos de campos se separan con espacio y líneas, sin paneles anidados. Controles de 44px, etiqueta visible, ayuda y error enlazados; estados OAuth, captcha, pendiente, éxito y cierre conservados.
+- El cierre aparece antes de los campos, mantiene el identificador accesible del envío desactivado y permite consultar los requisitos. Acciones y validación de servidor sin cambios.

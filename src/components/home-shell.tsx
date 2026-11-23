@@ -11,6 +11,7 @@ import "./home.css";
 import "./matches.css";
 import "./objectives.css";
 import "./rules.css";
+import "./participate.css";
 
 export function HomeShell({
   legacy,
@@ -37,12 +38,13 @@ export function HomeShell({
 }) {
   const pathname = usePathname();
   const isScoring = pathname === "/puntuacion";
-  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && pathname !== "/reglas" && !isScoring) return legacy;
+  const isParticipating = pathname === "/participar";
+  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && pathname !== "/reglas" && !isScoring && !isParticipating) return legacy;
 
   return (
     <div
       className={`league-home ${
-        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : pathname === "/reglas" ? "league-rules" : isScoring ? "league-scoring" : ""
+        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : pathname === "/reglas" ? "league-rules" : isScoring ? "league-scoring" : isParticipating ? "league-participate" : ""
       } ${fonts}`}
       style={accentStyle}
     >

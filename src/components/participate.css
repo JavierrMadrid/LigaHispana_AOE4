@@ -1,0 +1,172 @@
+.league-participate .participate-layout {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 688px);
+  justify-content: center;
+  align-items: start;
+  gap: 40px;
+}
+.league-participate .participate-intro {
+  position: sticky;
+  top: 104px;
+}
+.league-participate .participate-intro h1 {
+  margin: 0 0 16px;
+  font: 600 30px/1.25 var(--font-cinzel), serif;
+}
+.league-participate .participate-intro p {
+  font-size: 14px;
+  line-height: 1.8;
+}
+.league-participate .participate-intro p + p {
+  margin-top: 24px;
+  padding-top: 20px;
+  font-size: 13px;
+}
+.league-participate .participate-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.league-participate .registration-surface {
+  min-width: 0;
+  padding: 28px 32px;
+  background: #122039;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.league-participate .registration-surface h2 {
+  border: 0;
+  padding: 0;
+  font: 600 21px/1.4 var(--font-home-inter), sans-serif;
+}
+.league-participate .registration-requirements {
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+.league-participate .registration-requirements p {
+  max-width: 72ch;
+  font-size: 13px;
+  line-height: 1.75;
+}
+.league-participate .registration-closed {
+  margin-top: 14px;
+  padding-block: 12px;
+  border-block: 1px solid #53627b;
+  color: #e0e7f2;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.league-participate .registration-discord {
+  margin-top: 20px;
+  padding: 0 0 20px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.league-participate .registration-discord a {
+  min-height: 44px;
+  border-radius: 4px;
+}
+.league-participate .registration-surface form {
+  margin-top: 24px;
+  gap: 28px;
+}
+.league-participate .registration-surface legend {
+  margin-bottom: 18px;
+}
+.league-participate .registration-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 18px;
+}
+.league-participate .registration-fields > div {
+  min-width: 0;
+}
+.league-participate .registration-surface fieldset + fieldset {
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.league-participate .registration-surface fieldset + fieldset legend {
+  padding-top: 24px;
+}
+.league-participate .registration-surface input:not([type="checkbox"]),
+.league-participate .registration-surface select {
+  min-height: 44px;
+  border-radius: 4px;
+  background: #0d1728;
+  font-size: 15px;
+}
+.league-participate .registration-surface input:not([type="checkbox"]):focus,
+.league-participate .registration-surface select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-color: var(--accent);
+}
+.league-participate .registration-surface input[aria-invalid="true"],
+.league-participate .registration-surface select[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.league-participate .registration-surface input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.league-participate .registration-surface button[type="submit"] {
+  min-height: 44px;
+  padding-inline: 24px;
+  border-radius: 4px;
+}
+.league-participate .registration-surface button:disabled {
+  background: #33425a;
+  color: #c1cddd;
+  opacity: 1;
+}
+.league-participate .registration-confirmation p {
+  line-height: 1.8;
+}
+.league-participate .participate-layout a:focus-visible,
+.league-participate .participate-layout button:focus-visible,
+.league-participate .participate-layout input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+@media (max-width: 1023px) {
+  .league-participate .participate-layout {
+    grid-template-columns: minmax(0, 688px);
+    gap: 24px;
+  }
+  .league-participate .participate-intro {
+    position: static;
+  }
+  .league-participate .participate-intro h1 {
+    margin-bottom: 12px;
+  }
+  .league-participate .participate-intro p + p {
+    margin-top: 16px;
+    padding-top: 14px;
+  }
+}
+@media (max-width: 600px) {
+  .league-participate .participate-intro h1 {
+    font-size: 26px;
+  }
+  .league-participate .registration-surface {
+    padding: 22px 18px;
+  }
+  .league-participate .registration-surface h2 {
+    font-size: 19px;
+  }
+  .league-participate .registration-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .league-participate .registration-surface input:not([type="checkbox"]),
+  .league-participate .registration-surface select {
+    font-size: 16px;
+  }
+  .league-participate .registration-surface button[type="submit"] {
+    width: 100%;
+  }
+}
