@@ -10,6 +10,7 @@ import { HomeObjectiveHelpProvider } from "@/components/home-objective-help";
 import "./home.css";
 import "./matches.css";
 import "./objectives.css";
+import "./rules.css";
 
 export function HomeShell({
   legacy,
@@ -36,12 +37,12 @@ export function HomeShell({
 }) {
   const pathname = usePathname();
   const isScoring = pathname === "/puntuacion";
-  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && !isScoring) return legacy;
+  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && pathname !== "/reglas" && !isScoring) return legacy;
 
   return (
     <div
       className={`league-home ${
-        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : isScoring ? "league-scoring" : ""
+        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : pathname === "/reglas" ? "league-rules" : isScoring ? "league-scoring" : ""
       } ${fonts}`}
       style={accentStyle}
     >
