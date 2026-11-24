@@ -100,10 +100,9 @@ catálogo y una redacción nueva no reescribe el histórico.
 
 ## Lanzamiento y devolución
 
-- El portador puede **lanzar el objeto a otro jugador una vez al día**. En el POC el
-  lanzamiento se hace desde el panel de admin, no hay automatismo ni bot. El límite es
-  **un lanzamiento por portador y día UTC, se devuelva o no** (`sameThrowerBlocked()`,
-  issue 224).
+- El portador puede **lanzar el objeto a otro jugador**. En el POC el lanzamiento se
+  hace desde el panel de admin, no hay automatismo ni bot. Cada objeto se juega una
+  sola vez: o viaja al objetivo o se pierde, así que no hay segunda tirada (issue 224).
 - **Probabilidad de devolución** (`returnProbability()`), con el puesto en la
   clasificación (`1` = primero) y el total de jugadores clasificados:
 
@@ -115,9 +114,12 @@ catálogo y una redacción nueva no reescribe el histórico.
   se devuelva; lanzar a alguien mejor la deja en el suelo. Nunca es `0` ni `1`: la
   tirada siempre existe. Con menos de un jugador clasificado no hay proporción que
   calcular y devuelve `0,01`.
-- Si **se devuelve**, la tirada sale mal y la desventaja y el objeto se quedan con el
-  portador: sus partidas siguen sin puntuar y **el turno del día queda gastado**. No
-  puede volver a lanzarlo hasta el día UTC siguiente, aunque siga siendo el portador.
+- Si **se devuelve**, la tirada sale mal: la desventaja se aplica al propio lanzador
+  —sus partidas siguen sin puntuar hasta que el admin la dé por cumplida— y el objeto
+  **se pierde**. No vuelve a su mano y no se puede volver a lanzar nunca, ni ese día ni
+  los siguientes (`objectLost()`): si se quedara con él, se relanzaría y la desventaja
+  se duplicaría. El objeto perdido sigue pendiente y se cumple sobre una partida
+  posterior del portador como cualquier otro premio.
 - Si **no se devuelve**, el portador pasa a ser el objetivo, con `heldSince` en el
   instante del lanzamiento; las partidas de la ventana anterior ya quedaron marcadas
   y la ventana nueva queda abierta (ver [Estados de la ventana](#estados-de-la-ventana)).
@@ -126,8 +128,8 @@ catálogo y una redacción nueva no reescribe el histórico.
   cambie de manos después.
 - **Regla Y:** un mismo objetivo no puede recibir el mismo objeto dos veces en el
   mismo día UTC (`sameTargetBlocked()`). Cuenta cualquier lanzamiento anotado, se
-  devolviera o no: lo que evita es insistir sobre la misma persona; el turno del
-  portador lo controla `sameThrowerBlocked()`.
+  devolviera o no: lo que evita es insistir sobre la misma persona; que el objeto siga
+  en juego lo controla `objectLost()`.
 - **Un objeto de cada tipo** (issue 225): nadie puede tener dos objetos del mismo
   tipo aplicados. Se bloquea el lanzamiento si el objetivo ya lo tiene **pendiente** o
   si ya le llegó uno del mismo tipo ese día UTC (`sameKindBlocked()`); los
@@ -155,8 +157,8 @@ en [`src/lib/objects.ts`](../src/lib/objects.ts).
   ventana **actual**, no un histórico de tramos. Al lanzar sin devolución, la
   ventana anterior se consolida en las partidas ya marcadas y la fila se reabre con
   el objetivo (por eso `exitedAt` vuelve a `null`). Al devolverse, la ventana no se
-  toca —la desventaja sigue en el lanzador— y solo se anota el lanzamiento, que gasta
-  su turno del día.
+  toca —la desventaja sigue en el lanzador— y solo se anota el lanzamiento: el objeto
+  se pierde y ya no se puede relanzar.
 - **El premio del día.** `syncDailyObjectAwards()` hace **una** consulta cruda sobre
   `Match` unida a `Player` con `rankedMatchSql()` —la misma regla que puntúa— más
   `result = 'WIN'` y `winReason` informado. Los pares `(kind, day)` ya existentes se
@@ -189,14 +191,16 @@ en [`src/lib/objects.ts`](../src/lib/objects.ts).
 | Estado | `heldSince` | `exitedAt` | `satisfiedByMatchId` |
 |---|---|---|---|
 | Pendiente | cuando llegó al portador | `null` | `null` |
-| Devuelto | sin cambios: sigue en el lanzador | `null` | `null` |
+| Devuelto | sin cambios: sigue pendiente en el lanzador | `null` | `null` |
 | Movido (no devuelto) | el instante del lanzamiento | `null`: la ventana nueva queda abierta en el objetivo | `null` |
 | Cumplido | cuando llegó al portador | `startedAt` de la partida que cumple | esa partida |
 
 La fila guarda **una** ventana, así que al moverla no cabe el cierre de la anterior:
 su rastro queda en las partidas que ya se marcaron (`Match.excludedByAwardId`) y en
 el `ObjectThrow` que anotó el lanzamiento. Por eso `exitedAt` vuelve a `null` al
-cambiar de portador, que es lo que deja la desventaja nueva activa.
+cambiar de portador, que es lo que deja la desventaja nueva activa. Una devolución no
+cambia esos campos, pero sí consume el objeto: no vuelve a su mano y no se puede
+relanzar.
 
 ## Operación
 
@@ -234,13 +238,15 @@ deja de estar pendiente y desaparece del listado. El error se queda bajo el bot�
 
 | Bloque | Qué enseña |
 |---|---|
-| **Pendientes ahora** | Una tarjeta por objeto pendiente: desventaja, día UTC, ganador, portador y desde cuándo, historial de lanzamientos y los dos formularios (solo con el modo encendido) |
+| **Pendientes ahora** | Una tarjeta por objeto pendiente: desventaja, día UTC, ganador, portador y desde cuándo, historial de lanzamientos y los formularios que sigan disponibles (solo con el modo encendido; un objeto perdido no ofrece lanzar) |
 | **Historial** | Los objetos ya cerrados, compactos, con la partida que cumplió la desventaja enlazada a AoE4World |
 
-- **El lanzamiento no se ofrece si no puede funcionar.** Si el portador ya lanzó hoy
-  (`sameThrowerBlocked()`) se explica en su lugar, y los destinos que ya recibieron el
-  objeto hoy se listan aparte en vez de ofrecerse (`sameTargetBlocked()`). Las dos
-  reglas se leen de `src/lib/objects.ts`, no se reescriben en la página.
+- **El lanzamiento no se ofrece si no puede funcionar.** Si el objeto **se perdió** al
+  devolverse un lanzamiento, la tarjeta lo explica en su lugar y no ofrece el
+  formulario; la desventaja sigue pendiente y se puede dar por cumplida. Los destinos
+  que ya recibieron el objeto hoy se listan aparte en vez de ofrecerse
+  (`sameTargetBlocked()`). Las reglas se leen de `src/lib/objects.ts`, no se reescriben
+  en la página.
 - **El cumplimiento** trae solo las partidas del portador posteriores a `heldSince`,
   con fecha, rival, mapa, resultado y si la partida cuenta o está excluida por este
   objeto o por otro. El aviso recuerda que la partida elegida y las posteriores
@@ -261,7 +267,7 @@ Van al canal **`#objetos`** (`DISCORD_BOT_TOKEN` + `DISCORD_OBJECTS_CHANNEL_ID`,
 | Aviso | Lo lanza | Qué cuenta |
 |---|---|---|
 | Premio nuevo | El worker, justo después de `syncDailyObjectAwards()`, uno por premio creado | Objeto, ganador, motivo y desventaja sorteada |
-| Lanzamiento | `throwObjectAction()`, tras el cambio | Objeto, lanzador, objetivo, probabilidad, si se ha devuelto o ha sido aceptado y la desventaja |
+| Lanzamiento | `throwObjectAction()`, tras el cambio | Objeto, lanzador, objetivo, probabilidad, si se ha devuelto o ha sido aceptado (devuelto = la desventaja se queda y el objeto se pierde) y la desventaja |
 | Desventaja cumplida | `fulfillObjectAction()`, tras el cambio | Objeto, portador y desventaja superada |
 
 - **Tolerantes**: sin token o sin canal no se envía nada y no se falla; un fallo de la
@@ -278,7 +284,7 @@ Van al canal **`#objetos`** (`DISCORD_BOT_TOKEN` + `DISCORD_OBJECTS_CHANNEL_ID`,
 
 La tarjeta de `/overlay/<profileId>` anima lo que le pasa al jugador con los objetos, en dos pasos y
 en la **misma cola** que los objetivos: la ficha (objeto, desventaja y contrario) y la consecuencia
-de recibirlo, lanzarlo o recuperarlo. Los textos, los glifos y los tiempos están en
+de recibirlo, lanzarlo o que se lo devuelvan. Los textos, los glifos y los tiempos están en
 [`OVERLAY.md`](./OVERLAY.md#qué-muestra).
 
 - Lo lee de [`GET /api/v0/objetos`](./API-OVERLAY.md#objetos), que devuelve los últimos eventos del

@@ -16,13 +16,15 @@ import { ObjectKind } from "@/generated/prisma/enums";
  *    el motivo de victoria del objeto (una victoria sagrada, de conquista o de
  *    maravilla). `pickDailyAwards()` hace esa selección sobre partidas ya
  *    filtradas como clasificatorias.
- * 2. El portador puede **lanzarlo a otro jugador una vez al día**. En el POC el
- *    lanzamiento se hace desde el panel de admin, no hay automatismo.
+ * 2. El portador puede **lanzarlo a otro jugador**. En el POC el lanzamiento se hace
+ *    desde el panel de admin, no hay automatismo. Cada objeto se juega una sola vez:
+ *    o viaja al objetivo o se pierde, pero no hay segunda tirada.
  * 3. Si el lanzamiento **se devuelve** (con la probabilidad de
- *    `returnProbability()`), la desventaja y el objeto siguen en el lanzador, que ha
- *    gastado el turno del día: no puede volver a lanzarlo hasta el día UTC siguiente.
- *    Si no se devuelve, el portador pasa a ser el objetivo, con `heldSince` en el
- *    instante del lanzamiento y `exitedAt` cerrado para el portador anterior.
+ *    `returnProbability()`), la desventaja se queda en el lanzador y el objeto **se
+ *    pierde**: no vuelve a su mano y no se puede volver a lanzar nunca (`objectLost()`).
+ *    La desventaja sigue pendiente y se cumple como cualquier otra. Si no se devuelve,
+ *    el portador pasa a ser el objetivo, con `heldSince` en el instante del lanzamiento
+ *    y `exitedAt` cerrado para el portador anterior.
  * 4. Mientras un objeto está pendiente, **las partidas del portador no puntúan**
  *    (`isMatchBlocked()`): quedan fuera de la clasificación y de los objetivos. La
  *    desventaja se da por **cumplida** cuando el admin la marca sobre una partida
@@ -537,14 +539,40 @@ export type ObjectThrowRecord = {
 };
 
 /**
+ * El dato de un lanzamiento que decide si el objeto **se ha perdido**.
+ *
+ * Solo hace falta `returned`: a quién se lanzó, cuándo y con qué tirada no cambia la
+ * consecuencia, que es que el objeto ya no está en manos de nadie.
+ */
+export type ObjectThrowOutcome = {
+  /** `true` = se devolvió: la desventaja se quedó en el lanzador y el objeto se perdió. */
+  returned: boolean;
+};
+
+/**
+ * Si el objeto se ha **perdido** en alguno de sus lanzamientos.
+ *
+ * Un lanzamiento devuelto aplica la desventaja al propio lanzador, así que el objeto
+ * no puede quedarse en su mano: se volvería a aplicar más adelante y se duplicaría la
+ * desventaja. Por eso la devolución lo consume para siempre, no solo hasta el día
+ * siguiente: mientras siga pendiente no se puede relanzar, y cuando la desventaja se
+ * dé por cumplida el premio se cierra como cualquier otro.
+ *
+ * Se deriva de `ObjectThrow.returned` porque la tabla es append-only: el estado no se
+ * guarda en ninguna columna, se lee de sus lanzamientos.
+ */
+export function objectLost(throws: readonly ObjectThrowOutcome[]): boolean {
+  return throws.some((item) => item.returned);
+}
+
+/**
  * La **regla Y**: un mismo objetivo no puede recibir el mismo objeto dos veces en
  * el mismo día UTC.
  *
  * Cuenta el lanzamiento aunque se haya devuelto: el `ObjectThrow` ocurrió y lo que
  * la regla evita es insistir sobre la misma persona ese día. Sigue haciendo falta
- * aunque el turno del lanzador se gaste con la devolución, porque el objeto puede
- * cambiar de manos ese mismo día y el portador nuevo no arrastra el lanzamiento del
- * anterior.
+ * aunque un lanzamiento devuelto pierda el objeto, porque el objeto puede cambiar de
+ * manos ese mismo día y el portador nuevo no arrastra el lanzamiento del anterior.
  *
  * `throws` son los lanzamientos **de este objeto**; el día se compara normalizado
  * con `objectDay()`.
@@ -603,39 +631,5 @@ export function sameKindBlocked(
       item.kind === kind &&
       item.holderId === toId &&
       (item.pending || objectDay(item.at).getTime() === targetDay),
-  );
-}
-/** Un lanzamiento con su lanzador, para la regla de uno por portador y día. */
-export type ObjectThrowWithThrower = ObjectThrowRecord & {
-  fromId: string;
-};
-
-/**
- * La regla de **un lanzamiento por portador y día UTC, se devuelva o no**.
- *
- * Cuenta todos los lanzamientos que hizo el portador actual, también los que se
- * devolvieron: si la tirada se devuelve, la desventaja y el objeto se quedan con el
- * lanzador y el turno del día queda gastado (issue 224). No hay segunda tirada ni
- * forma de reutilizar el objeto hasta el día UTC siguiente.
- *
- * Lo que sí permite lanzar el mismo día es **cambiar de manos sin devolución**: el
- * portador nuevo no ha lanzado nada, así que su turno está entero. Es lo que compara
- * `fromId` y no el `awardId`.
- *
- * La **regla Y** lee el mismo listado y también cuenta los devueltos: lo que limita es
- * no insistir dos veces sobre el mismo jugador el mismo día.
- *
- * `throws` son los lanzamientos **de este objeto**; el día se normaliza con
- * `objectDay()` igual que en la regla Y.
- */
-export function sameThrowerBlocked(
-  throws: readonly ObjectThrowWithThrower[],
-  fromId: string,
-  day: Date,
-): boolean {
-  const targetDay = objectDay(day).getTime();
-
-  return throws.some(
-    (item) => item.fromId === fromId && objectDay(item.at).getTime() === targetDay,
   );
 }

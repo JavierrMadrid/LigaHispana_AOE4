@@ -39,7 +39,8 @@ function PlayerName({ player }: { player: ObjectHistoryPlayer }) {
  * que la frase se cierra sin él en vez de dejar un hueco o un "a nadie": sigue
  * siendo cierta y completa con lo que se sabe. Una devolución usa «se le devolvió»
  * para no concordar con el género del objeto y funcionar igual con reliquia,
- * moneda o monumento.
+ * moneda o monumento, y cierra con que el objeto se perdió: la devolución lo
+ * consume, la desventaja se le queda al lanzador y no se vuelve a lanzar.
  */
 function describeEvent(event: ObjectHistoryEvent): ReactNode {
   const object = `«${event.object.name}»`;
@@ -70,7 +71,7 @@ function describeEvent(event: ObjectHistoryEvent): ReactNode {
             a <PlayerName player={event.opponent} />
           </>
         )}{" "}
-        y se le devolvió.
+        y se le devolvió: el objeto se perdió.
       </>
     );
   }

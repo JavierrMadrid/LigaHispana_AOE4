@@ -1515,8 +1515,9 @@ model ObjectThrow {
   // Tirada de la devolución (0-1), tal cual la consumió `returnProbability()`. Se
   // guarda para poder auditar por qué un lanzamiento se devolvió o no.
   roll Float
-  // `true` = se devolvió: el objeto sigue en el lanzador y ese día ya no puede
-  // relanzarlo. `false` = el portador pasó a ser el objetivo.
+  // `true` = se devolvió: la desventaja se aplica al lanzador y el objeto se pierde,
+  // así que ya no se puede volver a lanzar. `false` = el portador pasó a ser el
+  // objetivo.
   returned Boolean
 
   // Los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`.

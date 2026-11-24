@@ -263,7 +263,7 @@ rival y lanzarlo para que se devuelva.
 |---|---|---|
 | `recibido` | Le llegó: se lo lanzó otro jugador y no se devolvió, o ganó el premio del día. | El lanzador; `null` en el premio del día. |
 | `lanzado` | Lo lanzó y no se devolvió: el objeto pasó al objetivo. | El objetivo. |
-| `devuelto` | Lo lanzó y se le devolvió: el objeto sigue en él. | El objetivo. |
+| `devuelto` | Lo lanzó y se le devolvió: la desventaja se queda en él y el objeto se pierde. | El objetivo. |
 
 | Campo | Origen | Nota |
 |---|---|---|

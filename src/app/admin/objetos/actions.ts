@@ -96,7 +96,7 @@ function revalidateObjectViews(): void {
  * Lanza un objeto a otro jugador.
  *
  * Lee `awardId` y `toId` y delega en `throwObject()`, que valida el premio, el
- * objetivo y la regla de un lanzamiento por portador y día UTC, se devuelva o no
+ * objetivo y que el objeto no se haya perdido al devolverse un lanzamiento anterior
  * (issue 224). Sus errores son `Error`
  * con el texto en español ya redactado, así que se devuelven tal cual. El estado de
  * éxito dice si se ha devuelto o si ha sido aceptado y la probabilidad que se aplicó.
@@ -124,7 +124,7 @@ export async function throwObjectAction(
 
   const probability = formatReturnProbability(result.probability);
   const outcome = result.returned
-    ? `El lanzamiento se ha devuelto: la desventaja se queda con el portador y el objeto sigue en su mano, pero hoy ya no puede volver a lanzarlo (probabilidad aplicada: ${probability}).`
+    ? `El lanzamiento se ha devuelto: la desventaja se queda con el portador y el objeto se pierde (probabilidad aplicada: ${probability}).`
     : `El lanzamiento ha sido aceptado: el objeto pasa a manos del jugador de destino (probabilidad aplicada: ${probability}).`;
 
   const recomputed = await recomputeAfterObjectChange();

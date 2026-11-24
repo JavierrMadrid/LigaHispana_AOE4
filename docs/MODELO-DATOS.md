@@ -615,7 +615,8 @@ participante y una baja no puede arrastrar lo que ya pasó.
 
 **La ventana.** `heldSince`/`exitedAt` describen la ventana **actual** del objeto, no
 un histórico: al lanzarlo sin devolución se consolidan las partidas de la ventana
-anterior y se reabre con el nuevo portador. Al devolverse, no se toca. Los estados y
+anterior y se reabre con el nuevo portador. Al devolverse, no se tocan —la desventaja
+sigue en el lanzador— pero el objeto se pierde. Los estados y
 la mecánica completa están en [`OBJETOS.md`](./OBJETOS.md#persistencia-y-worker).
 
 **La exclusión.** Mientras `exitedAt` es `null`, las partidas del portador con
@@ -644,7 +645,7 @@ después; lo que se anota es el siguiente, no se corrige el anterior.
 | `fromId`, `toId` | `String` | `Player.id` del lanzador y del objetivo del lanzamiento. |
 | `at` | `DateTime` | Instante del lanzamiento. Con su día UTC sostiene la regla Y: un mismo objetivo no recibe el mismo objeto dos veces el mismo día. |
 | `roll` | `Float` | Tirada de la devolución (0-1), tal cual la consumió `returnProbability()`. Se guarda para poder auditar el resultado. |
-| `returned` | `Boolean` | `true` = se devolvió: el objeto sigue en el lanzador y ese día no puede relanzarlo. `false` = el portador pasó a ser el objetivo. |
+| `returned` | `Boolean` | `true` = se devolvió: la desventaja se aplica al lanzador y el objeto se pierde, sin posibilidad de relanzarlo. `false` = el portador pasó a ser el objetivo. |
 
 Índices: `(awardId)`, los lanzamientos de un objeto y el `Cascade` desde `ObjectAward`; y
 `(fromId, at)` y `(toId, at)`, el feed de objetos de la API del overlay (`/api/v0/objetos`): los

@@ -658,7 +658,7 @@ function ObjetoFocus({ view, pending }: { view: OverlayObjetoEvento; pending: nu
  * Cierra la tarjeta con la frase que resume qué cambia a partir de ahora y no
  * con una cifra: un objeto no da puntos, da una carga, se la quita o se la
  * devuelve. El color marca la polaridad (alivio al lanzarlo, carga al recibirlo
- * o al recuperarlo) y el glifo mantiene la continuidad con la ficha.
+ * o al devolvérsele) y el glifo mantiene la continuidad con la ficha.
  */
 function ObjetoConsecuencia({ view }: { view: OverlayObjetoEvento }) {
   const alivio = overlayObjetoAlivio(view.tipo);

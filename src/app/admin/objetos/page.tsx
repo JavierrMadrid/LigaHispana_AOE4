@@ -22,7 +22,7 @@ import {
   type ObjectAwardPlayerView,
   type ObjectThrowTargetView,
 } from "@/lib/object-awards";
-import { sameKindBlocked, sameTargetBlocked, sameThrowerBlocked } from "@/lib/objects";
+import { sameKindBlocked, sameTargetBlocked } from "@/lib/objects";
 import { FulfillForm, type FulfillMatchOption } from "./fulfill-form";
 import { ThrowForm, type ThrowTargetOption } from "./throw-form";
 
@@ -40,7 +40,8 @@ export const metadata: Metadata = {
  * `docs/OBJETOS.md`.
  *
  * Dos bloques con el modo encendido: **Pendientes ahora**, una tarjeta por objeto que
- * todavía no se ha cerrado, con su desventaja, sus lanzamientos y las dos acciones; e
+ * todavía no se ha cerrado, con su desventaja, sus lanzamientos y las acciones que
+ * sigan disponibles —un objeto perdido por una devolución ya no se puede lanzar—; e
  * **Historial**, los ya cerrados, compactos y con la partida que cumplió la desventaja
  * si la hay.
  *
@@ -208,7 +209,7 @@ function PendingSection({
         </div>
         <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-muted">
           {enabled
-            ? "El portador puede lanzarlo; la desventaja se cierra sobre una partida suya posterior."
+            ? "El portador puede lanzarlo; si el objeto ya se ha perdido, solo queda cerrar la desventaja sobre una partida suya posterior."
             : "El modo está apagado: estas tarjetas no ofrecen lanzar ni dar por cumplida la desventaja."}
         </p>
       </div>
@@ -245,11 +246,13 @@ function PendingSection({
  * lanzamientos. La tarjeta se divide con filetes y no con cajas anidadas: es el
  * mismo dialecto del resto del panel.
  *
- * El lanzamiento solo se ofrece cuando puede funcionar: si el portador ya lanzó
- * hoy o no queda ningún destino válido, en su sitio va la explicación y la regla
- * que lo impide. El formulario de cumplimiento solo se monta si hay partidas
- * elegibles; si no, se dice que todavía no hay ninguna. Con el modo apagado no se
- * monta ninguno de los dos: en su lugar va la nota de que no hay acciones.
+ * El lanzamiento solo se ofrece cuando puede funcionar: un objeto **perdido** —algún
+ * lanzamiento se devolvió— o una jornada sin destino válido se explican en su sitio,
+ * con la regla que lo impide. El perdido no se puede lanzar nunca más, así que la
+ * tarjeta lo marca junto al título y deja el cumplimiento como única acción. El
+ * formulario de cumplimiento solo se monta si hay partidas elegibles; si no, se dice
+ * que todavía no hay ninguna. Con el modo apagado no se monta ninguno de los dos: en
+ * su lugar va la nota de que no hay acciones.
  */
 function PendingAwardCard({
   award,
@@ -270,17 +273,12 @@ function PendingAwardCard({
   const holder = award.holder;
 
   // Las reglas del lanzamiento se leen de `objects.ts`, las mismas que aplica el
-  // servicio: aquí no se reescribe el día UTC ni la condición de "ya lanzó".
+  // servicio: aquí no se reescribe el día UTC ni la condición de "ya recibido".
   const throwsForRules = award.throws.map((item) => ({
     fromId: item.from.playerId,
     toId: item.to.playerId,
     at: item.at,
   }));
-  // Un lanzamiento devuelto también cuenta (issue 224): el objeto y la desventaja se
-  // quedan con el portador y su turno del día queda gastado, sin segunda tirada hasta
-  // el día UTC siguiente.
-  const thrownToday =
-    holder !== null && sameThrowerBlocked(throwsForRules, holder.playerId, now);
 
   // La regla de un objeto de cada tipo (issue 225) se lee de los premios que ya tiene
   // la página: uno pendiente en el jugador o uno que le llegó hoy. El servicio la
@@ -329,7 +327,14 @@ function PendingAwardCard({
   return (
     <li className="rounded-lg border border-line bg-surface">
       <div className="px-5 py-4">
-        <h3 className="text-base font-semibold text-foreground">{award.kindName}</h3>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h3 className="text-base font-semibold text-foreground">{award.kindName}</h3>
+          {award.lost ? (
+            <span className="inline-block whitespace-nowrap rounded-full border border-loss/40 px-2 py-0.5 text-xs font-medium text-loss">
+              Objeto perdido
+            </span>
+          ) : null}
+        </div>
         <p className="mt-1 text-xs text-muted">
           {award.obtainedBy} · Día{" "}
           <time dateTime={award.day.toISOString()} title={formatAbsoluteTime(award.day)}>
@@ -362,7 +367,9 @@ function PendingAwardCard({
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-muted">En su poder desde</dt>
+            <dt className="text-xs text-muted">
+              {award.lost ? "Desventaja desde" : "En su poder desde"}
+            </dt>
             <dd className="mt-0.5 text-sm text-foreground">
               {award.heldSince === null ? (
                 <span className="text-muted">—</span>
@@ -383,45 +390,52 @@ function PendingAwardCard({
         <div className="grid border-t border-line lg:grid-cols-2">
           <div className="px-5 py-4 lg:border-r lg:border-line">
             <h4 className="text-sm font-semibold text-foreground">Lanzar el objeto</h4>
-            <p className="mt-1 max-w-[60ch] text-xs leading-relaxed text-muted">
-              Una vez por portador y día UTC, y nunca a quien ya tenga uno de este tipo.
-              Si la tirada se devuelve, la desventaja y el objeto se quedan con el
-              portador y su turno del día queda gastado: no puede volver a lanzarlo
-              hasta el día UTC siguiente.
-            </p>
 
-            {holder === null ? (
+            {award.lost ? (
               <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
-                El objeto no tiene portador, así que no hay a quién lanzarlo. Se
-                resolverá en la siguiente pasada del sincronizador.
-              </p>
-            ) : thrownToday ? (
-              <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
-                <span className="text-foreground">{playerName(holder)}</span> ya ha
-                lanzado este objeto hoy. El límite es un lanzamiento por portador y día
-                UTC, se devuelva o no, así que la acción vuelve a estar disponible a
-                medianoche UTC.
-              </p>
-            ) : available.length === 0 ? (
-              <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
-                {blockedNames.length === 0 ? (
-                  "No hay otros jugadores aprobados a los que lanzar."
-                ) : (
-                  <>
-                    No queda ningún destino disponible hoy: {blockedNames.join(", ")}{" "}
-                    ya lo recibieron o ya tienen un objeto de este tipo. El lanzamiento
-                    vuelve a estar disponible cuando cambie el día UTC.
-                  </>
-                )}
+                El lanzamiento se devolvió: la desventaja sigue en{" "}
+                <span className="text-foreground">
+                  {holder === null ? "el portador" : playerName(holder)}
+                </span>{" "}
+                y el objeto se perdió al salir de su mano. No se puede volver a lanzar;
+                solo queda darla por cumplida en una de sus partidas posteriores.
               </p>
             ) : (
-              <ThrowForm
-                awardId={award.id}
-                objectName={award.kindName}
-                holderName={playerName(holder)}
-                targets={available}
-                blockedNames={blockedNames}
-              />
+              <>
+                <p className="mt-1 max-w-[60ch] text-xs leading-relaxed text-muted">
+                  Nunca a quien ya recibió este objeto hoy ni a quien ya tenga uno de
+                  este tipo. Si la tirada se devuelve, la desventaja se queda en el
+                  portador y el objeto se pierde: no se puede volver a lanzar.
+                </p>
+
+                {holder === null ? (
+                  <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
+                    El objeto no tiene portador, así que no hay a quién lanzarlo. Se
+                    resolverá en la siguiente pasada del sincronizador.
+                  </p>
+                ) : available.length === 0 ? (
+                  <p className="mt-3 max-w-[60ch] text-sm leading-relaxed text-muted">
+                    {blockedNames.length === 0 ? (
+                      "No hay otros jugadores aprobados a los que lanzar."
+                    ) : (
+                      <>
+                        No queda ningún destino disponible hoy: {blockedNames.join(", ")}{" "}
+                        ya lo recibieron o ya tienen un objeto de este tipo. Vuelve a
+                        haber destinos cuando cambie el día UTC o se cierre el que ya
+                        tienen.
+                      </>
+                    )}
+                  </p>
+                ) : (
+                  <ThrowForm
+                    awardId={award.id}
+                    objectName={award.kindName}
+                    holderName={playerName(holder)}
+                    targets={available}
+                    blockedNames={blockedNames}
+                  />
+                )}
+              </>
             )}
           </div>
 
@@ -564,7 +578,9 @@ function HistorySection({ awards }: { awards: ObjectAwardAdminView[] }) {
  * Compacta: el objeto y su desventaja en dos líneas, y el resultado con la fecha
  * y el enlace a la partida que lo cerró. En pantalla estrecha la desventaja cede
  * a su columna y se lee bajo el nombre del objeto, como en las demás tablas del
- * panel; el resto de columnas caben sin plegarse.
+ * panel; el resto de columnas caben sin plegarse. Un objeto que se perdió y luego
+ * se cumplió lo dice al final de esa línea: explica por qué la desventaja se cerró
+ * con un objeto que ya no estaba en manos de nadie.
  */
 function ResolvedAwardRow({ award }: { award: ObjectAwardAdminView }) {
   const holder = award.holder;
@@ -634,6 +650,11 @@ function ResolvedAwardRow({ award }: { award: ObjectAwardAdminView }) {
                   </a>
                 </>
               )}
+              {award.lost ? (
+                <span title="Se devolvió un lanzamiento y el objeto no volvió a su mano.">
+                  {" · "}Objeto perdido
+                </span>
+              ) : null}
             </span>
           </>
         )}

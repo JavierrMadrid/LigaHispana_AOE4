@@ -7,13 +7,13 @@ import {
   isMatchBlocked,
   objectDay,
   objectKindForWinReason,
+  objectLost,
   objectsModeActivationBlocked,
   pickDailyAwards,
   pickPenalty,
   returnProbability,
   sameKindBlocked,
   sameTargetBlocked,
-  sameThrowerBlocked,
   throwReturnProbability,
   type AwardMatch,
 } from "@/lib/objects";
@@ -484,40 +484,19 @@ describe("sameTargetBlocked", () => {
   });
 });
 
-describe("sameThrowerBlocked", () => {
-  const day = at("2026-11-04T12:00:00.000Z");
-
-  const lanzado = (fromId: string, toId: string, iso: string) => ({
-    fromId,
-    toId,
-    at: at(iso),
+describe("objectLost", () => {
+  it("sin lanzamientos no se ha perdido", () => {
+    expect(objectLost([])).toBe(false);
   });
 
-  it("el portador que ya lanzó el objeto ese día UTC no puede repetir", () => {
-    const throws = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
-
-    expect(sameThrowerBlocked(throws, "p-1", day)).toBe(true);
+  it("un lanzamiento que no se devolvió deja el objeto en juego", () => {
+    expect(objectLost([{ returned: false }])).toBe(false);
   });
 
-  it("un lanzamiento devuelto sí gasta el turno del día (issue 224)", () => {
-    // La tirada se devolvió, pero el lanzador se queda con la desventaja y con el
-    // objeto: el turno está gastado hasta el día UTC siguiente.
-    const devuelto = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
-
-    expect(sameThrowerBlocked(devuelto, "p-1", day)).toBe(true);
-  });
-
-  it("cuenta solo el día UTC: el de ayer no bloquea", () => {
-    // El portador que lanzó ayer sí puede lanzar hoy; otro portador, no.
-    const ayer = [lanzado("p-1", "p-2", "2026-11-03T23:59:59.999Z")];
-
-    expect(sameThrowerBlocked(ayer, "p-1", day)).toBe(false);
-    expect(sameThrowerBlocked(ayer, "p-9", day)).toBe(false);
-  });
-
-  it("un objeto que cambió de manos deja lanzar al portador nuevo", () => {
-    const throws = [lanzado("p-1", "p-2", "2026-11-04T08:00:00.000Z")];
-
-    expect(sameThrowerBlocked(throws, "p-2", day)).toBe(false);
+  it("un lanzamiento devuelto pierde el objeto para siempre (issue 224)", () => {
+    // La desventaja se aplicó al propio lanzador: si el objeto volviera a su mano se
+    // podría lanzar otra vez y la desventaja se duplicaría.
+    expect(objectLost([{ returned: true }])).toBe(true);
+    expect(objectLost([{ returned: false }, { returned: true }])).toBe(true);
   });
 });
