@@ -10,11 +10,11 @@ import { aoe4WorldProfileUrl } from "@/lib/format";
 import {
   OBJECT_CATALOG,
   objectDay,
+  objectLost,
   pickDailyAwards,
   pickPenalty,
   sameKindBlocked,
   sameTargetBlocked,
-  sameThrowerBlocked,
   throwReturnProbability,
   type AwardMatch,
   type KindApplication,
@@ -395,7 +395,7 @@ export type ThrowObjectOptions = ObjectAwardsOptions & {
 };
 
 export type ThrowObjectResult = {
-  /** `true` = se devolvió: el objeto sigue en el lanzador y su turno del día queda gastado. */
+  /** `true` = se devolvió: la desventaja se queda en el lanzador y el objeto se pierde. */
   returned: boolean;
   /** Probabilidad de devolución que se aplicó, ya degradada si faltaban puestos. */
   probability: number;
@@ -409,11 +409,11 @@ export type ThrowObjectResult = {
  * Lanza un objeto a otro jugador.
  *
  * Valida, en este orden: que el premio exista, que tenga portador y siga pendiente,
- * que el objetivo no sea el portador, que ese objetivo no haya recibido ya el
- * objeto hoy (regla Y), que el portador no haya **lanzado** ya el objeto hoy —cuentan
- * también los lanzamientos devueltos— y que el objetivo no tenga ya un objeto de ese
- * tipo (issue 225: ni pendiente ni recibido hoy). Los errores son `Error` con el texto
- * en español que el panel enseñará tal cual.
+ * que el objetivo no sea el portador, que el objeto no se haya **perdido** en un
+ * lanzamiento anterior (se devolvió), que ese objetivo no haya recibido ya el objeto
+ * hoy (regla Y) y que el objetivo no tenga ya un objeto de ese tipo (issue 225: ni
+ * pendiente ni recibido hoy). Los errores son `Error` con el texto en español que el
+ * panel enseñará tal cual.
  *
  * La probabilidad sale del puesto de los dos en `PlayerScore` del ruleset vigente.
  * Si falta la fila de alguno (un alta recién aprobada, un recálculo a medias) se
@@ -423,9 +423,9 @@ export type ThrowObjectResult = {
  * Si **no** se devuelve, consolida la ventana actual (marca sus partidas) y mueve el
  * portador dejando la ventana nueva abierta en el instante del lanzamiento, todo en
  * la misma transacción que el `ObjectThrow`. Si **se devuelve**, la ventana no se toca
- * —la desventaja se le queda al portador— y solo se anota el lanzamiento con
- * `returned = true`; ese intento **gasta el turno del día** (issue 224), así que el
- * portador no puede volver a lanzarlo hasta el día UTC siguiente.
+ * —la desventaja se le queda al portador y sigue pendiente— y solo se anota el
+ * lanzamiento con `returned = true`; el objeto **se pierde**: no vuelve a su mano y no
+ * se puede relanzar nunca (issue 224).
  */
 export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObjectResult> {
   const client = options.client ?? db;
@@ -463,15 +463,17 @@ export async function throwObject(options: ThrowObjectOptions): Promise<ThrowObj
 
   const throws = await client.objectThrow.findMany({
     where: { awardId },
-    select: { fromId: true, toId: true, at: true },
+    select: { fromId: true, toId: true, at: true, returned: true },
   });
+
+  if (objectLost(throws)) {
+    throw new Error(
+      "El objeto se perdió al devolverse el lanzamiento: la desventaja sigue pendiente y ya no se puede volver a lanzar.",
+    );
+  }
 
   if (sameTargetBlocked(throws, toId, now)) {
     throw new Error("Ese jugador ya ha recibido este objeto hoy.");
-  }
-
-  if (sameThrowerBlocked(throws, award.holderId, now)) {
-    throw new Error("El portador ya ha lanzado este objeto hoy.");
   }
 
   // Regla de un objeto de cada tipo aplicado (issue 225): ni dos pendientes del mismo
@@ -671,6 +673,12 @@ export type ObjectAwardAdminView = {
   exitedAt: Date | null;
   /** `true` si el objeto sigue pendiente (`exitedAt` a `null`). */
   pending: boolean;
+  /**
+   * `true` si el objeto **se perdió** al devolverse un lanzamiento: la desventaja
+   * sigue pendiente, pero el objeto ya no está en ninguna mano y no se puede volver a
+   * lanzar. El panel tiene que ocultar el formulario de lanzamiento en ese caso.
+   */
+  lost: boolean;
   /** La partida que dio la desventaja por cumplida, si la hay. */
   satisfiedBy: {
     matchId: string;
@@ -786,6 +794,7 @@ export async function listObjectAwardsForAdmin(
       heldSince: award.heldSince,
       exitedAt: award.exitedAt,
       pending: award.exitedAt === null,
+      lost: objectLost(award.throws),
       satisfiedBy:
         satisfiedBy === null
           ? null

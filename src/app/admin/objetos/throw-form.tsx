@@ -20,7 +20,7 @@ type ThrowFormProps = {
   holderName: string;
   /** Destinos que hoy no están bloqueados, ya ordenados por puesto. */
   targets: ThrowTargetOption[];
-  /** Nombres que ya recibieron este objeto hoy: la regla Y rechazaría el envío. */
+  /** Nombres que hoy no pueden recibirlo: ya lo recibieron o ya tienen uno del tipo. */
   blockedNames: string[];
 };
 
@@ -28,10 +28,10 @@ type ThrowFormProps = {
  * Formulario de lanzamiento de un objeto.
  *
  * El fallo de la Server Action se pinta **tal cual llega** bajo el botón, y el
- * éxito se publica en la banda del panel: al revalidar, un lanzamiento devuelto
- * sustituye este formulario por la explicación de la regla, así que el mensaje
- * del servicio necesita un sitio que sobreviva al refresco. La página decide qué
- * se ofrece; aquí solo queda elegir destino y enviar.
+ * éxito se publica en la banda del panel: al revalidar, un lanzamiento devuelto deja
+ * el objeto perdido y la tarjeta cambia este formulario por su explicación, así que
+ * el mensaje del servicio necesita un sitio que sobreviva al refresco. La página
+ * decide qué se ofrece; aquí solo queda elegir destino y enviar.
  *
  * El destino va ordenado por puesto y quien no tiene fila queda al final; el
  * desplegable lo muestra para que se vea de un vistazo a quién se lanza.
@@ -101,14 +101,15 @@ export function ThrowForm({
         <p id={hintId} className="max-w-[60ch] text-xs leading-relaxed text-muted">
           La tirada decide si se devuelve: cuanto peor clasificado esté el destino
           respecto a {holderName}, más probable es que el objeto vuelva. Si vuelve, la
-          desventaja se queda en {holderName} y el turno del día queda gastado.
+          desventaja se queda en {holderName} y el objeto se pierde: no se puede volver
+          a lanzar.
         </p>
       </div>
 
       {blockedNames.length > 0 ? (
         <p className="max-w-[60ch] text-xs leading-relaxed text-muted">
-          Ya lo recibieron hoy: {blockedNames.join(", ")}. No pueden repetir hasta
-          que cambie el día UTC.
+          Fuera del reparto: {blockedNames.join(", ")}. Ya lo recibieron hoy o ya
+          tienen un objeto de este tipo.
         </p>
       ) : null}
 

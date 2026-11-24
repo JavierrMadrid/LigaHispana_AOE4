@@ -133,7 +133,7 @@ export type ObjectThrowAnnouncement = {
   fromName: string | null;
   /** Nombre del jugador que recibe el lanzamiento, o `null` si su fila ya no existe. */
   toName: string | null;
-  /** `true` = se devolvió: el objeto sigue en el lanzador y su turno del día queda gastado. */
+  /** `true` = se devolvió: la desventaja se queda en el lanzador y el objeto se pierde. */
   returned: boolean;
   /** Probabilidad de devolución que se aplicó. */
   probability: number;
@@ -148,9 +148,9 @@ export type ObjectThrowAnnouncement = {
  * La probabilidad se enseña siempre, se devuelva o no: es lo que explica por qué el
  * objeto se ha quedado o ha viajado, y el panel no tiene que repetir esa frase. La
  * desventaja se recuerda porque el portador cambia y quien lee tiene que saber qué
- * carga le acaba de llegar. Cuando se devuelve, el aviso dice que el portador conserva
- * la carga y el objeto pero **ha gastado el turno del día**: no puede volver a lanzarlo
- * hasta el día siguiente (issue 224).
+ * carga le acaba de llegar. Cuando se devuelve, el aviso dice que el lanzador conserva
+ * la carga y que el objeto **se pierde**: no vuelve a su mano y no se puede volver a
+ * lanzar (issue 224).
  */
 export function objectThrowAnnouncementText(input: ObjectThrowAnnouncement): string {
   const definition = OBJECT_CATALOG[input.kind];
@@ -158,7 +158,7 @@ export function objectThrowAnnouncementText(input: ObjectThrowAnnouncement): str
   const to = playerLabel(input.toName);
   const penalty = objectPenaltyText(input.kind, input.penaltyId) ?? UNKNOWN_PENALTY_TEXT;
   const outcome = input.returned
-    ? `Se ha devuelto: la desventaja se queda con ${from} y el objeto sigue en su mano, pero hoy ya no puede volver a lanzarlo.`
+    ? `Se ha devuelto: la desventaja se queda con ${from} y el objeto se pierde.`
     : `No se ha devuelto: el objeto pasa a manos de ${to}.`;
 
   return `Objeto lanzado: «${definition.name}» de ${from} a ${to}, con un ${formatReturnProbability(input.probability)} de probabilidad de devolución. ${outcome} Desventaja: ${penalty}`;

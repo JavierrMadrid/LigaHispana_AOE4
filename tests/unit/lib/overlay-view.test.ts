@@ -946,7 +946,7 @@ describe("tarjeta de objeto", () => {
       "Ya no lo tienes: tus próximas partidas vuelven a puntuar.",
     );
     expect(overlayObjetoConsecuencia("devuelto")).toBe(
-      "Sigue siendo tuyo y hoy no puedes volver a lanzarlo.",
+      "La desventaja se queda contigo y el objeto se pierde.",
     );
   });
 
