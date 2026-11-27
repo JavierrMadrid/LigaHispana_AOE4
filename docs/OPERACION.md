@@ -1341,6 +1341,9 @@ hace el worker en su pasada (`announceDailyStandings()`, en `src/lib/standings-r
 - **Una vez por día de Madrid, y nada de ráfagas**: si la pasada de las 21:00 no ocurre (caída,
   despliegue), el informe de ese día **no se manda atrasado**; se salta y se informa del siguiente cuando
   llegue su hora.
+- **Con la edición terminada (`window.to`) el informe deja de salir**: se comprueba `editionEnded()` antes
+  de leer la clasificación, y no se manda un informe atrasado de una liga acabada. Con la ventana abierta
+  (`to: null`) no hay corte. Si `readRuleset()` falla, el motivo va a `announceError` como el resto.
 - **La clasificación puede no caber en un mensaje**: se parte en varios de **2000 caracteres** como
   máximo, **por líneas** (sin cortar ninguna por la mitad). Si un trozo falla, la pasada siguiente retoma
   desde donde se quedó **sin repetir** lo ya enviado, y el día queda cerrado cuando sale el último.

@@ -2817,7 +2817,8 @@ export async function syncApprovedPlayers(options: SyncOptions = {}): Promise<Sy
   // ni mueve `lastSuccessAt`. Los dos comparten `announceError`, que es el rastro de los
   // mensajes al canal. `announceEditionWindow()` sale antes de leer el nombre de la
   // edición cuando no toca ningún aviso, así que en las pasadas normales es una
-  // comparación de fechas; el informe diario, fuera de su hora, también.
+  // comparación de fechas; el informe diario, fuera de su hora o con la edición
+  // terminada, también.
   let announceError: string | null = null;
 
   try {
