@@ -326,9 +326,10 @@ pie y su paleta, y una columna lateral que explica qué es cada tipo de evento. 
 - **Paginación**: `page` y `pageSize` con `DEFAULT_PAGE_SIZE`/`MAX_PAGE_SIZE`, página acotada a
   la última con filas y `pageCount` a `0` si no hay ninguna. Un corte de base devuelve
   `{ status: "degraded", data: null }`, que la página distingue de una lista vacía.
-- **Navegación**: `/objetos` es la sexta y última entrada de la navegación principal («Objetos»;
-  la clasificación se abrevia a «Puestos» en la barra de móvil para que las seis quepan sin
-  recortes). `/historial` y `/objetos` comparten además un selector local «Puntos / Objetos», que
+- **Navegación**: `/objetos` es la sexta entrada de la navegación principal («Objetos»), por
+  delante de «Noticias»; en la barra de móvil la clasificación se abrevia a «Puestos» y, por
+  debajo de 380 px, los siete destinos se reparten en dos filas —cuatro y tres— en lugar de
+  recortarse. `/historial` y `/objetos` comparten además un selector local «Puntos / Objetos», que
   en `/objetos` viste el control de la portada. La ruta vieja `/historial-objetos` redirige de
   forma permanente a `/objetos` conservando la búsqueda (`jugador`, `from`, `to`, `pageSize` y
   `page`).

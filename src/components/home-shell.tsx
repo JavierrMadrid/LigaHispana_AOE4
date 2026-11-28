@@ -13,6 +13,7 @@ import "./objectives.css";
 import "./rules.css";
 import "./participate.css";
 import "./objects.css";
+import "./news.css";
 
 /**
  * Las rutas que se leen con el armazón de la portada y el modificador que tiñe
@@ -31,7 +32,34 @@ const HOME_SHELL_CLASS: Record<string, string> = {
   "/reglas": "league-rules",
   "/participar": "league-participate",
   "/objetos": "league-objects",
+  "/noticias": "league-news",
 };
+
+/**
+ * Si el destino está activo en esa ruta o en las que cuelgan de ella.
+ *
+ * La comparación exacta no bastaba en cuanto una sección tiene página propia por
+ * elemento: al leer `/noticias/<slug>`, la cabecera sigue estando en Noticias, y
+ * con `===` no marcaba nada. La portada solo lo está en sí misma.
+ */
+function isSection(href: string, pathname: string): boolean {
+  return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/**
+ * La sección de la casa a la que pertenece una ruta, o `undefined` si usa el
+ * cromo heredado. Las páginas propias de una sección —hoy, las noticias sueltas—
+ * heredan la clase de su sección.
+ */
+function homeShellClass(pathname: string): string | undefined {
+  const direct = HOME_SHELL_CLASS[pathname];
+
+  if (direct !== undefined) {
+    return direct;
+  }
+
+  return pathname.startsWith("/noticias/") ? HOME_SHELL_CLASS["/noticias"] : undefined;
+}
 
 export function HomeShell({
   legacy,
@@ -58,7 +86,8 @@ export function HomeShell({
 }) {
   const pathname = usePathname();
   const isScoring = pathname === "/puntuacion";
-  const shellClass = HOME_SHELL_CLASS[pathname];
+  const shellClass = homeShellClass(pathname);
+
   if (shellClass === undefined) return legacy;
 
   return (
@@ -93,7 +122,7 @@ export function HomeShell({
               <Link
                 key={item.href}
                 href={item.href}
-                aria-current={item.href === pathname ? "page" : undefined}
+                aria-current={isSection(item.href, pathname) ? "page" : undefined}
               >
                 {"homeLabel" in item ? item.homeLabel : item.label}
               </Link>

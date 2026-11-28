@@ -8,8 +8,8 @@ import { usePathname, useSearchParams } from "next/navigation";
  *
  * `/historial` (puntos) y `/objetos` (objetos) son los dos feeds hermanos del
  * torneo. Se cambia de uno a otro con esta barra, que se conserva como atajo
- * dentro de cualquiera de las dos páginas aunque el historial de objetos ya sea
- * además la última entrada de la navegación principal.
+ * dentro de cualquiera de las dos páginas aunque el historial de objetos ya tenga
+ * además su propia entrada —la sexta— en la navegación principal.
  *
  * Cada opción es un enlace de ruta, no estado local: se puede recargar, compartir
  * y alcanzar con el teclado, y el navegador anuncia la activa con `aria-current`.

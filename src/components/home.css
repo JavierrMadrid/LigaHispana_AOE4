@@ -1684,6 +1684,28 @@
     padding-top: 110px;
   }
 }
+@media (max-width: 519px) {
+  /* Con siete destinos, la fila de una sola línea se rompe antes de lo que parece:
+     a 500 px los siete rótulos piden 469 px, la celda mide 468 y el `flex-wrap`
+     deja «Noticias» sola en la segunda fila (6 + 1), que es peor que dos filas
+     regulares. Aquí se reparten en cuatro y tres; de 510 en adelante la fila ya
+     vuelve a ser una sola, pero con menos de 20 px de holgura. */
+  .home-nav {
+    display: grid;
+    grid-template-columns: repeat(4, max-content);
+  }
+}
+@media (max-width: 359px) {
+  /* Las cuatro columnas de `max-content` miden 292 px con el relleno de 8 px y el
+     hueco de 4 px, y a 320 px la celda mide 279: la barra se desplazaba 6 px sin
+     señal. Con 6 px de relleno lateral y 2 px de hueco la fila pide 270 y entra. */
+  .home-nav {
+    gap: 2px;
+  }
+  .home-nav a {
+    padding-inline: 6px;
+  }
+}
 @media (min-width: 1024px) {
   .home-header-actions {
     padding-right: 96px;

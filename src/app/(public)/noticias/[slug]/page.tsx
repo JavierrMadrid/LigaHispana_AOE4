@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { formatMadridDateTime } from "@/lib/format";
+import { ArrowLeft } from "@phosphor-icons/react/dist/ssr/ArrowLeft";
+import { NewsDate } from "@/components/news-date";
 import { renderNewsBody } from "@/lib/news";
 import { getPublishedPost } from "@/lib/news-store";
 
@@ -12,11 +13,12 @@ type NewsPostPageProps = {
 };
 
 /**
- * Una noticia publicada (issue 229).
+ * Una noticia publicada (issue 229), con la identidad de la portada.
  *
  * El cuerpo se pinta con renderNewsBody(), que escapa todo y solo reconoce un
  * repertorio corto de marcas: el HTML que llega a dangerouslySetInnerHTML lo ha
- * construido el propio proyecto, no el texto guardado.
+ * construido el propio proyecto, no el texto guardado. Los estilos de ese
+ * repertorio viven en `news.css`, bajo `.news-body`.
  *
  * Un borrador o una dirección que no existe dan el mismo 404: la web pública no tiene
  * que revelar qué está a medio escribir.
@@ -29,38 +31,32 @@ export default async function NewsPostPage({ params }: NewsPostPageProps) {
     notFound();
   }
 
-  const published = post.publishedAt !== null ? formatMadridDateTime(post.publishedAt) : null;
-
   return (
-    <article className="flex flex-col gap-6">
-      <header className="flex flex-col gap-2 border-b border-line pb-5">
-        <Link
-          href="/noticias"
-          className="text-xs uppercase tracking-wide text-muted transition-colors hover:text-accent"
-        >
-          Noticias
-        </Link>
-        <h1 className="font-display text-2xl font-semibold text-foreground sm:text-3xl">
-          {post.title}
-        </h1>
-        {published !== null ? (
-          <time
-            dateTime={post.publishedAt?.toISOString()}
-            className="text-xs uppercase tracking-wide text-muted"
-          >
-            {published}
-          </time>
+    <article className="news-article">
+      <Link href="/noticias" className="news-back">
+        <ArrowLeft size={14} aria-hidden="true" />
+        Noticias
+      </Link>
+
+      <header className="news-article-head">
+        <NewsDate publishedAt={post.publishedAt} />
+        <h1>{post.title}</h1>
+        {post.summary !== null ? (
+          <p className="news-article-summary">{post.summary}</p>
         ) : null}
       </header>
 
-      {post.summary !== null ? (
-        <p className="max-w-[75ch] text-base leading-relaxed text-muted">{post.summary}</p>
-      ) : null}
-
       <div
-        className="news-body flex max-w-[75ch] flex-col gap-4 text-sm leading-relaxed text-foreground"
+        className="news-body"
         dangerouslySetInnerHTML={{ __html: renderNewsBody(post.body) }}
       />
+
+      <footer className="news-article-foot">
+        <Link href="/noticias" className="news-back">
+          <ArrowLeft size={14} aria-hidden="true" />
+          Volver a Noticias
+        </Link>
+      </footer>
     </article>
   );
 }
