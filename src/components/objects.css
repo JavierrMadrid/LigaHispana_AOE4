@@ -7,9 +7,17 @@
  * de secciones de la casa. El oro se reserva a lo que señala estado —el tipo de
  * evento y la vista activa del selector local—, nunca a decorar la caja.
  */
+.league-objects {
+  /* Medidas que comparten la cabecera y la rejilla: la entradilla se corta donde
+     termina el feed, no donde termina la ventana. */
+  --objects-aside-width: 208px;
+  --objects-layout-gap: 32px;
+}
 .league-objects .objects-heading {
-  max-width: 74ch;
   margin-bottom: 28px;
+  /* El texto ocupa el ancho del feed y deja libre la columna del lateral, que a
+     esa altura no tiene nada que leer. */
+  padding-right: calc(var(--objects-aside-width) + var(--objects-layout-gap));
 }
 .league-objects .objects-heading h1 {
   margin: 0 0 12px;
@@ -27,9 +35,9 @@
 }
 .league-objects .objects-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 208px;
+  grid-template-columns: minmax(0, 1fr) var(--objects-aside-width);
   align-items: start;
-  gap: 32px;
+  gap: var(--objects-layout-gap);
 }
 .league-objects .objects-main {
   display: flex;
@@ -307,7 +315,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-width: 74ch;
+  padding-right: calc(var(--objects-aside-width) + var(--objects-layout-gap));
 }
 .league-objects .objects-skeleton-heading span {
   height: 14px;
@@ -323,9 +331,9 @@
 }
 .league-objects .objects-skeleton-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 208px;
+  grid-template-columns: minmax(0, 1fr) var(--objects-aside-width);
   align-items: start;
-  gap: 32px;
+  gap: var(--objects-layout-gap);
 }
 .league-objects .objects-skeleton-main {
   display: flex;
@@ -382,6 +390,11 @@
     display: flex;
     flex-direction: column;
     gap: 24px;
+  }
+  /* Sin lateral al lado, la entradilla usa todo el ancho del feed. */
+  .league-objects .objects-heading,
+  .league-objects .objects-skeleton-heading {
+    padding-right: 0;
   }
   .league-objects .objects-aside {
     position: static;
