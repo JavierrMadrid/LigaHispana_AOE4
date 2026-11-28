@@ -53,11 +53,13 @@ export default async function PublicLayout({
 
   const legacy = (
     // El relleno inferior deja libre la franja que ocupa `SiteTabBar` en móvil:
-    // la barra es fija y, sin él, taparía el último tramo del pie. Desde `sm` la
-    // barra no existe y el relleno sobra.
+    // la barra es fija y, sin él, taparía el último tramo del pie. Mide 53 px en
+    // una fila y 109 px cuando los siete destinos se reparten en dos (por debajo
+    // de 380), y el relleno los cubre con 3 px de sobra en los dos casos. Desde
+    // `md` la barra no existe y el relleno sobra.
     <div
       style={accentStyle}
-      className="flex min-h-full flex-col pb-[calc(3.5rem+env(safe-area-inset-bottom))] sm:pb-0"
+      className="flex min-h-full flex-col pb-[calc(3.5rem+env(safe-area-inset-bottom))] max-[379px]:pb-[calc(7rem+env(safe-area-inset-bottom))] md:pb-0"
     >
       <a
         href="#contenido"
@@ -90,32 +92,31 @@ export default async function PublicLayout({
             La fila única (marca, navegación centrada y acciones, las tres al mismo
             alto) se enciende cuando la ventana alcanza el ancho máximo del
             contenedor (`86rem`, 1376 px, el `min-[1376px]` de la rejilla): es el
-            primer punto en el que las tres celdas caben sin tocarse. La cuenta, con
-            los rótulos cortos que pinta la nav: la lista pide de 573 a 584 px —el
-            destino activo va en negrita y ensancha su etiqueta—, la marca 234 (48 del
-            emblema, 12 del hueco y 174 del wordmark) y la celda de acciones 347 (135
-            de la inscripción, 108 del acceso, 8 de separación y los 96 px que le
-            reserva al estandarte). Las dos columnas laterales se reparten lo que
-            queda por igual —es lo que mantiene la nav en el centro de la página—: con
-            el rótulo más ancho, el de `/partidas`, salen (1328 − 572 − 32) / 2 = 362
-            px para cada una (572 es esa lista menos los 12 px que le come el
-            `-mx-1.5` a `SiteNav`), así que la marca entra con 128 de sobra y las
-            acciones con 15. El hueco entre las tres celdas es el de `sm` (16 px) y no
-            los 24 de la fila antigua: esos 8 px se los quedan las columnas laterales
-            —la de acciones pasa de 7 a 15 px de margen—, y el `gap-x-6` no se puede
-            reponer con una variante arbitraria, porque Tailwind emite `min-[…]` antes
-            que los puntos de corte con nombre y ganaría la regla de `sm`.
-            Por debajo de ese ancho la nav no comparte fila, y no es por falta de sitio
-            en el contenedor, que a 1280 —el `xl` que se usaba antes— da 1232 px: es
-            que los dos laterales tienen que medir lo mismo para que la nav quede
-            centrada, y con 347 px de celda eso pide 1298. A 1280 faltan 66 y el
-            último rótulo acaba tocando el borde de la inscripción, y pisándolo 3 px
-            en `/partidas`: marca y acciones ocupan la primera fila y la navegación
-            baja a la segunda, a ancho completo y centrada en ella —el centrado lo
-            detalla `SiteNav`—. En móvil (`< sm`) esa segunda fila desaparece: los
-            cinco destinos bajan a `SiteTabBar`, la barra fija del pie, y la cabecera
-            se queda en una sola fila compacta.
-            El estandarte del patrocinador conserva su reserva ancha (`md:pr-24`) en
+            primer punto en el que las tres celdas caben sin tocarse, y no por el
+            ancho en sí sino porque ahí la nav baja a 13 px. La cuenta, con los siete
+            rótulos ya compactados en esa fila: la celda de la nav mide 573 (549 de
+            lista —554 con el destino activo en negrita— más el relleno), la marca
+            234 (48 del emblema, 12 del hueco y 174 del wordmark) y la celda de
+            acciones 338 (129 de la inscripción, 106 del acceso, 8 de separación y
+            los 96 px que le reserva al estandarte). Las dos columnas laterales se
+            reparten lo que queda por igual —es lo que mantiene la nav en el centro
+            de la página—: (1328 − 573 − 32) / 2 = 362 px para cada una, así que la
+            marca entra con 128 de sobra y las acciones con 24. El hueco entre las
+            tres celdas es el de `sm` (16 px); el `gap-x-6` no se puede reponer con
+            una variante arbitraria, porque Tailwind emite `min-[…]` antes que los
+            puntos de corte con nombre y ganaría la regla de `sm`.
+            Por debajo de ese ancho la nav no comparte fila. Con el cuerpo de 15 px
+            la lista mide 616, su celda 640 y los laterales bajan a 328, por debajo
+            de los 338 que piden las acciones: la cuenta pediría 1348 px de contenido
+            y a 1280 —el `xl` que se usaba antes— hay 1232, así que faltan 116 y las
+            acciones pisarían la nav. Marca y acciones ocupan la primera fila y la
+            navegación baja a la segunda, a ancho completo y centrada en ella
+            —el centrado lo detalla `SiteNav`—. Ahí sí hay sitio por ancho: a 768 la
+            celda mide 710 y la lista pide 616. En móvil y tableta pequeña (`< md`)
+            esa segunda fila desaparece: en 375 px de ventana la fila da 343 para
+            esos mismos 616, así que los siete destinos bajan a `SiteTabBar`, la
+            barra fija del pie, y la cabecera se queda en una sola fila compacta.
+            El estandarte del patrocinador conserva su reserva ancha (`lg:pr-24`) en
             todos los tramos, así que la holgura entre los controles y el paño no baja
             de los 28 px que deja mientras la ventana no llega al máximo del
             contenedor, y crece por encima: 44 a 1440, 68 a 1536 y 164 a 1920.
@@ -127,7 +128,7 @@ export default async function PublicLayout({
             filete neutro (el porqué, en su componente). El contenedor las centra
             con `items-center` y las separa con el `gap-2` de entre controles; en la
             fila única la celda se estira para que el centrado sea el de la fila, y
-            desde `md` le reserva el ancho al estandarte del patrocinador, que cuelga
+            desde `lg` le reserva el ancho al estandarte del patrocinador, que cuelga
             por fuera para no tapar ningún control (los números, en su componente).
             De la cabecera cuelga, además, el estandarte del patrocinador: entra
             desde el borde superior de la ventana (por eso se le ve cortado arriba),
@@ -179,7 +180,7 @@ export default async function PublicLayout({
             </span>
           </Link>
 
-          <div className="col-start-2 row-start-1 flex items-center gap-2 justify-self-end md:pr-24 min-[1376px]:col-start-3 min-[1376px]:self-stretch">
+          <div className="col-start-2 row-start-1 flex items-center gap-2 justify-self-end lg:pr-24 min-[1376px]:col-start-3 min-[1376px]:self-stretch">
             <ParticipateCta />
             <AdminAccess />
           </div>
@@ -187,13 +188,14 @@ export default async function PublicLayout({
           {/* `min-w-0`: sin él, el ancho mínimo de la lista de navegación (con
               enlaces que no se parten) empujaría la rejilla y abriría scroll de
               página en lugar de desplazarse solo la barra.
-              Por debajo de `sm` no se pinta: los cinco destinos no caben sin
-              desplazamiento horizontal y ahí navega `SiteTabBar`. La fila queda
-              vacía y la rejilla se cierra en una sola altura.
+              Por debajo de `md` no se pinta: en un móvil los siete rótulos piden 616
+              px y la fila da 343 a 375, así que ahí navega `SiteTabBar`. La fila
+              queda vacía y la rejilla se cierra en una sola altura.
               De `min-[1376px]` en adelante la fila es la única de la cabecera: la
               celda pasa a la columna central (`w-auto`, que es la anchura de la
-              lista) y marca y acciones se reparten los dos laterales. */}
-          <div className="col-span-2 row-start-2 hidden min-w-0 w-full sm:block min-[1376px]:col-span-1 min-[1376px]:col-start-2 min-[1376px]:row-start-1 min-[1376px]:w-auto">
+              lista) y marca y acciones se reparten los dos laterales; ahí `SiteNav`
+              compacta sus rótulos para dejar hueco a las dos celdas. */}
+          <div className="col-span-2 row-start-2 hidden min-w-0 w-full md:block min-[1376px]:col-span-1 min-[1376px]:col-start-2 min-[1376px]:row-start-1 min-[1376px]:w-auto">
             <SiteNav />
           </div>
         </div>

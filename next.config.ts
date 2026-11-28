@@ -36,12 +36,23 @@ const nextConfig: NextConfig = {
    * Es permanente porque el cambio de ruta tambien lo es, y los parametros de la
    * URL se conservan: `/objetivos/123?page=2` lleva a
    * `/detalle-jugador/123?page=2`.
+   *
+   * El historial de objetos dejo de ser una vista colgada del historial de puntos
+   * y paso a `/objetos`, con entrada propia en la navegacion. La redireccion es
+   * permanente y conserva la busqueda (`jugador`, `from`, `to`, `pageSize` y
+   * `page`), que Next anade al destino: un enlace antiguo con filtros sigue
+   * llevando al mismo feed filtrado.
    */
   async redirects() {
     return [
       {
         source: "/objetivos/:profileId",
         destination: "/detalle-jugador/:profileId",
+        permanent: true,
+      },
+      {
+        source: "/historial-objetos",
+        destination: "/objetos",
         permanent: true,
       },
     ];

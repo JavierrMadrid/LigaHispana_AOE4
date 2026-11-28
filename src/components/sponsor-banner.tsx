@@ -14,11 +14,11 @@ import { SponsorLogo } from "@/components/sponsor";
  * acciones y el canto de la ventana: el `right` es un cuarto de la ventana menos
  * 20rem —64 px a 1536, 80 a 1600 y 160 a 1920—, con un mínimo de 24 px para
  * tableta, que es donde ese cuarto se queda corto. La celda de las acciones le
- * reserva el ancho (`md:pr-24`) para que el paño cuelgue por fuera de los
+ * reserva el ancho (`lg:pr-24`) para que el paño cuelgue por fuera de los
  * controles y no tape "Inscríbete" ni "Admin": es la misma reserva en todos los
  * tramos, y con ella la holgura entre los controles y el paño nunca baja de 28 px
  * —el mínimo está mientras la ventana no alcanza el ancho máximo del contenedor—
- * y crece por encima: 44 a 1440, 68 a 1536 y 164 a 1920. Por debajo de `md` no se
+ * y crece por encima: 44 a 1440, 68 a 1536 y 164 a 1920. Por debajo de `lg` no se
  * pinta: ahí la cabecera va justa y el crédito sigue entero en el pie.
  *
  * Es pura decoración: el escudo es `alt=""` y no hay texto, así que no añade
@@ -26,7 +26,7 @@ import { SponsorLogo } from "@/components/sponsor";
  */
 export function SponsorBanner() {
   return (
-    <div className="pointer-events-none absolute -bottom-12 right-[max(1.5rem,calc(25%-20rem))] z-10 hidden h-[190px] w-17 md:block">
+    <div className="pointer-events-none absolute -bottom-12 right-[max(1.5rem,calc(25%-20rem))] z-10 hidden h-[190px] w-17 lg:block">
       {/* Orla: la forma recortada en oro; el paño va encima, medio paso dentro. */}
       <div className="relative h-full w-full bg-[linear-gradient(180deg,#e6c98f,#c9a45c_45%,#7d6533)] [clip-path:polygon(0_0,100%_0,100%_100%,50%_88%,0_100%)]">
         <div className="absolute inset-0.5 bg-[linear-gradient(180deg,#262b34,#161a20_55%,#0d1014)] [clip-path:polygon(0_0,100%_0,100%_100%,50%_88%,0_100%)]">

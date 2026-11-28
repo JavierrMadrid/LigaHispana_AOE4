@@ -34,7 +34,7 @@ type HistoryFiltersProps = {
  * panel—.
  *
  * La barra la montan tres pantallas con el mismo eje: el historial de puntos
- * (`/historial`), el de objetos (`/historial-objetos`) y la pestaña de historial de
+ * (`/historial`), el de objetos (`/objetos`) y la pestaña de historial de
  * un participante (solo fechas, porque allí el jugador es la ruta). Por eso vive en
  * `src/components/` y la ruta entra por `basePath`.
  */

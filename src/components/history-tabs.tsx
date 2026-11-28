@@ -6,11 +6,10 @@ import { usePathname, useSearchParams } from "next/navigation";
 /**
  * El selector local de los dos historiales públicos.
  *
- * `/historial` y `/historial-objetos` son dos feeds hermanos —puntos y objetos—,
- * así que se cambia de uno a otro con esta barra y no con una sexta entrada en la
- * navegación principal. Se dibuja con el control segmentado de la casa (el mismo
- * carril de `surface` con radio completo de las pestañas del participante) para
- * que se lea como una vista del historial, no como una sección nueva del sitio.
+ * `/historial` (puntos) y `/objetos` (objetos) son los dos feeds hermanos del
+ * torneo. Se cambia de uno a otro con esta barra, que se conserva como atajo
+ * dentro de cualquiera de las dos páginas aunque el historial de objetos ya tenga
+ * además su propia entrada —la sexta— en la navegación principal.
  *
  * Cada opción es un enlace de ruta, no estado local: se puede recargar, compartir
  * y alcanzar con el teclado, y el navegador anuncia la activa con `aria-current`.
@@ -20,16 +19,25 @@ import { usePathname, useSearchParams } from "next/navigation";
  * parámetros (`jugador`, `from`, `to`, `pageSize`), así que cambiar de feed no
  * obliga a volver a escribirlos. `page` se queda fuera a propósito: la página 5 de
  * un feed no significa lo mismo en el otro.
+ *
+ * `variant` elige el cromo: `default` es el control segmentado de las páginas
+ * heredadas (`/historial`), y `home` el carril de la casa que usa `/objetos` en su
+ * columna lateral, con el rótulo encima y el relleno de las pestañas de la
+ * portada. El comportamiento es idéntico: solo cambian las clases.
  */
 const TABS: readonly { href: string; label: string }[] = [
   { href: "/historial", label: "Puntos" },
-  { href: "/historial-objetos", label: "Objetos" },
+  { href: "/objetos", label: "Objetos" },
 ];
 
 /** Los filtros que se conservan al cambiar de pestaña, en el orden de la barra. */
 const CARRIED_PARAMS = ["jugador", "from", "to", "pageSize"] as const;
 
-export function HistoryTabs() {
+type HistoryTabsProps = {
+  variant?: "default" | "home";
+};
+
+export function HistoryTabs({ variant = "default" }: HistoryTabsProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const carried = new URLSearchParams();
@@ -43,31 +51,54 @@ export function HistoryTabs() {
   }
 
   const carriedQuery = carried.toString();
+  const tabs = TABS.map((tab) => ({
+    ...tab,
+    active: pathname === tab.href,
+    href: carriedQuery === "" ? tab.href : `${tab.href}?${carriedQuery}`,
+  }));
+
+  if (variant === "home") {
+    return (
+      <div className="objects-tabs">
+        <span className="objects-tabs-label">Historial</span>
+        <nav aria-label="Vistas del historial">
+          <ul>
+            {tabs.map((tab) => (
+              <li key={tab.href}>
+                <Link
+                  href={tab.href}
+                  aria-current={tab.active ? "page" : undefined}
+                >
+                  {tab.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-3">
       <span className="text-sm text-muted">Historial</span>
       <nav aria-label="Vistas del historial">
         <ul className="flex items-center gap-1 rounded-full border border-line bg-surface p-1">
-          {TABS.map((tab) => {
-            const active = pathname === tab.href;
-
-            return (
-              <li key={tab.href}>
-                <Link
-                  href={carriedQuery === "" ? tab.href : `${tab.href}?${carriedQuery}`}
-                  aria-current={active ? "page" : undefined}
-                  className={`block whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-                    active
-                      ? "bg-accent/15 text-accent"
-                      : "text-muted hover:bg-surface-raised hover:text-foreground"
-                  }`}
-                >
-                  {tab.label}
-                </Link>
-              </li>
-            );
-          })}
+          {tabs.map((tab) => (
+            <li key={tab.href}>
+              <Link
+                href={tab.href}
+                aria-current={tab.active ? "page" : undefined}
+                className={`block whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                  tab.active
+                    ? "bg-accent/15 text-accent"
+                    : "text-muted hover:bg-surface-raised hover:text-foreground"
+                }`}
+              >
+                {tab.label}
+              </Link>
+            </li>
+          ))}
         </ul>
       </nav>
     </div>

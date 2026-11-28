@@ -1,0 +1,466 @@
+/*
+ * Noticias (`/noticias` y `/noticias/<slug>`) — issue 229.
+ *
+ * La gaceta del torneo con la identidad de la portada: misma tinta, mismo oro y
+ * las mismas dos familias (Cinzel para titulares, Inter para lo funcional). Todo
+ * va bajo `.league-news`, así que la sección no tiñe ninguna otra ruta.
+ */
+
+.league-news .news-page,
+.league-news .news-skeleton {
+  width: min(100%, 880px);
+  margin-inline: auto;
+}
+
+/* Cabecera de sección: título de casa y una entradilla de una frase. */
+.league-news .news-heading {
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+.league-news .news-heading h1 {
+  font: 600 36px/1.15 var(--font-cinzel), serif;
+  letter-spacing: -0.01em;
+}
+.league-news .news-heading p {
+  max-width: 58ch;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* La fecha se lee como un pie editorial: filete de oro y cifra en Inter. */
+.league-news .news-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #c4cfdf;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.league-news .news-date::before {
+  content: "";
+  flex-shrink: 0;
+  width: 18px;
+  height: 1px;
+  background: var(--accent);
+  opacity: 0.8;
+}
+
+/* Destacada: la última publicada, una sola superficie de panel. */
+.league-news .news-lead {
+  margin-top: 28px;
+  background: #101d30;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.league-news .news-lead > a {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 32px;
+  border-radius: inherit;
+  color: var(--foreground);
+}
+.league-news .news-lead > a:hover,
+.league-news .news-lead > a:focus-visible {
+  background: #14243d;
+}
+.league-news .news-lead h2 {
+  font: 600 28px/1.25 var(--font-cinzel), serif;
+}
+.league-news .news-lead > a:is(:hover, :focus-visible) h2 {
+  color: var(--accent-strong);
+}
+.league-news .news-lead p {
+  max-width: 66ch;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.league-news .news-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+.league-news .news-lead a:is(:hover, :focus-visible) .news-more {
+  color: var(--accent-strong);
+}
+.league-news .news-more > svg {
+  transition: transform 0.2s;
+}
+.league-news .news-lead a:is(:hover, :focus-visible) .news-more > svg {
+  transform: translate(1px, -1px);
+}
+
+/* Archivo: las anteriores, separadas por filetes, sin otra tarjeta. */
+.league-news .news-archive {
+  margin-top: 40px;
+}
+.league-news .news-archive > h2 {
+  color: var(--muted);
+  font: 600 13px/1.4 var(--font-home-inter), sans-serif;
+}
+.league-news .news-list {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.league-news .news-list > li {
+  border-bottom: 1px solid var(--line);
+  transition: background-color 0.2s;
+}
+.league-news .news-list > li:is(:hover, :focus-within) {
+  background: #0f1c2f;
+}
+.league-news .news-item > a {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 20px 12px;
+  color: var(--foreground);
+}
+.league-news .news-item h3 {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.league-news .news-item > a:is(:hover, :focus-visible) h3 {
+  color: var(--accent-strong);
+}
+.league-news .news-item p {
+  max-width: 72ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* Los dos desenlaces que no son una lista: la base caída y el vacío real. */
+.league-news .news-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 240px;
+  margin-top: 28px;
+  padding: 36px 24px;
+  text-align: center;
+  background: #122039;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.league-news .news-state > svg {
+  color: var(--accent);
+}
+.league-news .news-state h2 {
+  font: 600 21px/1.3 var(--font-home-inter), sans-serif;
+}
+.league-news .news-state p {
+  max-width: 52ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* ---------------------------------------------------------------- */
+/* Una noticia (`/noticias/<slug>`)                                  */
+/* ---------------------------------------------------------------- */
+
+.league-news .news-article {
+  width: min(100%, 780px);
+  margin-inline: auto;
+}
+.league-news .news-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.league-news .news-back:hover {
+  color: var(--accent-strong);
+}
+.league-news .news-article-head {
+  margin-top: 8px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--line);
+}
+.league-news .news-article-head h1 {
+  margin-top: 14px;
+  font: 600 36px/1.2 var(--font-cinzel), serif;
+  letter-spacing: -0.01em;
+}
+.league-news .news-article-summary {
+  margin-top: 14px;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.7;
+}
+.league-news .news-article-foot {
+  margin-top: 40px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/*
+ * El cuerpo llega saneado de `renderNewsBody()`: párrafos con `<br />`, `h2`,
+ * `h3`, listas, citas, `code`, `strong`, `em` y enlaces. Aquí se viste ese
+ * repertorio y nada más, en una medida de lectura de 66 caracteres.
+ */
+.league-news .news-body {
+  max-width: 66ch;
+  margin-top: 32px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.league-news .news-body > * + * {
+  margin-top: 18px;
+}
+.league-news .news-body h2 {
+  margin-top: 34px;
+  color: var(--foreground);
+  font: 600 23px/1.3 var(--font-cinzel), serif;
+}
+.league-news .news-body h3 {
+  margin-top: 26px;
+  color: var(--foreground);
+  font: 600 17px/1.4 var(--font-home-inter), sans-serif;
+}
+.league-news .news-body :is(ul, ol) {
+  display: grid;
+  gap: 8px;
+  padding-left: 22px;
+}
+.league-news .news-body ul {
+  list-style: disc;
+}
+.league-news .news-body ol {
+  list-style: decimal;
+}
+.league-news .news-body li {
+  padding-left: 4px;
+}
+.league-news .news-body li::marker {
+  color: var(--accent);
+}
+.league-news .news-body ol > li::marker {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.league-news .news-body blockquote {
+  padding: 4px 0 4px 20px;
+  border-left: 2px solid var(--accent);
+  color: #d9e3f1;
+  font-size: 17px;
+  line-height: 1.7;
+}
+.league-news .news-body blockquote > p {
+  margin: 0;
+}
+.league-news .news-body code {
+  padding: 1px 5px;
+  border: 1px solid #2f4665;
+  border-radius: 3px;
+  background: #152945;
+  color: var(--accent-strong);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.875em;
+}
+.league-news .news-body a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.league-news .news-body a:hover {
+  color: var(--accent);
+}
+.league-news .news-body strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.league-news .news-body em {
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------- */
+/* Esqueletos de carga                                               */
+/* ---------------------------------------------------------------- */
+
+.league-news .news-skeleton {
+  animation: news-pulse 1.8s ease-in-out infinite;
+}
+.league-news .news-skeleton-article {
+  width: min(100%, 780px);
+}
+.league-news .news-skeleton-head {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+.league-news .news-skeleton-title {
+  width: 220px;
+  height: 36px;
+  border-radius: 4px;
+  background: #152945;
+}
+.league-news .news-skeleton-line {
+  display: block;
+  height: 12px;
+  border-radius: 3px;
+  background: #12213a;
+}
+.league-news .news-skeleton-line-short {
+  width: 58%;
+}
+.league-news .news-skeleton-lead {
+  display: grid;
+  gap: 12px;
+  margin-top: 28px;
+  padding: 28px 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #101d30;
+}
+.league-news .news-skeleton-date {
+  display: block;
+  width: 168px;
+  height: 12px;
+  border-radius: 3px;
+  background: #16263f;
+}
+.league-news .news-skeleton-list {
+  margin-top: 40px;
+  border-top: 1px solid var(--line);
+}
+.league-news .news-skeleton-row {
+  display: grid;
+  gap: 8px;
+  padding: 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.league-news .news-skeleton-back {
+  display: block;
+  width: 90px;
+  height: 14px;
+  border-radius: 3px;
+  background: #12213a;
+}
+.league-news .news-skeleton-article-head {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--line);
+}
+.league-news .news-skeleton-article-title {
+  height: 30px;
+  background: #152945;
+}
+.league-news .news-skeleton-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 32px;
+}
+.league-news .news-skeleton-body .news-skeleton-line:nth-child(3n) {
+  width: 72%;
+}
+@keyframes news-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (max-width: 600px) {
+  .league-news .news-heading {
+    padding-bottom: 18px;
+  }
+  .league-news .news-heading h1 {
+    font-size: 27px;
+  }
+  .league-news .news-heading p {
+    font-size: 14px;
+    line-height: 1.65;
+  }
+  .league-news .news-lead {
+    margin-top: 20px;
+  }
+  .league-news .news-lead > a {
+    gap: 10px;
+    padding: 20px 18px;
+  }
+  .league-news .news-lead h2 {
+    font-size: 22px;
+  }
+  .league-news .news-lead p {
+    font-size: 14px;
+  }
+  .league-news .news-archive {
+    margin-top: 32px;
+  }
+  .league-news .news-item > a {
+    padding: 16px 8px;
+  }
+  .league-news .news-item h3 {
+    font-size: 16px;
+  }
+  .league-news .news-state {
+    min-height: 200px;
+    padding: 28px 20px;
+  }
+  .league-news .news-state h2 {
+    font-size: 18px;
+  }
+  .league-news .news-article-head h1 {
+    font-size: 26px;
+  }
+  .league-news .news-article-summary {
+    font-size: 15px;
+  }
+  .league-news .news-body {
+    margin-top: 24px;
+    font-size: 15px;
+    line-height: 1.75;
+  }
+  .league-news .news-body h2 {
+    font-size: 20px;
+  }
+  .league-news .news-body h3 {
+    font-size: 16px;
+  }
+  .league-news .news-body blockquote {
+    font-size: 16px;
+  }
+  .league-news .news-skeleton-head {
+    padding-bottom: 18px;
+  }
+  .league-news .news-skeleton-title {
+    width: 160px;
+    height: 28px;
+  }
+  .league-news .news-skeleton-lead {
+    padding: 20px 18px;
+  }
+  .league-news .news-skeleton-article-title {
+    height: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .league-news .news-skeleton {
+    animation: none;
+  }
+  .league-news .news-list > li,
+  .league-news .news-more > svg {
+    transition: none;
+  }
+}

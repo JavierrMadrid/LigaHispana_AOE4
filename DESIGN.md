@@ -4,7 +4,7 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 
 | Elemento                     | Regla                                                                                       |
 | ---------------------------- | ------------------------------------------------------------------------------------------- |
-| Ámbito                       | `/`, `/partidas`, `/objetivos`, `/reglas`, `/puntuacion` y `/participar`, incluida cabecera y pie; otras rutas conservan su diseño                  |
+| Ámbito                       | `/`, `/partidas`, `/objetivos`, `/reglas`, `/puntuacion`, `/participar`, `/objetos` y `/noticias`, incluida cabecera y pie; otras rutas conservan su diseño                  |
 | Fondo / panel / borde        | Tinta `#090F1A` / azul heráldico `#122039` / metal azulado `#2B405D`                        |
 | Texto principal / secundario | `#EDF1F8` / `#B6C3D6`                                                                       |
 | Acento                       | Oro `#D6B568` para inscripción, selección, foco y primer puesto; rojo para emisión          |
@@ -41,6 +41,13 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Chips extraíbles solo con filtros activos, además de «Limpiar». «Restablecer vista» borra búsqueda y filtros, vuelve a puesto ascendente y página 1; se activa ante cualquier cambio de la vista inicial. «Limpiar» en los chips conserva búsqueda y orden. El vacío filtrado permite limpiar búsqueda y filtros juntos.
 - Cabeceras ordenables: puesto, jugador, puntos y Elo. Nuevos criterios numéricos comienzan descendentes; puesto y nombre, ascendentes. Valores nulos al final. Panel y cabeceras comparten estado. Las divisiones seleccionadas se combinan con OR entre sí y con AND respecto a actividad y búsqueda; cuentan como un único filtro.
 - Filtrar, buscar y ordenar opera sobre toda la colección antes de paginar y vuelve a página 1. Páginas de 25, rango anunciado y navegación al pie. Las primeras 25 filas son legibles en HTML sin JavaScript.
+
+## Navegación principal
+
+- Siete destinos en este orden: Clasificación, Partidas en juego, Objetivos, Puntuación, Reglas, Objetos y Noticias. Las tres formas del rótulo —`label`, `tabLabel` y `homeLabel`— salen de `PUBLIC_NAVIGATION`, que también fija el orden.
+- Desde 768px, una sola fila sin desplazamiento: 616px a 15px de cuerpo y 549px a 13px desde 1376px, donde comparte fila con la marca y las acciones. Por debajo de 768px la navegación baja a la barra fija del pie.
+- Barra del pie: icono y rótulo corto, con `aria-current` y filete en el destino activo. Una fila de 53px desde 380px; por debajo, dos filas —cuatro y tres— de 109px, sin recortar ningún rótulo ni esconder destinos tras un desplazamiento. El relleno del layout y «Volver arriba» reservan esa altura.
+- La cabecera de portada reparte los siete en dos filas —cuatro y tres— por debajo de 520px, donde la fila única dejaría «Noticias» sola; desde ahí vuelve a una sola línea.
 
 ## Detalles y puntuación
 
@@ -102,3 +109,10 @@ La clasificación es la tarea principal: ver quién lidera y con cuántos puntos
 - Comparte navegación, panorama y pie de portada; ámbito exclusivo `.league-participate`. Identidad y enlaces de apoyo laterales desde 1024px; formulario único, una columna en móvil.
 - Discord, requisitos y grupos de campos se separan con espacio y líneas, sin paneles anidados. Controles de 44px, etiqueta visible, ayuda y error enlazados; estados OAuth, captcha, pendiente, éxito y cierre conservados.
 - El cierre aparece antes de los campos, mantiene el identificador accesible del envío desactivado y permite consultar los requisitos. Acciones y validación de servidor sin cambios.
+
+## Noticias (`/noticias`)
+
+- Comparte navegación, panorama y pie de portada; ámbito exclusivo `.league-news`. La cabecera marca «Noticias» también en las noticias sueltas (`/noticias/<slug>`).
+- Modo Read: cabecera de sección con título Cinzel y entradilla; la última publicada se destaca en un panel y las anteriores van en un archivo separado por filetes, con fecha, titular y entradilla. Sin imágenes ni datos que la noticia no traiga.
+- Fecha en el huso de Madrid con un filete de oro. El cuerpo del Markdown —párrafos, `h2`/`h3`, listas, citas, código y enlaces— se viste a 66 caracteres, Inter de 16px e interlineado 1,8; los enlaces van en oro con subrayado.
+- La noticia suelta abre con vuelta a Noticias, titular y entradilla, y cierra con la misma vuelta. Vacío y lectura fallida son estados distintos en la misma caja; la carga usa un esqueleto con la forma real y movimiento reducido estático.
