@@ -1,0 +1,436 @@
+/*
+ * Página de objetos (`/objetos`): el historial público de objetos vestido con el
+ * armazón de la portada.
+ *
+ * No inventa una paleta: hereda las variables de `.league-home` (pizarra, oro y
+ * marfil), usa Cinzel para el titular y la misma rejilla de filetes que el resto
+ * de secciones de la casa. El oro se reserva a lo que señala estado —el tipo de
+ * evento y la vista activa del selector local—, nunca a decorar la caja.
+ */
+.league-objects .objects-heading {
+  max-width: 74ch;
+  margin-bottom: 28px;
+}
+.league-objects .objects-heading h1 {
+  margin: 0 0 12px;
+  font: 600 30px/1.25 var(--font-cinzel), serif;
+}
+.league-objects .objects-heading p {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.8;
+}
+.league-objects .objects-heading .objects-heading-note {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.league-objects .objects-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 208px;
+  align-items: start;
+  gap: 32px;
+}
+.league-objects .objects-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+.league-objects .objects-aside {
+  position: sticky;
+  top: 100px;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Selector local «Puntos / Objetos», en el dialecto de la casa. */
+.league-objects .objects-tabs-label {
+  display: block;
+  margin-bottom: 10px;
+  color: #c4cfdf;
+  font-size: 12px;
+  font-weight: 600;
+}
+.league-objects .objects-tabs nav ul {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0b1729;
+}
+.league-objects .objects-tabs nav li {
+  flex: 1;
+  min-width: 0;
+}
+.league-objects .objects-tabs nav a {
+  display: block;
+  min-height: 40px;
+  padding: 10px 6px;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+}
+.league-objects .objects-tabs nav a:hover {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+.league-objects .objects-tabs nav a[aria-current] {
+  background: #26374d;
+  color: var(--accent-strong);
+  box-shadow: inset 0 -1px #d6b56855;
+}
+
+/* Leyenda de tipos y enlace de apoyo. */
+.league-objects .objects-legend {
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.league-objects .objects-legend h2 {
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.league-objects .objects-legend dl {
+  display: grid;
+  gap: 14px;
+}
+.league-objects .objects-legend dt {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+.league-objects .objects-legend dd {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.league-objects .objects-guide {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.league-objects .objects-guide a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  color: #d9c28e;
+  font-size: 12px;
+}
+
+/* Barra de filtros: la caja de la casa y sus controles de 4 px. */
+.league-objects .objects-filters > div {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #122039;
+}
+.league-objects .objects-filters label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.league-objects .objects-filters input {
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0b1729;
+  color: var(--foreground);
+  font-size: 13px;
+}
+.league-objects .objects-filters input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.league-objects .objects-filters input::placeholder {
+  color: var(--muted);
+}
+.league-objects .objects-filters [role="listbox"] {
+  border: 1px solid #59749a;
+  border-radius: 4px;
+  background: #12243c;
+  box-shadow: 0 12px 24px #0007;
+}
+.league-objects .objects-filters [role="option"] {
+  padding: 9px 12px;
+  font-size: 13px;
+}
+.league-objects .objects-filters [role="option"][aria-selected="true"] {
+  color: var(--accent-strong);
+}
+.league-objects .objects-filters button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.league-objects .objects-filters button:hover {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+
+/* Feed: el tablero de la casa, con el filete de cada evento. */
+.league-objects .objects-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.league-objects .objects-list ul {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #101d30;
+}
+.league-objects .objects-list li {
+  padding: 14px 18px;
+}
+.league-objects .objects-list li[data-kind="AWARD"],
+.league-objects .objects-list li[data-kind="FULFILL"] {
+  background: #d6b5680d;
+  box-shadow: inset 2px 0 var(--accent);
+}
+.league-objects .objects-list li p:first-child {
+  font-size: 11px;
+}
+.league-objects .objects-list li p:first-child > span:last-child {
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.league-objects .objects-list li > p:nth-child(2) {
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.league-objects .objects-list li > p:last-child {
+  margin-top: 6px;
+  padding-left: 28px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.league-objects .objects-list a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+.league-objects .objects-list a:hover {
+  color: var(--accent-strong);
+  text-decoration-color: currentColor;
+}
+
+/* Pie del feed: tamaño de página y paginación. */
+.league-objects .objects-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.league-objects .objects-footer select {
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0b1729;
+  color: var(--foreground);
+  font-size: 12px;
+}
+.league-objects .objects-footer nav > p {
+  color: var(--muted);
+  font-size: 11px;
+}
+.league-objects .objects-footer nav a,
+.league-objects .objects-footer nav span[aria-disabled="true"] {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.league-objects .objects-footer nav a:hover {
+  background: var(--surface-raised);
+  color: var(--accent-strong);
+}
+.league-objects .objects-footer nav span[aria-disabled="true"] {
+  opacity: 0.45;
+}
+
+/* Estados vacío y degradado. */
+.league-objects .objects-empty > div {
+  padding: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #101d30;
+}
+.league-objects .objects-empty h2 {
+  font-family: var(--font-home-inter), sans-serif;
+  font-size: 17px;
+  font-weight: 600;
+}
+.league-objects .objects-empty > div > div {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.league-objects .objects-empty .objects-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+.league-objects .objects-empty nav a {
+  color: var(--accent-strong);
+}
+.league-objects .objects-empty nav a:last-child {
+  color: var(--muted);
+}
+
+/* Esqueleto de carga: la forma real, para que el feed no salte. */
+.league-objects .objects-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  animation: home-pulse 1.6s ease-in-out infinite;
+}
+.league-objects .objects-skeleton-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 74ch;
+}
+.league-objects .objects-skeleton-heading span {
+  height: 14px;
+  border-radius: 3px;
+  background: #14243a;
+}
+.league-objects .objects-skeleton-heading span:first-child {
+  width: 180px;
+  height: 30px;
+}
+.league-objects .objects-skeleton-heading span:last-child {
+  width: 70%;
+}
+.league-objects .objects-skeleton-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 208px;
+  align-items: start;
+  gap: 32px;
+}
+.league-objects .objects-skeleton-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+.league-objects .objects-skeleton-toolbar {
+  height: 68px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #14243a;
+}
+.league-objects .objects-skeleton-list {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #14243a;
+}
+.league-objects .objects-skeleton-row {
+  height: 92px;
+}
+.league-objects .objects-skeleton-row + .objects-skeleton-row {
+  border-top: 1px solid var(--line);
+}
+.league-objects .objects-skeleton-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.league-objects .objects-skeleton-footer span {
+  width: 180px;
+  height: 36px;
+  border-radius: 4px;
+  background: #14243a;
+}
+.league-objects .objects-skeleton-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.league-objects .objects-skeleton-aside span {
+  height: 42px;
+  border-radius: 4px;
+  background: #14243a;
+}
+.league-objects .objects-skeleton-aside span:last-child {
+  height: 132px;
+}
+
+@media (max-width: 1023px) {
+  .league-objects .objects-layout,
+  .league-objects .objects-skeleton-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .league-objects .objects-aside {
+    position: static;
+    order: -1;
+    width: 100%;
+  }
+  .league-objects .objects-legend {
+    display: none;
+  }
+  .league-objects .objects-skeleton-aside {
+    order: -1;
+  }
+}
+@media (max-width: 640px) {
+  .league-objects .objects-heading {
+    margin-bottom: 20px;
+  }
+  .league-objects .objects-heading h1 {
+    font-size: 26px;
+  }
+  .league-objects .objects-heading p {
+    font-size: 14px;
+    line-height: 1.75;
+  }
+  .league-objects .objects-filters > div {
+    padding: 14px;
+  }
+  .league-objects .objects-list li {
+    padding: 12px 14px;
+  }
+  .league-objects .objects-list li > p:last-child {
+    padding-left: 24px;
+  }
+  .league-objects .objects-empty > div {
+    padding: 22px 18px;
+  }
+  .league-objects .objects-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .league-objects .objects-footer nav {
+    width: 100%;
+  }
+  .league-objects .objects-skeleton-row {
+    height: 104px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .league-objects .objects-skeleton {
+    animation: none;
+  }
+}

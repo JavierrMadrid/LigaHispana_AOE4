@@ -297,11 +297,12 @@ de recibirlo, lanzarlo o que se lo devuelvan. Los textos, los glifos y los tiemp
 
 ## Historial público
 
-La página **`/historial-objetos`** publica los objetos de la edición activa como un **feed de
+La página **`/objetos`** publica los objetos de la edición activa como un **feed de
 eventos**, no como tarjetas por objeto: premios, lanzamientos, devoluciones y desventajas
 cumplidas, mezclados de lo más reciente a lo más antiguo. Es el mismo lenguaje que el historial
 de puntos (`/historial`): filtro por participante, rango de fechas con el día final completo y
-paginación en servidor. La lectura vive en
+paginación en servidor. Se lee con el armazón de la portada (`league-home`), con su cabecera, su
+pie y su paleta, y una columna lateral que explica qué es cada tipo de evento. La lectura vive en
 [`src/lib/object-history.ts`](../src/lib/object-history.ts) (`getObjectHistory()`).
 
 | `kind` | Cuándo existe | `at` | `player` | `opponent` |
@@ -325,8 +326,12 @@ paginación en servidor. La lectura vive en
 - **Paginación**: `page` y `pageSize` con `DEFAULT_PAGE_SIZE`/`MAX_PAGE_SIZE`, página acotada a
   la última con filas y `pageCount` a `0` si no hay ninguna. Un corte de base devuelve
   `{ status: "degraded", data: null }`, que la página distingue de una lista vacía.
-- **Navegación**: `/historial` y `/historial-objetos` comparten un selector local «Puntos / Objetos»;
-  el historial de objetos no es una sexta entrada de la navegación principal.
+- **Navegación**: `/objetos` es la sexta y última entrada de la navegación principal («Objetos»;
+  la clasificación se abrevia a «Puestos» en la barra de móvil para que las seis quepan sin
+  recortes). `/historial` y `/objetos` comparten además un selector local «Puntos / Objetos», que
+  en `/objetos` viste el control de la portada. La ruta vieja `/historial-objetos` redirige de
+  forma permanente a `/objetos` conservando la búsqueda (`jugador`, `from`, `to`, `pageSize` y
+  `page`).
 
 ## Exclusión de partidas
 

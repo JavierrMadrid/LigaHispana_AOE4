@@ -26,7 +26,7 @@ import { SponsorLogo } from "@/components/sponsor";
  */
 export function SponsorBanner() {
   return (
-    <div className="pointer-events-none absolute -bottom-12 right-[max(1.5rem,calc(25%-20rem))] z-10 hidden h-[190px] w-17 md:block">
+    <div className="pointer-events-none absolute -bottom-12 right-[max(1.5rem,calc(25%-20rem))] z-10 hidden h-[190px] w-17 lg:block">
       {/* Orla: la forma recortada en oro; el paño va encima, medio paso dentro. */}
       <div className="relative h-full w-full bg-[linear-gradient(180deg,#e6c98f,#c9a45c_45%,#7d6533)] [clip-path:polygon(0_0,100%_0,100%_100%,50%_88%,0_100%)]">
         <div className="absolute inset-0.5 bg-[linear-gradient(180deg,#262b34,#161a20_55%,#0d1014)] [clip-path:polygon(0_0,100%_0,100%_100%,50%_88%,0_100%)]">
