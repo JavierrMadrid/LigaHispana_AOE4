@@ -1435,7 +1435,8 @@
     width: 13px;
   }
   .home-nav {
-    justify-content: flex-start;
+    flex-wrap: wrap;
+    justify-content: center;
     padding-bottom: 4px;
   }
   .home-nav a {
@@ -1683,7 +1684,7 @@
     padding-top: 110px;
   }
 }
-@media (min-width: 768px) {
+@media (min-width: 1024px) {
   .home-header-actions {
     padding-right: 96px;
   }

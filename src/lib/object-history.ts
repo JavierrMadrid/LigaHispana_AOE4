@@ -21,7 +21,7 @@ import { windowBounds } from "@/lib/ranked-match";
 import { readRuleset } from "@/lib/scoring";
 
 /**
- * El **historial público de objetos**: el feed de `/historial-objetos`.
+ * El **historial público de objetos**: el feed de `/objetos`.
  *
  * Es la cara pública de lo que el panel enseña en `/admin/objetos`, pero como
  * **feed de eventos** y no como tarjetas por objeto: premios, lanzamientos,
@@ -114,7 +114,7 @@ export type ObjectHistoryEvent = {
   penalty: { id: string; text: string | null };
 };
 
-/** Una página del feed público de `/historial-objetos`. */
+/** Una página del feed público de `/objetos`. */
 export type ObjectHistory = {
   rows: ObjectHistoryEvent[];
   total: number;

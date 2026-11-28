@@ -107,7 +107,10 @@ export function ObjectHistoryRow({ row }: { row: ObjectHistoryEvent }) {
   const milestone = row.kind === "AWARD" || row.kind === "FULFILL";
 
   return (
-    <li className={`px-4 py-3 ${milestone ? "bg-accent/[0.06]" : ""}`}>
+    <li
+      data-kind={row.kind}
+      className={`px-4 py-3 ${milestone ? "bg-accent/[0.06]" : ""}`}
+    >
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
         <time
           dateTime={row.at.toISOString()}
@@ -145,6 +148,10 @@ export function ObjectHistoryRow({ row }: { row: ObjectHistoryEvent }) {
  * El feed completo, sobre el mismo bloque de `surface` y con el mismo filete que
  * la lista del historial de puntos, para que los dos historiales no se separen en
  * cuanto uno cambie de bordes.
+ *
+ * Cada fila lleva su `kind` en `data-kind`: el color no es la única señal —el
+ * rótulo ya dice qué pasó—, pero deja que la hoja de `/objetos` marque los hitos
+ * del objeto sin repetir la regla en JavaScript.
  */
 export function ObjectHistoryList({ rows }: { rows: readonly ObjectHistoryEvent[] }) {
   return (

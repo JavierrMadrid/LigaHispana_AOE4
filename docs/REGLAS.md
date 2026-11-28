@@ -59,6 +59,26 @@ El bono de un evento es **permanente** en la clasificación: no es una competici
 cierre, sino una ventana que se juega y se cobra. Cómo se suma a la puntuación está en
 [`docs/PUNTUACION.md`](./PUNTUACION.md).
 
+### Objetos
+
+Una **carga** que se gana con ciertas victorias del día y que llega con una **desventaja**. Es un
+ajuste de edición: solo existe si el modo de objetos está encendido, y solo se puede encender antes
+de que empiece el torneo (ver [`OBJETOS.md`](./OBJETOS.md#modo-configurable)).
+
+| Regla | Cómo se controla |
+|---|---|
+| Se gana con la **primera victoria del día UTC** de su tipo: sagrada o religiosa (reliquia), conquista (moneda) o maravilla (monumento). | Motor |
+| Una **retirada temprana** del rival también la otorga: con 3 minutos o menos, como victoria sagrada; entre 3 y 5, como victoria por maravilla. | Motor |
+| Hay **un objeto de cada tipo por día UTC**. | Motor (índice único `(kind, day)`) |
+| Mientras la desventaja está pendiente, las partidas del portador **no puntúan** ni dan objetivos. | Motor |
+| El portador puede **lanzar** el objeto a otro participante; la desventaja viaja con él. Una **devolución** deja la desventaja en el lanzador y pierde el objeto. | Panel |
+| La desventaja se da por **cumplida** sobre una partida concreta y desde esa partida el portador vuelve a puntuar. | Panel |
+| Apagar el modo **levanta las exclusiones** pendientes y no borra el histórico. | Panel (configuración de la edición) |
+
+El catálogo de desventajas, la probabilidad de devolución, las ventanas de exclusión y la operación
+están en [`OBJETOS.md`](./OBJETOS.md). La página `/reglas` recoge esta sección y `/objetos` publica el
+historial de premios, lanzamientos, devoluciones y cumplimientos.
+
 ### Normas
 
 De obligado cumplimiento dentro del torneo. El incumplimiento de cualquiera de ellas es **motivo de
