@@ -14,6 +14,8 @@ import { readEditionConfig } from "@/lib/edition";
 import { postChannelMessage } from "@/lib/edition-announcements";
 import { isRecord } from "@/lib/json";
 import { getStandings } from "@/lib/public";
+import { editionEnded, type ScoringWindow } from "@/lib/ranked-match";
+import { readRuleset } from "@/lib/scoring";
 import { readPublicOrigin } from "@/lib/site-url";
 
 /**
@@ -31,9 +33,23 @@ import { readPublicOrigin } from "@/lib/site-url";
  * ## Lo barato primero
  *
  * La mayoría de las ~288 pasadas diarias no tocan informe, así que el paso mira primero
- * el reloj de Madrid y la memoria y solo lee la clasificación y la edición cuando hoy
- * **puede** tocar (ver `reportMayRunToday()`). En una pasada normal el coste es una
- * lectura de `Setting` y una comparación.
+ * el reloj de Madrid y la memoria y solo lee la ventana del torneo, la clasificación y el
+ * nombre de la edición cuando hoy **puede** tocar (ver `reportMayRunToday()`). En una
+ * pasada normal el coste es una lectura de `Setting` y una comparación.
+ *
+ * ## Solo mientras la edición siga viva
+ *
+ * El informe se manda una vez al día **mientras la edición siga en marcha**. A partir de
+ * `window.to` la edición está terminada (`editionEnded()`, el predicado único del
+ * proyecto) y el worker deja de mandarlo: la clasificación ya no cambia y no tiene
+ * sentido repetirla cada noche, ni mandar uno **atrasado** de una liga que ya acabó. La
+ * ventana se lee **solo** cuando `reportMayRunToday()` ya ha dicho que hoy puede tocar,
+ * así que la criba barata sigue siendo el reloj y la memoria. Con la ventana abierta
+ * (`to: null`) la edición no termina nunca. Si la ventana no se puede leer, el fallo va a
+ * `error` como el de la clasificación, y no se envía nada.
+ *
+ * Cuando la edición termina no se escribe la memoria: no hay informe que cerrar, y una
+ * ventana que se reabra después debe poder mandar el informe de su día.
  *
  * ## Por qué es un módulo propio
  *
@@ -230,6 +246,23 @@ export function reportMayRunToday(
 }
 
 /**
+ * ¿Deja la edición que el informe salga **hoy**?
+ *
+ * Es la regla del informe sobre la ventana del torneo: se manda una vez al día mientras la
+ * edición siga viva, y a partir de `window.to` (`editionEnded()`) deja de salir. El corte
+ * lo pone el predicado canónico del proyecto, no una comparación propia, para que "edición
+ * terminada" signifique lo mismo aquí que en el panel o en la puntuación.
+ *
+ * Una ventana abierta (`to: null`) permite siempre; un `to` ilegible también (el fallo cae
+ * hacia "sigue en marcha"). Se prueba aparte de `editionEnded()` porque lo que aquí se fija
+ * es la **regla del informe**, no el predicado: si algún día el informe tuviera que
+ * sobrevivir al final de la edición, cambiaría esta función y no la del torneo.
+ */
+export function reportEditionAllowsToday(window: ScoringWindow, now: Date): boolean {
+  return !editionEnded(window, now);
+}
+
+/**
  * Qué hacer con el informe en esta pasada.
  *
  * | Estado | Decisión |
@@ -398,13 +431,18 @@ export type StandingsReportRunResult = {
  *
  * La mayoría de las ~288 pasadas diarias no tocan informe, así que antes de leer nada
  * caro se miran el reloj de Madrid y la memoria, y `reportMayRunToday()` decide si hoy
- * puede tocar. Solo entonces se leen la clasificación (`getStandings()`) y la edición, se
+ * puede tocar. Solo entonces se lee la **ventana del torneo** (`readRuleset()`): con la
+ * edición terminada (`reportEditionAllowsToday()`, o sea `editionEnded()`) se sale sin
+ * leer la clasificación ni crear ningún cliente HTTP, y sin tocar la memoria —no hay
+ * informe que cerrar y una ventana reabierta debe poder mandar el del día—. Si la edición
+ * sigue viva se leen la clasificación (`getStandings()`) y el nombre de la edición, se
  * trocea y se llama a `dailyReportPlan()` para la decisión fina. En una pasada normal el
  * coste es una lectura de `Setting` y una comparación, sin crear ningún cliente HTTP.
  *
- * Sin configurar, fuera de la hora o con el día ya informado, devuelve `{ sent: 0, error:
- * null }`. Sin filas clasificadas tampoco hay informe, y no es un fallo. Cuando ya tocaba
- * y todo salió, deja el día anotado como completo.
+ * Sin configurar, fuera de la hora, con el día ya informado o con la edición terminada,
+ * devuelve `{ sent: 0, error: null }`. Sin filas clasificadas tampoco hay informe, y no es
+ * un fallo: nunca se manda un informe atrasado de una liga acabada. Cuando ya tocaba y
+ * todo salió, deja el día anotado como completo.
  */
 export async function announceDailyStandings(
   options: { config?: DiscordConfig; now?: Date } = {},
@@ -425,6 +463,25 @@ export async function announceDailyStandings(
   const memory = await readMemory();
 
   if (!reportMayRunToday(clock, memory)) {
+    return { sent: 0, error: null };
+  }
+
+  // Con la edición terminada (`window.to` ya pasado) no hay informe: la clasificación no
+  // cambia y no toca mandar uno atrasado de una liga acabada. Se sale **antes** de leer la
+  // clasificación y sin crear el cliente HTTP, y **sin escribir la memoria**: no hay
+  // informe que cerrar, y si la ventana se reabre debe poder salir el del día.
+  let window: ScoringWindow;
+
+  try {
+    ({ window } = await readRuleset());
+  } catch (error) {
+    return {
+      sent: 0,
+      error: `No se ha podido leer la ventana del torneo para el informe diario de Discord: ${toErrorMessage(error)}`,
+    };
+  }
+
+  if (!reportEditionAllowsToday(window, now)) {
     return { sent: 0, error: null };
   }
 

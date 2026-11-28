@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { ScoringWindow } from "@/lib/ranked-match";
 import {
   buildStandingsReportMessages,
   dailyReportPlan,
@@ -7,6 +8,7 @@ import {
   EMPTY_STANDINGS_REPORT_MEMORY,
   madridReportClock,
   parseStandingsReportMemory,
+  reportEditionAllowsToday,
   reportMayRunToday,
   standingsReportDateLabel,
   STANDINGS_REPORT_HOUR,
@@ -20,8 +22,8 @@ import {
  * Todo es puro y sin red ni base de datos: el reloj va en la mano (instantes escritos a
  * mano) y las filas son una lista de números y nombres. Lo que se fija es lo que no puede
  * fallar: que no salga dos veces el mismo día, que un día que se pasó no se mande
- * atrasado, que ningún mensaje pase de 2000 caracteres sin partir una línea, y que una
- * reanudación no repita lo ya enviado.
+ * atrasado, que no se mande con la edición terminada, que ningún mensaje pase de 2000
+ * caracteres sin partir una línea, y que una reanudación no repita lo ya enviado.
  */
 
 const ROWS: StandingsReportRow[] = [
@@ -184,6 +186,40 @@ describe("reportMayRunToday", () => {
 
     expect(reportMayRunToday(HOY_MANANA, memory)).toBe(false);
     expect(reportMayRunToday(HOY_NOCHE, memory)).toBe(true);
+  });
+});
+
+describe("reportEditionAllowsToday", () => {
+  // La ventana del torneo tal y como llega del ruleset: fin exclusivo para las partidas,
+  // pero el instante `to` ya cuenta como edición terminada.
+  const VENTANA: ScoringWindow = {
+    from: "2026-09-15T00:00:00.000Z",
+    to: "2026-10-15T00:00:00.000Z",
+  };
+
+  it("un milisegundo antes de `window.to` la edición sigue viva y el informe puede salir", () => {
+    expect(reportEditionAllowsToday(VENTANA, new Date("2026-10-14T23:59:59.999Z"))).toBe(true);
+  });
+
+  it("en `window.to` la edición ya está terminada y el informe no sale", () => {
+    expect(reportEditionAllowsToday(VENTANA, new Date("2026-10-15T00:00:00.000Z"))).toBe(false);
+  });
+
+  it("un día después de `window.to` tampoco sale: no se manda un informe atrasado", () => {
+    expect(reportEditionAllowsToday(VENTANA, new Date("2026-10-16T19:00:00.000Z"))).toBe(false);
+    expect(reportEditionAllowsToday(VENTANA, new Date("2030-01-01T00:00:00.000Z"))).toBe(false);
+  });
+
+  it("con la ventana abierta (`to: null`) la edición no termina y el informe sigue saliendo", () => {
+    const abierta: ScoringWindow = { from: VENTANA.from, to: null };
+
+    expect(reportEditionAllowsToday(abierta, new Date("2030-01-01T00:00:00.000Z"))).toBe(true);
+  });
+
+  it("un `to` ilegible no da la edición por terminada, así que el informe sigue saliendo", () => {
+    const rota: ScoringWindow = { from: VENTANA.from, to: "esto no es una fecha" };
+
+    expect(reportEditionAllowsToday(rota, new Date("2030-01-01T00:00:00.000Z"))).toBe(true);
   });
 });
 
