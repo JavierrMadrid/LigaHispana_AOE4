@@ -1,0 +1,692 @@
+/*
+ * Página de objetos (`/objetos`): el historial público de objetos vestido con el
+ * armazón de la portada.
+ *
+ * No inventa una paleta: hereda las variables de `.league-home` (pizarra, oro y
+ * marfil), usa Cinzel para el titular y la misma rejilla de filetes que el resto
+ * de secciones de la casa. El oro se reserva a lo que señala estado —el tipo de
+ * evento y la vista activa del selector local—, nunca a decorar la caja.
+ *
+ * La rejilla es la de `/partidas` y `/objetivos`: 192 px de contexto a la
+ * izquierda —título, resumen, botón de información, selector, leyenda y enlace— y
+ * el feed a la derecha. La explicación de la mecánica vive en el modal que abre
+ * ese botón: no cabe en la columna sin convertirla en un párrafo de pie y, sobre
+ * el feed, le quitaba el sitio al historial.
+ */
+.league-objects {
+  /* La rejilla de las secciones de la casa: 192 px de contexto a la izquierda y
+     el feed a la derecha, con el mismo hueco que `/partidas` y `/objetivos`. */
+  --objects-context-width: 192px;
+  --objects-layout-gap: 24px;
+}
+.league-objects .objects-layout {
+  display: grid;
+  grid-template-columns: var(--objects-context-width) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--objects-layout-gap);
+}
+.league-objects .objects-context {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.league-objects .objects-context h1 {
+  margin: 0 0 12px;
+  font: 600 27px/1.2 var(--font-cinzel), serif;
+}
+.league-objects .objects-context > p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.league-objects .objects-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Botón de información: abre la mecánica de los objetos en un modal. Va bajo el
+   resumen y antes del selector, con el cromo de control de la página (filete,
+   4 px, 44 px de alto). */
+.league-objects .objects-help {
+  margin-top: 18px;
+}
+.league-objects .objects-help-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #122039;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+}
+.league-objects .objects-help-trigger svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.league-objects .objects-help-trigger:hover {
+  border-color: #59749a;
+  background: var(--surface-raised);
+  color: var(--accent-strong);
+}
+
+/* Ventana de la explicación: medida de lectura cómoda y scroll dentro del cuerpo,
+   para que la cabecera y el pie no se vayan con el contenido. */
+.league-objects .objects-help-dialog {
+  margin: auto;
+  width: min(44rem, calc(100vw - 32px));
+  max-height: min(86dvh, 54rem);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #0f1b2d;
+  color: var(--foreground);
+  overflow: hidden;
+}
+/* El `dialog` cerrado lo oculta el navegador con `dialog:not([open])`; el flex
+   solo se declara con la ventana abierta para no pisar esa regla. */
+.league-objects .objects-help-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.league-objects .objects-help-head {
+  flex-shrink: 0;
+  padding: 26px 56px 16px 28px;
+  border-bottom: 1px solid var(--line);
+  background: #122039;
+}
+.league-objects .objects-help-eyebrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.league-objects .objects-help-head h2 {
+  margin-top: 8px;
+  font: 600 24px/1.25 var(--font-cinzel), serif;
+}
+.league-objects .objects-help-lead {
+  max-width: 36rem;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.league-objects .objects-help-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px 28px 24px;
+}
+.league-objects .objects-help-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.league-objects .objects-help-step + .objects-help-step {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.league-objects .objects-help-step h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.league-objects .objects-help-step h3 > span {
+  color: var(--accent);
+  font: 600 12px/1 var(--font-cinzel), serif;
+  letter-spacing: 0.06em;
+}
+.league-objects .objects-help-step p {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.league-objects .objects-help-step p + p {
+  margin-top: 6px;
+}
+.league-objects .objects-help-footnote {
+  padding-left: 12px;
+  border-left: 2px solid var(--thread);
+}
+.league-objects .objects-help-catalog {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.league-objects .objects-help-object {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #101d30;
+}
+.league-objects .objects-help-object-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.league-objects .objects-help-object-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0b1729;
+}
+.league-objects .objects-help-object-title h4 {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.league-objects .objects-help-object-title p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.league-objects .objects-help-penalties {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.league-objects .objects-help-penalties li {
+  position: relative;
+  padding-left: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.league-objects .objects-help-penalties li::before {
+  content: "";
+  position: absolute;
+  top: 0.65em;
+  left: 0;
+  width: 7px;
+  height: 1px;
+  background: var(--accent);
+}
+.league-objects .objects-help-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 20px;
+  flex-shrink: 0;
+  padding: 10px 28px;
+  border-top: 1px solid var(--line);
+  background: #0c1828;
+}
+.league-objects .objects-help-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  color: #d9c28e;
+  font-size: 12px;
+}
+
+/* Selector local «Puntos / Objetos», en el dialecto de la casa. Abre el bloque
+   de consulta del lateral con el mismo filete que el índice de `/objetivos`. */
+.league-objects .objects-tabs {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.league-objects .objects-tabs-label {
+  display: block;
+  margin-bottom: 10px;
+  color: #c4cfdf;
+  font-size: 12px;
+  font-weight: 600;
+}
+.league-objects .objects-tabs nav ul {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0b1729;
+}
+.league-objects .objects-tabs nav li {
+  flex: 1;
+  min-width: 0;
+}
+.league-objects .objects-tabs nav a {
+  display: block;
+  min-height: 40px;
+  padding: 10px 6px;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+}
+.league-objects .objects-tabs nav a:hover {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+.league-objects .objects-tabs nav a[aria-current] {
+  background: #26374d;
+  color: var(--accent-strong);
+  box-shadow: inset 0 -1px #d6b56855;
+}
+
+/* Leyenda de tipos y enlace de apoyo. */
+.league-objects .objects-legend {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.league-objects .objects-legend h2 {
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.league-objects .objects-legend dl {
+  display: grid;
+  gap: 14px;
+}
+.league-objects .objects-legend dt {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+.league-objects .objects-legend dd {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.league-objects .objects-guide {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.league-objects .objects-guide a {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  color: #d9c28e;
+  font-size: 12px;
+}
+
+/* Barra de filtros: la caja de la casa y sus controles de 4 px. */
+.league-objects .objects-filters > div {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #122039;
+}
+.league-objects .objects-filters label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.league-objects .objects-filters input {
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0b1729;
+  color: var(--foreground);
+  font-size: 13px;
+}
+.league-objects .objects-filters input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.league-objects .objects-filters input::placeholder {
+  color: var(--muted);
+}
+.league-objects .objects-filters [role="listbox"] {
+  border: 1px solid #59749a;
+  border-radius: 4px;
+  background: #12243c;
+  box-shadow: 0 12px 24px #0007;
+}
+.league-objects .objects-filters [role="option"] {
+  padding: 9px 12px;
+  font-size: 13px;
+}
+.league-objects .objects-filters [role="option"][aria-selected="true"] {
+  color: var(--accent-strong);
+}
+.league-objects .objects-filters button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.league-objects .objects-filters button:hover {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+
+/* Feed: el tablero de la casa, con el filete de cada evento. */
+.league-objects .objects-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.league-objects .objects-list ul {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #101d30;
+}
+.league-objects .objects-list li {
+  padding: 14px 18px;
+}
+.league-objects .objects-list li[data-kind="AWARD"],
+.league-objects .objects-list li[data-kind="FULFILL"] {
+  background: #d6b5680d;
+  box-shadow: inset 2px 0 var(--accent);
+}
+.league-objects .objects-list li p:first-child {
+  font-size: 11px;
+}
+.league-objects .objects-list li p:first-child > span:last-child {
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.league-objects .objects-list li > p:nth-child(2) {
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.league-objects .objects-list li > p:last-child {
+  margin-top: 6px;
+  padding-left: 28px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.league-objects .objects-list a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+.league-objects .objects-list a:hover {
+  color: var(--accent-strong);
+  text-decoration-color: currentColor;
+}
+
+/* Pie del feed: tamaño de página y paginación. */
+.league-objects .objects-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.league-objects .objects-footer select {
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0b1729;
+  color: var(--foreground);
+  font-size: 12px;
+}
+.league-objects .objects-footer nav > p {
+  color: var(--muted);
+  font-size: 11px;
+}
+.league-objects .objects-footer nav a,
+.league-objects .objects-footer nav span[aria-disabled="true"] {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.league-objects .objects-footer nav a:hover {
+  background: var(--surface-raised);
+  color: var(--accent-strong);
+}
+.league-objects .objects-footer nav span[aria-disabled="true"] {
+  opacity: 0.45;
+}
+
+/* Estados vacío y degradado. */
+.league-objects .objects-empty > div {
+  padding: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #101d30;
+}
+.league-objects .objects-empty h2 {
+  font-family: var(--font-home-inter), sans-serif;
+  font-size: 17px;
+  font-weight: 600;
+}
+.league-objects .objects-empty > div > div {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.league-objects .objects-empty .objects-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+.league-objects .objects-empty nav a {
+  color: var(--accent-strong);
+}
+.league-objects .objects-empty nav a:last-child {
+  color: var(--muted);
+}
+
+/* Esqueleto de carga: la forma real, para que el feed no salte. */
+.league-objects .objects-skeleton {
+  display: grid;
+  grid-template-columns: var(--objects-context-width) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--objects-layout-gap);
+  animation: home-pulse 1.6s ease-in-out infinite;
+}
+.league-objects .objects-skeleton-context {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.league-objects .objects-skeleton-context > span {
+  height: 10px;
+  border-radius: 3px;
+  background: #14243a;
+}
+.league-objects .objects-skeleton-context .objects-skeleton-title {
+  width: 132px;
+  height: 30px;
+  margin-bottom: 4px;
+}
+.league-objects .objects-skeleton-context .objects-skeleton-tabs {
+  height: 44px;
+  margin-top: 14px;
+}
+.league-objects .objects-skeleton-context .objects-skeleton-help {
+  height: 44px;
+  margin-top: 10px;
+}
+.league-objects .objects-skeleton-context .objects-skeleton-legend {
+  height: 280px;
+  margin-top: 14px;
+}
+.league-objects .objects-skeleton-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+.league-objects .objects-skeleton-toolbar {
+  height: 68px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #14243a;
+}
+.league-objects .objects-skeleton-list {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #14243a;
+}
+.league-objects .objects-skeleton-row {
+  height: 92px;
+}
+.league-objects .objects-skeleton-row + .objects-skeleton-row {
+  border-top: 1px solid var(--line);
+}
+.league-objects .objects-skeleton-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.league-objects .objects-skeleton-footer span {
+  width: 180px;
+  height: 36px;
+  border-radius: 4px;
+  background: #14243a;
+}
+
+/* Tablet y móvil: el lateral sube y el feed ocupa el ancho completo. Los bloques
+   del contexto se reordenan en dos columnas en vez de desaparecer: la leyenda es
+   información, no adorno. */
+@media (max-width: 1023px) {
+  .league-objects {
+    --objects-layout-gap: 20px;
+  }
+  .league-objects .objects-layout,
+  .league-objects .objects-skeleton {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .league-objects .objects-context h1 {
+    font-size: 28px;
+    margin-bottom: 7px;
+  }
+  .league-objects .objects-context > p {
+    max-width: 520px;
+  }
+  .league-objects .objects-help {
+    max-width: 520px;
+  }
+  .league-objects .objects-tabs {
+    margin-top: 16px;
+    padding-top: 14px;
+  }
+  .league-objects .objects-tabs nav ul {
+    max-width: 320px;
+  }
+  .league-objects .objects-legend dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 24px;
+  }
+  .league-objects .objects-legend dd {
+    max-width: 46ch;
+  }
+  .league-objects .objects-skeleton-context {
+    max-width: 520px;
+  }
+  .league-objects .objects-skeleton-context .objects-skeleton-legend {
+    height: 96px;
+  }
+}
+@media (max-width: 640px) {
+  .league-objects .objects-context h1 {
+    font-size: 25px;
+  }
+  .league-objects .objects-context > p {
+    font-size: 12px;
+  }
+  .league-objects .objects-help-dialog {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+  .league-objects .objects-help-head {
+    padding: 22px 52px 14px 20px;
+  }
+  .league-objects .objects-help-head h2 {
+    font-size: 21px;
+  }
+  .league-objects .objects-help-body {
+    padding: 18px 20px 20px;
+  }
+  .league-objects .objects-help-footer {
+    padding: 10px 20px;
+  }
+  .league-objects .objects-tabs nav ul {
+    max-width: none;
+  }
+  .league-objects .objects-legend dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .league-objects .objects-legend h2 {
+    margin-bottom: 10px;
+  }
+  .league-objects .objects-legend dt {
+    display: inline;
+    margin-right: 6px;
+    font-size: 11px;
+  }
+  .league-objects .objects-legend dd {
+    display: inline;
+    margin: 0;
+    max-width: none;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  .league-objects .objects-filters > div {
+    padding: 14px;
+  }
+  .league-objects .objects-list li {
+    padding: 12px 14px;
+  }
+  .league-objects .objects-list li > p:last-child {
+    padding-left: 24px;
+  }
+  .league-objects .objects-empty > div {
+    padding: 22px 18px;
+  }
+  .league-objects .objects-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .league-objects .objects-footer nav {
+    width: 100%;
+  }
+  .league-objects .objects-skeleton-row {
+    height: 104px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .league-objects .objects-skeleton {
+    animation: none;
+  }
+}

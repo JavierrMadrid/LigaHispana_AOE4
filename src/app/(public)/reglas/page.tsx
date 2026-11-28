@@ -16,13 +16,14 @@ import {
 export const metadata: Metadata = {
   title: "Reglas",
   description:
-    "El reglamento de la Liga Hispana de Age of Empires IV: formato, condiciones de participación, eventos puntuales, normas de obligado cumplimiento y organización del torneo.",
+    "El reglamento de la Liga Hispana de Age of Empires IV: formato, condiciones de participación, eventos puntuales, objetos, normas de obligado cumplimiento y organización del torneo.",
 };
 
 const SECTIONS: readonly DocSection[] = [
   { id: "formato", label: "Formato" },
   { id: "participacion", label: "Participación" },
   { id: "eventos", label: "Eventos" },
+  { id: "objetos", label: "Objetos" },
   { id: "normas", label: "Normas" },
   { id: "organizacion", label: "Organización" },
 ];
@@ -246,6 +247,60 @@ export default async function RulesPage() {
                 })}
               </ul>
             )}
+          </section>
+
+          <section id="objetos" className="scroll-mt-24">
+            <SectionHeading title="Objetos" />
+            <div className="mt-4 flex max-w-[68ch] flex-col gap-3 text-[15px] leading-relaxed text-muted">
+              <p>
+                Un <strong className="font-semibold text-foreground">objeto</strong>{" "}
+                es una carga que se gana con ciertas victorias del día y que llega con
+                una{" "}
+                <strong className="font-semibold text-foreground">desventaja</strong>{" "}
+                que el portador tiene que cumplir.
+              </p>
+              <p>
+                Se gana con la{" "}
+                <strong className="font-semibold text-foreground">
+                  primera victoria del día
+                </strong>{" "}
+                (en UTC) que cumpla su condición: sagrada o religiosa para la
+                reliquia, conquista para la moneda y maravilla para el monumento. Una
+                retirada temprana del rival también cuenta: con 3 minutos o menos,
+                como sagrada; entre 3 y 5, como maravilla. Hay un objeto de cada tipo
+                por día.
+              </p>
+              <p>
+                Mientras el portador no cumple la desventaja,{" "}
+                <strong className="font-semibold text-foreground">
+                  sus partidas no puntúan
+                </strong>{" "}
+                ni cuentan para los objetivos. Puede{" "}
+                <strong className="font-semibold text-foreground">lanzarlo</strong> a
+                otro participante, y la desventaja viaja con el objeto. Si se lo
+                devuelven, la desventaja se queda con quien lo lanzó y el objeto se
+                pierde.
+              </p>
+              <p>
+                La desventaja se da por{" "}
+                <strong className="font-semibold text-foreground">cumplida</strong>{" "}
+                cuando el portador la supera en una partida y la organización lo
+                valida; desde esa misma partida vuelve a puntuar.
+              </p>
+            </div>
+
+            <p className="mt-5 max-w-[68ch] border-t border-line pt-4 text-sm leading-relaxed text-muted">
+              Solo hay objetos si la edición tiene activado el modo de objetos:
+              apagado, dejan de repartirse y el historial anterior se conserva.
+              Premios, lanzamientos, devoluciones y cumplimientos se ven en el{" "}
+              <Link
+                href="/objetos"
+                className="text-accent underline underline-offset-4 hover:text-accent-strong"
+              >
+                historial de objetos
+              </Link>
+              .
+            </p>
           </section>
 
           <section id="normas" className="scroll-mt-24">

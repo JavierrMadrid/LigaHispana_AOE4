@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { PUBLIC_NAVIGATION } from "@/lib/public-navigation";
 
 /**
- * Los cinco destinos del sitio público, en el orden en que se leen.
+ * Los seis destinos del sitio público, en el orden en que se leen.
  *
  * `label` es el rótulo de la navegación y el título de la página de destino —lo
  * que la pestaña anuncia es lo que su `h1` dice, que es lo que pidió la issue
@@ -21,6 +21,7 @@ const icons = {
   objectives: TargetIcon,
   scoring: MedalIcon,
   rules: BookIcon,
+  objects: ChaliceIcon,
 };
 
 function isActive(href: string, pathname: string): boolean {
@@ -35,22 +36,27 @@ function isActive(href: string, pathname: string): boolean {
  * barra inferior de móvil. El estado activo se marca con el `aria-current`, el
  * color de acento y un filete, aquí inferior porque la barra cuelga de arriba.
  *
- * Por debajo de `sm` esta versión no se pinta: cinco destinos no caben a lo
- * ancho de un móvil, y en lugar de dejar "Reglas" fuera de vista tras un
- * desplazamiento sin señal, la navegación baja a `SiteTabBar`. A partir de `sm` la
- * fila cabe entera y no hay desplazamiento: los cinco rótulos piden entre 573 y
- * 584 px —el destino activo va en negrita y ensancha el suyo— y en `sm` la celda
- * mide 592, así que entran con 8 px de sobra en el peor caso.
+ * Por debajo de `md` esta versión no se pinta: seis destinos no caben a lo ancho
+ * de un móvil ni de una tableta pequeña, y en lugar de dejar "Objetos" fuera de
+ * vista tras un desplazamiento sin señal, la navegación baja a `SiteTabBar`. A
+ * partir de `md` la fila cabe entera y no hay desplazamiento: los seis rótulos
+ * piden 575 px con 8 px de relleno —el destino activo va en negrita y ensancha
+ * el suyo— y en `md` la celda mide 720, así que entran con 145 de sobra. El
+ * relleno es más estrecho que el de antes para que esa cuenta siga saliendo con
+ * seis destinos: con los 14 px de antes la lista pedía 647 y a 768 no cabía sin
+ * desplazamiento. El estandarte del patrocinador no entra en la cuenta porque
+ * solo cuelga desde `lg`, donde la fila ya tiene ancho de sobra.
  *
- * La lista va centrada. Cuando comparte fila con la marca y las acciones —de
- * `min-[1376px]` en adelante, el ancho máximo del contenedor de la cabecera— el
+ * Cuando comparte fila con la marca y las acciones —de `min-[1376px]` en
+ * adelante, el ancho máximo del contenedor de la cabecera— los seis rótulos
+ * bajan además a 13 px de cuerpo, y la lista pasa de 575 a 522 px. El
  * centrado lo da la rejilla, que reparte el mismo ancho a los dos laterales, y
- * aquí el `mx-auto` no tiene nada que repartir. Cuando la nav tiene su propia fila,
- * a ancho completo, es el `mx-auto` quien la centra. En los dos casos se centra con
- * ancho por contenido y no con `justify-center`: si la fila llegara a no caber,
- * `justify-center` dejaría lo desbordado por la izquierda fuera del alcance del
- * desplazamiento horizontal, mientras que con el ancho por contenido la lista se
- * apoya en el principio y el desplazamiento llega a todo.
+ * aquí el `mx-auto` no tiene nada que repartir. Cuando la nav tiene su propia
+ * fila, a ancho completo, es el `mx-auto` quien la centra. En los dos casos se
+ * centra con ancho por contenido y no con `justify-center`: si la fila llegara a
+ * no caber, `justify-center` dejaría lo desbordado por la izquierda fuera del
+ * alcance del desplazamiento horizontal, mientras que con el ancho por contenido
+ * la lista se apoya en el principio y el desplazamiento llega a todo.
  */
 export function SiteNav() {
   const pathname = usePathname();
@@ -62,7 +68,7 @@ export function SiteNav() {
       aria-label="Principal"
       className="-mx-1.5 overflow-x-auto overscroll-x-contain py-1"
     >
-      <ul className="mx-auto flex w-fit items-center gap-1.5 px-1.5">
+      <ul className="mx-auto flex w-fit items-center gap-1 px-1.5">
         {PUBLIC_NAVIGATION.map((item) => {
           const active = isActive(item.href, pathname);
 
@@ -71,7 +77,7 @@ export function SiteNav() {
               <Link
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`relative block whitespace-nowrap rounded-md px-3.5 py-2.5 text-[15px] leading-5 transition-colors ${
+                className={`relative block whitespace-nowrap rounded-md px-2 py-2.5 text-[15px] leading-5 transition-colors min-[1376px]:text-[13px] ${
                   active
                     ? "font-semibold text-accent"
                     : "text-muted hover:bg-surface hover:text-foreground"
@@ -81,7 +87,7 @@ export function SiteNav() {
                 {active ? (
                   <span
                     aria-hidden="true"
-                    className="absolute inset-x-3.5 -bottom-px h-px bg-accent"
+                    className="absolute inset-x-2 -bottom-px h-px bg-accent"
                   />
                 ) : null}
               </Link>
@@ -96,14 +102,15 @@ export function SiteNav() {
 /**
  * Barra de destinos para móvil, fija al pie de la ventana.
  *
- * Es la misma navegación que `SiteNav`, resuelta como pestañas: cinco destinos
+ * Es la misma navegación que `SiteNav`, resuelta como pestañas: seis destinos
  * en una fila, siempre a la vista y al alcance del pulgar. Existe porque en un
- * móvil los cinco nombres no caben de una sola línea y la alternativa —una
+ * móvil los seis nombres no caben de una sola línea y la alternativa —una
  * barra que se desplaza— esconde un destino sin avisar de que hay más. Aquí no
- * hay nada que desplazar ni que adivinar. El relleno lateral es más estrecho que
- * en la cabecera para que los cinco rótulos entren sin recortarse en los anchos
- * de móvil habituales; `min-w-0` y el `truncate` de la etiqueta quedan como red
- * de seguridad en pantallas muy justas.
+ * hay nada que desplazar ni que adivinar: cada enlace mide lo que mide su
+ * rótulo, con 2 px de relleno lateral y 12 px de cuerpo, y los seis caben sin
+ * recortarse desde 320 px. «Clasificación» es la única forma que no entraba, así
+ * que en este tramo se lee «Puestos» (ver `PUBLIC_NAVIGATION`); `min-w-0` y el
+ * `truncate` de la etiqueta quedan como red de seguridad en pantallas muy justas.
  *
  * El coste de identidad es real: el sitio deja de tener toda su navegación
  * arriba. Se compensa manteniendo el dialecto de la cabecera (mismo fondo, mismo
@@ -111,7 +118,7 @@ export function SiteNav() {
  * destino activo, marcado con `aria-current` y un filete en el borde superior
  * que es el espejo del que la cabecera pinta en el inferior.
  *
- * Desaparece a partir de `sm`, donde `SiteNav` ya cabe sin desplazarse.
+ * Desaparece a partir de `md`, donde `SiteNav` ya cabe sin desplazarse.
  */
 export function SiteTabBar() {
   const pathname = usePathname();
@@ -119,7 +126,7 @@ export function SiteTabBar() {
   return (
     <nav
       aria-label="Principal"
-      className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-background/95 backdrop-blur sm:hidden"
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-background/95 backdrop-blur md:hidden"
     >
       <ul className="flex items-stretch justify-around gap-1 px-1 pb-[env(safe-area-inset-bottom)]">
         {PUBLIC_NAVIGATION.map((item) => {
@@ -131,7 +138,7 @@ export function SiteTabBar() {
               <Link
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex flex-col items-center gap-1 px-1.5 py-2 text-xs leading-none transition-colors ${
+                className={`relative flex flex-col items-center gap-1 px-0.5 py-2 text-xs leading-none transition-colors ${
                   active ? "text-accent" : "text-muted hover:text-foreground"
                 }`}
               >
@@ -158,9 +165,9 @@ export function SiteTabBar() {
  * Mismo lenguaje que los iconos de `objective-icon.tsx` (caja de 24, `currentColor`,
  * 1.5 de grosor y extremos redondeados), para que la navegación no estrene un
  * dialecto propio: el podio para la clasificación, las espadas cruzadas para las
- * partidas, la diana para los objetivos, la medalla para la puntuación y el libro
- * abierto para las reglas. Todos son decorativos: el nombre accesible lo da la
- * etiqueta del enlace.
+ * partidas, la diana para los objetivos, la medalla para la puntuación, el libro
+ * abierto para las reglas y el cáliz de la reliquia para los objetos. Todos son
+ * decorativos: el nombre accesible lo da la etiqueta del enlace.
  */
 function Glyph({ className, children }: { className?: string; children: ReactNode }) {
   return (
@@ -234,6 +241,18 @@ function BookIcon({ className }: { className?: string }) {
     <Glyph className={className}>
       <path d="M12 6.75C10.4 5.35 8.3 4.6 5.5 4.6v12.3c2.8 0 4.9.75 6.5 2.15 1.6-1.4 3.7-2.15 6.5-2.15V4.6c-2.8 0-4.9.75-6.5 2.15Z" />
       <path d="M12 6.75v12.3" />
+    </Glyph>
+  );
+}
+
+/** Objetos: el cáliz de la reliquia, el mismo glifo del feed de objetos. */
+function ChaliceIcon({ className }: { className?: string }) {
+  return (
+    <Glyph className={className}>
+      <path d="M8 4h8" />
+      <path d="M8.5 4v4a3.5 3.5 0 0 0 7 0V4" />
+      <path d="M12 11.5v6" />
+      <path d="M9.5 17.5h5l1 2.5h-7Z" />
     </Glyph>
   );
 }

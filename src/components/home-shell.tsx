@@ -12,6 +12,26 @@ import "./matches.css";
 import "./objectives.css";
 import "./rules.css";
 import "./participate.css";
+import "./objects.css";
+
+/**
+ * Las rutas que se leen con el armazón de la portada y el modificador que tiñe
+ * cada una. Una ruta que no esté aquí usa el cromo heredado (`legacy`): la
+ * cabecera y el pie de las páginas que no son secciones de la casa.
+ *
+ * La portada no lleva modificador —es la casa misma— y por eso su valor es
+ * vacío; las demás se anuncian con su clase para que su hoja de estilos pueda
+ * pintar solo lo suyo.
+ */
+const HOME_SHELL_CLASS: Record<string, string> = {
+  "/": "",
+  "/partidas": "league-matches",
+  "/objetivos": "league-objectives",
+  "/puntuacion": "league-scoring",
+  "/reglas": "league-rules",
+  "/participar": "league-participate",
+  "/objetos": "league-objects",
+};
 
 export function HomeShell({
   legacy,
@@ -38,14 +58,12 @@ export function HomeShell({
 }) {
   const pathname = usePathname();
   const isScoring = pathname === "/puntuacion";
-  const isParticipating = pathname === "/participar";
-  if (pathname !== "/" && pathname !== "/partidas" && pathname !== "/objetivos" && pathname !== "/reglas" && !isScoring && !isParticipating) return legacy;
+  const shellClass = HOME_SHELL_CLASS[pathname];
+  if (shellClass === undefined) return legacy;
 
   return (
     <div
-      className={`league-home ${
-        pathname === "/partidas" ? "league-matches" : pathname === "/objetivos" ? "league-objectives" : pathname === "/reglas" ? "league-rules" : isScoring ? "league-scoring" : isParticipating ? "league-participate" : ""
-      } ${fonts}`}
+      className={`league-home ${shellClass} ${fonts}`}
       style={accentStyle}
     >
       <a href="#contenido" className="home-skip">
