@@ -79,15 +79,20 @@ export default async function ObjectsPage({
       <header className="objects-heading">
         <h1>Objetos</h1>
         <p>
-          Un objeto es una carga que se gana con una victoria del día y reparte una
-          desventaja: mientras sigue pendiente, las partidas de quien lo porta no
-          puntúan. Aquí se reúnen los premios, los lanzamientos, las devoluciones y
-          las desventajas cumplidas de la edición activa, de lo más reciente a lo
-          más antiguo.
+          Un objeto es una carga que se gana con ciertas victorias del día (sagrada,
+          conquista o maravilla) y que llega con una desventaja: no guarecer
+          reliquias, no hacer 2TC, no levantar fuertes. Mientras el portador no la
+          cumpla, sus partidas no puntúan, así que lo normal es lanzárselo a otro
+          participante. Puede volver: si se lo devuelven, la desventaja se queda con
+          quien lo lanzó y el objeto se pierde. La carga solo se levanta cuando el
+          portador cumple la desventaja en una partida y el admin lo da por bueno; a
+          partir de ahí, sus partidas vuelven a puntuar.
         </p>
         <p className="objects-heading-note">
-          Los objetos solo se crean si la edición los tiene activados; si se apagan,
-          el historial anterior se conserva.
+          Este historial reúne los premios, los lanzamientos, las devoluciones y las
+          desventajas cumplidas de la edición activa, de lo más reciente a lo más
+          antiguo. Solo hay objetos si la edición los tiene activados; si se apagan,
+          dejan de repartirse, pero el historial anterior se conserva.
         </p>
       </header>
 
